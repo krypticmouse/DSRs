@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 use serde::{Serialize, Deserialize};
 
-
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Example {
     pub data: HashMap<String, String>,
     pub input_keys: Vec<String>,
     pub output_keys: Vec<String>,
 }
-
 
 impl Example {
     pub fn new(data: HashMap<String, String>, input_keys: Vec<String>, output_keys: Vec<String>) -> Self {
@@ -26,7 +24,6 @@ impl Example {
         Self { data, input_keys, output_keys }
     }
 
-
     pub fn get(&self, key: &str, default: Option<&str>) -> String {
         self.data
             .get(key)
@@ -34,16 +31,13 @@ impl Example {
             .clone()
     }
 
-
     pub fn keys(&self) -> Vec<String> {
         self.data.keys().cloned().collect()
     }
 
-
     pub fn values(&self) -> Vec<String> {
         self.data.values().cloned().collect()
     }
-
 
     pub fn set_input_keys(&mut self, keys: Vec<String>) {
         self.input_keys = keys;
@@ -53,7 +47,6 @@ impl Example {
             .cloned()
             .collect();
     }
-
 
     pub fn without(&self, keys: Vec<String>) -> Self {
         Self {

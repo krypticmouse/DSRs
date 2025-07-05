@@ -1,8 +1,10 @@
+use rstest::*;
+
 use dsrs::data::prediction::{Prediction, LmUsage};
 use std::collections::HashMap;
 
 
-#[test]
+#[rstest]
 fn test_prediction_initialization() {
     let data = HashMap::from([("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
     let prediction = Prediction::new(data);
@@ -10,7 +12,7 @@ fn test_prediction_initialization() {
     assert_eq!(prediction.lm_usage, LmUsage::default());
 }
 
-#[test]
+#[rstest]
 fn test_prediction_get() {
     let data = HashMap::from([("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
     let prediction = Prediction::new(data);
@@ -20,22 +22,27 @@ fn test_prediction_get() {
     assert_eq!(prediction.get("c", Some("3")), "3");
 }
 
-#[test]
+#[rstest]
 fn test_prediction_keys() {
     let data = HashMap::from([("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
     let prediction = Prediction::new(data);
-    assert_eq!(prediction.keys(), vec!["a", "b"]);
+
+    let mut keys = prediction.keys();
+    keys.sort();
+    assert_eq!(keys, vec!["a", "b"]);
 }
 
-#[test]
+#[rstest]
 fn test_prediction_values() {
     let data = HashMap::from([("a".to_string(), "1".to_string()), ("b".to_string(), "2".to_string())]);
     let prediction = Prediction::new(data);
 
-    assert_eq!(prediction.values(), vec!["1", "2"]);
+    let mut values = prediction.values();
+    values.sort();
+    assert_eq!(values, vec!["1", "2"]);
 }
 
-#[test]
+#[rstest]
 fn test_prediction_set_lm_usage() {
     let mut prediction = Prediction::new(HashMap::new());
     let lm_usage = LmUsage { prompt_tokens: 10, completion_tokens: 20 };

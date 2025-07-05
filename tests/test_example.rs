@@ -1,6 +1,7 @@
 use rstest::*;
 use std::collections::HashMap;
 use dsrs::data::example::Example;
+use dsrs::data::serialize::{load_jsonl, save_examples_as_jsonl};
 
 #[rstest]
 fn test_initialization() {
@@ -101,4 +102,21 @@ fn test_without() {
     let without_input1 = example.without(vec!["input1".to_string()]);
     assert_eq!(without_input1.input_keys, vec!["input2".to_string()]);
     assert_eq!(without_input1.output_keys, vec!["output1".to_string()]);
+}
+
+#[rstest]
+fn test_serialize() {
+    let examples = vec![
+        Example::new(HashMap::from([("input1".to_string(), "value1".to_string())]), vec!["input1".to_string()], vec!["output1".to_string()]),
+        Example::new(HashMap::from([("input1".to_string(), "value2".to_string())]), vec!["input1".to_string()], vec!["output1".to_string()]),
+    ];
+    save_examples_as_jsonl("/tmp/examples.jsonl", examples);
+    let examples = load_jsonl("/tmp/examples.jsonl", vec!["input1".to_string()], vec!["output1".to_string()]);
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[0].data, HashMap::from([("input1".to_string(), "value1".to_string())]));
+    assert_eq!(examples[1].data, HashMap::from([("input1".to_string(), "value2".to_string())]));
+    assert_eq!(examples[0].input_keys, vec!["input1".to_string()]);
+    assert_eq!(examples[1].input_keys, vec!["input1".to_string()]);
+    assert_eq!(examples[0].output_keys, vec!["output1".to_string()]);
+    assert_eq!(examples[1].output_keys, vec!["output1".to_string()]);
 }
