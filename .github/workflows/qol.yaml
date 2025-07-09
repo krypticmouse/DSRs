@@ -1,0 +1,43 @@
+name: Lint and Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test
+      - run: cargo test --features preserve_order --tests -- --skip ui --exact
+      - run: cargo test --features float_roundtrip --tests -- --skip ui --exact
+      - run: cargo test --features arbitrary_precision --tests -- --skip ui --exact
+      - run: cargo test --features float_roundtrip,arbitrary_precision --tests -- --skip ui --exact
+      - run: cargo test --features raw_value --tests -- --skip ui --exact
+      - run: cargo test --features unbounded_depth --tests -- --skip ui --exact
+  
+  miri-test:
+    name: MIRI Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@miri
+        with:
+          toolchain: nightly-2025-05-16  # https://github.com/rust-lang/miri/issues/4323
+      - run: cargo miri setup
+      - run: cargo miri test --target ${{matrix.target}}
+      - run: cargo miri test --target ${{matrix.target}} --features preserve_order,float_roundtrip,arbitrary_precision,raw_value
+
+  clippy:
+    name: Clippy Lint
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --tests -- -Dclippy::all -Dclippy::pedantic
+      - run: cargo clippy --all-features --tests -- -Dclippy::all -Dclippy::pedantic
+
