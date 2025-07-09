@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@clippy
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
