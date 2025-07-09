@@ -1,3 +1,3 @@
-pub mod example; 
+pub mod example;
 pub mod prediction;
 pub mod serialize;

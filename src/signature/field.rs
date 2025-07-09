@@ -1,5 +1,5 @@
-use std::fmt;
 use std::any::Any;
+use std::fmt;
 
 pub type FormatFn = fn(&dyn Any) -> String;
 
@@ -16,7 +16,7 @@ pub enum Field {
         desc: String,
         format: Option<FormatFn>,
         output_type: String,
-    }
+    },
 }
 
 impl Field {
@@ -40,7 +40,7 @@ impl Field {
             Field::OutputField { format, .. } => format.as_ref(),
         }
     }
-    
+
     pub fn output_type(&self) -> &str {
         match self {
             Field::InputField { output_type, .. } => output_type,
@@ -52,8 +52,30 @@ impl Field {
 impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Field::InputField { prefix, desc, format, output_type: _ } => write!(f, "InputField(\n\tprefix: {},\n\tdesc: {},\n\tformat: {:?}\n)", prefix, desc, format.is_some()),
-            Field::OutputField { prefix, desc, format, output_type: _ } => write!(f, "OutputField(\n\tprefix: {},\n\tdesc: {},\n\tformat: {:?}\n)", prefix, desc, format.is_some()),
+            Field::InputField {
+                prefix,
+                desc,
+                format,
+                output_type: _,
+            } => write!(
+                f,
+                "InputField(\n\tprefix: {},\n\tdesc: {},\n\tformat: {:?}\n)",
+                prefix,
+                desc,
+                format.is_some()
+            ),
+            Field::OutputField {
+                prefix,
+                desc,
+                format,
+                output_type: _,
+            } => write!(
+                f,
+                "OutputField(\n\tprefix: {},\n\tdesc: {},\n\tformat: {:?}\n)",
+                prefix,
+                desc,
+                format.is_some()
+            ),
         }
     }
 }

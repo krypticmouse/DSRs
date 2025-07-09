@@ -1,5 +1,5 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Example {
@@ -9,7 +9,11 @@ pub struct Example {
 }
 
 impl Example {
-    pub fn new(data: HashMap<String, String>, input_keys: Vec<String>, output_keys: Vec<String>) -> Self {
+    pub fn new(
+        data: HashMap<String, String>,
+        input_keys: Vec<String>,
+        output_keys: Vec<String>,
+    ) -> Self {
         let output_keys = if !output_keys.is_empty() {
             output_keys
         } else if !input_keys.is_empty() {
@@ -20,8 +24,12 @@ impl Example {
         } else {
             vec![]
         };
-        
-        Self { data, input_keys, output_keys }
+
+        Self {
+            data,
+            input_keys,
+            output_keys,
+        }
     }
 
     pub fn get(&self, key: &str, default: Option<&str>) -> String {
@@ -42,7 +50,9 @@ impl Example {
     pub fn set_input_keys(&mut self, keys: Vec<String>) {
         self.input_keys = keys;
 
-        self.output_keys = self.data.keys()
+        self.output_keys = self
+            .data
+            .keys()
             .filter(|key| !self.input_keys.contains(key))
             .cloned()
             .collect();
@@ -50,21 +60,24 @@ impl Example {
 
     pub fn without(&self, keys: Vec<String>) -> Self {
         Self {
-            data: self.data
-                      .iter()
-                      .filter(|(key, _)| !keys.contains(key))
-                      .map(|(k, v)| (k.clone(), v.clone()))
-                      .collect(),
-            input_keys: self.input_keys
-                            .iter()
-                            .filter(|key| !keys.contains(key))
-                            .cloned()
-                            .collect(),
-            output_keys: self.output_keys
-                            .iter()
-                            .filter(|key| !keys.contains(key))
-                            .cloned()
-                            .collect(),
+            data: self
+                .data
+                .iter()
+                .filter(|(key, _)| !keys.contains(key))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            input_keys: self
+                .input_keys
+                .iter()
+                .filter(|key| !keys.contains(key))
+                .cloned()
+                .collect(),
+            output_keys: self
+                .output_keys
+                .iter()
+                .filter(|key| !keys.contains(key))
+                .cloned()
+                .collect(),
         }
     }
 }

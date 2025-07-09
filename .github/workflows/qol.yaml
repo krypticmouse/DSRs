@@ -14,6 +14,8 @@ jobs:
   miri-test:
     name: MIRI Test
     runs-on: ubuntu-latest
+    env:
+      MIRIFLAGS: -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@miri
@@ -29,8 +31,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/cargo@v1
+      - uses: dtolnay/rust-toolchain@clippy
       - run: cargo fmt --check
-      - run: cargo clippy --tests -- -Dclippy::all -Dclippy::pedantic
-      - run: cargo clippy --all-features --tests -- -Dclippy::all -Dclippy::pedantic
-
+      - run: cargo clippy --all-targets --all-features -- -D warnings

@@ -1,7 +1,7 @@
-use rstest::*;
-use std::collections::HashMap;
 use dsrs::data::example::Example;
 use dsrs::data::serialize::{load_jsonl, save_examples_as_jsonl};
+use rstest::*;
+use std::collections::HashMap;
 
 #[rstest]
 fn test_initialization() {
@@ -77,11 +77,15 @@ fn test_set_input_keys() {
         ("output1".to_string(), "value3".to_string()),
     ]);
 
-    let mut example = Example::new(data, vec!["input2".to_string()], vec!["output1".to_string()]);
+    let mut example = Example::new(
+        data,
+        vec!["input2".to_string()],
+        vec!["output1".to_string()],
+    );
     example.set_input_keys(vec!["input1".to_string()]);
-    
+
     assert_eq!(example.input_keys, vec!["input1".to_string()]);
-    
+
     // output_keys should now contain all keys not in input_keys
     let mut output_keys = example.output_keys.clone();
     output_keys.sort();
@@ -105,16 +109,35 @@ fn test_without() {
 }
 
 #[rstest]
+#[cfg_attr(miri, ignore = "MIRI has issues with rayon's parallel iterators")]
 fn test_serialize() {
     let examples = vec![
-        Example::new(HashMap::from([("input1".to_string(), "value1".to_string())]), vec!["input1".to_string()], vec!["output1".to_string()]),
-        Example::new(HashMap::from([("input1".to_string(), "value2".to_string())]), vec!["input1".to_string()], vec!["output1".to_string()]),
+        Example::new(
+            HashMap::from([("input1".to_string(), "value1".to_string())]),
+            vec!["input1".to_string()],
+            vec!["output1".to_string()],
+        ),
+        Example::new(
+            HashMap::from([("input1".to_string(), "value2".to_string())]),
+            vec!["input1".to_string()],
+            vec!["output1".to_string()],
+        ),
     ];
     save_examples_as_jsonl("/tmp/examples.jsonl", examples);
-    let examples = load_jsonl("/tmp/examples.jsonl", vec!["input1".to_string()], vec!["output1".to_string()]);
+    let examples = load_jsonl(
+        "/tmp/examples.jsonl",
+        vec!["input1".to_string()],
+        vec!["output1".to_string()],
+    );
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[0].data, HashMap::from([("input1".to_string(), "value1".to_string())]));
-    assert_eq!(examples[1].data, HashMap::from([("input1".to_string(), "value2".to_string())]));
+    assert_eq!(
+        examples[0].data,
+        HashMap::from([("input1".to_string(), "value1".to_string())])
+    );
+    assert_eq!(
+        examples[1].data,
+        HashMap::from([("input1".to_string(), "value2".to_string())])
+    );
     assert_eq!(examples[0].input_keys, vec!["input1".to_string()]);
     assert_eq!(examples[1].input_keys, vec!["input1".to_string()]);
     assert_eq!(examples[0].output_keys, vec!["output1".to_string()]);
