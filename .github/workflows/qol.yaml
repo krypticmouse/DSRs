@@ -3,6 +3,14 @@ name: Lint and Test
 on: [push, pull_request]
 
 jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo build
+
   test:
     name: Test
     runs-on: ubuntu-latest
