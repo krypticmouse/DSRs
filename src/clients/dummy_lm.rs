@@ -1,13 +1,10 @@
-use std::error::Error;
+use openrouter_rs::types::{
+    Choice, CompletionsResponse, FinishReason, Message, NonStreamingChoice, ObjectType,
+};
 use smart_default::SmartDefault;
-use openrouter_rs::{
-    types::{CompletionsResponse, Choice, Message, ObjectType, NonStreamingChoice, FinishReason},
-};
+use std::error::Error;
 
-use crate::clients::{
-    chat::Chat,
-    lm::LMConfig,
-};
+use crate::clients::{chat::Chat, lm::LMConfig};
 use crate::data::history::History;
 
 #[derive(Clone, Debug, SmartDefault)]
@@ -21,7 +18,12 @@ pub struct DummyLM {
 }
 
 impl DummyLM {
-    pub async fn call(&mut self, chat: &Chat, output: String, signature: String) -> Result<CompletionsResponse, Box<dyn Error>> {
+    pub async fn call(
+        &mut self,
+        chat: &Chat,
+        output: String,
+        signature: String,
+    ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let response = CompletionsResponse {
             id: "dummy_id".to_string(),
             choices: vec![Choice::NonStreaming(NonStreamingChoice {

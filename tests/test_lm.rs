@@ -25,7 +25,10 @@ async fn test_dummy_lm() {
         .unwrap();
     let choice = &output.choices[0];
     if let openrouter_rs::types::Choice::NonStreaming(non_streaming) = choice {
-        assert_eq!(non_streaming.message.content, Some("Hello, world!".to_string()));
+        assert_eq!(
+            non_streaming.message.content,
+            Some("Hello, world!".to_string())
+        );
     } else {
         panic!("Expected non-streaming choice");
     }
