@@ -1,20 +1,29 @@
 use std::any::Any;
 use std::fmt;
 
+use smart_default::SmartDefault;
+
 pub type FormatFn = fn(&dyn Any) -> String;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, SmartDefault)]
 pub enum Field {
+    #[default]
     InputField {
+        #[default = ""]
         prefix: String,
+        #[default = ""]
         desc: String,
         format: Option<FormatFn>,
+        #[default = ""]
         output_type: String,
     },
     OutputField {
+        #[default = ""]
         prefix: String,
+        #[default = ""]
         desc: String,
         format: Option<FormatFn>,
+        #[default = ""]
         output_type: String,
     },
 }
@@ -76,17 +85,6 @@ impl fmt::Display for Field {
                 desc,
                 format.is_some()
             ),
-        }
-    }
-}
-
-impl Default for Field {
-    fn default() -> Self {
-        Field::InputField {
-            prefix: String::new(),
-            desc: String::new(),
-            format: None,
-            output_type: String::new(),
         }
     }
 }

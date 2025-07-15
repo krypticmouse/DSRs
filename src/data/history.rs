@@ -1,12 +1,11 @@
-use crate::premitives::lm::LMProvider;
-use openai_api_rs::v1::chat_completion::ChatCompletionMessage;
+use crate::clients::chat::Chat;
+use openrouter_rs::types::CompletionsResponse;
 
 #[derive(Clone, Debug)]
 pub struct History {
-    pub input: Vec<ChatCompletionMessage>,
-    pub output: String,
+    pub input: Chat,
+    pub output: CompletionsResponse,
     pub signature: String,
 
     pub model: String,
-    pub provider: LMProvider,
 }

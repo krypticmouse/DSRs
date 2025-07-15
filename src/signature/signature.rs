@@ -1,26 +1,19 @@
-use crate::signature::field::Field;
+use derive_builder::Builder;
 use indexmap::IndexMap;
 use std::fmt;
 
+use crate::signature::field::Field;
+
+#[derive(Builder, Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
+    #[builder(default = "String::new()")]
     pub description: String,
+
     pub input_fields: IndexMap<String, Field>,
     pub output_fields: IndexMap<String, Field>,
 }
 
 impl Signature {
-    pub fn new(
-        description: String,
-        input_fields: IndexMap<String, Field>,
-        output_fields: IndexMap<String, Field>,
-    ) -> Self {
-        Self {
-            description,
-            input_fields,
-            output_fields,
-        }
-    }
-
     pub fn insert(&mut self, field_name: String, field: Field, index: usize) {
         match &field {
             Field::InputField { .. } => {
@@ -54,6 +47,10 @@ impl Signature {
                 self.output_fields.insert_before(index, field_name, field);
             }
         }
+    }
+
+    pub fn builder() -> SignatureBuilder {
+        SignatureBuilder::default()
     }
 }
 
@@ -115,6 +112,10 @@ impl From<String> for Signature {
             )
         }));
 
-        Self::new(default_desc, input_fields_map, output_fields_map)
+        Self {
+            description: default_desc,
+            input_fields: input_fields_map,
+            output_fields: output_fields_map,
+        }
     }
 }

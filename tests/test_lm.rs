@@ -1,51 +1,47 @@
-use openai_api_rs::v1::chat_completion::{Content, MessageRole};
-
-use dsrs::premitives::dummy_lm::DummyLM;
-use dsrs::premitives::lm::{LMConfig, LMProvider};
+use dsrs::clients::{chat::Chat, dummy_lm::DummyLM};
+use openrouter_rs::{api::chat::Message, types::Role};
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)] // Miri doesn't support async runtime
 async fn test_dummy_lm() {
-    let mut dummy_lm = DummyLM::new(
-        Some(LMProvider::OpenAI),
-        "test".to_string(),
-        "test".to_string(),
-        LMConfig::default(),
-        None,
-    );
+    let mut dummy_lm = DummyLM::default();
 
     assert_eq!(dummy_lm.history.len(), 0);
 
-    let output = dummy_lm
-        .forward(
-            "Hello, world!".to_string(),
-            "Hello, world!".to_string(),
-            "test".to_string(),
-        )
-        .await;
+    let chat = Chat::new(vec![
+        Message {
+            role: Role::System,
+            content: "You are a helpful assistant.".to_string(),
+        },
+        Message {
+            role: Role::User,
+            content: "Hello, world!".to_string(),
+        },
+    ]);
 
-    assert_eq!(output, "Hello, world!");
+    let output = dummy_lm
+        .call(&chat, "Hello, world!".to_string(), "test".to_string())
+        .await
+        .unwrap();
+    let choice = &output.choices[0];
+    if let openrouter_rs::types::Choice::NonStreaming(non_streaming) = choice {
+        assert_eq!(non_streaming.message.content, Some("Hello, world!".to_string()));
+    } else {
+        panic!("Expected non-streaming choice");
+    }
     assert_eq!(dummy_lm.history.len(), 1);
-    assert_eq!(dummy_lm.history[0].input.len(), 1);
-    assert_eq!(dummy_lm.history[0].input[0].role, MessageRole::user);
-    assert_eq!(
-        dummy_lm.history[0].input[0].content,
-        Content::Text("Hello, world!".to_string())
-    );
-    assert_eq!(dummy_lm.history[0].output, "Hello, world!");
-    assert_eq!(dummy_lm.history[0].signature, "test");
-    assert_eq!(dummy_lm.history[0].model, "test");
+
+    // Check that the chat was stored in history
+    let stored_history = &dummy_lm.history[0];
+    assert_eq!(stored_history.input.messages.len(), 2);
+    assert_eq!(stored_history.input.messages[0].role.to_string(), "system");
+    assert_eq!(stored_history.input.messages[1].role.to_string(), "user");
+    assert_eq!(stored_history.input.messages[1].content, "Hello, world!");
 
     let history = dummy_lm.inspect_history(1);
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].input.len(), 1);
-    assert_eq!(history[0].input[0].role, MessageRole::user);
-    assert_eq!(
-        history[0].input[0].content,
-        Content::Text("Hello, world!".to_string())
-    );
-    assert_eq!(history[0].output, "Hello, world!");
-    assert_eq!(history[0].signature, "test");
-    assert_eq!(history[0].model, "test");
-    assert_eq!(history[0].provider, LMProvider::OpenAI);
+    assert_eq!(history[0].input.messages.len(), 2);
+    assert_eq!(history[0].input.messages[0].role.to_string(), "system");
+    assert_eq!(history[0].input.messages[1].role.to_string(), "user");
+    assert_eq!(history[0].input.messages[1].content, "Hello, world!");
 }
