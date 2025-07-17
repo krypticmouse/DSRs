@@ -7,7 +7,7 @@ use crate::signature::field::Field;
 #[derive(Builder, Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
     #[builder(default = "String::new()")]
-    pub description: String,
+    pub instruction: String,
 
     pub input_fields: IndexMap<String, Field>,
     pub output_fields: IndexMap<String, Field>,
@@ -72,7 +72,7 @@ impl fmt::Display for Signature {
         write!(
             f,
             "Signature(\n\tdescription: {},\n\tinput_fields: {},\n\toutput_fields: {}\n)",
-            self.description, input_str, output_str
+            self.instruction, input_str, output_str
         )
     }
 }
@@ -113,7 +113,7 @@ impl From<String> for Signature {
         }));
 
         Self {
-            description: default_desc,
+            instruction: default_desc,
             input_fields: input_fields_map,
             output_fields: output_fields_map,
         }

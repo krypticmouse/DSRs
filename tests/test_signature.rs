@@ -34,7 +34,7 @@ fn test_signature_from_string() {
     let signature = Signature::from("inp1, inp2 -> out1, out2".to_string());
 
     assert_eq!(
-        signature.description,
+        signature.instruction,
         "Given a inputs inp1, inp2, return outputs out1, out2"
     );
     assert_eq!(signature.input_fields.len(), 2);
@@ -149,7 +149,7 @@ fn test_signature_prepend() {
 #[rstest]
 fn test_signature_builder() {
     let signature = Signature::builder()
-        .description("given a input, return a output".to_string())
+        .instruction("given a input, return a output".to_string())
         .input_fields(IndexMap::from_iter(vec![
             (
                 "inp1".to_string(),
