@@ -1,88 +1,146 @@
 use crate::adapter::base::Adapter;
-use crate::signature::signature::Signature;
+use crate::data::prediction::{LmUsage, Prediction};
 use crate::signature::field::Field;
+use crate::signature::signature::Signature;
 use std::collections::HashMap;
 
-fn get_type_name<T>(_ : &T) -> &'static str {
-    std::any::type_name::<T>()
-}
+use indexmap::IndexMap;
+use openrouter_rs::types::CompletionsResponse;
 
-trait ChatAdapter: Adapter {
-    fn format_system_message(&self, signature: Signature) -> String {
-        let field_description = self.format_field_description(signature);
-        let field_structure = self.format_field_structure(signature);
-        let task_description = self.format_task_description(signature);
+#[derive(Default)]
+pub struct ChatAdapter;
 
-        format!("{field_description}\n{field_structure}\n{task_description}")
-    }
-
-    fn get_field_attribute_list(&self, field_iter: Iterator<(&String, &Field)>) -> String {
+impl ChatAdapter {
+    fn get_field_attribute_list(&self, field_iter: &IndexMap<String, Field>) -> String {
         let mut field_attributes = String::new();
-        for (i, (field_name, field)) in field_iter.enumerate() {
-            field_attributes.push_str(format!("{}. `{}` ({})\n", i, field_name, get_type_name(field)).as_str());
+        for (i, (field_name, field)) in field_iter.iter().enumerate() {
+            field_attributes.push_str(
+                format!("{}. `{}` ({})\n", i + 1, field_name, field.output_type()).as_str(),
+            );
         }
         field_attributes
     }
 
-    fn format_field_description(&self, signature: Signature) -> String {
-        let input_field_description = self.get_field_attribute_list(signature.input_fields.iter());
-        let output_field_description = self.get_field_attribute_list(signature.output_fields.iter());
-
-        format!("Your input fields are:\n{input_field_description}\n\nYour output fields are:\n{output_field_description}")
-    }
-
-    fn get_field_structure(&self, field_iter: Iterator<(&String, &Field)>) -> String {
+    fn get_field_structure(&self, field_iter: &IndexMap<String, Field>) -> String {
         let mut field_structure = String::new();
         for (field_name, _) in field_iter {
-            field_structure.push_str(format!("[[ ## {field_name} ## ]]\n{field_name}\n\n").as_str());
+            field_structure
+                .push_str(format!("[[ ## {field_name} ## ]]\n{field_name}\n\n").as_str());
         }
         field_structure
     }
+}
 
-    fn format_field_structure(&self, signature: Signature) -> String {
-        let input_field_structure = self.get_field_structure(signature.input_fields.iter());
-        let output_field_structure = self.get_field_structure(signature.output_fields.iter());
+impl Adapter for ChatAdapter {
+    fn format_system_message(&self, signature: &Signature) -> String {
+        let field_description = Adapter::format_field_description(self, signature);
+        let field_structure = Adapter::format_field_structure(self, signature);
+        let task_description = Adapter::format_task_description(self, signature);
 
-        format!("All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}\n\n{output_field_structure}\n\n[[ ## completed ## ]]")
+        format!("{field_description}\n{field_structure}\n{task_description}")
     }
 
-    fn format_task_description(&self, signature: Signature) -> String {
-        let instruction = if !signature.instruction.is_empty() {
+    fn format_field_description(&self, signature: &Signature) -> String {
+        let input_field_description = self.get_field_attribute_list(&signature.input_fields);
+        let output_field_description = self.get_field_attribute_list(&signature.output_fields);
+
+        format!(
+            "Your input fields are:\n{input_field_description}\nYour output fields are:\n{output_field_description}"
+        )
+    }
+
+    fn format_field_structure(&self, signature: &Signature) -> String {
+        let input_field_structure = self.get_field_structure(&signature.input_fields);
+        let output_field_structure = self.get_field_structure(&signature.output_fields);
+
+        format!(
+            "All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}{output_field_structure}[[ ## completed ## ]]\n"
+        )
+    }
+
+    fn format_task_description(&self, signature: &Signature) -> String {
+        let instruction = if signature.instruction.is_empty() {
             format!(
-                "Given the fields `{}`, produce the fields `{}`.", 
-                signature.input_fields.keys().join(", "), 
-                signature.output_fields.keys().join(", ")
+                "Given the fields `{}`, produce the fields `{}`.",
+                signature
+                    .input_fields
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(", "),
+                signature
+                    .output_fields
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<&str>>()
+                    .join(", ")
             )
         } else {
             signature.instruction.clone()
         };
 
-        format!("In adhering to this structure, your objective is: {instruction}")
+        format!("In adhering to this structure, your objective is:\n\t{instruction}")
     }
 
-    fn format_user_message(&self, signature: Signature, inputs: HashMap<String, String>) -> String {
+    fn format_user_message(
+        &self,
+        signature: &Signature,
+        inputs: HashMap<String, String>,
+    ) -> String {
         let mut input_str = String::new();
-        for (field_name, field_value) in inputs {
-            input_str.push_str(format!("[[ ## {field_name} ## ]]\n{field_value}\n\n").as_str());
+        for (field_name, _) in signature.input_fields.iter() {
+            input_str.push_str(
+                format!(
+                    "[[ ## {field_name} ## ]]\n{field_value}\n\n",
+                    field_name = field_name,
+                    field_value = inputs.get(field_name).unwrap()
+                )
+                .as_str(),
+            );
         }
 
-        let mut user_message = format!("Respond with the corresponding output fields, starting with the field `{}`,", signature.output_fields.keys()[0]);
+        let mut user_message = format!(
+            "Respond with the corresponding output fields, starting with the field `{}`,",
+            signature.output_fields.keys()[0]
+        );
         for (field_name, _) in signature.output_fields.iter().skip(1) {
-            user_message.push_str(format!(" then `{}`,", field_name).as_str());
+            user_message.push_str(format!(" then `{field_name}`,").as_str());
         }
-        user_message.push_str("and then ending with the marker for `completed`.");
+        user_message.push_str(" and then ending with the marker for `completed`.");
 
-        format!("{input_str}\n\n{user_message}")
+        format!("{input_str}{user_message}")
     }
 
-    fn parse_response(&self, signature: Signature, response: String) -> HashMap<String, String> {
+    fn parse_response(&self, signature: &Signature, response: CompletionsResponse) -> Prediction {
         let mut output = HashMap::new();
 
+        let response_content = if let openrouter_rs::types::Choice::NonStreaming(non_streaming) =
+            &response.choices[0]
+        {
+            non_streaming.message.content.as_ref().unwrap()
+        } else {
+            panic!("Expected non-streaming choice");
+        };
+
         for (field_name, _) in signature.output_fields.iter() {
-            let field_value = response.split(format!("[[ ## {field_name} ## ]]\n").as_str()).nth(1).unwrap();
-            output.insert(field_name.clone(), field_value.split("[[ ## ").nth(0).unwrap().trim().to_string());
+            let field_value = response_content
+                .split(format!("[[ ## {field_name} ## ]]\n").as_str())
+                .nth(1)
+                .unwrap();
+            output.insert(
+                field_name.clone(),
+                field_value
+                    .split("[[ ## ")
+                    .nth(0)
+                    .unwrap()
+                    .trim()
+                    .to_string(),
+            );
         }
 
-        output
+        Prediction {
+            data: output,
+            lm_usage: LmUsage::default(),
+        }
     }
 }

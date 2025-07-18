@@ -1,7 +1,5 @@
 use openrouter_rs::{
-    OpenRouterClient,
-    api::chat::ChatCompletionRequest,
-    types::{CompletionsResponse, ResponseFormat},
+    OpenRouterClient, api::chat::ChatCompletionRequest, types::CompletionsResponse,
 };
 use smart_default::SmartDefault;
 
@@ -26,10 +24,8 @@ pub struct LMConfig {
     pub top_k: Option<u32>,
     pub repetition_penalty: Option<f64>,
     pub logit_bias: Option<HashMap<String, f64>>,
-    pub top_logprobs: Option<u32>,
     pub min_p: Option<f64>,
     pub top_a: Option<f64>,
-    pub response_format: Option<ResponseFormat>,
 }
 
 #[derive(Clone, Debug, SmartDefault)]
@@ -53,10 +49,8 @@ impl LM {
         signature: String,
     ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let client = OpenRouterClient::builder()
-            .api_key("your_api_key")
-            .base_url("https://openrouter.ai/api/v1") // optional
-            .http_referer("your_referer") // optional
-            .x_title("your_app") // optional
+            .api_key(self.api_key.clone())
+            .base_url(self.base_url.clone())
             .build()?;
 
         let request = ChatCompletionRequest::builder()
@@ -71,10 +65,8 @@ impl LM {
             .top_k(self.config.top_k.unwrap_or_default())
             .repetition_penalty(self.config.repetition_penalty.unwrap_or_default())
             .logit_bias(self.config.logit_bias.clone().unwrap_or_default())
-            .top_logprobs(self.config.top_logprobs.unwrap_or_default())
             .min_p(self.config.min_p.unwrap_or_default())
             .top_a(self.config.top_a.unwrap_or_default())
-            .response_format(self.config.response_format.clone().unwrap_or_default())
             .build()?;
 
         let response = client.send_chat_completion(&request).await?;

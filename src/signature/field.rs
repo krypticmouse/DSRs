@@ -14,7 +14,7 @@ pub enum Field {
         #[default = ""]
         desc: String,
         format: Option<FormatFn>,
-        #[default = ""]
+        #[default = "String"]
         output_type: String,
     },
     OutputField {
@@ -23,7 +23,7 @@ pub enum Field {
         #[default = ""]
         desc: String,
         format: Option<FormatFn>,
-        #[default = ""]
+        #[default = "String"]
         output_type: String,
     },
 }
