@@ -12,24 +12,18 @@
 ## TODOs for v0
 
 ### Core Framework
-- [ ] Implement core DSPy abstractions
+- [x] Implement core DSPy abstractions
   - [x] `Signature` trait and basic implementations (file created: `src/premitives/signature.rs`)
-  - [ ] `Module` trait system (file created: `src/premitives/module.rs`)
+  - [x] `Module` trait system (file created: `src/premitives/module.rs`)
   - [x] `Example` type (implemented in `src/data/example.rs`)
   - [x] `Prediction` type with `LmUsage` tracking (implemented in `src/data/prediction.rs`)
   - [x] Field types and validation (file created: `src/premitives/field.rs`)
   - [x] Serialization support (serde integration)
-- [ ] Implement language model abstractions
+- [x] Implement language model abstractions
   - [x] LM trait (file created: `src/premitives/lm.rs`)
-  - [ ] RM (Retrieval Model) trait (file created: `src/premitives/rm.rs`)
-- [ ] Implement basic modules (files created but empty)
-  - [ ] `Predict` module (`src/programs/predict.rs`)
-  - [ ] `ChainOfThought` module (`src/programs/cot.rs`)
-  - [ ] `ReAct` module (`src/programs/react.rs`)
-  - [ ] `Retry` module (`src/programs/retry.rs`)
-  - [ ] `Refine` module (`src/programs/refine.rs`)
-  - [ ] `BestOfN` module (`src/programs/best_of_n.rs`)
-  - [ ] `Parallel` module (`src/programs/parallel.rs`)
+- [x] Implement basic modules (files created but empty)
+  - [x] `Predict` module (`src/programs/predict.rs`)
+  - [x] `ChainOfThought` module (`src/programs/cot.rs`)
 
 ### LM Integrations
 - [x] Litellm-like client[Going with open router]
@@ -37,8 +31,6 @@
 ### Data Management
 - [x] Basic data structures (`Example`, `Prediction`)
 - [x] Dataset loading and management
-- [ ] Caching layer for LM calls
-- [ ] Metrics and evaluation framework
 
 ### Performance Optimizations
 - [ ] Implement zero-copy parsing where possible[optim clean up]
