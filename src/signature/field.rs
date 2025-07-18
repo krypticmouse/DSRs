@@ -5,7 +5,7 @@ use smart_default::SmartDefault;
 
 pub type FormatFn = fn(&dyn Any) -> String;
 
-#[derive(Debug, Clone, PartialEq, Eq, SmartDefault)]
+#[derive(Debug, Clone, SmartDefault)]
 pub enum Field {
     #[default]
     InputField {
@@ -27,6 +27,44 @@ pub enum Field {
         output_type: String,
     },
 }
+
+impl PartialEq for Field {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                Field::InputField {
+                    prefix: p1,
+                    desc: d1,
+                    format: _,
+                    output_type: ot1,
+                },
+                Field::InputField {
+                    prefix: p2,
+                    desc: d2,
+                    format: _,
+                    output_type: ot2,
+                },
+            ) => p1 == p2 && d1 == d2 && ot1 == ot2,
+            (
+                Field::OutputField {
+                    prefix: p1,
+                    desc: d1,
+                    format: _,
+                    output_type: ot1,
+                },
+                Field::OutputField {
+                    prefix: p2,
+                    desc: d2,
+                    format: _,
+                    output_type: ot2,
+                },
+            ) => p1 == p2 && d1 == d2 && ot1 == ot2,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Field {}
 
 impl Field {
     pub fn prefix(&self) -> &str {
