@@ -22,13 +22,13 @@ Add DSRs to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dsrs = "0.0.1b"
+dspy-rs = "0.0.1-beta"
 ```
 
 Or use cargo:
 
 ```bash
-cargo add dsrs
+cargo add dspy-rs
 ```
 
 ## 🔧 Quick Start
@@ -36,7 +36,7 @@ cargo add dsrs
 Here's a simple example to get you started:
 
 ```rust
-use dsrs::prelude::*;
+use dspy_rs::prelude::*;
 use std::collections::HashMap;
 use indexmap::IndexMap;
 

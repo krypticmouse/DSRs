@@ -1,5 +1,5 @@
-use dsrs::data::example::Example;
-use dsrs::data::serialize::{load_jsonl, save_examples_as_jsonl};
+use dspy_rs::data::example::Example;
+use dspy_rs::data::serialize::{load_jsonl, save_examples_as_jsonl};
 use rstest::*;
 use std::collections::HashMap;
 

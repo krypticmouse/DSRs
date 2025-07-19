@@ -1,4 +1,4 @@
-use dsrs::clients::{chat::Chat, dummy_lm::DummyLM};
+use dspy_rs::clients::{chat::Chat, dummy_lm::DummyLM};
 use openrouter_rs::{api::chat::Message, types::Role};
 
 #[tokio::test]

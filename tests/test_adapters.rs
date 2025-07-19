@@ -2,12 +2,12 @@ use indexmap::IndexMap;
 use openrouter_rs::types::Role;
 use std::collections::HashMap;
 
-use dsrs::adapter::base::Adapter;
-use dsrs::adapter::chat_adapter::ChatAdapter;
-use dsrs::clients::chat::Chat;
-use dsrs::clients::dummy_lm::DummyLM;
-use dsrs::signature::field::Field;
-use dsrs::signature::signature::Signature;
+use dspy_rs::adapter::base::Adapter;
+use dspy_rs::adapter::chat_adapter::ChatAdapter;
+use dspy_rs::clients::chat::Chat;
+use dspy_rs::clients::dummy_lm::DummyLM;
+use dspy_rs::signature::field::Field;
+use dspy_rs::signature::signature::Signature;
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]

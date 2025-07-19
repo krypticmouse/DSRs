@@ -1,10 +1,10 @@
 use indexmap::IndexMap;
 use std::collections::HashMap;
 
-use dsrs::clients::dummy_lm::DummyLM;
-use dsrs::programs::dummy_predictor::DummyPredict;
-use dsrs::signature::field::Field;
-use dsrs::signature::signature::Signature;
+use dspy_rs::clients::dummy_lm::DummyLM;
+use dspy_rs::programs::dummy_predictor::DummyPredict;
+use dspy_rs::signature::field::Field;
+use dspy_rs::signature::signature::Signature;
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]

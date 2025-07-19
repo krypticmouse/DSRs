@@ -1,4 +1,4 @@
-use dsrs::clients::chat::Chat;
+use dspy_rs::clients::chat::Chat;
 use openrouter_rs::{api::chat::Message, types::Role};
 use rstest::*;
 

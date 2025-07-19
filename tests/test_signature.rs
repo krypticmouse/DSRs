@@ -1,5 +1,5 @@
-use dsrs::signature::field::Field;
-use dsrs::signature::signature::Signature;
+use dspy_rs::signature::field::Field;
+use dspy_rs::signature::signature::Signature;
 use indexmap::IndexMap;
 use rstest::*;
 

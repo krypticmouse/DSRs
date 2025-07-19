@@ -1,6 +1,6 @@
 use rstest::*;
 
-use dsrs::data::prediction::{LmUsage, Prediction};
+use dspy_rs::data::prediction::{LmUsage, Prediction};
 use std::collections::HashMap;
 
 #[rstest]
