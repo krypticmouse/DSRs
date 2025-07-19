@@ -8,7 +8,7 @@ use crate::module::Module;
 use crate::signature::signature::Signature;
 
 pub struct Predict<'a> {
-    pub signature: &'a mut Signature,
+    pub signature: &'a Signature,
 }
 
 impl<'a> Module for Predict<'a> {
