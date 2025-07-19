@@ -22,12 +22,20 @@ Add DSRs to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dspy-rs = "0.0.1-beta"
+# Option 1: Use the shorter alias (recommended)
+dsrs = { package = "dspy-rs", version = "0.0.2-beta" }
+
+# Option 2: Use the full name
+dspy-rs = "0.0.2-beta"
 ```
 
 Or use cargo:
 
 ```bash
+# Option 1: Add with alias (recommended)
+cargo add dsrs --package dspy-rs
+
+# Option 2: Add with full name
 cargo add dspy-rs
 ```
 
@@ -36,7 +44,7 @@ cargo add dspy-rs
 Here's a simple example to get you started:
 
 ```rust
-use dspy_rs::prelude::*;
+use dsrs::prelude::*;
 use std::collections::HashMap;
 use indexmap::IndexMap;
 
@@ -143,6 +151,6 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 <div align="center">
 
-**[Documentation](https://docs.rs/dsrs) • [Examples](examples/) • [Issues](https://github.com/yourusername/dsrs/issues) • [Discussions](https://github.com/yourusername/dsrs/discussions)**
+**[Documentation](https://docs.rs/dspy-rs) • [Examples](examples/) • [Issues](https://github.com/krypticmouse/dsrs/issues) • [Discussions](https://github.com/krypticmouse/dsrs/discussions)**
 
 </div>
