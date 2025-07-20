@@ -1,0 +1,71 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "DSRs",
+  "colors": {
+    "primary": "#ec9d75",
+    "light": "#ed6c13",
+    "dark": "#ed6c13"
+  },
+  "favicon": "/logo/logo.png",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting started",
+            "pages": [
+              "index",
+              "docs/getting-started/quickstart"
+            ]
+          },
+          {
+            "group": "Data",
+            "pages": [
+              "docs/data/examples",
+              "docs/data/prediction"
+            ]
+          },
+          {
+            "group": "Building blocks",
+            "pages": [
+              "docs/building-blocks/signature",
+              "docs/building-blocks/lm",
+              "docs/building-blocks/predictors",
+              "docs/building-blocks/module"
+            ]
+          }
+        ]
+      }
+    ],
+    "global": {
+      "anchors": [
+        {
+          "anchor": "DSPy Discord",
+          "href": "https://discord.com/invite/ZAEGgxjPUe",
+          "icon": "discord"
+        }
+      ]
+    }
+  },
+  "logo": {
+    "light": "/logo/main.png",
+    "dark": "/logo/main.png"
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "krypticmouse/DSRs",
+        "href": "https://github.com/krypticmouse/DSRs",
+        "icon": "github"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "x": "https://x.com/krypticmouse",
+      "github": "https://github.com/krypticmouse/DSRs"
+    }
+  }
+}

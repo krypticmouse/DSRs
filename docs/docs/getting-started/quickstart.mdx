@@ -1,0 +1,81 @@
+---
+title: "Quickstart"
+description: "Start building awesome LLM pipelines in minutes"
+icon: "rocket"
+---
+
+This guide will walk you through setting up DSRs in your Rust project and building your first LLM pipeline. You'll learn how to install the necessary dependencies, configure your language model provider, create a simple signature, and run your first prediction.
+
+The entire process takes about 10-15 minutes and requires only basic Rust knowledge. We'll start with installation, then move through configuration, and finally build a practical example that you can extend for your own use cases.
+
+<Steps>
+<Step title="Install DSRs">
+
+You can add DSRs to your project just like any other Rust crate, using either of these two methods:
+
+**Option 1: Add via Cargo.toml**
+```toml
+[dependencies]
+dsrs = { package = "dspy-rs", version = "0.0.2-beta" }
+```
+
+**Option 2: Add via cargo command**
+```bash
+cargo add dsrs --package dspy-rs
+```
+
+This will create an alias `dsrs` for the `dspy-rs` crate which is the intended way to use it.
+
+<Note>
+The reason we wanna do aliasing is because `dsrs` was already a published crate so I couldn't get the name, but this is how we intend to use it.
+</Note>
+</Step>
+
+<Step title="Setting up your Language Model">
+
+Create a `.env` file in your project root to configure your language model provider:
+
+```bash
+mint dev
+```
+
+A local preview of your documentation will be available at `http://localhost:3000`.
+
+</Step>
+
+<Step title="Define Task via Signatures">
+
+Create a `.env` file in your project root to configure your language model provider:
+
+```bash
+mint dev
+```
+
+A local preview of your documentation will be available at `http://localhost:3000`.
+
+</Step>
+
+<Step title="Setting Predictor for Signature Execution">
+
+Create a `.env` file in your project root to configure your language model provider:
+
+```bash
+mint dev
+```
+
+A local preview of your documentation will be available at `http://localhost:3000`.
+
+</Step>
+
+<Step title="Building Modules for Complex Pipelines">
+
+Create a `.env` file in your project root to configure your language model provider:
+
+```bash
+mint dev
+```
+
+A local preview of your documentation will be available at `http://localhost:3000`.
+
+</Step>
+</Steps>
