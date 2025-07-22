@@ -8,21 +8,21 @@ use crate::clients::{chat::Chat, lm::LMConfig};
 use crate::data::history::History;
 
 #[derive(Clone, Debug, SmartDefault)]
-pub struct DummyLM {
+pub struct DummyLM<'a> {
     #[default = "dummy/model"]
-    pub model: String,
+    pub model: &'a str,
     #[default(Vec::new())]
-    pub history: Vec<History>,
+    pub history: Vec<History<'a>>,
     #[default(LMConfig::default())]
     pub config: LMConfig,
 }
 
-impl DummyLM {
+impl<'a> DummyLM<'a> {
     pub async fn call(
         &mut self,
         chat: &Chat,
-        output: String,
-        signature: String,
+        output: &'a str,
+        signature: &'a str,
     ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let response = CompletionsResponse {
             id: "dummy_id".to_string(),
@@ -32,12 +32,12 @@ impl DummyLM {
                 error: None,
                 message: Message {
                     role: Some("assistant".to_string()),
-                    content: Some(output.clone()),
+                    content: Some(output.to_string()),
                     tool_calls: None,
                 },
             })],
             created: 0,
-            model: self.model.clone(),
+            model: self.model.to_string(),
             object_type: ObjectType::ChatCompletion,
             provider: None,
             system_fingerprint: None,
@@ -48,12 +48,12 @@ impl DummyLM {
             input: chat.clone(),
             output: response.clone(),
             signature,
-            model: self.model.clone(),
+            model: self.model,
         });
         Ok(response)
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&History> {
+    pub fn inspect_history(&self, n: usize) -> Vec<&History<'a>> {
         self.history.iter().rev().take(n).collect()
     }
 }

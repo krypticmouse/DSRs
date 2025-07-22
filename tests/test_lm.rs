@@ -19,10 +19,7 @@ async fn test_dummy_lm() {
         },
     ]);
 
-    let output = dummy_lm
-        .call(&chat, "Hello, world!".to_string(), "test".to_string())
-        .await
-        .unwrap();
+    let output = dummy_lm.call(&chat, "Hello, world!", "test").await.unwrap();
     let choice = &output.choices[0];
     if let openrouter_rs::types::Choice::NonStreaming(non_streaming) = choice {
         assert_eq!(

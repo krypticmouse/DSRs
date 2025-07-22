@@ -14,9 +14,11 @@ impl ChatAdapter {
     fn get_field_attribute_list(&self, field_iter: &IndexMap<String, Field>) -> String {
         let mut field_attributes = String::new();
         for (i, (field_name, field)) in field_iter.iter().enumerate() {
-            field_attributes.push_str(
-                format!("{}. `{}` ({})\n", i + 1, field_name, field.output_type()).as_str(),
-            );
+            field_attributes.push_str(format!("{}. `{field_name}`", i + 1).as_str());
+            if field.desc() != "" {
+                field_attributes.push_str(format!(": {}", field.desc()).as_str());
+            }
+            field_attributes.push('\n');
         }
         field_attributes
     }

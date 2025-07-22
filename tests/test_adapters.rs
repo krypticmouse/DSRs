@@ -13,25 +13,10 @@ use dspy_rs::signature::signature::Signature;
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter() {
     let signature = Signature::builder()
+        .name("test")
         .instruction("Given the fields `problem`, produce the fields `answer`.".to_string())
-        .input_fields(IndexMap::from([(
-            "problem".to_string(),
-            Field::InputField {
-                prefix: "".to_string(),
-                desc: "".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
-        )]))
-        .output_fields(IndexMap::from([(
-            "answer".to_string(),
-            Field::OutputField {
-                prefix: "".to_string(),
-                desc: "".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
-        )]))
+        .input_fields(IndexMap::from([("problem".to_string(), Field::In(""))]))
+        .output_fields(IndexMap::from([("answer".to_string(), Field::Out(""))]))
         .build()
         .unwrap();
 
@@ -57,7 +42,7 @@ async fn test_chat_adapter() {
 
     assert_eq!(
         messages.messages[0].content.to_string(),
-        "Your input fields are:\n1. `problem` (String)\n\nYour output fields are:\n1. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, produce the fields `answer`."
+        "Your input fields are:\n1. `problem`\n\nYour output fields are:\n1. `answer`\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, produce the fields `answer`."
     );
     assert_eq!(
         messages.messages[1].content.to_string(),
@@ -67,8 +52,8 @@ async fn test_chat_adapter() {
     let response = lm
         .call(
             &messages,
-            "[[ ## answer ## ]]\n150 degrees\n\n[[ ## completed ## ]]".to_string(),
-            "test".to_string(),
+            "[[ ## answer ## ]]\n150 degrees\n\n[[ ## completed ## ]]",
+            "test",
         )
         .await
         .unwrap();
@@ -82,14 +67,15 @@ async fn test_chat_adapter() {
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_multiple_fields() {
     let signature = Signature::builder()
+        .name("test")
         .instruction("You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string())
         .input_fields(IndexMap::from([
-            ("problem".to_string(), Field::InputField { prefix: "".to_string(), desc: "".to_string(), format: None, output_type: "String".to_string() }),
-            ("hint".to_string(), Field::InputField { prefix: "".to_string(), desc: "".to_string(), format: None, output_type: "String".to_string() }),
+            ("problem".to_string(), Field::In("")),
+            ("hint".to_string(), Field::In("")),
         ]))
         .output_fields(IndexMap::from([
-            ("reasoning".to_string(), Field::OutputField { prefix: "".to_string(), desc: "".to_string(), format: None, output_type: "String".to_string() }),
-            ("answer".to_string(), Field::OutputField { prefix: "".to_string(), desc: "".to_string(), format: None, output_type: "String".to_string() }),
+            ("reasoning".to_string(), Field::Out("")),
+            ("answer".to_string(), Field::Out("")),
         ]))
         .build()
         .unwrap();
@@ -122,14 +108,21 @@ async fn test_chat_adapter_with_multiple_fields() {
 
     assert_eq!(
         messages.messages[0].content.to_string(),
-        "Your input fields are:\n1. `problem` (String)\n2. `hint` (String)\n\nYour output fields are:\n1. `reasoning` (String)\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer."
+        "Your input fields are:\n1. `problem`\n2. `hint`\n\nYour output fields are:\n1. `reasoning`\n2. `answer`\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer."
     );
     assert_eq!(
         messages.messages[1].content.to_string(),
         "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `reasoning`, then `answer`, and then ending with the marker for `completed`."
     );
 
-    let response = lm.call(&messages, "[[ ## reasoning ## ]]\nThe capital of France is Paris.\n\n[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]".to_string(), "test".to_string()).await.unwrap();
+    let response = lm
+        .call(
+            &messages,
+            "[[ ## reasoning ## ]]\nThe capital of France is Paris.\n\n[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]",
+            "test",
+        )
+        .await
+        .unwrap();
     let output = adapter.parse_response(&signature, response);
 
     assert_eq!(output.data.len(), 2);

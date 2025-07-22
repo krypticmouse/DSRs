@@ -2,10 +2,10 @@ use crate::clients::chat::Chat;
 use openrouter_rs::types::CompletionsResponse;
 
 #[derive(Clone, Debug)]
-pub struct History {
+pub struct History<'a> {
     pub input: Chat,
     pub output: CompletionsResponse,
-    pub signature: String,
+    pub signature: &'a str,
 
-    pub model: String,
+    pub model: &'a str,
 }

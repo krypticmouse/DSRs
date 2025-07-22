@@ -29,32 +29,32 @@ pub struct LMConfig {
 }
 
 #[derive(Clone, Debug, SmartDefault)]
-pub struct LM {
+pub struct LM<'a> {
     #[default = "https://openrouter.ai/api/v1"]
-    pub base_url: String,
+    pub base_url: &'a str,
 
-    pub api_key: String,
+    pub api_key: &'a str,
     #[default = "openai/gpt-4o-mini"]
-    pub model: String,
+    pub model: &'a str,
     #[default(Vec::new())]
-    pub history: Vec<History>,
+    pub history: Vec<History<'a>>,
     #[default(LMConfig::default())]
     pub config: LMConfig,
 }
 
-impl LM {
+impl<'a> LM<'a> {
     pub async fn call(
         &mut self,
         chat: &Chat,
-        signature: String,
+        signature: &'a str,
     ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let client = OpenRouterClient::builder()
-            .api_key(self.api_key.clone())
-            .base_url(self.base_url.clone())
+            .api_key(self.api_key)
+            .base_url(self.base_url)
             .build()?;
 
         let request = ChatCompletionRequest::builder()
-            .model(self.model.clone())
+            .model(self.model)
             .messages(chat.messages.clone())
             .temperature(self.config.temperature)
             .top_p(self.config.top_p)
@@ -75,7 +75,7 @@ impl LM {
             input: chat.clone(),
             output: response.clone(),
             signature,
-            model: self.model.clone(),
+            model: self.model,
         });
 
         Ok(response)

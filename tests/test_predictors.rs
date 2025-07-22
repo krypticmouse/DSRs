@@ -10,25 +10,15 @@ use dspy_rs::signature::signature::Signature;
 #[cfg_attr(miri, ignore)]
 async fn test_predictor() {
     let mut signature = Signature::builder()
-        .name("QASignature".to_string())
+        .name("QASignature")
         .instruction("You are a helpful assistant.".to_string())
         .input_fields(IndexMap::from([(
             "question".to_string(),
-            Field::InputField {
-                prefix: "".to_string(),
-                desc: "The question to answer".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
+            Field::In("The question to answer"),
         )]))
         .output_fields(IndexMap::from([(
             "answer".to_string(),
-            Field::OutputField {
-                prefix: "".to_string(),
-                desc: "The answer to the question".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
+            Field::Out("The answer to the question"),
         )]))
         .build()
         .unwrap();
@@ -46,7 +36,7 @@ async fn test_predictor() {
     let outputs = predictor
         .forward(
             inputs,
-            "[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]".to_string(),
+            "[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]",
             Some(lm),
             None,
         )

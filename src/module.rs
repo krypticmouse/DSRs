@@ -5,11 +5,11 @@ use crate::clients::lm::LM;
 use crate::data::prediction::Prediction;
 
 #[allow(async_fn_in_trait)]
-pub trait Module {
+pub trait Module<'a> {
     async fn forward(
         &self,
         inputs: HashMap<String, String>,
-        lm: Option<LM>,
+        lm: Option<LM<'a>>,
         adapter: Option<ChatAdapter>,
     ) -> Prediction;
 }

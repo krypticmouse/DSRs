@@ -7,15 +7,15 @@ use crate::data::prediction::Prediction;
 use crate::signature::signature::Signature;
 
 pub struct DummyPredict<'a> {
-    pub signature: &'a mut Signature,
+    pub signature: &'a mut Signature<'a>,
 }
 
 impl<'a> DummyPredict<'a> {
     pub async fn forward(
         &self,
         inputs: HashMap<String, String>,
-        output: String,
-        lm: Option<DummyLM>,
+        output: &'a str,
+        lm: Option<DummyLM<'a>>,
         adapter: Option<ChatAdapter>,
     ) -> Prediction {
         let mut lm = lm.unwrap_or_default();
@@ -23,7 +23,7 @@ impl<'a> DummyPredict<'a> {
 
         let messages = adapter.format(self.signature, inputs);
         let response = lm
-            .call(&messages, output, self.signature.name.clone())
+            .call(&messages, output, self.signature.name)
             .await
             .unwrap();
         adapter.parse_response(self.signature, response)
