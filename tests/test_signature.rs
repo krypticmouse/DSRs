@@ -85,3 +85,28 @@ fn test_signature_builder() {
         "desc 2"
     );
 }
+
+#[rstest]
+fn test_signature_no_builder() {
+    let signature = Signature {
+        name: "QASignature",
+        instruction: "You'll be given a question and a context, and you'll need to answer the question based on the context".to_string(),
+        input_fields: IndexMap::from_iter(vec![
+            ("question".to_string(), Field::In("The question to answer")),
+        ]),
+        output_fields: IndexMap::from_iter(vec![
+            ("answer".to_string(), Field::Out("The answer to the question")),
+        ]),
+    };
+
+    assert_eq!(signature.input_fields.len(), 1);
+    assert_eq!(signature.output_fields.len(), 1);
+    assert_eq!(
+        signature.input_fields.get("question").unwrap().desc(),
+        "The question to answer"
+    );
+    assert_eq!(
+        signature.output_fields.get("answer").unwrap().desc(),
+        "The answer to the question"
+    );
+}

@@ -8,7 +8,6 @@ readme = "README.md"
 documentation = "https://dsrs.herumbshandilya.com"
 homepage = "https://dsrs.herumbshandilya.com"
 repository = "https://github.com/krypticmouse/DSRs"
-license = "Apache-2.0"
 license-file = "LICENSE"
 exclude = [
     "docs/*",

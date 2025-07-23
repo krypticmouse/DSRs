@@ -81,7 +81,7 @@ impl<'a> LM<'a> {
         Ok(response)
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&History> {
+    pub fn inspect_history(&self, n: usize) -> Vec<&History<'_>> {
         self.history.iter().rev().take(n).collect()
     }
 }

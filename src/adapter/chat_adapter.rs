@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 use openrouter_rs::types::CompletionsResponse;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ChatAdapter;
 
 impl ChatAdapter {
