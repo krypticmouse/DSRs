@@ -1,30 +1,30 @@
-use std::collections::HashMap;
-
-use crate::adapter::base::Adapter;
-use crate::adapter::chat_adapter::ChatAdapter;
+use crate::adapter::{base::Adapter, chat_adapter::ChatAdapter};
 use crate::clients::lm::LM;
-use crate::data::prediction::Prediction;
+use crate::data::{example::Example, prediction::Prediction};
 use crate::module::Module;
 use crate::signature::signature::Signature;
 use crate::utils::settings::SETTINGS;
 
-pub struct Predict<'a> {
-    pub signature: &'a Signature<'a>,
+pub struct Predict {
+    pub signature: Signature,
 }
 
-impl<'a> Module<'a> for Predict<'a> {
+impl Module for Predict {
     async fn forward(
         &self,
-        inputs: HashMap<String, String>,
-        lm: Option<LM<'a>>,
+        inputs: Example,
+        lm: Option<LM>,
         adapter: Option<ChatAdapter>,
     ) -> Prediction {
         let mut lm = lm.unwrap_or(SETTINGS.lock().unwrap().lm.clone());
         let adapter = adapter.unwrap_or(SETTINGS.lock().unwrap().adapter.clone());
 
-        let messages = adapter.format(self.signature, inputs);
-        let response = lm.call(&messages, self.signature.name).await.unwrap();
+        let messages = adapter.format(self.signature.clone(), inputs);
+        let response = lm
+            .call(&messages, self.signature.name.clone())
+            .await
+            .unwrap();
 
-        adapter.parse_response(self.signature, response)
+        adapter.parse_response(self.signature.clone(), response)
     }
 }

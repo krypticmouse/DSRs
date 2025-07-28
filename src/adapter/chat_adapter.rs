@@ -1,5 +1,8 @@
 use crate::adapter::base::Adapter;
-use crate::data::prediction::{LmUsage, Prediction};
+use crate::data::{
+    example::Example,
+    prediction::{LmUsage, Prediction},
+};
 use crate::signature::field::Field;
 use crate::signature::signature::Signature;
 use std::collections::HashMap;
@@ -34,15 +37,15 @@ impl ChatAdapter {
 }
 
 impl Adapter for ChatAdapter {
-    fn format_system_message(&self, signature: &Signature) -> String {
-        let field_description = Adapter::format_field_description(self, signature);
-        let field_structure = Adapter::format_field_structure(self, signature);
-        let task_description = Adapter::format_task_description(self, signature);
+    fn format_system_message(&self, signature: Signature) -> String {
+        let field_description = self.format_field_description(signature.clone());
+        let field_structure = self.format_field_structure(signature.clone());
+        let task_description = self.format_task_description(signature.clone());
 
         format!("{field_description}\n{field_structure}\n{task_description}")
     }
 
-    fn format_field_description(&self, signature: &Signature) -> String {
+    fn format_field_description(&self, signature: Signature) -> String {
         let input_field_description = self.get_field_attribute_list(&signature.input_fields);
         let output_field_description = self.get_field_attribute_list(&signature.output_fields);
 
@@ -51,7 +54,7 @@ impl Adapter for ChatAdapter {
         )
     }
 
-    fn format_field_structure(&self, signature: &Signature) -> String {
+    fn format_field_structure(&self, signature: Signature) -> String {
         let input_field_structure = self.get_field_structure(&signature.input_fields);
         let output_field_structure = self.get_field_structure(&signature.output_fields);
 
@@ -60,7 +63,7 @@ impl Adapter for ChatAdapter {
         )
     }
 
-    fn format_task_description(&self, signature: &Signature) -> String {
+    fn format_task_description(&self, signature: Signature) -> String {
         let instruction = if signature.instruction.is_empty() {
             format!(
                 "Given the fields `{}`, produce the fields `{}`.",
@@ -84,18 +87,14 @@ impl Adapter for ChatAdapter {
         format!("In adhering to this structure, your objective is:\n\t{instruction}")
     }
 
-    fn format_user_message(
-        &self,
-        signature: &Signature,
-        inputs: HashMap<String, String>,
-    ) -> String {
+    fn format_user_message(&self, signature: Signature, inputs: Example) -> String {
         let mut input_str = String::new();
         for (field_name, _) in signature.input_fields.iter() {
             input_str.push_str(
                 format!(
                     "[[ ## {field_name} ## ]]\n{field_value}\n\n",
                     field_name = field_name,
-                    field_value = inputs.get(field_name).unwrap()
+                    field_value = inputs.get(field_name, None)
                 )
                 .as_str(),
             );
@@ -113,7 +112,7 @@ impl Adapter for ChatAdapter {
         format!("{input_str}{user_message}")
     }
 
-    fn parse_response(&self, signature: &Signature, response: CompletionsResponse) -> Prediction {
+    fn parse_response(&self, signature: Signature, response: CompletionsResponse) -> Prediction {
         let mut output = HashMap::new();
 
         let response_content = if let openrouter_rs::types::Choice::NonStreaming(non_streaming) =

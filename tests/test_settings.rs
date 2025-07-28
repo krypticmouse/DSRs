@@ -16,7 +16,7 @@ fn test_settings() {
 
     configure_settings(
         Some(LM {
-            model: "openai/gpt-4o",
+            model: "openai/gpt-4o".to_string(),
             ..LM::default()
         }),
         Some(ChatAdapter {}),

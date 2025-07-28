@@ -7,13 +7,13 @@ use crate::clients::lm::LM;
 #[derive(SmartDefault, Clone)]
 pub struct Settings {
     #[default(LM::default())]
-    pub lm: LM<'static>,
+    pub lm: LM,
     #[default(ChatAdapter {})]
     pub adapter: ChatAdapter,
 }
 
 impl Settings {
-    pub fn configure(&mut self, lm: Option<LM<'static>>, adapter: Option<ChatAdapter>) {
+    pub fn configure(&mut self, lm: Option<LM>, adapter: Option<ChatAdapter>) {
         self.lm = lm.unwrap_or(self.lm.clone());
         self.adapter = adapter.unwrap_or(self.adapter.clone());
     }
@@ -21,6 +21,6 @@ impl Settings {
 
 pub static SETTINGS: LazyLock<Mutex<Settings>> = LazyLock::new(|| Mutex::new(Settings::default()));
 
-pub fn configure_settings(lm: Option<LM<'static>>, adapter: Option<ChatAdapter>) {
+pub fn configure_settings(lm: Option<LM>, adapter: Option<ChatAdapter>) {
     SETTINGS.lock().unwrap().configure(lm, adapter);
 }

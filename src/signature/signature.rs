@@ -5,16 +5,16 @@ use std::fmt;
 use crate::signature::field::Field;
 
 #[derive(Builder, Debug, Clone, PartialEq, Eq)]
-pub struct Signature<'a> {
-    pub name: &'a str,
+pub struct Signature {
+    pub name: String,
     pub instruction: String,
 
-    pub input_fields: IndexMap<String, Field<'a>>,
-    pub output_fields: IndexMap<String, Field<'a>>,
+    pub input_fields: IndexMap<String, Field>,
+    pub output_fields: IndexMap<String, Field>,
 }
 
-impl<'a> Signature<'a> {
-    pub fn insert(&mut self, field_name: String, field: Field<'a>, index: usize) {
+impl Signature {
+    pub fn insert(&mut self, field_name: String, field: Field, index: usize) {
         match &field {
             Field::In(_) => {
                 self.input_fields.insert_before(index, field_name, field);
@@ -25,7 +25,7 @@ impl<'a> Signature<'a> {
         }
     }
 
-    pub fn append(&mut self, field_name: String, field: Field<'a>) {
+    pub fn append(&mut self, field_name: String, field: Field) {
         match &field {
             Field::In(_) => {
                 self.input_fields.insert_before(0, field_name, field);
@@ -36,7 +36,7 @@ impl<'a> Signature<'a> {
         }
     }
 
-    pub fn prepend(&mut self, field_name: String, field: Field<'a>) {
+    pub fn prepend(&mut self, field_name: String, field: Field) {
         let index = self.input_fields.len();
 
         match &field {
@@ -49,12 +49,12 @@ impl<'a> Signature<'a> {
         }
     }
 
-    pub fn builder() -> SignatureBuilder<'a> {
+    pub fn builder() -> SignatureBuilder {
         SignatureBuilder::default()
     }
 }
 
-impl<'a> fmt::Display for Signature<'a> {
+impl fmt::Display for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let input_str = self
             .input_fields
@@ -77,8 +77,8 @@ impl<'a> fmt::Display for Signature<'a> {
     }
 }
 
-impl<'a> From<&'a str> for Signature<'a> {
-    fn from(signature: &'a str) -> Self {
+impl From<&str> for Signature {
+    fn from(signature: &str) -> Self {
         let fields = signature.split("->").collect::<Vec<&str>>();
         let input_fields: Vec<&str> = fields[0].split(",").map(|s| s.trim()).collect();
         let output_fields: Vec<&str> = fields[1].split(",").map(|s| s.trim()).collect();
@@ -91,17 +91,17 @@ impl<'a> From<&'a str> for Signature<'a> {
         let input_fields_map = IndexMap::from_iter(
             input_fields
                 .iter()
-                .map(|field| (field.to_string(), Field::In(""))),
+                .map(|field| (field.to_string(), Field::In("".to_string()))),
         );
 
         let output_fields_map = IndexMap::from_iter(
             output_fields
                 .iter()
-                .map(|field| (field.to_string(), Field::Out(""))),
+                .map(|field| (field.to_string(), Field::Out("".to_string()))),
         );
 
         Self {
-            name: signature,
+            name: signature.to_string(),
             instruction: default_desc,
             input_fields: input_fields_map,
             output_fields: output_fields_map,

@@ -6,6 +6,7 @@ use dspy_rs::adapter::base::Adapter;
 use dspy_rs::adapter::chat_adapter::ChatAdapter;
 use dspy_rs::clients::chat::Chat;
 use dspy_rs::clients::dummy_lm::DummyLM;
+use dspy_rs::data::example::Example;
 use dspy_rs::signature::field::Field;
 use dspy_rs::signature::signature::Signature;
 
@@ -13,10 +14,16 @@ use dspy_rs::signature::signature::Signature;
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter() {
     let signature = Signature::builder()
-        .name("test")
+        .name("test".to_string())
         .instruction("Given the fields `problem`, produce the fields `answer`.".to_string())
-        .input_fields(IndexMap::from([("problem".to_string(), Field::In(""))]))
-        .output_fields(IndexMap::from([("answer".to_string(), Field::Out(""))]))
+        .input_fields(IndexMap::from([(
+            "problem".to_string(),
+            Field::In("".to_string()),
+        )]))
+        .output_fields(IndexMap::from([(
+            "answer".to_string(),
+            Field::Out("".to_string()),
+        )]))
         .build()
         .unwrap();
 
@@ -24,11 +31,15 @@ async fn test_chat_adapter() {
     let adapter = ChatAdapter;
 
     let messages: Chat = adapter.format(
-        &signature,
-        HashMap::from([(
-            "problem".to_string(),
-            "What is the capital of France?".to_string(),
-        )]),
+        signature.clone(),
+        Example::new(
+            HashMap::from([(
+                "problem".to_string(),
+                "What is the capital of France?".to_string(),
+            )]),
+            vec!["problem".to_string()],
+            vec!["answer".to_string()],
+        ),
     );
     assert_eq!(messages.len(), 2);
     assert_eq!(
@@ -57,7 +68,7 @@ async fn test_chat_adapter() {
         )
         .await
         .unwrap();
-    let output = adapter.parse_response(&signature, response);
+    let output = adapter.parse_response(signature.clone(), response);
 
     assert_eq!(output.data.len(), 1);
     assert_eq!(output.data.get("answer").unwrap().as_str(), "150 degrees");
@@ -67,15 +78,15 @@ async fn test_chat_adapter() {
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_multiple_fields() {
     let signature = Signature::builder()
-        .name("test")
+        .name("test".to_string())
         .instruction("You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string())
         .input_fields(IndexMap::from([
-            ("problem".to_string(), Field::In("")),
-            ("hint".to_string(), Field::In("")),
+            ("problem".to_string(), Field::In("".to_string())),
+            ("hint".to_string(), Field::In("".to_string())),
         ]))
         .output_fields(IndexMap::from([
-            ("reasoning".to_string(), Field::Out("")),
-            ("answer".to_string(), Field::Out("")),
+            ("reasoning".to_string(), Field::Out("".to_string())),
+            ("answer".to_string(), Field::Out("".to_string())),
         ]))
         .build()
         .unwrap();
@@ -84,17 +95,21 @@ async fn test_chat_adapter_with_multiple_fields() {
     let adapter = ChatAdapter;
 
     let messages: Chat = adapter.format(
-        &signature,
-        HashMap::from([
-            (
-                "problem".to_string(),
-                "What is the capital of France?".to_string(),
-            ),
-            (
-                "hint".to_string(),
-                "The capital of France is Paris.".to_string(),
-            ),
-        ]),
+        signature.clone(),
+        Example::new(
+            HashMap::from([
+                (
+                    "problem".to_string(),
+                    "What is the capital of France?".to_string(),
+                ),
+                (
+                    "hint".to_string(),
+                    "The capital of France is Paris.".to_string(),
+                ),
+            ]),
+            vec!["problem".to_string(), "hint".to_string()],
+            vec!["reasoning".to_string(), "answer".to_string()],
+        ),
     );
     assert_eq!(messages.len(), 2);
     assert_eq!(
@@ -123,7 +138,7 @@ async fn test_chat_adapter_with_multiple_fields() {
         )
         .await
         .unwrap();
-    let output = adapter.parse_response(&signature, response);
+    let output = adapter.parse_response(signature.clone(), response);
 
     assert_eq!(output.data.len(), 2);
     assert_eq!(

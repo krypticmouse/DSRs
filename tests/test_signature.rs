@@ -5,9 +5,9 @@ use rstest::*;
 
 #[rstest]
 fn test_field_initizalization() {
-    let input_field = Field::In("desc");
+    let input_field = Field::In("desc".to_string());
 
-    let output_field = Field::Out("desc");
+    let output_field = Field::Out("desc".to_string());
     assert_eq!(input_field.desc(), "desc");
     assert_eq!(output_field.desc(), "desc");
 }
@@ -27,7 +27,7 @@ fn test_signature_from_string() {
 #[rstest]
 fn test_signature_insert() {
     let mut signature = Signature::from("inp1, inp2 -> out1, out2");
-    signature.insert("inp3".to_string(), Field::In("desc"), 0);
+    signature.insert("inp3".to_string(), Field::In("desc".to_string()), 0);
 
     assert_eq!(signature.input_fields.len(), 3);
     assert_eq!(signature.input_fields.get("inp3").unwrap().desc(), "desc");
@@ -37,7 +37,7 @@ fn test_signature_insert() {
 #[rstest]
 fn test_signature_append() {
     let mut signature = Signature::from("inp1, inp2 -> out1, out2");
-    signature.append("inp3".to_string(), Field::In("desc"));
+    signature.append("inp3".to_string(), Field::In("desc".to_string()));
 
     assert_eq!(signature.input_fields.len(), 3);
     assert_eq!(signature.input_fields.get("inp3").unwrap().desc(), "desc");
@@ -47,7 +47,7 @@ fn test_signature_append() {
 #[rstest]
 fn test_signature_prepend() {
     let mut signature = Signature::from("inp1, inp2 -> out1, out2");
-    signature.prepend("inp3".to_string(), Field::In("desc"));
+    signature.prepend("inp3".to_string(), Field::In("desc".to_string()));
 
     assert_eq!(signature.input_fields.len(), 3);
     assert_eq!(signature.input_fields.get("inp3").unwrap().desc(), "desc");
@@ -56,15 +56,15 @@ fn test_signature_prepend() {
 #[rstest]
 fn test_signature_builder() {
     let signature = Signature::builder()
-        .name("test")
+        .name("test".to_string())
         .instruction("given a input, return a output".to_string())
         .input_fields(IndexMap::from_iter(vec![
-            ("inp1".to_string(), Field::In("desc 1")),
-            ("inp2".to_string(), Field::In("desc 2")),
+            ("inp1".to_string(), Field::In("desc 1".to_string())),
+            ("inp2".to_string(), Field::In("desc 2".to_string())),
         ]))
         .output_fields(IndexMap::from_iter(vec![
-            ("out1".to_string(), Field::Out("desc 1")),
-            ("out2".to_string(), Field::Out("desc 2")),
+            ("out1".to_string(), Field::Out("desc 1".to_string())),
+            ("out2".to_string(), Field::Out("desc 2".to_string())),
         ]))
         .build()
         .unwrap();
@@ -89,13 +89,13 @@ fn test_signature_builder() {
 #[rstest]
 fn test_signature_no_builder() {
     let signature = Signature {
-        name: "QASignature",
+        name: "QASignature".to_string(),
         instruction: "You'll be given a question and a context, and you'll need to answer the question based on the context".to_string(),
         input_fields: IndexMap::from_iter(vec![
-            ("question".to_string(), Field::In("The question to answer")),
+            ("question".to_string(), Field::In("The question to answer".to_string())),
         ]),
         output_fields: IndexMap::from_iter(vec![
-            ("answer".to_string(), Field::Out("The answer to the question")),
+            ("answer".to_string(), Field::Out("The answer to the question".to_string())),
         ]),
     };
 

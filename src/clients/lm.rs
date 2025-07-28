@@ -29,32 +29,32 @@ pub struct LMConfig {
 }
 
 #[derive(Clone, Debug, SmartDefault)]
-pub struct LM<'a> {
+pub struct LM {
     #[default = "https://openrouter.ai/api/v1"]
-    pub base_url: &'a str,
+    pub base_url: String,
 
-    pub api_key: &'a str,
+    pub api_key: String,
     #[default = "openai/gpt-4o-mini"]
-    pub model: &'a str,
+    pub model: String,
     #[default(Vec::new())]
-    pub history: Vec<History<'a>>,
+    pub history: Vec<History>,
     #[default(LMConfig::default())]
     pub config: LMConfig,
 }
 
-impl<'a> LM<'a> {
+impl LM {
     pub async fn call(
         &mut self,
         chat: &Chat,
-        signature: &'a str,
+        signature: String,
     ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let client = OpenRouterClient::builder()
-            .api_key(self.api_key)
-            .base_url(self.base_url)
+            .api_key(self.api_key.clone())
+            .base_url(self.base_url.clone())
             .build()?;
 
         let request = ChatCompletionRequest::builder()
-            .model(self.model)
+            .model(self.model.clone())
             .messages(chat.messages.clone())
             .temperature(self.config.temperature)
             .top_p(self.config.top_p)
@@ -75,13 +75,13 @@ impl<'a> LM<'a> {
             input: chat.clone(),
             output: response.clone(),
             signature,
-            model: self.model,
+            model: self.model.clone(),
         });
 
         Ok(response)
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&History<'_>> {
+    pub fn inspect_history(&self, n: usize) -> Vec<&History> {
         self.history.iter().rev().take(n).collect()
     }
 }

@@ -8,21 +8,21 @@ use crate::clients::{chat::Chat, lm::LMConfig};
 use crate::data::history::History;
 
 #[derive(Clone, Debug, SmartDefault)]
-pub struct DummyLM<'a> {
+pub struct DummyLM {
     #[default = "dummy/model"]
-    pub model: &'a str,
+    pub model: String,
     #[default(Vec::new())]
-    pub history: Vec<History<'a>>,
+    pub history: Vec<History>,
     #[default(LMConfig::default())]
     pub config: LMConfig,
 }
 
-impl<'a> DummyLM<'a> {
+impl DummyLM {
     pub async fn call(
         &mut self,
         chat: &Chat,
-        output: &'a str,
-        signature: &'a str,
+        output: &str,
+        signature: &str,
     ) -> Result<CompletionsResponse, Box<dyn Error>> {
         let response = CompletionsResponse {
             id: "dummy_id".to_string(),
@@ -47,13 +47,13 @@ impl<'a> DummyLM<'a> {
         self.history.push(History {
             input: chat.clone(),
             output: response.clone(),
-            signature,
-            model: self.model,
+            signature: signature.to_string(),
+            model: self.model.clone(),
         });
         Ok(response)
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&History<'a>> {
+    pub fn inspect_history(&self, n: usize) -> Vec<&History> {
         self.history.iter().rev().take(n).collect()
     }
 }

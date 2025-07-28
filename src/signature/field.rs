@@ -1,13 +1,13 @@
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Field<'a> {
-    In(&'a str),
-    Out(&'a str),
+pub enum Field {
+    In(String),
+    Out(String),
 }
 
-impl<'a> Field<'a> {
-    pub fn desc(&self) -> &'a str {
+impl Field {
+    pub fn desc(&self) -> &str {
         match self {
             Field::In(desc) => desc,
             Field::Out(desc) => desc,
@@ -15,7 +15,7 @@ impl<'a> Field<'a> {
     }
 }
 
-impl<'a> fmt::Display for Field<'a> {
+impl fmt::Display for Field {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Field::In(desc) => write!(f, "Input({desc})"),
