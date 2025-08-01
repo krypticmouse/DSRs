@@ -115,19 +115,19 @@ cargo test -- --nocapture
 ⚠️ **Early Development** - DSRs is actively being developed. The API may change between versions.
 
 ### Core Framework
-- [] Metrics traits and Evaluators
-- [] Structured Output Parsing
-- [] Adding More Predictors
-    - [] dsrs.Refine
-    - [] dsrs.BestOfN
-    - [] dsrs.Retry
-- [] Retriever Module Support
+- [x] Metrics traits and Evaluators
+- [ ] Structured Output Parsing
+- [ ] Adding More Predictors
+    - [ ] dsrs.Refine
+    - [ ] dsrs.BestOfN
+    - [ ] dsrs.Retry
+- [ ] Retriever Module Support
 
 ### LM Integrations
-- [] Ability to use native provider keys for popular clients
+- [ ] Ability to use native provider keys for popular clients
 
 ### Data Management
-- [] Support for data loading from sources
+- [ ] Support for data loading from sources
 
 ### Performance Optimizations
 - [ ] Batch processing for LM calls
