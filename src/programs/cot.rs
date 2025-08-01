@@ -1,9 +1,10 @@
 use crate::adapter::chat_adapter::ChatAdapter;
 use crate::clients::lm::LM;
 use crate::data::{example::Example, prediction::Prediction};
+use crate::field::Out;
 use crate::module::Module;
 use crate::programs::predict::Predict;
-use crate::signature::{field::Field, signature::Signature};
+use crate::signature::Signature;
 
 pub struct ChainofThought {
     pub signature: Signature,
@@ -14,16 +15,10 @@ pub struct ChainofThought {
 impl ChainofThought {
     pub fn new(signature: &mut Signature, add_hint: bool) -> Self {
         if add_hint {
-            signature.append(
-                "hint".to_string(),
-                Field::Out("The hint for the answer".to_string()),
-            );
+            signature.append_output("hint".to_string(), Out::default());
         }
 
-        signature.prepend(
-            "reasoning".to_string(),
-            Field::Out("Let's think step by step.".to_string()),
-        );
+        signature.prepend_output("reasoning".to_string(), Out::default());
 
         Self {
             signature: signature.clone(),

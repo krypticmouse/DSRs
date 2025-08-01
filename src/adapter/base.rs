@@ -5,7 +5,7 @@ use openrouter_rs::{
 
 use crate::clients::chat::Chat;
 use crate::data::{example::Example, prediction::Prediction};
-use crate::signature::signature::Signature;
+use crate::signature::Signature;
 
 pub trait Adapter {
     fn format(&self, signature: Signature, inputs: Example) -> Chat {

@@ -34,6 +34,8 @@ impl DummyLM {
                     role: Some("assistant".to_string()),
                     content: Some(output.to_string()),
                     tool_calls: None,
+                    reasoning: None,
+                    reasoning_details: None,
                 },
             })],
             created: 0,

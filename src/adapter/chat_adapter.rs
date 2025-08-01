@@ -3,8 +3,8 @@ use crate::data::{
     example::Example,
     prediction::{LmUsage, Prediction},
 };
-use crate::signature::field::Field;
-use crate::signature::signature::Signature;
+use crate::field::Field;
+use crate::signature::Signature;
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
@@ -14,11 +14,11 @@ use openrouter_rs::types::CompletionsResponse;
 pub struct ChatAdapter;
 
 impl ChatAdapter {
-    fn get_field_attribute_list(&self, field_iter: &IndexMap<String, Field>) -> String {
+    fn get_field_attribute_list<T: Field>(&self, field_iter: &IndexMap<String, T>) -> String {
         let mut field_attributes = String::new();
         for (i, (field_name, field)) in field_iter.iter().enumerate() {
             field_attributes.push_str(format!("{}. `{field_name}`", i + 1).as_str());
-            if field.desc() != "" {
+            if !field.desc().is_empty() {
                 field_attributes.push_str(format!(": {}", field.desc()).as_str());
             }
             field_attributes.push('\n');
@@ -26,7 +26,7 @@ impl ChatAdapter {
         field_attributes
     }
 
-    fn get_field_structure(&self, field_iter: &IndexMap<String, Field>) -> String {
+    fn get_field_structure<T: Field>(&self, field_iter: &IndexMap<String, T>) -> String {
         let mut field_structure = String::new();
         for (field_name, _) in field_iter {
             field_structure

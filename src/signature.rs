@@ -2,51 +2,40 @@ use derive_builder::Builder;
 use indexmap::IndexMap;
 use std::fmt;
 
-use crate::signature::field::Field;
+use crate::field::{In, Out};
 
 #[derive(Builder, Debug, Clone, PartialEq, Eq)]
 pub struct Signature {
     pub name: String,
     pub instruction: String,
 
-    pub input_fields: IndexMap<String, Field>,
-    pub output_fields: IndexMap<String, Field>,
+    pub input_fields: IndexMap<String, In>,
+    pub output_fields: IndexMap<String, Out>,
 }
 
 impl Signature {
-    pub fn insert(&mut self, field_name: String, field: Field, index: usize) {
-        match &field {
-            Field::In(_) => {
-                self.input_fields.insert_before(index, field_name, field);
-            }
-            Field::Out(_) => {
-                self.output_fields.insert_before(index, field_name, field);
-            }
-        }
+    pub fn insert_input(&mut self, field_name: String, field: In, index: usize) {
+        self.input_fields.insert_before(index, field_name, field);
     }
 
-    pub fn append(&mut self, field_name: String, field: Field) {
-        match &field {
-            Field::In(_) => {
-                self.input_fields.insert_before(0, field_name, field);
-            }
-            Field::Out(_) => {
-                self.output_fields.insert_before(0, field_name, field);
-            }
-        }
+    pub fn insert_output(&mut self, field_name: String, field: Out, index: usize) {
+        self.output_fields.insert_before(index, field_name, field);
     }
 
-    pub fn prepend(&mut self, field_name: String, field: Field) {
-        let index = self.input_fields.len();
+    pub fn append_input(&mut self, field_name: String, field: In) {
+        self.input_fields.insert_before(0, field_name, field);
+    }
 
-        match &field {
-            Field::In(_) => {
-                self.input_fields.insert_before(index, field_name, field);
-            }
-            Field::Out(_) => {
-                self.output_fields.insert_before(index, field_name, field);
-            }
-        }
+    pub fn append_output(&mut self, field_name: String, field: Out) {
+        self.output_fields.insert_before(0, field_name, field);
+    }
+
+    pub fn prepend_input(&mut self, field_name: String, field: In) {
+        self.input_fields.insert_before(0, field_name, field);
+    }
+
+    pub fn prepend_output(&mut self, field_name: String, field: Out) {
+        self.output_fields.insert_before(0, field_name, field);
     }
 
     pub fn builder() -> SignatureBuilder {
@@ -59,13 +48,13 @@ impl fmt::Display for Signature {
         let input_str = self
             .input_fields
             .iter()
-            .map(|(key, value)| format!("{key}: {value}"))
+            .map(|(key, value)| format!("{key}: {value:?}"))
             .collect::<Vec<String>>()
             .join(",\n\t");
         let output_str = self
             .output_fields
             .iter()
-            .map(|(key, value)| format!("{key}: {value}"))
+            .map(|(key, value)| format!("{key}: {value:?}"))
             .collect::<Vec<String>>()
             .join(",\n\t");
 
@@ -91,13 +80,13 @@ impl From<&str> for Signature {
         let input_fields_map = IndexMap::from_iter(
             input_fields
                 .iter()
-                .map(|field| (field.to_string(), Field::In("".to_string()))),
+                .map(|field| (field.to_string(), In::default())),
         );
 
         let output_fields_map = IndexMap::from_iter(
             output_fields
                 .iter()
-                .map(|field| (field.to_string(), Field::Out("".to_string()))),
+                .map(|field| (field.to_string(), Out::default())),
         );
 
         Self {

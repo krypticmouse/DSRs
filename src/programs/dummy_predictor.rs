@@ -3,7 +3,7 @@ use crate::adapter::chat_adapter::ChatAdapter;
 use crate::clients::dummy_lm::DummyLM;
 use crate::data::example::Example;
 use crate::data::prediction::Prediction;
-use crate::signature::signature::Signature;
+use crate::signature::Signature;
 
 pub struct DummyPredict {
     pub signature: Signature,
