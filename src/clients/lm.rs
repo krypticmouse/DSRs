@@ -4,6 +4,7 @@ use openrouter_rs::{
 use smart_default::SmartDefault;
 
 use crate::{clients::chat::Chat, data::history::History};
+use derive_builder::Builder;
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -28,17 +29,21 @@ pub struct LMConfig {
     pub top_a: Option<f64>,
 }
 
-#[derive(Clone, Debug, SmartDefault)]
+#[derive(Clone, Debug, SmartDefault, Builder)]
 pub struct LM {
     #[default = "https://openrouter.ai/api/v1"]
+    #[builder(default = "https://openrouter.ai/api/v1".to_string())]
     pub base_url: String,
 
     pub api_key: String,
     #[default = "openai/gpt-4o-mini"]
+    #[builder(default = "openai/gpt-4o-mini".to_string())]
     pub model: String,
     #[default(Vec::new())]
+    #[builder(default = Vec::new())]
     pub history: Vec<History>,
     #[default(LMConfig::default())]
+    #[builder(default = LMConfig::default())]
     pub config: LMConfig,
 }
 
@@ -83,5 +88,9 @@ impl LM {
 
     pub fn inspect_history(&self, n: usize) -> Vec<&History> {
         self.history.iter().rev().take(n).collect()
+    }
+
+    pub fn builder() -> LMBuilder {
+        LMBuilder::default()
     }
 }

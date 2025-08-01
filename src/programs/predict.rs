@@ -2,7 +2,7 @@ use crate::adapter::{base::Adapter, chat_adapter::ChatAdapter};
 use crate::clients::lm::LM;
 use crate::data::{example::Example, prediction::Prediction};
 use crate::module::Module;
-use crate::signature::signature::Signature;
+use crate::signature::Signature;
 use crate::utils::settings::SETTINGS;
 
 pub struct Predict {

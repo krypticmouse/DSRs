@@ -7,8 +7,8 @@ use dspy_rs::adapter::chat_adapter::ChatAdapter;
 use dspy_rs::clients::chat::Chat;
 use dspy_rs::clients::dummy_lm::DummyLM;
 use dspy_rs::data::example::Example;
-use dspy_rs::signature::field::Field;
-use dspy_rs::signature::signature::Signature;
+use dspy_rs::field::{In, Out};
+use dspy_rs::signature::Signature;
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -16,14 +16,8 @@ async fn test_chat_adapter() {
     let signature = Signature::builder()
         .name("test".to_string())
         .instruction("Given the fields `problem`, produce the fields `answer`.".to_string())
-        .input_fields(IndexMap::from([(
-            "problem".to_string(),
-            Field::In("".to_string()),
-        )]))
-        .output_fields(IndexMap::from([(
-            "answer".to_string(),
-            Field::Out("".to_string()),
-        )]))
+        .input_fields(IndexMap::from([("problem".to_string(), In::default())]))
+        .output_fields(IndexMap::from([("answer".to_string(), Out::default())]))
         .build()
         .unwrap();
 
@@ -81,12 +75,12 @@ async fn test_chat_adapter_with_multiple_fields() {
         .name("test".to_string())
         .instruction("You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string())
         .input_fields(IndexMap::from([
-            ("problem".to_string(), Field::In("".to_string())),
-            ("hint".to_string(), Field::In("".to_string())),
+            ("problem".to_string(), In::default()),
+            ("hint".to_string(), In::default()),
         ]))
         .output_fields(IndexMap::from([
-            ("reasoning".to_string(), Field::Out("".to_string())),
-            ("answer".to_string(), Field::Out("".to_string())),
+            ("reasoning".to_string(), Out::default()),
+            ("answer".to_string(), Out::default()),
         ]))
         .build()
         .unwrap();
