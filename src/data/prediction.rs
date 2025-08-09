@@ -9,12 +9,12 @@ pub struct LmUsage {
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Prediction {
-    pub data: HashMap<String, String>,
+    pub data: HashMap<String, serde_json::Value>,
     pub lm_usage: LmUsage,
 }
 
 impl Prediction {
-    pub fn new(data: HashMap<String, String>) -> Self {
+    pub fn new(data: HashMap<String, serde_json::Value>) -> Self {
         Self {
             data,
             lm_usage: LmUsage::default(),
@@ -25,10 +25,10 @@ impl Prediction {
         self.lm_usage = lm_usage;
     }
 
-    pub fn get(&self, key: &str, default: Option<&str>) -> String {
+    pub fn get(&self, key: &str, default: Option<&str>) -> serde_json::Value {
         self.data
             .get(key)
-            .unwrap_or(&default.unwrap_or_default().to_string())
+            .unwrap_or(&default.unwrap_or_default().to_string().into())
             .clone()
     }
 
@@ -36,7 +36,7 @@ impl Prediction {
         self.data.keys().cloned().collect()
     }
 
-    pub fn values(&self) -> Vec<String> {
+    pub fn values(&self) -> Vec<serde_json::Value> {
         self.data.values().cloned().collect()
     }
 }

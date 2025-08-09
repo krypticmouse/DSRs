@@ -1,22 +1,23 @@
-use indexmap::IndexMap;
 use std::collections::HashMap;
 
+use dspy_rs::Signature;
 use dspy_rs::clients::dummy_lm::DummyLM;
 use dspy_rs::data::example::Example;
 use dspy_rs::field::{In, Out};
 use dspy_rs::programs::dummy_predictor::DummyPredict;
-use dspy_rs::signature::Signature;
 
+#[allow(dead_code)]
+#[derive(Signature)]
+struct QASignature {
+    /// You are a helpful assistant.
+    pub question: In<String>,
+    pub answer: Out<String>,
+}
+
+#[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
-#[cfg_attr(miri, ignore)]
 async fn test_predictor() {
-    let signature = Signature::builder()
-        .name("QASignature".to_string())
-        .instruction("You are a helpful assistant.".to_string())
-        .input_fields(IndexMap::from([("question".to_string(), In::default())]))
-        .output_fields(IndexMap::from([("answer".to_string(), Out::default())]))
-        .build()
-        .unwrap();
+    let signature = QASignature::new();
 
     let predictor = DummyPredict {
         signature: signature.clone(),
@@ -40,5 +41,5 @@ async fn test_predictor() {
             None,
         )
         .await;
-    assert_eq!(outputs.data.get("answer").unwrap().as_str(), "Paris");
+    assert_eq!(outputs.data.get("answer").unwrap(), "Paris");
 }

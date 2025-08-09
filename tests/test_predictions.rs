@@ -1,31 +1,23 @@
 use rstest::*;
+use serde_json::json;
 
 use dspy_rs::data::prediction::{LmUsage, Prediction};
 use std::collections::HashMap;
 
 #[rstest]
 fn test_prediction_initialization() {
-    let data = HashMap::from([
-        ("a".to_string(), "1".to_string()),
-        ("b".to_string(), "2".to_string()),
-    ]);
+    let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
     let prediction = Prediction::new(data);
     assert_eq!(
         prediction.data,
-        HashMap::from([
-            ("a".to_string(), "1".to_string()),
-            ("b".to_string(), "2".to_string())
-        ])
+        HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))])
     );
     assert_eq!(prediction.lm_usage, LmUsage::default());
 }
 
 #[rstest]
 fn test_prediction_get() {
-    let data = HashMap::from([
-        ("a".to_string(), "1".to_string()),
-        ("b".to_string(), "2".to_string()),
-    ]);
+    let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
     let prediction = Prediction::new(data);
     assert_eq!(prediction.get("a", None), "1");
     assert_eq!(prediction.get("b", None), "2");
@@ -35,10 +27,7 @@ fn test_prediction_get() {
 
 #[rstest]
 fn test_prediction_keys() {
-    let data = HashMap::from([
-        ("a".to_string(), "1".to_string()),
-        ("b".to_string(), "2".to_string()),
-    ]);
+    let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
     let prediction = Prediction::new(data);
 
     let mut keys = prediction.keys();
@@ -48,15 +37,12 @@ fn test_prediction_keys() {
 
 #[rstest]
 fn test_prediction_values() {
-    let data = HashMap::from([
-        ("a".to_string(), "1".to_string()),
-        ("b".to_string(), "2".to_string()),
-    ]);
+    let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
     let prediction = Prediction::new(data);
 
     let mut values = prediction.values();
-    values.sort();
-    assert_eq!(values, vec!["1", "2"]);
+    values.sort_by_key(|v| v.to_string());
+    assert_eq!(values, vec![json!("1"), json!("2")]);
 }
 
 #[rstest]

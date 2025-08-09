@@ -1,8 +1,8 @@
 use dspy_rs::clients::{chat::Chat, dummy_lm::DummyLM};
 use openrouter_rs::{api::chat::Message, types::Role};
 
+#[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
-#[cfg_attr(miri, ignore)] // Miri doesn't support async runtime
 async fn test_dummy_lm() {
     let mut dummy_lm = DummyLM::default();
 
