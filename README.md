@@ -116,7 +116,8 @@ cargo test -- --nocapture
 
 ### Core Framework
 - [x] Metrics traits and Evaluators
-- [ ] Structured Output Parsing
+- [x] Signature Macros
+- [x] Structured Output Parsing
 - [ ] Adding More Predictors
     - [ ] dsrs.Refine
     - [ ] dsrs.BestOfN
@@ -127,6 +128,7 @@ cargo test -- --nocapture
 - [ ] Ability to use native provider keys for popular clients
 
 ### Data Management
+- [ ] Example Macros
 - [ ] Support for data loading from sources
 
 ### Performance Optimizations
