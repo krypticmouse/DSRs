@@ -17,7 +17,6 @@ exclude = [
 derive_builder = "0.20.2"
 futures = "0.3.31"
 indexmap = "2.10.0"
-openrouter-rs = "0.4.5"
 rayon = "1.10.0"
 rstest = "0.25.0"
 schemars = "1.0.4"
@@ -26,3 +25,4 @@ serde_json = "1.0.140"
 smart-default = "0.7.1"
 tokio = "1.46.1"
 dspy_signatures = { path = "./dspy-signatures/"}
+async-openai = "0.29.0"

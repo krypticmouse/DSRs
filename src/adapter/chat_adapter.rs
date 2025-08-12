@@ -7,8 +7,8 @@ use crate::internal::{MetaField, MetaSignature};
 use serde_json::json;
 use std::collections::HashMap;
 
+use async_openai::types::CreateChatCompletionResponse;
 use indexmap::IndexMap;
-use openrouter_rs::types::CompletionsResponse;
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -144,17 +144,11 @@ impl Adapter for ChatAdapter {
     fn parse_response(
         &self,
         signature: &MetaSignature,
-        response: CompletionsResponse,
+        response: CreateChatCompletionResponse,
     ) -> Prediction {
         let mut output = HashMap::new();
 
-        let response_content = if let openrouter_rs::types::Choice::NonStreaming(non_streaming) =
-            &response.choices[0]
-        {
-            non_streaming.message.content.as_ref().unwrap()
-        } else {
-            panic!("Expected non-streaming choice");
-        };
+        let response_content = response.choices[0].message.content.as_ref().unwrap();
 
         for (field_name, field) in signature.output_fields.iter() {
             let field_value = response_content

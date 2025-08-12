@@ -11,7 +11,7 @@ fn test_settings() {
     assert_eq!(SETTINGS.lock().unwrap().lm.model, "openai/gpt-4o-mini");
     assert_eq!(
         SETTINGS.lock().unwrap().lm.base_url,
-        "https://openrouter.ai/api/v1"
+        Some("https://api.openai.com/v1".to_string())
     );
 
     configure_settings(
@@ -25,6 +25,6 @@ fn test_settings() {
     assert_eq!(SETTINGS.lock().unwrap().lm.model, "openai/gpt-4o");
     assert_eq!(
         SETTINGS.lock().unwrap().lm.base_url,
-        "https://openrouter.ai/api/v1"
+        Some("https://api.openai.com/v1".to_string())
     );
 }

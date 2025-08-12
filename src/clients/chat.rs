@@ -1,23 +1,45 @@
-use serde::{Deserialize, Serialize};
-use std::fmt;
+use async_openai::types::{
+    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
+    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
+};
+use serde_json::json;
 
-use openrouter_rs::{api::chat::Message, types::Role};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Chat {
-    pub messages: Vec<Message>,
+    pub messages: Vec<ChatCompletionRequestMessage>,
 }
 
 impl Chat {
-    pub fn new(messages: Vec<Message>) -> Self {
+    pub fn new(messages: Vec<ChatCompletionRequestMessage>) -> Self {
         Self { messages }
     }
 
-    pub fn push(&mut self, role: Role, content: String) {
-        self.messages.push(Message { role, content });
+    fn build_message(&self, role: &str, content: String) -> ChatCompletionRequestMessage {
+        match role {
+            "system" => ChatCompletionRequestSystemMessageArgs::default()
+                .content(content)
+                .build()
+                .unwrap()
+                .into(),
+            "user" => ChatCompletionRequestUserMessageArgs::default()
+                .content(content)
+                .build()
+                .unwrap()
+                .into(),
+            "assistant" => ChatCompletionRequestAssistantMessageArgs::default()
+                .content(content)
+                .build()
+                .unwrap()
+                .into(),
+            _ => panic!("Invalid role: {role}"),
+        }
     }
 
-    pub fn pop(&mut self) -> Option<Message> {
+    pub fn push(&mut self, role: &str, content: String) {
+        self.messages.push(self.build_message(role, content));
+    }
+
+    pub fn pop(&mut self) -> Option<ChatCompletionRequestMessage> {
         self.messages.pop()
     }
 
@@ -29,23 +51,42 @@ impl Chat {
         self.messages.is_empty()
     }
 
-    /// Serialize the chat messages to JSON string
-    pub fn to_json(&self) -> Result<String, serde_json::Error> {
-        serde_json::to_string(&self.messages)
-    }
-
-    /// Deserialize chat messages from JSON string
-    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
-        let messages: Vec<Message> = serde_json::from_str(json)?;
-        Ok(Self { messages })
-    }
-}
-
-impl fmt::Display for Chat {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for message in &self.messages {
-            write!(f, "{}", serde_json::to_string(message).unwrap())?;
+    fn get_message_json(&self, message: &ChatCompletionRequestMessage) -> serde_json::Value {
+        match message {
+            ChatCompletionRequestMessage::System(system_message) => {
+                json!({ "role": "system", "content": system_message.content })
+            }
+            ChatCompletionRequestMessage::User(user_message) => {
+                json!({ "role": "user", "content": user_message.content })
+            }
+            ChatCompletionRequestMessage::Assistant(assistant_message) => {
+                json!({ "role": "assistant", "content": assistant_message.content })
+            }
+            _ => panic!("Invalid message type"),
         }
-        Ok(())
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        let json_messages = self
+            .messages
+            .iter()
+            .map(|message| self.get_message_json(message))
+            .collect::<Vec<serde_json::Value>>();
+
+        json!(json_messages)
+    }
+
+    pub fn from_json(&self, json_dump: &str) -> Result<Self, serde_json::Error> {
+        let parsed: serde_json::Value = serde_json::from_str(json_dump)?;
+        let json_messages = parsed.as_array().unwrap();
+
+        let mut messages: Vec<ChatCompletionRequestMessage> = Vec::new();
+        for message in json_messages {
+            let role = message["role"].as_str().unwrap();
+            let content = message["content"].as_str().unwrap();
+            messages.push(self.build_message(role, content.to_string()));
+        }
+
+        Ok(Self { messages })
     }
 }

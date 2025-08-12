@@ -1,4 +1,3 @@
-use openrouter_rs::types::Role;
 use schemars::JsonSchema;
 use std::collections::HashMap;
 
@@ -31,22 +30,20 @@ async fn test_chat_adapter() {
             vec!["answer".to_string()],
         ),
     );
+
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
     assert_eq!(messages.len(), 2);
-    assert_eq!(
-        messages.messages[0].role.to_string(),
-        Role::System.to_string()
-    );
-    assert_eq!(
-        messages.messages[1].role.to_string(),
-        Role::User.to_string()
-    );
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[1]["role"], "user");
 
     assert_eq!(
-        messages.messages[0].content.to_string(),
+        json[0]["content"],
         "Your input fields are:\n1. `problem` (String)\n\nYour output fields are:\n1. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, produce the fields `answer`."
     );
     assert_eq!(
-        messages.messages[1].content.to_string(),
+        json[1]["content"],
         "[[ ## problem ## ]]\nWhat is the capital of France?\n\nRespond with the corresponding output fields, starting with the field `answer`, and then ending with the marker for `completed`."
     );
 
@@ -99,22 +96,20 @@ async fn test_chat_adapter_with_multiple_fields() {
             vec!["reasoning".to_string(), "answer".to_string()],
         ),
     );
+
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
     assert_eq!(messages.len(), 2);
-    assert_eq!(
-        messages.messages[0].role.to_string(),
-        Role::System.to_string()
-    );
-    assert_eq!(
-        messages.messages[1].role.to_string(),
-        Role::User.to_string()
-    );
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[1]["role"], "user");
 
     assert_eq!(
-        messages.messages[0].content.to_string(),
+        json[0]["content"],
         "Your input fields are:\n1. `problem` (String)\n2. `hint` (String)\n\nYour output fields are:\n1. `reasoning` (String)\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer."
     );
     assert_eq!(
-        messages.messages[1].content.to_string(),
+        json[1]["content"],
         "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `reasoning`, then `answer`, and then ending with the marker for `completed`."
     );
 
@@ -177,22 +172,19 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
         ),
     );
 
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
     assert_eq!(messages.len(), 2);
-    assert_eq!(
-        messages.messages[0].role.to_string(),
-        Role::System.to_string()
-    );
-    assert_eq!(
-        messages.messages[1].role.to_string(),
-        Role::User.to_string()
-    );
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[1]["role"], "user");
 
     assert_eq!(
-        messages.messages[0].content.to_string(),
+        json[0]["content"],
         "Your input fields are:\n1. `problem` (String)\n2. `hint` (i8)\n\nYour output fields are:\n1. `output` (TestOutput)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\t# note: the value you produce must be a single i8 value\n\n[[ ## output ## ]]\noutput\t# note: the value you produce must adhere to the JSON schema: {\"rating\":{\"format\":\"int8\",\"maximum\":127,\"minimum\":-128,\"type\":\"integer\"},\"reasoning\":{\"type\":\"string\"}}\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, `hint`, produce the fields `output`."
     );
     assert_eq!(
-        messages.messages[1].content.to_string(),
+        json[1]["content"],
         "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `output` (must be formatted as valid Rust TestOutput), and then ending with the marker for `completed`."
     );
 

@@ -1,5 +1,5 @@
-use openrouter_rs::types::{
-    Choice, CompletionsResponse, FinishReason, Message, NonStreamingChoice, ObjectType,
+use async_openai::types::{
+    ChatChoice, ChatCompletionResponseMessage, CreateChatCompletionResponse, FinishReason, Role,
 };
 use smart_default::SmartDefault;
 use std::error::Error;
@@ -17,33 +17,35 @@ pub struct DummyLM {
     pub config: LMConfig,
 }
 
+#[allow(deprecated)]
 impl DummyLM {
     pub async fn call(
         &mut self,
         chat: &Chat,
         output: &str,
         signature: &str,
-    ) -> Result<CompletionsResponse, Box<dyn Error>> {
-        let response = CompletionsResponse {
+    ) -> Result<CreateChatCompletionResponse, Box<dyn Error>> {
+        let response = CreateChatCompletionResponse {
             id: "dummy_id".to_string(),
-            choices: vec![Choice::NonStreaming(NonStreamingChoice {
-                finish_reason: Some(FinishReason::Stop),
-                native_finish_reason: None,
-                error: None,
-                message: Message {
-                    role: Some("assistant".to_string()),
+            choices: vec![ChatChoice {
+                index: 0,
+                message: ChatCompletionResponseMessage {
+                    role: Role::Assistant,
                     content: Some(output.to_string()),
+                    refusal: None,
                     tool_calls: None,
-                    reasoning: None,
-                    reasoning_details: None,
+                    function_call: None,
+                    audio: None,
                 },
-            })],
+                finish_reason: Some(FinishReason::Stop),
+                logprobs: None,
+            }],
             created: 0,
             model: self.model.to_string(),
-            object_type: ObjectType::ChatCompletion,
-            provider: None,
             system_fingerprint: None,
             usage: None,
+            object: "dummy_chat.completion".to_string(),
+            service_tier: None,
         };
 
         self.history.push(History {
