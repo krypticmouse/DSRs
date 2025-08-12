@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod clients;
+pub mod core;
 pub mod data;
 pub mod evaluate;
 pub mod field;
