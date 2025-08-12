@@ -26,3 +26,4 @@ smart-default = "0.7.1"
 tokio = "1.46.1"
 async-openai = "0.29.0"
 dsrs_macros = { version = "0.1.0", path = "../dsrs-macros" }
+anyhow = "1.0.99"
