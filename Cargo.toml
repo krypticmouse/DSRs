@@ -24,5 +24,5 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 smart-default = "0.7.1"
 tokio = "1.46.1"
-dspy_signatures = { path = "./dspy-signatures/"}
+dsrs_macros = { path = "./dsrs-macros/"}
 async-openai = "0.29.0"

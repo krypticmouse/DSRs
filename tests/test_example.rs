@@ -1,5 +1,6 @@
 use dspy_rs::data::example::Example;
 use dspy_rs::data::serialize::{load_jsonl, save_examples_as_jsonl};
+use dspy_rs::example;
 use rstest::*;
 use std::collections::HashMap;
 
@@ -142,4 +143,40 @@ fn test_serialize() {
     assert_eq!(examples[1].input_keys, vec!["input1".to_string()]);
     assert_eq!(examples[0].output_keys, vec!["output1".to_string()]);
     assert_eq!(examples[1].output_keys, vec!["output1".to_string()]);
+}
+
+#[rstest]
+fn test_example_macro() {
+    let example = example! {
+        "question": "What is the capital of France?",
+        "answer": "Paris"
+    };
+    assert_eq!(
+        example.data,
+        HashMap::from([
+            (
+                "question".to_string(),
+                "What is the capital of France?".to_string()
+            ),
+            ("answer".to_string(), "Paris".to_string())
+        ])
+    );
+
+    let example = example! {
+        "question": "What is the capital of France?",
+        "answer": "Paris"
+    }
+    .with_input_keys(vec!["question".to_string()]);
+    assert_eq!(example.input_keys, vec!["question".to_string()]);
+    assert_eq!(example.output_keys, vec!["answer".to_string()]);
+    assert_eq!(
+        example.data,
+        HashMap::from([
+            (
+                "question".to_string(),
+                "What is the capital of France?".to_string()
+            ),
+            ("answer".to_string(), "Paris".to_string())
+        ])
+    );
 }

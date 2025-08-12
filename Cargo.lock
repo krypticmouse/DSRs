@@ -261,7 +261,7 @@ version = "0.0.1-beta"
 dependencies = [
  "async-openai",
  "derive_builder",
- "dspy_signatures",
+ "dsrs_macros",
  "futures",
  "indexmap",
  "rayon",
@@ -274,7 +274,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dspy_signatures"
+name = "dsrs_macros"
 version = "0.1.0"
 dependencies = [
  "indexmap",

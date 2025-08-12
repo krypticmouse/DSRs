@@ -125,10 +125,10 @@ cargo test -- --nocapture
 - [ ] Retriever Module Support
 
 ### LM Integrations
-- [ ] Ability to use native provider keys for popular clients
+- [x] Ability to use native provider keys for popular clients
 
 ### Data Management
-- [ ] Example Macros
+- [x] Example Macros
 - [ ] Support for data loading from sources
 
 ### Performance Optimizations

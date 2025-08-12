@@ -58,6 +58,21 @@ impl Example {
             .collect();
     }
 
+    pub fn with_input_keys(&self, keys: Vec<String>) -> Self {
+        let output_keys = self
+            .data
+            .keys()
+            .filter(|key| !keys.contains(key))
+            .cloned()
+            .collect();
+
+        Self {
+            data: self.data.clone(),
+            input_keys: keys,
+            output_keys,
+        }
+    }
+
     pub fn without(&self, keys: Vec<String>) -> Self {
         Self {
             data: self

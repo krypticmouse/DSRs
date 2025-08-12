@@ -9,7 +9,7 @@ pub mod utils;
 
 pub mod internal;
 
-pub use dspy_signatures::*;
+pub use dsrs_macros::*;
 
 #[macro_export]
 macro_rules! sign {
@@ -94,5 +94,25 @@ macro_rules! sign {
             input_fields,
             output_fields,
         }
+    }};
+}
+
+#[macro_export]
+macro_rules! example {
+    // Pattern: { "key": "value", ... }
+    { $($key:literal : $value:expr),* $(,)? } => {{
+        use std::collections::HashMap;
+        use dspy_rs::data::example::Example;
+
+        let mut fields = HashMap::new();
+        $(
+            fields.insert($key.to_string(), $value.to_string());
+        )*
+
+        Example::new(
+            fields,
+            vec![],
+            vec![],
+        )
     }};
 }
