@@ -71,6 +71,9 @@ impl Message {
 
 #[derive(Clone, Debug, Builder)]
 pub struct LMConfig {
+    #[builder(default = "gpt-4o-mini".to_string())]
+    pub model: String,
+
     #[builder(default = 0.7)]
     pub temperature: f32,
     #[builder(default = 1.0)]
@@ -103,6 +106,7 @@ impl Default for LMConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct LMInvocation {
     pub chat: Chat,
     pub config: LMConfig,

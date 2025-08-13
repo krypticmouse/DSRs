@@ -1,3 +1,4 @@
+use crate::core::LMConfig;
 use crate::core::lm::LM;
 use crate::providers::{ConcreteProvider, OpenAIProvider};
 use anyhow::Result;
@@ -21,9 +22,12 @@ pub fn openai_lm(api_key: String, model: String) -> Result<LM> {
     let (model_provider, model_name) = model.split_once('/').unwrap();
     let base_url = get_base_url(model_provider);
     let provider = OpenAIProvider::new(api_key, base_url);
-    let mut lm_builder = LM::builder()
-        .model(model_name)
-        .provider(ConcreteProvider::OpenAIProvider);
-    let lm = lm_builder.build()?;
+
+    let config = LMConfig::builder().model(model_name.to_string()).build();
+
+    let lm = LM::builder()
+        .provider(ConcreteProvider::OpenAI(provider))
+        .config(config)
+        .build();
     Ok(lm)
 }

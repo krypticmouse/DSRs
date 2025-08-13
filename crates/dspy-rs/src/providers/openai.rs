@@ -9,23 +9,19 @@ use async_openai::types::{
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestSystemMessageContent,
     ChatCompletionRequestToolMessageArgs, ChatCompletionRequestToolMessageContent,
     ChatCompletionRequestUserMessageArgs, ChatCompletionRequestUserMessageContent,
-    ChatCompletionStreamOptions, ChatCompletionTool, ChatCompletionToolArgs,
-    ChatCompletionToolType, CreateChatCompletionRequestArgs, FunctionCall, FunctionObjectArgs,
-    ReasoningEffort,
+    CreateChatCompletionRequestArgs, FunctionCall,
 };
 
+#[derive(Clone)]
 pub struct OpenAIProvider {
     client: Client<OpenAIConfig>,
 }
 
 impl OpenAIProvider {
-    pub fn new(api_key: String, base_url: Option<String>) -> Self {
-        let config = OpenAIConfig::new().with_api_key(api_key);
-        let config = if let Some(url) = base_url {
-            config.with_api_base(url)
-        } else {
-            config
-        };
+    pub fn new(api_key: String, base_url: String) -> Self {
+        let config = OpenAIConfig::new()
+            .with_api_key(api_key)
+            .with_api_base(base_url);
         let client = Client::with_config(config);
         OpenAIProvider { client }
     }
@@ -129,28 +125,28 @@ impl From<&Message> for ChatCompletionRequestMessage {
     }
 }
 
-impl From<&AvailableTool> for ChatCompletionTool {
-    fn from(tool: &AvailableTool) -> Self {
-        let mut builder = FunctionObjectArgs::default();
+// impl From<&AvailableTool> for ChatCompletionTool {
+//     fn from(tool: &AvailableTool) -> Self {
+//         let mut builder = FunctionObjectArgs::default();
 
-        builder
-            .name(tool.name.clone())
-            .description(tool.desc.clone())
-            .strict(true);
+//         builder
+//             .name(tool.name.clone())
+//             .description(tool.desc.clone())
+//             .strict(true);
 
-        if let Some(schema) = tool.input_schema_json.clone() {
-            builder.parameters(schema);
-        }
+//         if let Some(schema) = tool.input_schema_json.clone() {
+//             builder.parameters(schema);
+//         }
 
-        let func = builder.build().unwrap();
+//         let func = builder.build().unwrap();
 
-        ChatCompletionToolArgs::default()
-            .r#type(ChatCompletionToolType::Function)
-            .function(func)
-            .build()
-            .unwrap()
-    }
-}
+//         ChatCompletionToolArgs::default()
+//             .r#type(ChatCompletionToolType::Function)
+//             .function(func)
+//             .build()
+//             .unwrap()
+//     }
+// }
 
 impl From<ChatCompletionMessageToolCall> for ToolCallMessage {
     fn from(tool_call: ChatCompletionMessageToolCall) -> Self {
@@ -205,29 +201,28 @@ impl CompletionProvider for OpenAIProvider {
         let request = builder
             .model(config.model)
             .messages(request_messages)
-            .temperature(self.config.temperature.unwrap_or_default())
-            .top_p(self.config.top_p.unwrap_or_default())
-            .n(self.config.n.unwrap_or_default())
-            .max_completion_tokens(self.config.max_completion_tokens.unwrap_or_default())
-            .max_tokens(self.config.max_tokens.unwrap_or_default())
-            .presence_penalty(self.config.presence_penalty.unwrap_or_default())
-            .frequency_penalty(self.config.frequency_penalty.unwrap_or_default())
-            .seed(self.config.seed.unwrap_or_default())
-            .stream(self.config.stream.unwrap_or(false))
-            .stream_options(
-                self.config
-                    .stream_options
-                    .unwrap_or(ChatCompletionStreamOptions {
-                        include_usage: false,
-                    }),
-            )
-            .reasoning_effort(
-                self.config
-                    .reasoning_effort
-                    .clone()
-                    .unwrap_or(ReasoningEffort::Low),
-            )
-            .logit_bias(self.config.logit_bias.clone().unwrap_or_default())
+            .temperature(config.temperature)
+            .top_p(config.top_p)
+            .n(config.n)
+            .max_completion_tokens(config.max_completion_tokens)
+            .max_tokens(config.max_tokens)
+            .presence_penalty(config.presence_penalty)
+            .frequency_penalty(config.frequency_penalty)
+            .seed(config.seed)
+            // .stream(config.stream.unwrap_or(false))
+            // .stream_options(
+            //     config
+            //         .stream_options
+            //         .unwrap_or(ChatCompletionStreamOptions {
+            //             include_usage: false,
+            //         }),
+            // )
+            // .reasoning_effort(
+            //     config
+            //         .reasoning_effort
+            //         .clone()
+            //         .unwrap_or(ReasoningEffort::Low),
+            .logit_bias(config.logit_bias.clone().unwrap_or_default())
             .build()?;
 
         let response = self.client.chat().create(request).await?;

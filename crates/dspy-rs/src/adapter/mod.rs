@@ -1,6 +1,6 @@
-pub mod chat_adapter;
+pub mod chat;
 
-pub use chat_adapter::*;
+pub use chat::*;
 
 use crate::core::Adapter;
 
@@ -44,40 +44,6 @@ impl Adapter for ConcreteAdapter {
     ) -> anyhow::Result<S::Outputs> {
         match self {
             ConcreteAdapter::Chat(adapter) => adapter.parse(signature, response),
-        }
-    }
-
-    fn format_field_description(&self, signature: &impl crate::core::Signature) -> String {
-        match self {
-            ConcreteAdapter::Chat(adapter) => adapter.format_field_description(signature),
-        }
-    }
-
-    fn format_field_structure(&self, signature: &impl crate::core::Signature) -> String {
-        match self {
-            ConcreteAdapter::Chat(adapter) => adapter.format_field_structure(signature),
-        }
-    }
-
-    fn format_system_message(&self, signature: &impl crate::core::Signature) -> String {
-        match self {
-            ConcreteAdapter::Chat(adapter) => adapter.format_system_message(signature),
-        }
-    }
-
-    fn format_task_description(&self, signature: &impl crate::core::Signature) -> String {
-        match self {
-            ConcreteAdapter::Chat(adapter) => adapter.format_task_description(signature),
-        }
-    }
-
-    fn format_user_message(
-        &self,
-        signature: &impl crate::core::Signature,
-        inputs: crate::data::example::Example,
-    ) -> String {
-        match self {
-            ConcreteAdapter::Chat(adapter) => adapter.format_user_message(signature, inputs),
         }
     }
 }

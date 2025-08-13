@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use std::collections::HashMap;
 
 use dspy_rs::adapter::base::Adapter;
-use dspy_rs::adapter::chat_adapter::ChatAdapter;
+use dspy_rs::adapter::chat::ChatAdapter;
 use dspy_rs::data::example::Example;
 use dspy_rs::field::{In, Out};
 use dspy_rs::providers::chat::Chat;

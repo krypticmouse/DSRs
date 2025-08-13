@@ -6,8 +6,8 @@ use serde::{Serialize, de::DeserializeOwned};
 #[derive(Clone)]
 pub struct SignatureMetadata {
     pub instructions: String,
-    input_schema: serde_json::Value,
-    output_schema: serde_json::Value,
+    pub input_schema: serde_json::Value,
+    pub output_schema: serde_json::Value,
 }
 
 impl SignatureMetadata {
@@ -122,11 +122,7 @@ pub trait Signature: Default {
 
     fn extract_fields(&self, inputs: &Self::Inputs) -> Vec<impl Into<String>>;
 
-    fn extract_history(&self, _inputs: &Self::Inputs) -> Option<History> {
-        None
-    }
+    fn extract_history(&self, _inputs: &Self::Inputs) -> Option<History>;
 
-    fn extract_tools(&self, _inputs: &Self::Inputs) -> Option<Vec<Tool>> {
-        None
-    }
+    fn extract_tools(&self, _inputs: &Self::Inputs) -> Option<Vec<Tool>>;
 }

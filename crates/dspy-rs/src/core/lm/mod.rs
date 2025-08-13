@@ -9,12 +9,9 @@ pub use providers::*;
 use anyhow::Result;
 use bon::Builder;
 
-#[derive(Clone, Debug, Builder)]
+#[derive(Clone, Builder)]
 pub struct LM {
     pub provider: ConcreteProvider,
-
-    #[builder(default = "openai/gpt-4o-mini".to_string())]
-    pub model: String,
 
     #[builder(default = LMConfig::default())]
     pub config: LMConfig,
@@ -44,11 +41,7 @@ impl LM {
         Ok(response)
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<LMInvocation> {
+    pub fn inspect_history(&self, n: usize) -> Vec<&LMInvocation> {
         self.history.iter().rev().take(n).collect()
-    }
-
-    pub fn builder() -> LMBuilder {
-        LMBuilder::default()
     }
 }
