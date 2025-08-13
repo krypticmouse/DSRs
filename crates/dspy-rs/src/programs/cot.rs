@@ -1,10 +1,10 @@
 use crate::adapter::chat_adapter::ChatAdapter;
-use crate::clients::lm::LM;
 use crate::data::{example::Example, prediction::Prediction};
 use crate::field::{In, Out};
 use crate::internal::MetaSignature;
 use crate::module::Module;
 use crate::programs::predict::Predict;
+use crate::providers::lm::LM;
 
 pub struct ChainofThought {
     pub signature: MetaSignature,

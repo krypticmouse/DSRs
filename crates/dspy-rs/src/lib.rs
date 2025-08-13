@@ -1,12 +1,11 @@
 pub mod adapter;
-pub mod clients;
 pub mod core;
 pub mod data;
 pub mod evaluate;
 pub mod field;
-pub mod module;
+pub mod lm;
 pub mod programs;
-pub mod utils;
+pub mod providers;
 
 pub mod internal;
 

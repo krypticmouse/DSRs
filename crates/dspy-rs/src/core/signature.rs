@@ -3,6 +3,7 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
 
+#[derive(Clone)]
 pub struct SignatureMetadata {
     pub instructions: String,
     input_schema: serde_json::Value,
@@ -107,7 +108,7 @@ impl SignatureMetadata {
     }
 }
 
-pub trait Signature {
+pub trait Signature: Default {
     // user interface. Modules have associated signature type SIG and forward (&self, &SIG::Inputs) -> SIG::Outputs
     type Inputs: Serialize + JsonSchema;
     type Outputs: DeserializeOwned + JsonSchema;
@@ -116,7 +117,7 @@ pub trait Signature {
     fn metadata(&self) -> &SignatureMetadata;
     fn metadata_mut(&mut self) -> &mut SignatureMetadata;
 
-    // Special field extraction methods - default implementations return None
+    // Special input field extraction methods - default implementations return None
     // If a signature has a type that is handled specially by adapters, they are extracted here
 
     fn extract_fields(&self, inputs: &Self::Inputs) -> Vec<impl Into<String>>;

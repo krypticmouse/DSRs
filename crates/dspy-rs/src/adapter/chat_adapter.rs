@@ -1,4 +1,5 @@
-use crate::adapter::base::Adapter;
+use crate::core::Adapter;
+use crate::core::Signature;
 use crate::data::{
     example::Example,
     prediction::{LmUsage, Prediction},
@@ -58,88 +59,6 @@ impl ChatAdapter {
         }
         field_structure
     }
-}
-
-impl Adapter for ChatAdapter {
-    fn format_system_message(&self, signature: &MetaSignature) -> String {
-        let field_description = self.format_field_description(signature);
-        let field_structure = self.format_field_structure(signature);
-        let task_description = self.format_task_description(signature);
-
-        format!("{field_description}\n{field_structure}\n{task_description}")
-    }
-
-    fn format_field_description(&self, signature: &MetaSignature) -> String {
-        let input_field_description = self.get_field_attribute_list(&signature.input_fields);
-        let output_field_description = self.get_field_attribute_list(&signature.output_fields);
-
-        format!(
-            "Your input fields are:\n{input_field_description}\nYour output fields are:\n{output_field_description}"
-        )
-    }
-
-    fn format_field_structure(&self, signature: &MetaSignature) -> String {
-        let input_field_structure = self.get_field_structure(&signature.input_fields);
-        let output_field_structure = self.get_field_structure(&signature.output_fields);
-
-        format!(
-            "All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}{output_field_structure}[[ ## completed ## ]]\n"
-        )
-    }
-
-    fn format_task_description(&self, signature: &MetaSignature) -> String {
-        let instruction = if signature.instruction.is_empty() {
-            format!(
-                "Given the fields {}, produce the fields {}.",
-                signature
-                    .input_fields
-                    .keys()
-                    .map(|k| format!("`{k}`"))
-                    .collect::<Vec<String>>()
-                    .join(", "),
-                signature
-                    .output_fields
-                    .keys()
-                    .map(|k| format!("`{k}`"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
-        } else {
-            signature.instruction.clone()
-        };
-
-        format!("In adhering to this structure, your objective is:\n\t{instruction}")
-    }
-
-    fn format_user_message(&self, signature: &MetaSignature, inputs: Example) -> String {
-        let mut input_str = String::new();
-        for (field_name, _) in signature.input_fields.iter() {
-            input_str.push_str(
-                format!(
-                    "[[ ## {field_name} ## ]]\n{field_value}\n\n",
-                    field_name = field_name,
-                    field_value = inputs.get(field_name, None)
-                )
-                .as_str(),
-            );
-        }
-
-        let first_output_field = &signature.output_fields.keys()[0];
-        let first_output_field_value = signature.output_fields.get(first_output_field).unwrap();
-
-        let type_hint = get_type_hint(first_output_field_value);
-
-        let mut user_message = format!(
-            "Respond with the corresponding output fields, starting with the field `{first_output_field}`{type_hint},"
-        );
-        for (field_name, field) in signature.output_fields.iter().skip(1) {
-            user_message
-                .push_str(format!(" then `{field_name}`{},", get_type_hint(field)).as_str());
-        }
-        user_message.push_str(" and then ending with the marker for `completed`.");
-
-        format!("{input_str}{user_message}")
-    }
 
     fn parse_response(
         &self,
@@ -172,5 +91,79 @@ impl Adapter for ChatAdapter {
             data: output,
             lm_usage: LmUsage::default(),
         }
+    }
+}
+
+impl Adapter for ChatAdapter {
+    fn format_field_description(&self, signature: &impl Signature) -> String {
+        let input_field_description = self.get_field_attribute_list(&signature.input_fields);
+        let output_field_description = self.get_field_attribute_list(&signature.output_fields);
+
+        format!(
+            "Your input fields are:\n{input_field_description}\nYour output fields are:\n{output_field_description}"
+        )
+    }
+
+    fn format_field_structure(&self, signature: &impl Signature) -> String {
+        let input_field_structure = self.get_field_structure(&signature.input_fields);
+        let output_field_structure = self.get_field_structure(&signature.output_fields);
+
+        format!(
+            "All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}{output_field_structure}[[ ## completed ## ]]\n"
+        )
+    }
+
+    fn format_task_description(&self, signature: &impl Signature) -> String {
+        let instruction = if signature.instruction.is_empty() {
+            format!(
+                "Given the fields {}, produce the fields {}.",
+                signature
+                    .input_fields
+                    .keys()
+                    .map(|k| format!("`{k}`"))
+                    .collect::<Vec<String>>()
+                    .join(", "),
+                signature
+                    .output_fields
+                    .keys()
+                    .map(|k| format!("`{k}`"))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )
+        } else {
+            signature.instruction.clone()
+        };
+
+        format!("In adhering to this structure, your objective is:\n\t{instruction}")
+    }
+
+    fn format_user_message(&self, signature: &impl Signature, inputs: Example) -> String {
+        let mut input_str = String::new();
+        for (field_name, _) in signature.input_fields.iter() {
+            input_str.push_str(
+                format!(
+                    "[[ ## {field_name} ## ]]\n{field_value}\n\n",
+                    field_name = field_name,
+                    field_value = inputs.get(field_name, None)
+                )
+                .as_str(),
+            );
+        }
+
+        let first_output_field = &signature.output_fields.keys()[0];
+        let first_output_field_value = signature.output_fields.get(first_output_field).unwrap();
+
+        let type_hint = get_type_hint(first_output_field_value);
+
+        let mut user_message = format!(
+            "Respond with the corresponding output fields, starting with the field `{first_output_field}`{type_hint},"
+        );
+        for (field_name, field) in signature.output_fields.iter().skip(1) {
+            user_message
+                .push_str(format!(" then `{field_name}`{},", get_type_hint(field)).as_str());
+        }
+        user_message.push_str(" and then ending with the marker for `completed`.");
+
+        format!("{input_str}{user_message}")
     }
 }

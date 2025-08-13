@@ -1,9 +1,9 @@
 use crate::adapter::base::Adapter;
 use crate::adapter::chat_adapter::ChatAdapter;
-use crate::clients::dummy_lm::DummyLM;
 use crate::data::example::Example;
 use crate::data::prediction::Prediction;
 use crate::internal::MetaSignature;
+use crate::providers::dummy_lm::DummyLM;
 
 pub struct DummyPredict {
     pub signature: MetaSignature,

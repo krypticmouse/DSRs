@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use dspy_rs::Signature;
-use dspy_rs::clients::dummy_lm::DummyLM;
 use dspy_rs::data::example::Example;
 use dspy_rs::field::{In, Out};
 use dspy_rs::programs::dummy_predictor::DummyPredict;
+use dspy_rs::providers::dummy_lm::DummyLM;
 
 #[allow(dead_code)]
 #[derive(Signature)]
