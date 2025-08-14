@@ -2,11 +2,11 @@ use schemars::JsonSchema;
 use std::collections::HashMap;
 
 use dspy_rs::adapter::base::Adapter;
-use dspy_rs::adapter::chat_adapter::ChatAdapter;
-use dspy_rs::clients::chat::Chat;
-use dspy_rs::clients::dummy_lm::DummyLM;
+use dspy_rs::adapter::chat::ChatAdapter;
 use dspy_rs::data::example::Example;
 use dspy_rs::field::{In, Out};
+use dspy_rs::providers::chat::Chat;
+use dspy_rs::providers::dummy_lm::DummyLM;
 use dspy_rs::{Signature, sign};
 
 #[tokio::test]

@@ -1,7 +1,7 @@
 use rstest::rstest;
 
-use dspy_rs::adapter::chat_adapter::ChatAdapter;
-use dspy_rs::clients::lm::LM;
+use dspy_rs::adapter::chat::ChatAdapter;
+use dspy_rs::providers::lm::LM;
 use dspy_rs::utils::settings::{SETTINGS, configure_settings};
 
 #[rstest]

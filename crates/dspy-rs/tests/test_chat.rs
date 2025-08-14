@@ -2,7 +2,7 @@ use async_openai::types::{
     ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
     ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
 };
-use dspy_rs::clients::chat::Chat;
+use dspy_rs::providers::chat::Chat;
 use rstest::*;
 
 #[rstest]

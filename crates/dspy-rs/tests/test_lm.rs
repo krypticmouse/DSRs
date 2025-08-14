@@ -2,7 +2,7 @@ use async_openai::types::{
     ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
     ChatCompletionRequestUserMessageArgs,
 };
-use dspy_rs::clients::{chat::Chat, dummy_lm::DummyLM};
+use dspy_rs::providers::{chat::Chat, dummy_lm::DummyLM};
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
