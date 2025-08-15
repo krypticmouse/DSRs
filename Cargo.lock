@@ -340,6 +340,7 @@ dependencies = [
  "rayon",
  "rstest",
  "schemars",
+ "secrecy",
  "serde",
  "serde_json",
  "tokio",
