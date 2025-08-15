@@ -1,10 +1,8 @@
 pub mod adapter;
 pub mod core;
-// pub mod data;
-// pub mod evaluate;
-pub mod lm;
-pub mod module;
-pub mod providers;
+pub mod data;
+pub mod evaluate;
+pub mod predictors;
 
 // pub use dsrs_macros::*;
 

@@ -60,8 +60,8 @@ impl ChatAdapter {
     }
 
     fn format_field_description(&self, signature: &impl Signature) -> String {
-        let input_fields = signature.metadata().input_fields_meta();
-        let output_fields = signature.metadata().output_fields_meta();
+        let input_fields = signature.metadata().input_fields();
+        let output_fields = signature.metadata().output_fields();
         let input_field_description = self.get_field_attribute_list(&input_fields);
         let output_field_description = self.get_field_attribute_list(&output_fields);
 
@@ -82,8 +82,8 @@ impl ChatAdapter {
     fn format_task_description(&self, signature: &impl Signature) -> String {
         let metadata = signature.metadata();
         let instruction = if metadata.instructions.is_empty() {
-            let input_fields = metadata.input_fields_meta();
-            let output_fields = metadata.output_fields_meta();
+            let input_fields = metadata.input_fields();
+            let output_fields = metadata.output_fields();
             format!(
                 "Given the fields {}, produce the fields {}.",
                 input_fields
@@ -117,7 +117,7 @@ impl ChatAdapter {
 
         // Extract field values using the signature's extract_fields method
         let field_values = signature.extract_fields(inputs);
-        let input_fields = signature.metadata().input_fields_meta();
+        let input_fields = signature.metadata().input_fields();
 
         for ((field_name, _), field_value) in input_fields.iter().zip(field_values.into_iter()) {
             let field_value_str: String = field_value.into();
@@ -131,7 +131,7 @@ impl ChatAdapter {
             );
         }
 
-        let output_fields = signature.metadata().output_fields_meta();
+        let output_fields = signature.metadata().output_fields();
         if let Some((first_field_name, _)) = output_fields.first() {
             let first_field_schema = signature
                 .metadata()
@@ -166,22 +166,10 @@ impl ChatAdapter {
     }
 
     fn parse_response<S: Signature>(&self, signature: &S, response: Message) -> Result<S::Outputs> {
-        let response_content = match response {
-            Message::Assistant {
-                content: Some(content),
-                ..
-            } => match content {
-                crate::core::ContentTypes::Text(text) => text,
-            },
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "Expected assistant message with text content"
-                ));
-            }
-        };
+        let response_content = response.content();
 
         let mut output_json = serde_json::Map::new();
-        let output_fields = signature.metadata().output_fields_meta();
+        let output_fields = signature.metadata().output_fields();
 
         for (field_name, _) in output_fields.iter() {
             let field_marker = format!("[[ ## {field_name} ## ]]\n");
@@ -232,8 +220,8 @@ impl Adapter for ChatAdapter {
         let user_message = self.format_user_message(signature, inputs);
 
         let mut chat = Chat::new(vec![]);
-        chat.push("system", system_message);
-        chat.push("user", user_message);
+        chat.push("system", system_message.as_str());
+        chat.push("user", user_message.as_str());
 
         chat
     }

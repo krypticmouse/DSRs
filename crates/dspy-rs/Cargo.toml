@@ -26,3 +26,4 @@ async-openai = "0.29.0"
 dsrs_macros = { version = "0.1.0", path = "../dsrs-macros" }
 anyhow = "1.0.99"
 bon = "3.7.0"
+secrecy = "0.10.3"
