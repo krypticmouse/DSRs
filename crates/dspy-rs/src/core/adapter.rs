@@ -10,7 +10,7 @@ pub trait Adapter: Default + Clone {
     ) -> impl Future<Output = Result<S::Outputs>> {
         async move {
             let messages = self.format(signature, inputs);
-            let response = lm.call(&messages, signature.metadata().clone()).await?;
+            let response = lm.call(messages, signature.metadata().clone()).await?;
             self.parse(signature, response)
         }
     }

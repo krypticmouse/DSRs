@@ -23,7 +23,7 @@ impl SignatureMetadata {
         }
     }
 
-    pub fn set_input_field_meta(&mut self, field: &str, description: String) -> Result<()> {
+    pub fn set_input_field(&mut self, field: &str, description: String) -> Result<()> {
         if let Some(properties) = self
             .input_schema
             .get_mut("properties")
@@ -46,7 +46,7 @@ impl SignatureMetadata {
         }
     }
 
-    pub fn set_output_field_meta(&mut self, field: &str, description: String) -> Result<()> {
+    pub fn set_output_field(&mut self, field: &str, description: String) -> Result<()> {
         if let Some(properties) = self
             .output_schema
             .get_mut("properties")
@@ -69,7 +69,7 @@ impl SignatureMetadata {
         }
     }
 
-    pub fn input_fields_meta(&self) -> Vec<(String, String)> {
+    pub fn input_fields(&self) -> Vec<(String, String)> {
         let mut fields = Vec::new();
         if let Some(properties) = self
             .input_schema
@@ -88,7 +88,7 @@ impl SignatureMetadata {
         fields
     }
 
-    pub fn output_fields_meta(&self) -> Vec<(String, String)> {
+    pub fn output_fields(&self) -> Vec<(String, String)> {
         let mut fields = Vec::new();
         if let Some(properties) = self
             .output_schema
@@ -109,20 +109,14 @@ impl SignatureMetadata {
 }
 
 pub trait Signature: Default {
-    // user interface. Modules have associated signature type SIG and forward (&self, &SIG::Inputs) -> SIG::Outputs
     type Inputs: Serialize + JsonSchema;
     type Outputs: DeserializeOwned + JsonSchema;
 
-    // signature metadata
     fn metadata(&self) -> &SignatureMetadata;
-    fn metadata_mut(&mut self) -> &mut SignatureMetadata;
 
-    // Special input field extraction methods - default implementations return None
-    // If a signature has a type that is handled specially by adapters, they are extracted here
+    fn metadata_mut(&mut self) -> &mut SignatureMetadata;
 
     fn extract_fields(&self, inputs: &Self::Inputs) -> Vec<impl Into<String>>;
 
     fn extract_history(&self, _inputs: &Self::Inputs) -> Option<History>;
-
-    fn extract_tools(&self, _inputs: &Self::Inputs) -> Option<Vec<Tool>>;
 }
