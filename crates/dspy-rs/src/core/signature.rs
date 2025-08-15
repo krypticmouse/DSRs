@@ -1,4 +1,4 @@
-use super::{History, Tool};
+use super::History;
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::{Serialize, de::DeserializeOwned};
