@@ -44,6 +44,14 @@ impl Message {
         }
     }
 
+    pub fn content(&self) -> String {
+        match self {
+            Message::System { content } => content.clone(),
+            Message::User { content } => content.clone(),
+            Message::Assistant { content } => content.clone(),
+        }
+    }
+
     pub fn get_message_turn(&self) -> ChatCompletionRequestMessage {
         match self {
             Message::System { content } => ChatCompletionRequestSystemMessageArgs::default()
@@ -76,9 +84,15 @@ impl Message {
 impl From<ChatCompletionResponseMessage> for Message {
     fn from(message: ChatCompletionResponseMessage) -> Self {
         match message.role {
-            Role::System => Message::System { content: message.content.unwrap() },
-            Role::User => Message::User { content: message.content.unwrap() },
-            Role::Assistant => Message::Assistant { content: message.content.unwrap() },
+            Role::System => Message::System {
+                content: message.content.unwrap(),
+            },
+            Role::User => Message::User {
+                content: message.content.unwrap(),
+            },
+            Role::Assistant => Message::Assistant {
+                content: message.content.unwrap(),
+            },
             _ => panic!("Invalid role: {:?}", message.role),
         }
     }

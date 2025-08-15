@@ -4,17 +4,20 @@ pub mod config;
 pub use chat::*;
 pub use config::*;
 
-use bon::Builder;
 use anyhow::Result;
-use secrecy::{ExposeSecretMut, SecretString};
+use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::{Client, config::OpenAIConfig};
-use async_openai::types::{CreateChatCompletionRequestArgs};
+use bon::Builder;
+use secrecy::{ExposeSecretMut, SecretString};
+
+use crate::core::SignatureMetadata;
 
 #[derive(Clone)]
 pub struct LMResponse {
     pub chat: Chat,
     pub config: LMConfig,
     pub output: Message,
+    pub signature_metadata: SignatureMetadata, // TODO: remove this, we just need enough data for DAG curation
 }
 
 #[derive(Clone, Builder)]
@@ -38,27 +41,27 @@ impl LM {
         self.client = Client::with_config(config);
     }
 
-    async fn call(
+    pub async fn call(
         &mut self,
         messages: Chat,
-        config: LMConfig,
+        signature_metadata: SignatureMetadata,
     ) -> Result<Message> {
         let request_messages = messages.get_async_openai_messages();
 
         let mut builder = CreateChatCompletionRequestArgs::default();
 
         let request = builder
-            .model(config.model)
+            .model(self.config.model.clone())
             .messages(request_messages)
-            .temperature(config.temperature)
-            .top_p(config.top_p)
-            .n(config.n)
-            .max_completion_tokens(config.max_completion_tokens)
-            .max_tokens(config.max_tokens)
-            .presence_penalty(config.presence_penalty)
-            .frequency_penalty(config.frequency_penalty)
-            .seed(config.seed)
-            .logit_bias(config.logit_bias.clone().unwrap_or_default())
+            .temperature(self.config.temperature)
+            .top_p(self.config.top_p)
+            .n(self.config.n)
+            .max_completion_tokens(self.config.max_completion_tokens)
+            .max_tokens(self.config.max_tokens)
+            .presence_penalty(self.config.presence_penalty)
+            .frequency_penalty(self.config.frequency_penalty)
+            .seed(self.config.seed)
+            .logit_bias(self.config.logit_bias.clone().unwrap_or_default())
             .build()?;
 
         let response = self.client.chat().create(request).await?;
@@ -68,6 +71,7 @@ impl LM {
             chat: messages.clone(),
             output: first_choice.clone(),
             config: self.config.clone(),
+            signature_metadata: signature_metadata.clone(),
         });
 
         Ok(first_choice)
