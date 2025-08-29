@@ -12,7 +12,7 @@ struct TestSignature {
     context: String,
 
     #[output(desc = "The answer to the question")]
-    answer: i8,
+    answer: Vec<i8>,
     
     #[output(desc = "Confidence score")]
     confidence: f32,
@@ -43,6 +43,7 @@ struct TestSignature2 {
 #[test]
 fn test_signature_macro() {
     let signature = TestSignature::new();
+    let expected_schema = serde_json::to_value(schemars::schema_for!(Vec<i8>)).unwrap();
 
     assert_eq!(signature.instruction, "This is a test instruction\nWhat is the meaning of life?");
     assert_eq!(signature.input_fields["question"]["type"], "String");
@@ -51,11 +52,12 @@ fn test_signature_macro() {
     assert_eq!(signature.input_fields["context"]["type"], "String");
     assert_eq!(signature.input_fields["context"]["desc"], "Additional context for the question");
     assert_eq!(signature.input_fields["context"]["schema"], "");
-    assert_eq!(signature.output_fields["answer"]["type"], "i8");
+    assert_eq!(signature.output_fields["answer"]["type"], "Vec < i8 >");
     assert_eq!(signature.output_fields["answer"]["desc"], "The answer to the question");
-    assert_eq!(signature.output_fields["answer"]["schema"], "");
+    assert_eq!(signature.output_fields["answer"]["schema"], expected_schema);
     assert_eq!(signature.output_fields["reasoning"]["type"], "String");
     assert_eq!(signature.output_fields["reasoning"]["desc"], "Think step by step");
+    assert_eq!(signature.output_fields["reasoning"]["schema"], "");
     assert_eq!(signature.output_fields["confidence"]["type"], "f32");
     assert_eq!(signature.output_fields["confidence"]["desc"], "Confidence score");
     assert_eq!(signature.output_fields["confidence"]["schema"], "");
