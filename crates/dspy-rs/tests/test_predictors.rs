@@ -1,17 +1,17 @@
-use dspy_rs::hashmap;
-use dspy_rs::Signature;
-use dspy_rs::data::example::Example;
 use dspy_rs::DummyPredict;
 use dspy_rs::Module;
+use dspy_rs::Signature;
+use dspy_rs::data::example::Example;
+use dspy_rs::hashmap;
 
 #[allow(dead_code)]
 #[Signature]
 struct QASignature {
     /// You are a helpful assistant.
-    
+
     #[input]
     pub question: String,
-    
+
     #[output]
     pub answer: String,
 }
@@ -29,10 +29,7 @@ async fn test_predictor() {
         vec!["answer".to_string()],
     );
 
-    let outputs = predictor
-        .forward(inputs.clone())
-        .await
-        .unwrap();
+    let outputs = predictor.forward(inputs.clone()).await.unwrap();
 
     assert_eq!(outputs.get("answer", None), "Paris");
 }

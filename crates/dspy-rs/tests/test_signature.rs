@@ -1,4 +1,4 @@
-use dspy_rs::{field, MetaSignature, sign};
+use dspy_rs::{MetaSignature, field, sign};
 use rstest::*;
 
 #[rstest]
@@ -23,8 +23,14 @@ fn test_signature_append() {
     let _ = signature.append("inp3", field_obj["inp3"].clone());
 
     assert_eq!(signature.input_fields_len(), 3);
-    assert_eq!(signature.input_fields.get("inp3").unwrap()["__dsrs_field_type"], "input");
+    assert_eq!(
+        signature.input_fields.get("inp3").unwrap()["__dsrs_field_type"],
+        "input"
+    );
     assert_eq!(signature.input_fields.get("inp3").unwrap()["desc"], "");
-    assert_eq!(signature.input_fields.get("inp1").unwrap()["__dsrs_field_type"], "input");
+    assert_eq!(
+        signature.input_fields.get("inp1").unwrap()["__dsrs_field_type"],
+        "input"
+    );
     assert_eq!(signature.input_fields.get("inp1").unwrap()["desc"], "");
 }

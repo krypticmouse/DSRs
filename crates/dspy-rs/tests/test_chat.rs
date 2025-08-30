@@ -1,6 +1,6 @@
-use serde_json::json;
 use dspy_rs::core::{Chat, Message};
 use rstest::*;
+use serde_json::json;
 
 #[rstest]
 fn test_chat_init() {
@@ -15,6 +15,7 @@ fn test_chat_init() {
 
     assert_eq!(chat.len(), 3);
     assert_eq!(json[0]["role"], "system");
+    assert!(!chat.is_empty());
     assert_eq!(
         json[0]["content"],
         "You are a helpful assistant.".to_string()

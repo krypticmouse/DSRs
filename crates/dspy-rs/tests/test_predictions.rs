@@ -15,9 +15,15 @@ fn test_prediction_initialization() {
 
     let lm_usage = LmUsage::default();
     assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
-    assert_eq!(prediction.lm_usage.completion_tokens, lm_usage.completion_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(prediction.lm_usage.reasoning_tokens, lm_usage.reasoning_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 }
 
 #[rstest]
@@ -30,7 +36,7 @@ fn test_prediction_get() {
         reasoning_tokens: Some(10),
     };
     let prediction = Prediction::new(data, lm_usage.clone());
-    
+
     assert_eq!(prediction.get("a", None), "1");
     assert_eq!(prediction.get("b", None), "2");
     assert_eq!(prediction.get("c", None), "");
@@ -38,9 +44,15 @@ fn test_prediction_get() {
     assert_eq!(prediction.get("a", None), "1");
 
     assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
-    assert_eq!(prediction.lm_usage.completion_tokens, lm_usage.completion_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(prediction.lm_usage.reasoning_tokens, lm_usage.reasoning_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 }
 
 #[rstest]
@@ -69,9 +81,15 @@ fn test_prediction_set_lm_usage() {
 
     let lm_usage = LmUsage::default();
     assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
-    assert_eq!(prediction.lm_usage.completion_tokens, lm_usage.completion_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(prediction.lm_usage.reasoning_tokens, lm_usage.reasoning_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 
     let lm_usage = LmUsage {
         prompt_tokens: 10,
@@ -81,7 +99,13 @@ fn test_prediction_set_lm_usage() {
     };
     prediction.set_lm_usage(lm_usage.clone());
     assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
-    assert_eq!(prediction.lm_usage.completion_tokens, lm_usage.completion_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(prediction.lm_usage.reasoning_tokens, lm_usage.reasoning_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 }

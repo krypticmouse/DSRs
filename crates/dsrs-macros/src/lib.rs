@@ -50,11 +50,11 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let (is_output, desc2) = has_out_attribute(&field.attrs);
                     
                     if is_input && is_output {
-                        panic!("Field {} cannot be both input and output", field_name);
+                        panic!("Field {field_name} cannot be both input and output");
                     }
                     
                     if !is_input && !is_output {
-                        panic!("Field {} must have either #[input] or #[output] attribute", field_name);
+                        panic!("Field {field_name} must have either #[input] or #[output] attribute");
                     }
                     
                     let field_desc = if is_input { desc } else { desc2 };

@@ -42,11 +42,7 @@ impl LM {
         self.client = Some(Client::with_config(config));
     }
 
-    pub async fn call(
-        &mut self,
-        messages: Chat,
-        signature: &str,
-    ) -> Result<(Message, LmUsage)> {
+    pub async fn call(&mut self, messages: Chat, signature: &str) -> Result<(Message, LmUsage)> {
         if self.client.is_none() {
             self.setup_client();
         }
@@ -88,7 +84,6 @@ impl LM {
     }
 }
 
-
 #[derive(Clone, Builder, Default)]
 pub struct DummyLM {
     pub api_key: SecretString,
@@ -109,12 +104,19 @@ impl DummyLM {
     ) -> Result<(Message, LmUsage)> {
         self.history.push(LMResponse {
             chat: messages.clone(),
-            output: Message::Assistant { content: prediction.clone() },
+            output: Message::Assistant {
+                content: prediction.clone(),
+            },
             config: self.config.clone(),
             signature: signature.to_string(),
         });
-        
-        Ok((Message::Assistant { content: prediction.clone() }, LmUsage::default()))
+
+        Ok((
+            Message::Assistant {
+                content: prediction.clone(),
+            },
+            LmUsage::default(),
+        ))
     }
 
     pub fn inspect_history(&self, n: usize) -> Vec<&LMResponse> {

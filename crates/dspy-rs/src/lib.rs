@@ -50,13 +50,13 @@ macro_rules! field {
     //   },
     //   ...
     // }
-    
+
     // Pattern for field definitions with descriptions
     { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
         use serde_json::json;
-        
+
         let mut result = serde_json::Map::new();
-        
+
         $(
             let type_str = stringify!($field_ty);
             let schema = {
@@ -83,16 +83,16 @@ macro_rules! field {
                 })
             );
         )*
-        
+
         serde_json::Value::Object(result)
     }};
-    
+
     // Pattern for field definitions without descriptions
     { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
         use serde_json::json;
-        
+
         let mut result = serde_json::Map::new();
-        
+
         $(
             let type_str = stringify!($field_ty);
             let schema = {
@@ -119,7 +119,7 @@ macro_rules! field {
                 })
             );
         )*
-        
+
         serde_json::Value::Object(result)
     }};
 }
@@ -158,7 +158,7 @@ macro_rules! sign {
                 $output_name: $output_type,
             )*
         }
-        
+
         InlineSignature::new()
     }};
 }

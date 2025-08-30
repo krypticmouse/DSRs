@@ -1,8 +1,8 @@
 use anyhow::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::core::{LM, Message, MetaSignature, Chat};
+use crate::core::{Chat, LM, Message, MetaSignature};
 use crate::data::{example::Example, prediction::Prediction};
 use crate::utils::get_iter_from_value;
 
@@ -10,24 +10,31 @@ use crate::utils::get_iter_from_value;
 pub struct ChatAdapter;
 
 fn get_type_hint(field: &Value) -> String {
-    if field["schema"].as_str().unwrap().is_empty() && field["data_type"].as_str().unwrap() == "String" {
+    if field["schema"].as_str().unwrap().is_empty()
+        && field["data_type"].as_str().unwrap() == "String"
+    {
         String::new()
     } else {
-        format!(" (must be formatted as valid Rust {})", field["data_type"].as_str().unwrap())
+        format!(
+            " (must be formatted as valid Rust {})",
+            field["data_type"].as_str().unwrap()
+        )
     }
 }
 
 impl ChatAdapter {
-    fn get_field_attribute_list(&self, field_iter: impl Iterator<Item = (String, Value)>) -> String {
+    fn get_field_attribute_list(
+        &self,
+        field_iter: impl Iterator<Item = (String, Value)>,
+    ) -> String {
         let mut field_attributes = String::new();
         for (i, (field_name, field)) in field_iter.enumerate() {
             let data_type = field["data_type"].as_str().unwrap();
             let desc = field["desc"].as_str().unwrap();
 
-            field_attributes
-                .push_str(format!("{}. `{field_name}` ({data_type})", i + 1).as_str());
+            field_attributes.push_str(format!("{}. `{field_name}` ({data_type})", i + 1).as_str());
             if !desc.is_empty() {
-                field_attributes.push_str(format!(": {}", desc).as_str());
+                field_attributes.push_str(format!(": {desc}").as_str());
             }
             field_attributes.push('\n');
         }
@@ -47,10 +54,7 @@ impl ChatAdapter {
                     "\t# note: the value you produce must adhere to the JSON schema: {schema_str}"
                 )
             } else {
-                format!(
-                    "\t# note: the value you produce must be a single {} value",
-                    data_type
-                )
+                format!("\t# note: the value you produce must be a single {data_type} value",)
             };
 
             field_structure.push_str(
@@ -69,8 +73,10 @@ impl ChatAdapter {
     }
 
     fn format_field_description(&self, signature: &dyn MetaSignature) -> String {
-        let input_field_description = self.get_field_attribute_list(get_iter_from_value(&signature.input_fields()));
-        let output_field_description = self.get_field_attribute_list(get_iter_from_value(&signature.output_fields()));
+        let input_field_description =
+            self.get_field_attribute_list(get_iter_from_value(&signature.input_fields()));
+        let output_field_description =
+            self.get_field_attribute_list(get_iter_from_value(&signature.output_fields()));
 
         format!(
             "Your input fields are:\n{input_field_description}\nYour output fields are:\n{output_field_description}"
@@ -78,8 +84,10 @@ impl ChatAdapter {
     }
 
     fn format_field_structure(&self, signature: &dyn MetaSignature) -> String {
-        let input_field_structure = self.get_field_structure(get_iter_from_value(&signature.input_fields()));
-        let output_field_structure = self.get_field_structure(get_iter_from_value(&signature.output_fields()));
+        let input_field_structure =
+            self.get_field_structure(get_iter_from_value(&signature.input_fields()));
+        let output_field_structure =
+            self.get_field_structure(get_iter_from_value(&signature.output_fields()));
 
         format!(
             "All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}{output_field_structure}[[ ## completed ## ]]\n"
@@ -127,8 +135,21 @@ impl ChatAdapter {
             );
         }
 
-        let first_output_field = signature.output_fields().as_object().unwrap().keys().next().unwrap().clone();
-        let first_output_field_value = signature.output_fields().as_object().unwrap().get(&first_output_field).unwrap().clone();
+        let first_output_field = signature
+            .output_fields()
+            .as_object()
+            .unwrap()
+            .keys()
+            .next()
+            .unwrap()
+            .clone();
+        let first_output_field_value = signature
+            .output_fields()
+            .as_object()
+            .unwrap()
+            .get(&first_output_field)
+            .unwrap()
+            .clone();
 
         let type_hint = get_type_hint(&first_output_field_value);
 
@@ -187,11 +208,16 @@ impl ChatAdapter {
         output
     }
 
-    pub async fn call(&self, lm: &mut LM, signature: &dyn MetaSignature, inputs: Example) -> Result<Prediction> {
+    pub async fn call(
+        &self,
+        lm: &mut LM,
+        signature: &dyn MetaSignature,
+        inputs: Example,
+    ) -> Result<Prediction> {
         let messages = self.format(signature, inputs);
         let (response, usage) = lm.call(messages, "predict").await?;
         let output = self.parse_response(signature, response);
-        
+
         Ok(Prediction {
             data: output,
             lm_usage: usage,

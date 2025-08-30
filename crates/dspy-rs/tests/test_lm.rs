@@ -1,4 +1,4 @@
-use dspy_rs::{Chat, Message, DummyLM};
+use dspy_rs::{Chat, DummyLM, Message};
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
@@ -12,11 +12,10 @@ async fn test_dummy_lm() {
         Message::user("Hello, world!"),
     ]);
 
-    let output = dummy_lm.call(
-        chat, 
-        "DummySignature", 
-        "Hello, world!".to_string(),
-    ).await.unwrap();
+    let output = dummy_lm
+        .call(chat, "DummySignature", "Hello, world!".to_string())
+        .await
+        .unwrap();
     let choice = &output.0.content();
     assert_eq!(choice, "Hello, world!");
     assert_eq!(dummy_lm.history.len(), 1);

@@ -1,5 +1,5 @@
-use serde_json::Value;
 use anyhow::Result;
+use serde_json::Value;
 
 pub trait MetaSignature {
     fn instruction(&self) -> String;

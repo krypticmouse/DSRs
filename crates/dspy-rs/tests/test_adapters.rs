@@ -1,6 +1,6 @@
 use schemars::JsonSchema;
 
-use dspy_rs::{Example, Chat, DummyLM, ChatAdapter, Signature, sign, Message, hashmap};
+use dspy_rs::{Chat, ChatAdapter, DummyLM, Example, Message, Signature, hashmap, sign};
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]

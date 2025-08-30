@@ -112,6 +112,10 @@ impl Chat {
         self.messages.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
+
     pub fn push(&mut self, role: &str, content: &str) {
         self.messages.push(Message::new(role, content));
     }

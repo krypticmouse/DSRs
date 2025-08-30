@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use async_openai::types::CompletionUsage;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LmUsage {
@@ -15,7 +15,9 @@ impl From<CompletionUsage> for LmUsage {
             prompt_tokens: usage.prompt_tokens,
             completion_tokens: usage.completion_tokens,
             total_tokens: usage.total_tokens,
-            reasoning_tokens: usage.completion_tokens_details.and_then(|details| details.reasoning_tokens),
+            reasoning_tokens: usage
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens),
         }
     }
 }

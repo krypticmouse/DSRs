@@ -10,7 +10,7 @@ fn test_initialization() {
         "input2".to_string() => "value2".to_string().into(),
         "output1".to_string() => "value3".to_string().into(),
     };
-    
+
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data.clone(), input_keys.clone(), output_keys.clone());
