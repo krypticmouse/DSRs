@@ -259,15 +259,13 @@ fn has_out_attribute(attrs: &[Attribute]) -> (bool, String) {
 }
 
 fn parse_desc_from_tokens(tokens: proc_macro2::TokenStream) -> String {
-    if let Ok(nv) = syn::parse2::<MetaNameValue>(tokens) {
-        if nv.path.is_ident("desc") {
-            if let syn::Expr::Lit(syn::ExprLit {
-                lit: Lit::Str(s), ..
-            }) = nv.value
-            {
-                return s.value();
-            }
-        }
+    if let Ok(nv) = syn::parse2::<MetaNameValue>(tokens)
+        && nv.path.is_ident("desc")
+        && let syn::Expr::Lit(syn::ExprLit {
+            lit: Lit::Str(s), ..
+        }) = nv.value
+    {
+        return s.value();
     }
     String::new()
 }
