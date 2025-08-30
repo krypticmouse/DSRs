@@ -1,6 +1,7 @@
 use anyhow::Result;
 use dspy_rs::{example, Prediction, Signature, Predict, Module, Example, hashmap, LM, configure, ChatAdapter};
 use secrecy::SecretString;
+use bon::Builder;
 
 #[Signature(cot)]
 struct QASignature {
@@ -13,43 +14,46 @@ struct QASignature {
 
 #[Signature]
 struct RateSignature {
+    /// Rate the answer on a scale of 1(very bad) to 10(very good)
+
+    #[input]
+    pub question: String,
+
     #[input]
     pub answer: String,
+
     #[output]
     pub rating: i8,
 }
 
+#[derive(Builder)]
 pub struct QARater {
+    #[builder(default = Predict::new(QASignature::new()))]
     pub answerer: Predict,
+    #[builder(default = Predict::new(RateSignature::new()))]
     pub rater: Predict,
-}
-
-impl QARater {
-    pub fn new() -> Self {
-        Self {
-            answerer: Predict::new(QASignature::new()),
-            rater: Predict::new(RateSignature::new()),
-        }
-    }
 }
 
 impl Module for QARater {
     async fn forward(&self, inputs: Example) -> Result<Prediction> {
         let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
 
+        let question = inputs.data.get("question").unwrap().clone();
         let answer = answerer_prediction.data.get("answer").unwrap().clone();
 
         let inputs = Example::new(
             hashmap! {
-                "answer".to_string() => answer.clone()
+                "answer".to_string() => answer.clone(),
+                "question".to_string() => question.clone()
             },
-            vec!["answer".to_string()],
+            vec!["answer".to_string(), "question".to_string()],
             vec![],
         );
         let rating_prediction = self.rater.forward(inputs).await?;
         Ok(Prediction::new(
             hashmap! {
                 "answer".to_string() => answer,
+                "question".to_string() => question,
                 "rating".to_string() => rating_prediction.data.get("rating").unwrap().clone()
             },
             rating_prediction.lm_usage
@@ -70,7 +74,7 @@ async fn main() {
         "question": "What is the capital of France?",
     };
 
-    let qa_rater = QARater::new();
+    let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
     println!("{:?}", prediction);
 }
