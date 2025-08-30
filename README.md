@@ -6,7 +6,11 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![Crates.io](https://img.shields.io/crates/v/dspy-rs)](https://crates.io/crates/dspy-rs)
+[![Documentation](https://docs.rs/dspy-rs/badge.svg)](https://docs.rs/dspy-rs)
 [![Build Status](https://img.shields.io/badge/build-passing-green.svg)](#)
+
+[Documentation](https://dsrs.herumbshandilya.com) • [API Reference](https://docs.rs/dspy-rs) • [Examples](crates/dspy-rs/examples/) • [Issues](https://github.com/krypticmouse/dsrs/issues) • [Discord](https://discord.com/invite/ZAEGgxjPUe)
 
 </div>
 
@@ -14,7 +18,7 @@
 
 ## 🚀 Overview
 
-**DSRs** (DSPy Rust) is a ground-up rewrite of the DSPy framework in Rust, designed for building robust, high-performance applications powered by Language Models. Unlike a simple port, DSRs leverages Rust's type system, memory safety, and concurrency features to provide a more efficient and reliable foundation for LLM applications.
+**DSRs** (DSPy Rust) is a ground-up rewrite of the [DSPy framework](https://github.com/stanfordnlp/dspy) in Rust, designed for building robust, high-performance applications powered by Language Models. Unlike a simple port, DSRs leverages Rust's type system, memory safety, and concurrency features to provide a more efficient and reliable foundation for LLM applications.
 
 ## 📦 Installation
 
@@ -45,51 +49,174 @@ Here's a simple example to get you started:
 
 ```rust
 use dsrs::prelude::*;
-use std::collections::HashMap;
-use indexmap::IndexMap;
+use anyhow::Result;
+
+#[Signature]
+struct QASignature {
+    /// You are a helpful assistant that answers questions accurately.
+    
+    #[input]
+    pub question: String,
+    
+    #[output]
+    pub answer: String,
+}
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Define a signature for Q&A
-    let signature = Signature::builder()
-        .name("QASignature".to_string())
-        .instruction("Answer the question concisely and accurately.".to_string())
-        .input_fields(IndexMap::from([(
-            "question".to_string(),
-            Field::InputField {
-                prefix: "Question:".to_string(),
-                desc: "The question to answer".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
-        )]))
-        .output_fields(IndexMap::from([(
-            "answer".to_string(),
-            Field::OutputField {
-                prefix: "Answer:".to_string(),
-                desc: "The answer to the question".to_string(),
-                format: None,
-                output_type: "String".to_string(),
-            },
-        )]))
-        .build()?;
-
+async fn main() -> Result<()> {
+    // Configure your LM (Language Model)
+    configure(
+        LM::builder()
+            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
+            .build(),
+        ChatAdapter {},
+    );
+    
     // Create a predictor
-    let predictor = Predict { 
-        signature: &signature 
-    };
-
+    let predictor = Predict::new(QASignature::new());
+    
     // Prepare input
-    let inputs = HashMap::from([
-        ("question".to_string(), "What is the capital of France?".to_string())
-    ]);
-
+    let example = example! {
+        "question": "input" => "What is the capital of France?",
+    };
+    
     // Execute prediction
-    let result = predictor.forward(inputs, None, None).await?;
+    let result = predictor.forward(example).await?;
     
     println!("Answer: {}", result.get("answer", None));
-
+    
     Ok(())
+}
+```
+
+## 🏗️ Architecture
+
+DSRs follows a modular architecture with clear separation of concerns:
+
+```
+dsrs/
+├── core/           # Core abstractions (LM, Module, Signature)
+├── adapter/        # LLM provider adapters (OpenAI, etc.)
+├── data/           # Data structures (Example, Prediction)
+├── predictors/     # Built-in predictors (Predict, Chain, etc.)
+├── evaluate/       # Evaluation framework and metrics
+└── macros/         # Derive macros for signatures
+```
+
+### Core Components
+
+#### 1. **Signatures** - Define Input/Output Specifications
+```rust
+#[Signature(cot)]  // Enable chain-of-thought reasoning
+struct TranslationSignature {
+    /// Translate the text accurately while preserving meaning
+    
+    #[input]
+    pub text: String,
+    
+    #[input]
+    pub target_language: String,
+    
+    #[output]
+    pub translation: String,
+}
+```
+
+#### 2. **Modules** - Composable Pipeline Components
+```rust
+#[derive(Builder)]
+pub struct CustomModule {
+    predictor: Predict,
+}
+
+impl Module for CustomModule {
+    async fn forward(&self, inputs: Example) -> Result<Prediction> {
+        // Your custom logic here
+        self.predictor.forward(inputs).await
+    }
+}
+```
+
+#### 3. **Predictors** - Pre-built LLM Interaction Patterns
+```rust
+// Simple prediction
+let predict = Predict::new(MySignature::new());
+
+// Chain of thought
+let cot_predict = Predict::new(MySignature::new().with_cot());
+
+// Future: More predictors coming
+// let chain = Chain::new(vec![step1, step2]);
+// let retry = Retry::new(predictor, max_attempts: 3);
+```
+
+#### 4. **Language Models** - Configurable LLM Backends
+```rust
+// Configure with OpenAI
+let lm = LM::builder()
+    .api_key(secret_key)
+    .model("gpt-4")
+    .temperature(0.7)
+    .max_tokens(1000)
+    .build();
+
+// Future: Support for other providers
+// .provider(Provider::Anthropic)
+// .provider(Provider::Local(model_path))
+```
+
+## 📚 Examples
+
+### Example 1: Multi-Step Reasoning Pipeline
+
+```rust
+use dsrs::prelude::*;
+
+#[Signature]
+struct AnalyzeSignature {
+    #[input]
+    pub text: String,
+    
+    #[output]
+    pub sentiment: String,
+    
+    #[output]
+    pub key_points: String,
+}
+
+#[Signature]
+struct SummarizeSignature {
+    #[input]
+    pub key_points: String,
+    
+    #[output]
+    pub summary: String,
+}
+
+#[derive(Builder)]
+pub struct AnalysisPipeline {
+    analyzer: Predict,
+    summarizer: Predict,
+}
+
+impl Module for AnalysisPipeline {
+    async fn forward(&self, inputs: Example) -> Result<Prediction> {
+        // Step 1: Analyze the text
+        let analysis = self.analyzer.forward(inputs).await?;
+        
+        // Step 2: Summarize key points
+        let summary_input = example! {
+            "key_points": "input" => analysis.get("key_points", None),
+        };
+        let summary = self.summarizer.forward(summary_input).await?;
+        
+        // Combine results
+        Ok(prediction! {
+            "sentiment" => analysis.get("sentiment", None),
+            "key_points" => analysis.get("key_points", None),
+            "summary" => summary.get("summary", None),
+        })
+    }
 }
 ```
 
@@ -106,37 +233,57 @@ cargo test test_predictors
 
 # With output
 cargo test -- --nocapture
+
+# Run examples
+cargo run --example 01-simple
+```
+
+## 🛠️ Other Features
+
+### Chain of Thought (CoT) Reasoning
+```rust
+#[Signature(cot)]  // Enable CoT with attribute
+struct ComplexReasoningSignature {
+    #[input(desc="Question")
+    pub problem: String,
+    
+    #[output]
+    pub solution: String,
+}
 ```
 
 ---
 
 ## 📈 Project Status
 
-⚠️ **Early Development** - DSRs is actively being developed. The API may change between versions.
+⚠️ **Beta Release** - DSRs is in active development. The API is stabilizing but may have breaking changes.
 
-### Core Framework
-- [x] Metrics traits and Evaluators
-- [x] Signature Macros
-- [x] Structured Output Parsing
-- [ ] Adding More Predictors
-    - [ ] dsrs.Refine
-    - [ ] dsrs.BestOfN
-    - [ ] dsrs.Retry
-- [ ] Retriever Module Support
+## 🤝 Contributing
 
-### LM Integrations
-- [x] Ability to use native provider keys for popular clients
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
-### Data Management
-- [x] Example Macros
-- [ ] Support for data loading from sources
+### Development Setup
 
-### Performance Optimizations
-- [ ] Batch processing for LM calls
-- [ ] Batch Input support for Module
-- [ ] Memory Analysis and Optimization
-- [ ] Caching Support for Providers
-- [ ] Performance benchmarking b/w DSPy and DSRs
+```bash
+# Clone the repository
+git clone https://github.com/krypticmouse/dsrs.git
+cd dsrs
+
+# Build the project
+cargo build
+
+# Run tests
+cargo test
+
+# Run with examples
+cargo run --example 01-simple
+
+# Check formatting
+cargo fmt -- --check
+
+# Run clippy
+cargo clippy -- -D warnings
+```
 
 ## 📄 License
 
@@ -146,9 +293,21 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 
 - Inspired by the original [DSPy](https://github.com/stanfordnlp/dspy) framework
 - Built with the amazing Rust ecosystem
+- Special thanks to the DSPy community for the discussion and ideas
+
+## 🔗 Resources
+
+- [Documentation](https://dsrs.herumbshandilya.com)
+- [API Reference](https://docs.rs/dspy-rs)
+- [Examples](crates/dspy-rs/examples/)
+- [GitHub Issues](https://github.com/krypticmouse/dsrs/issues)
+- [Discord Community](https://discord.com/invite/ZAEGgxjPUe)
+- [Original DSPy Paper](https://arxiv.org/abs/2310.03714)
+
+---
 
 <div align="center">
-
-**[Documentation](https://docs.rs/dspy-rs) • [Examples](examples/) • [Issues](https://github.com/krypticmouse/dsrs/issues) • [Discussions](https://github.com/krypticmouse/dsrs/discussions)**
-
+<strong>Built with 🦀 by the DSPy x Rust community</strong>
+<br>
+<sub>Star ⭐ this repo if you find it useful!</sub>
 </div>
