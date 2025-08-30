@@ -1,7 +1,9 @@
 use anyhow::Result;
-use dspy_rs::{example, Prediction, Signature, Predict, Module, Example, hashmap, LM, configure, ChatAdapter};
-use secrecy::SecretString;
 use bon::Builder;
+use dspy_rs::{
+    ChatAdapter, Example, LM, Module, Predict, Prediction, Signature, configure, example, hashmap,
+};
+use secrecy::SecretString;
 
 #[Signature(cot)]
 struct QASignature {
@@ -56,7 +58,7 @@ impl Module for QARater {
                 "question".to_string() => question,
                 "rating".to_string() => rating_prediction.data.get("rating").unwrap().clone()
             },
-            rating_prediction.lm_usage
+            rating_prediction.lm_usage,
         ))
     }
 }
@@ -71,10 +73,10 @@ async fn main() {
     );
 
     let example = example! {
-        "question": "What is the capital of France?",
+        "question": "input" => "What is the capital of France?",
     };
 
     let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
-    println!("{:?}", prediction);
+    println!("{prediction:?}");
 }

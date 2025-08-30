@@ -10,7 +10,9 @@ pub struct Predict {
 
 impl Predict {
     pub fn new(signature: impl MetaSignature + 'static) -> Self {
-        Self { signature: Box::new(signature) }
+        Self {
+            signature: Box::new(signature),
+        }
     }
 }
 

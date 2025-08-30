@@ -156,8 +156,8 @@ fn test_serialize() {
 #[rstest]
 fn test_example_macro() {
     let example = example! {
-        "question": "What is the capital of France?",
-        "answer": "Paris"
+        "question": "input" => "What is the capital of France?",
+        "answer": "output" => "Paris"
     };
     assert_eq!(
         example.data,
@@ -168,10 +168,9 @@ fn test_example_macro() {
     );
 
     let example = example! {
-        "question": "What is the capital of France?",
-        "answer": "Paris"
-    }
-    .with_input_keys(vec!["question".to_string()]);
+        "question": "input" => "What is the capital of France?",
+        "answer": "output" => "Paris"
+    };
     assert_eq!(example.input_keys, vec!["question".to_string()]);
     assert_eq!(example.output_keys, vec!["answer".to_string()]);
     assert_eq!(

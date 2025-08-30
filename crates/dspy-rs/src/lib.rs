@@ -16,20 +16,29 @@ pub use dsrs_macros::*;
 
 #[macro_export]
 macro_rules! example {
-    // Pattern: { "key": "value", ... }
-    { $($key:literal : $value:expr),* $(,)? } => {{
+    // Pattern: { "key": <__dsrs_field_type>: "value", ... }
+    { $($key:literal : $field_type:literal => $value:expr),* $(,)? } => {{
         use std::collections::HashMap;
         use dspy_rs::data::example::Example;
 
+        let mut input_keys = vec![];
+        let mut output_keys = vec![];
+
         let mut fields = HashMap::new();
         $(
+            if $field_type == "input" {
+                input_keys.push($key.to_string());
+            } else {
+                output_keys.push($key.to_string());
+            }
+
             fields.insert($key.to_string(), $value.to_string().into());
         )*
 
         Example::new(
             fields,
-            vec![],
-            vec![],
+            input_keys,
+            output_keys,
         )
     }};
 }
