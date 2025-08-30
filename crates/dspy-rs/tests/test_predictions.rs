@@ -1,34 +1,64 @@
 use rstest::*;
 use serde_json::json;
 
-use dspy_rs::data::prediction::{LmUsage, Prediction};
+use dspy_rs::{LmUsage, Prediction};
 use std::collections::HashMap;
 
 #[rstest]
 fn test_prediction_initialization() {
     let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
-    let prediction = Prediction::new(data);
+    let prediction = Prediction::new(data, LmUsage::default());
     assert_eq!(
         prediction.data,
         HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))])
     );
-    assert_eq!(prediction.lm_usage, LmUsage::default());
+
+    let lm_usage = LmUsage::default();
+    assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
+    assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 }
 
 #[rstest]
 fn test_prediction_get() {
     let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
-    let prediction = Prediction::new(data);
+    let lm_usage = LmUsage {
+        prompt_tokens: 10,
+        completion_tokens: 20,
+        total_tokens: 30,
+        reasoning_tokens: Some(10),
+    };
+    let prediction = Prediction::new(data, lm_usage.clone());
+
     assert_eq!(prediction.get("a", None), "1");
     assert_eq!(prediction.get("b", None), "2");
     assert_eq!(prediction.get("c", None), "");
     assert_eq!(prediction.get("c", Some("3")), "3");
+    assert_eq!(prediction.get("a", None), "1");
+
+    assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
+    assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
 }
 
 #[rstest]
 fn test_prediction_keys() {
     let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
-    let prediction = Prediction::new(data);
+    let prediction = Prediction::new(data, LmUsage::default());
 
     let mut keys = prediction.keys();
     keys.sort();
@@ -38,7 +68,7 @@ fn test_prediction_keys() {
 #[rstest]
 fn test_prediction_values() {
     let data = HashMap::from([("a".to_string(), json!("1")), ("b".to_string(), json!("2"))]);
-    let prediction = Prediction::new(data);
+    let prediction = Prediction::new(data, LmUsage::default());
 
     let mut values = prediction.values();
     values.sort_by_key(|v| v.to_string());
@@ -47,17 +77,35 @@ fn test_prediction_values() {
 
 #[rstest]
 fn test_prediction_set_lm_usage() {
-    let mut prediction = Prediction::new(HashMap::new());
+    let mut prediction = Prediction::new(HashMap::new(), LmUsage::default());
+
+    let lm_usage = LmUsage::default();
+    assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
+    assert_eq!(
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
+    assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
+    );
+
     let lm_usage = LmUsage {
         prompt_tokens: 10,
         completion_tokens: 20,
+        total_tokens: 30,
+        reasoning_tokens: Some(10),
     };
-    prediction.set_lm_usage(lm_usage);
+    prediction.set_lm_usage(lm_usage.clone());
+    assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
     assert_eq!(
-        prediction.lm_usage,
-        LmUsage {
-            prompt_tokens: 10,
-            completion_tokens: 20
-        }
+        prediction.lm_usage.completion_tokens,
+        lm_usage.completion_tokens
+    );
+    assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
+    assert_eq!(
+        prediction.lm_usage.reasoning_tokens,
+        lm_usage.reasoning_tokens
     );
 }

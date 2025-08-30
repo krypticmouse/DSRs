@@ -1,8 +1,4 @@
-use async_openai::types::{
-    ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
-    ChatCompletionRequestUserMessageArgs,
-};
-use dspy_rs::providers::{chat::Chat, dummy_lm::DummyLM};
+use dspy_rs::{Chat, DummyLM, Message};
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
@@ -12,66 +8,39 @@ async fn test_dummy_lm() {
     assert_eq!(dummy_lm.history.len(), 0);
 
     let chat = Chat::new(vec![
-        ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content("You are a helpful assistant.".to_string())
-                .build()
-                .unwrap(),
-        ),
-        ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessageArgs::default()
-                .content("Hello, world!".to_string())
-                .build()
-                .unwrap(),
-        ),
+        Message::system("You are a helpful assistant."),
+        Message::user("Hello, world!"),
     ]);
 
-    let output = dummy_lm.call(&chat, "Hello, world!", "test").await.unwrap();
-    let choice = &output.choices[0];
-    assert_eq!(choice.message.content, Some("Hello, world!".to_string()));
+    let output = dummy_lm
+        .call(chat, "DummySignature", "Hello, world!".to_string())
+        .await
+        .unwrap();
+    let choice = &output.0.content();
+    assert_eq!(choice, "Hello, world!");
     assert_eq!(dummy_lm.history.len(), 1);
 
     // Check that the chat was stored in history
     let stored_history = &dummy_lm.history[0];
-    assert_eq!(stored_history.input.messages.len(), 2);
+    assert_eq!(stored_history.chat.len(), 2);
     assert_eq!(
-        stored_history.input.messages[0],
-        ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content("You are a helpful assistant.".to_string())
-                .build()
-                .unwrap()
-        )
+        stored_history.chat.messages[0].content(),
+        "You are a helpful assistant.".to_string(),
     );
     assert_eq!(
-        stored_history.input.messages[1],
-        ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessageArgs::default()
-                .content("Hello, world!".to_string())
-                .build()
-                .unwrap()
-        )
+        stored_history.chat.messages[1].content(),
+        "Hello, world!".to_string(),
     );
 
     let history = dummy_lm.inspect_history(1);
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].input.messages.len(), 2);
+    assert_eq!(history[0].chat.len(), 2);
     assert_eq!(
-        history[0].input.messages[0],
-        ChatCompletionRequestMessage::System(
-            ChatCompletionRequestSystemMessageArgs::default()
-                .content("You are a helpful assistant.".to_string())
-                .build()
-                .unwrap()
-        )
+        history[0].chat.messages[0].content(),
+        "You are a helpful assistant.".to_string(),
     );
     assert_eq!(
-        history[0].input.messages[1],
-        ChatCompletionRequestMessage::User(
-            ChatCompletionRequestUserMessageArgs::default()
-                .content("Hello, world!".to_string())
-                .build()
-                .unwrap()
-        )
+        history[0].chat.messages[1].content(),
+        "Hello, world!".to_string(),
     );
 }

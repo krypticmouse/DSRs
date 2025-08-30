@@ -1,11 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, PartialEq, Eq)]
-pub struct LmUsage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-}
+use crate::LmUsage;
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Prediction {
@@ -14,15 +10,8 @@ pub struct Prediction {
 }
 
 impl Prediction {
-    pub fn new(data: HashMap<String, serde_json::Value>) -> Self {
-        Self {
-            data,
-            lm_usage: LmUsage::default(),
-        }
-    }
-
-    pub fn set_lm_usage(&mut self, lm_usage: LmUsage) {
-        self.lm_usage = lm_usage;
+    pub fn new(data: HashMap<String, serde_json::Value>, lm_usage: LmUsage) -> Self {
+        Self { data, lm_usage }
     }
 
     pub fn get(&self, key: &str, default: Option<&str>) -> serde_json::Value {
@@ -38,5 +27,9 @@ impl Prediction {
 
     pub fn values(&self) -> Vec<serde_json::Value> {
         self.data.values().cloned().collect()
+    }
+
+    pub fn set_lm_usage(&mut self, lm_usage: LmUsage) {
+        self.lm_usage = lm_usage;
     }
 }

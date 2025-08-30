@@ -1,23 +1,24 @@
 pub mod chat;
 pub mod config;
+pub mod usage;
 
 pub use chat::*;
 pub use config::*;
+pub use usage::*;
 
 use anyhow::Result;
 use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::{Client, config::OpenAIConfig};
+
 use bon::Builder;
 use secrecy::{ExposeSecretMut, SecretString};
-
-use crate::core::SignatureMetadata;
 
 #[derive(Clone)]
 pub struct LMResponse {
     pub chat: Chat,
     pub config: LMConfig,
     pub output: Message,
-    pub signature_metadata: SignatureMetadata, // TODO: remove this, we just need enough data for DAG curation
+    pub signature: String,
 }
 
 #[derive(Clone, Builder)]
@@ -29,7 +30,7 @@ pub struct LM {
     pub config: LMConfig,
     #[builder(default = Vec::new())]
     pub history: Vec<LMResponse>,
-    client: Client<OpenAIConfig>,
+    client: Option<Client<OpenAIConfig>>,
 }
 
 impl LM {
@@ -38,14 +39,14 @@ impl LM {
             .with_api_key(self.api_key.expose_secret_mut().to_string())
             .with_api_base(self.base_url.clone());
 
-        self.client = Client::with_config(config);
+        self.client = Some(Client::with_config(config));
     }
 
-    pub async fn call(
-        &mut self,
-        messages: Chat,
-        signature_metadata: SignatureMetadata,
-    ) -> Result<Message> {
+    pub async fn call(&mut self, messages: Chat, signature: &str) -> Result<(Message, LmUsage)> {
+        if self.client.is_none() {
+            self.setup_client();
+        }
+
         let request_messages = messages.get_async_openai_messages();
 
         let mut builder = CreateChatCompletionRequestArgs::default();
@@ -64,17 +65,58 @@ impl LM {
             .logit_bias(self.config.logit_bias.clone().unwrap_or_default())
             .build()?;
 
-        let response = self.client.chat().create(request).await?;
+        let response = self.client.as_ref().unwrap().chat().create(request).await?;
         let first_choice = Message::from(response.choices.first().unwrap().message.clone());
+        let usage = LmUsage::from(response.usage.unwrap());
 
         self.history.push(LMResponse {
             chat: messages.clone(),
             output: first_choice.clone(),
             config: self.config.clone(),
-            signature_metadata: signature_metadata.clone(),
+            signature: signature.to_string(),
         });
 
-        Ok(first_choice)
+        Ok((first_choice, usage))
+    }
+
+    pub fn inspect_history(&self, n: usize) -> Vec<&LMResponse> {
+        self.history.iter().rev().take(n).collect()
+    }
+}
+
+#[derive(Clone, Builder, Default)]
+pub struct DummyLM {
+    pub api_key: SecretString,
+    #[builder(default = "https://api.openai.com/v1".to_string())]
+    pub base_url: String,
+    #[builder(default = LMConfig::default())]
+    pub config: LMConfig,
+    #[builder(default = Vec::new())]
+    pub history: Vec<LMResponse>,
+}
+
+impl DummyLM {
+    pub async fn call(
+        &mut self,
+        messages: Chat,
+        signature: &str,
+        prediction: String,
+    ) -> Result<(Message, LmUsage)> {
+        self.history.push(LMResponse {
+            chat: messages.clone(),
+            output: Message::Assistant {
+                content: prediction.clone(),
+            },
+            config: self.config.clone(),
+            signature: signature.to_string(),
+        });
+
+        Ok((
+            Message::Assistant {
+                content: prediction.clone(),
+            },
+            LmUsage::default(),
+        ))
     }
 
     pub fn inspect_history(&self, n: usize) -> Vec<&LMResponse> {

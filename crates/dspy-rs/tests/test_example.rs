@@ -1,16 +1,16 @@
 use dspy_rs::data::example::Example;
 use dspy_rs::data::serialize::{load_jsonl, save_examples_as_jsonl};
-use dspy_rs::example;
+use dspy_rs::{example, hashmap};
 use rstest::*;
-use std::collections::HashMap;
 
 #[rstest]
 fn test_initialization() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
+
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data.clone(), input_keys.clone(), output_keys.clone());
@@ -22,11 +22,11 @@ fn test_initialization() {
 
 #[rstest]
 fn test_get() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data, input_keys, output_keys);
@@ -40,11 +40,11 @@ fn test_get() {
 
 #[rstest]
 fn test_keys() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data, input_keys, output_keys);
@@ -56,27 +56,27 @@ fn test_keys() {
 
 #[rstest]
 fn test_values() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data, input_keys, output_keys);
 
     let mut values = example.values();
-    values.sort();
+    values.sort_by_key(|v| v.to_string());
     assert_eq!(values, vec!["value1", "value2", "value3"]);
 }
 
 #[rstest]
 fn test_set_input_keys() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
 
     let mut example = Example::new(
         data,
@@ -95,11 +95,11 @@ fn test_set_input_keys() {
 
 #[rstest]
 fn test_without() {
-    let data = HashMap::from([
-        ("input1".to_string(), "value1".to_string()),
-        ("input2".to_string(), "value2".to_string()),
-        ("output1".to_string(), "value3".to_string()),
-    ]);
+    let data = hashmap! {
+        "input1".to_string() => "value1".to_string().into(),
+        "input2".to_string() => "value2".to_string().into(),
+        "output1".to_string() => "value3".to_string().into(),
+    };
     let input_keys = vec!["input1".to_string(), "input2".to_string()];
     let output_keys = vec!["output1".to_string()];
     let example = Example::new(data, input_keys, output_keys);
@@ -114,12 +114,16 @@ fn test_without() {
 fn test_serialize() {
     let examples = vec![
         Example::new(
-            HashMap::from([("input1".to_string(), "value1".to_string())]),
+            hashmap! {
+                "input1".to_string() => "value1".to_string().into(),
+            },
             vec!["input1".to_string()],
             vec!["output1".to_string()],
         ),
         Example::new(
-            HashMap::from([("input1".to_string(), "value2".to_string())]),
+            hashmap! {
+                "input1".to_string() => "value2".to_string().into(),
+            },
             vec!["input1".to_string()],
             vec!["output1".to_string()],
         ),
@@ -133,11 +137,15 @@ fn test_serialize() {
     assert_eq!(examples.len(), 2);
     assert_eq!(
         examples[0].data,
-        HashMap::from([("input1".to_string(), "value1".to_string())])
+        hashmap! {
+            "input1".to_string() => "value1".to_string().into(),
+        }
     );
     assert_eq!(
         examples[1].data,
-        HashMap::from([("input1".to_string(), "value2".to_string())])
+        hashmap! {
+            "input1".to_string() => "value2".to_string().into(),
+        }
     );
     assert_eq!(examples[0].input_keys, vec!["input1".to_string()]);
     assert_eq!(examples[1].input_keys, vec!["input1".to_string()]);
@@ -153,13 +161,10 @@ fn test_example_macro() {
     };
     assert_eq!(
         example.data,
-        HashMap::from([
-            (
-                "question".to_string(),
-                "What is the capital of France?".to_string()
-            ),
-            ("answer".to_string(), "Paris".to_string())
-        ])
+        hashmap! {
+            "question".to_string() => "What is the capital of France?".to_string().into(),
+            "answer".to_string() => "Paris".to_string().into(),
+        }
     );
 
     let example = example! {
@@ -171,12 +176,9 @@ fn test_example_macro() {
     assert_eq!(example.output_keys, vec!["answer".to_string()]);
     assert_eq!(
         example.data,
-        HashMap::from([
-            (
-                "question".to_string(),
-                "What is the capital of France?".to_string()
-            ),
-            ("answer".to_string(), "Paris".to_string())
-        ])
+        hashmap! {
+            "question".to_string() => "What is the capital of France?".to_string().into(),
+            "answer".to_string() => "Paris".to_string().into(),
+        }
     );
 }
