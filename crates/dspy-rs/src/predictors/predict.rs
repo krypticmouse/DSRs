@@ -8,6 +8,12 @@ pub struct Predict {
     pub signature: Box<dyn MetaSignature>,
 }
 
+impl Predict {
+    pub fn new(signature: impl MetaSignature + 'static) -> Self {
+        Self { signature: Box::new(signature) }
+    }
+}
+
 impl Module for Predict {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
         let (adapter, mut lm) = {

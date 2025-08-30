@@ -57,7 +57,6 @@ impl LM {
             .temperature(self.config.temperature)
             .top_p(self.config.top_p)
             .n(self.config.n)
-            .max_completion_tokens(self.config.max_completion_tokens)
             .max_tokens(self.config.max_tokens)
             .presence_penalty(self.config.presence_penalty)
             .frequency_penalty(self.config.frequency_penalty)
