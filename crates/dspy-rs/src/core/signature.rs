@@ -7,5 +7,5 @@ pub trait MetaSignature {
     fn output_fields(&self) -> Value;
 
     fn update_instruction(&mut self, instruction: String) -> Result<()>;
-    fn append(&mut self, name: &str, value: Value, field_type: &str) -> Result<()>;
+    fn append(&mut self, name: &str, value: Value) -> Result<()>;
 }

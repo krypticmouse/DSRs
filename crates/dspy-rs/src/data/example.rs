@@ -1,16 +1,17 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Example {
-    pub data: HashMap<String, String>,
+    pub data: HashMap<String, Value>,
     pub input_keys: Vec<String>,
     pub output_keys: Vec<String>,
 }
 
 impl Example {
     pub fn new(
-        data: HashMap<String, String>,
+        data: HashMap<String, Value>,
         input_keys: Vec<String>,
         output_keys: Vec<String>,
     ) -> Self {
@@ -32,10 +33,10 @@ impl Example {
         }
     }
 
-    pub fn get(&self, key: &str, default: Option<&str>) -> String {
+    pub fn get(&self, key: &str, default: Option<&str>) -> Value {
         self.data
             .get(key)
-            .unwrap_or(&default.unwrap_or_default().to_string())
+            .unwrap_or(&default.unwrap_or_default().to_string().into())
             .clone()
     }
 
@@ -43,7 +44,7 @@ impl Example {
         self.data.keys().cloned().collect()
     }
 
-    pub fn values(&self) -> Vec<String> {
+    pub fn values(&self) -> Vec<Value> {
         self.data.values().cloned().collect()
     }
 

@@ -1,5 +1,6 @@
 use schemars::JsonSchema;
-use dsrs_macros::Signature;
+use dspy_rs::Signature;
+use rstest::*;
 
 #[Signature(cot, hint)]
 struct TestSignature {
@@ -34,13 +35,15 @@ struct TestSignature2 {
     
     #[input(desc = "The first input")]
     input1: String,
+
     #[input(desc = "The second input")]
     input2: i8,
-    #[output(desc = "The first output")]
+    
+    #[output]
     output1: TestOutput,
 }
 
-#[test]
+#[rstest]
 fn test_signature_macro() {
     let signature = TestSignature::new();
     let expected_schema = serde_json::to_value(schemars::schema_for!(Vec<i8>)).unwrap();
@@ -75,7 +78,7 @@ fn test_signature_macro() {
     assert_eq!(signature.input_fields["input2"]["desc"], "The second input");
     assert_eq!(signature.input_fields["input2"]["schema"], "");
     assert_eq!(signature.output_fields["output1"]["type"], "TestOutput");
-    assert_eq!(signature.output_fields["output1"]["desc"], "The first output");
+    assert_eq!(signature.output_fields["output1"]["desc"], "");
     let expected_schema = serde_json::to_value(schemars::schema_for!(TestOutput)).unwrap();
     assert_eq!(
         signature.output_fields["output1"]["schema"],

@@ -1,45 +1,38 @@
-use std::collections::HashMap;
-
+use dspy_rs::hashmap;
 use dspy_rs::Signature;
 use dspy_rs::data::example::Example;
-use dspy_rs::field::{In, Out};
-use dspy_rs::module::dummy_predictor::DummyPredict;
-use dspy_rs::providers::dummy_lm::DummyLM;
+use dspy_rs::DummyPredict;
+use dspy_rs::Module;
 
 #[allow(dead_code)]
-#[derive(Signature)]
+#[Signature]
 struct QASignature {
     /// You are a helpful assistant.
-    pub question: In<String>,
-    pub answer: Out<String>,
+    
+    #[input]
+    pub question: String,
+    
+    #[output]
+    pub answer: String,
 }
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
 async fn test_predictor() {
-    let signature = QASignature::new();
-
-    let predictor = DummyPredict {
-        signature: signature.clone(),
-    };
+    let predictor = DummyPredict {};
     let inputs = Example::new(
-        HashMap::from([(
-            "question".to_string(),
-            "What is the capital of France?".to_string(),
-        )]),
+        hashmap! {
+            "question".to_string() => "What is the capital of France?".to_string().into(),
+            "answer".to_string() => "Paris".to_string().into(),
+        },
         vec!["question".to_string()],
         vec!["answer".to_string()],
     );
 
-    let lm = DummyLM::default();
-
     let outputs = predictor
-        .forward(
-            inputs.clone(),
-            "[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]",
-            Some(lm),
-            None,
-        )
-        .await;
-    assert_eq!(outputs.data.get("answer").unwrap(), "Paris");
+        .forward(inputs.clone())
+        .await
+        .unwrap();
+
+    assert_eq!(outputs.get("answer", None), "Paris");
 }

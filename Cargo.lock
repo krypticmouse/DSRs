@@ -334,6 +334,7 @@ dependencies = [
  "anyhow",
  "async-openai",
  "bon",
+ "dsrs_macros",
  "futures",
  "indexmap",
  "rayon",
@@ -350,7 +351,6 @@ name = "dsrs_macros"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dspy-rs",
  "proc-macro2",
  "quote",
  "schemars",

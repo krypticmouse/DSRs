@@ -1,13 +1,6 @@
 use schemars::JsonSchema;
-use std::collections::HashMap;
 
-use dspy_rs::adapter::base::Adapter;
-use dspy_rs::adapter::chat::ChatAdapter;
-use dspy_rs::data::example::Example;
-use dspy_rs::field::{In, Out};
-use dspy_rs::providers::chat::Chat;
-use dspy_rs::providers::dummy_lm::DummyLM;
-use dspy_rs::{Signature, sign};
+use dspy_rs::{Example, Chat, DummyLM, ChatAdapter, Signature, sign, Message, hashmap};
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -22,10 +15,10 @@ async fn test_chat_adapter() {
     let messages: Chat = adapter.format(
         &signature,
         Example::new(
-            HashMap::from([(
-                "problem".to_string(),
-                "What is the capital of France?".to_string(),
-            )]),
+            hashmap! {
+                "problem".to_string() => "What is the capital of France?".to_string().into(),
+                "answer".to_string() => "Paris".to_string().into(),
+            },
             vec!["problem".to_string()],
             vec!["answer".to_string()],
         ),
@@ -49,26 +42,30 @@ async fn test_chat_adapter() {
 
     let response = lm
         .call(
-            &messages,
+            Chat::new(vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello, world!"),
+            ]),
             "[[ ## answer ## ]]\n150 degrees\n\n[[ ## completed ## ]]",
-            "test",
+            "test".to_string(),
         )
         .await
         .unwrap();
-    let output = adapter.parse_response(&signature, response);
+    let output = adapter.parse_response(&signature, response.0);
 
-    assert_eq!(output.data.len(), 1);
-    assert_eq!(output.data.get("answer").unwrap(), "150 degrees");
+    assert_eq!(output.len(), 1);
+    assert_eq!(output.get("answer").unwrap(), "150 degrees");
 }
 
 #[allow(dead_code)]
-#[derive(Signature)]
+#[Signature(cot, hint)]
 struct TestSignature {
     ///You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.
-    pub problem: In<String>,
-    pub hint: In<String>,
-    pub reasoning: Out<String>,
-    pub answer: Out<String>,
+
+    #[input]
+    pub problem: String,
+    #[output]
+    pub answer: String,
 }
 
 #[tokio::test]
@@ -82,16 +79,10 @@ async fn test_chat_adapter_with_multiple_fields() {
     let messages: Chat = adapter.format(
         &signature,
         Example::new(
-            HashMap::from([
-                (
-                    "problem".to_string(),
-                    "What is the capital of France?".to_string(),
-                ),
-                (
-                    "hint".to_string(),
-                    "The capital of France is Paris.".to_string(),
-                ),
-            ]),
+            hashmap! {
+                "problem".to_string() => "What is the capital of France?".to_string().into(),
+                "hint".to_string() => "The capital of France is Paris.".to_string().into(),
+            },
             vec!["problem".to_string(), "hint".to_string()],
             vec!["reasoning".to_string(), "answer".to_string()],
         ),
@@ -115,20 +106,23 @@ async fn test_chat_adapter_with_multiple_fields() {
 
     let response = lm
         .call(
-            &messages,
+            Chat::new(vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello, world!"),
+            ]),
             "[[ ## reasoning ## ]]\nThe capital of France is Paris.\n\n[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]",
-            "test",
+            "test".to_string(),
         )
         .await
         .unwrap();
-    let output = adapter.parse_response(&signature, response);
+    let output = adapter.parse_response(&signature, response.0);
 
-    assert_eq!(output.data.len(), 2);
+    assert_eq!(output.len(), 2);
     assert_eq!(
-        output.data.get("reasoning").unwrap(),
+        output.get("reasoning").unwrap(),
         "The capital of France is Paris."
     );
-    assert_eq!(output.data.get("answer").unwrap(), "Paris");
+    assert_eq!(output.get("answer").unwrap(), "Paris");
 }
 
 #[allow(dead_code)]
@@ -139,11 +133,14 @@ struct TestOutput {
 }
 
 #[allow(dead_code)]
-#[derive(Signature)]
+#[Signature]
 struct TestSignature2 {
-    pub problem: In<String>,
-    pub hint: In<i8>,
-    pub output: Out<TestOutput>,
+    #[input]
+    pub problem: String,
+    #[input]
+    pub hint: i8,
+    #[output]
+    pub output: TestOutput,
 }
 
 #[tokio::test]
@@ -157,16 +154,10 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
     let messages: Chat = adapter.format(
         &signature,
         Example::new(
-            HashMap::from([
-                (
-                    "problem".to_string(),
-                    "What is the capital of France?".to_string(),
-                ),
-                (
-                    "hint".to_string(),
-                    "The capital of France is Paris.".to_string(),
-                ),
-            ]),
+            hashmap! {
+                "problem".to_string() => "What is the capital of France?".to_string().into(),
+                "hint".to_string() => "The capital of France is Paris.".to_string().into(),
+            },
             vec!["problem".to_string(), "hint".to_string()],
             vec!["output".to_string()],
         ),
@@ -190,25 +181,28 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
 
     let response = lm
         .call(
-            &messages,
+            Chat::new(vec![
+                Message::system("You are a helpful assistant."),
+                Message::user("Hello, world!"),
+            ]),
             "[[ ## output ## ]]\n{\"reasoning\": \"The capital of France is Paris.\", \"rating\": 5}\n\n[[ ## completed ## ]]",
-            "test",
+            "test".to_string(),
         )
         .await
         .unwrap();
-    let output = adapter.parse_response(&signature, response);
+    let output = adapter.parse_response(&signature, response.0);
 
-    assert_eq!(output.data.len(), 1);
+    assert_eq!(output.len(), 1);
 
     let parsed_output: serde_json::Value =
         serde_json::from_str("{\"reasoning\": \"The capital of France is Paris.\", \"rating\": 5}")
             .unwrap();
     assert_eq!(
-        output.data.get("output").unwrap()["reasoning"],
+        output.get("output").unwrap()["reasoning"],
         parsed_output["reasoning"]
     );
     assert_eq!(
-        output.data.get("output").unwrap()["rating"],
+        output.get("output").unwrap()["rating"],
         parsed_output["rating"]
     );
 }

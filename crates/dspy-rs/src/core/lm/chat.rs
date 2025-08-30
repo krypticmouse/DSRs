@@ -100,12 +100,16 @@ impl From<ChatCompletionResponseMessage> for Message {
 
 #[derive(Clone, Debug)]
 pub struct Chat {
-    messages: Vec<Message>,
+    pub messages: Vec<Message>,
 }
 
 impl Chat {
     pub fn new(messages: Vec<Message>) -> Self {
         Self { messages }
+    }
+
+    pub fn len(&self) -> usize {
+        self.messages.len()
     }
 
     pub fn push(&mut self, role: &str, content: &str) {

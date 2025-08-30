@@ -5,7 +5,6 @@ use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Attribute, MetaNameValue, Lit};
 use serde_json::{json, Value};
 
-
 #[allow(unused_assignments, non_snake_case)]
 #[proc_macro_attribute]
 pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -30,7 +29,8 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
         input_schema["hint"] = json!({
             "type": "String",
             "desc": "Hint for the query",
-            "schema": ""
+            "schema": "",
+            "__dsrs_field_type": "input"
         });
     }
 
@@ -87,7 +87,8 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                     let field_metadata = json!({
                         "type": type_str,
                         "desc": field_desc,
-                        "schema": ""
+                        "schema": "",
+                        "__dsrs_field_type": if is_input { "input" } else { "output" }
                     });
                     
                     if is_input {
@@ -145,7 +146,8 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
         output_schema["reasoning"] = json!({
             "type": "String",
             "desc": "Think step by step",
-            "schema": ""
+            "schema": "",
+            "__dsrs_field_type": "output"
         });
     }
 
@@ -154,7 +156,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_schema_str = serde_json::to_string(&output_schema).unwrap();
     
     let generated = quote! {
-        #[derive(Default, Debug)]
+        #[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
         struct #struct_name {
             instruction: String,
             input_fields: serde_json::Value,
@@ -174,6 +176,14 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                     input_fields: input_fields,
                     output_fields: output_fields,
                 }
+            }
+
+            pub fn input_fields_len(&self) -> usize {
+                self.input_fields.as_object().map_or(0, |obj| obj.len())
+            }
+
+            pub fn output_fields_len(&self) -> usize {
+                self.output_fields.as_object().map_or(0, |obj| obj.len())
             }
         }
 
@@ -195,16 +205,16 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 Ok(())
             }
         
-            fn append(&mut self, name: &str, field_value: serde_json::Value, field_type: &str) -> anyhow::Result<()> {
-                match field_type {
-                    "in" | "input" => {
+            fn append(&mut self, name: &str, field_value: serde_json::Value) -> anyhow::Result<()> {
+                match field_value["__dsrs_field_type"].as_str() {
+                    Some("input") => {
                         self.input_fields[name] = field_value;
                     }
-                    "out" | "output" => {
+                    Some("output") => {
                         self.output_fields[name] = field_value;
                     }
                     _ => {
-                        return Err(anyhow::anyhow!("Invalid field type: {}", field_type));
+                        return Err(anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
                     }
                 }
                 Ok(())

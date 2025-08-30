@@ -1,20 +1,20 @@
-use crate::core::{Adapter, Module, Signature};
+use crate::{core::{GLOBAL_SETTINGS, Module}, data::{example::Example, prediction::Prediction}};
+use crate::core::MetaSignature;
 
-pub struct Predict<S: Signature> {
-    pub signature: S,
+pub struct Predict{
+    pub signature: Box<dyn MetaSignature>,
 }
 
-impl<S: Signature> Module for Predict<S> {
-    type SIG = S;
-
-    async fn aforward_with_settings(
+impl Module for Predict {
+    async fn forward(
         &self,
-        inputs: &<<Self as Module>::SIG as Signature>::Inputs,
-        settings: &mut crate::core::Settings,
-    ) -> anyhow::Result<<<Self as Module>::SIG as Signature>::Outputs> {
+        inputs: Example
+    ) -> anyhow::Result<Prediction> {
+        let guard = GLOBAL_SETTINGS.read().unwrap();
+        let settings = guard.as_ref().unwrap();
         let adapter = &settings.adapter;
-        let lm = &mut settings.lm;
-        let result = adapter.call(lm, &self.signature, inputs).await;
+        let lm = &mut settings.lm.clone();
+        let result = adapter.call(lm, self.signature.as_ref(), inputs).await;
         result
     }
 }
