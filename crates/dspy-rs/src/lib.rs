@@ -44,6 +44,21 @@ macro_rules! example {
 }
 
 #[macro_export]
+macro_rules! prediction {
+    { $($key:literal => $value:expr),* $(,)? } => {{
+        use std::collections::HashMap;
+        use dspy_rs::{Prediction, LmUsage};
+
+        let mut fields = HashMap::new();
+        $(
+            fields.insert($key.to_string(), $value.to_string().into());
+        )*
+
+        Prediction::new(fields, LmUsage::default())
+    }};
+}
+
+#[macro_export]
 macro_rules! field {
     // Example Usage: field! {
     //   input["Description"] => question: String

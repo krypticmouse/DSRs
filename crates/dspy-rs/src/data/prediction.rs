@@ -29,7 +29,8 @@ impl Prediction {
         self.data.values().cloned().collect()
     }
 
-    pub fn set_lm_usage(&mut self, lm_usage: LmUsage) {
+    pub fn set_lm_usage(&mut self, lm_usage: LmUsage) -> Self {
         self.lm_usage = lm_usage;
+        self.clone()
     }
 }

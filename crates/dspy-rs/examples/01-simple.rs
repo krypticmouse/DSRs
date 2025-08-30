@@ -2,6 +2,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, Example, LM, Module, Predict, Prediction, Signature, configure, example, hashmap,
+    prediction,
 };
 use secrecy::SecretString;
 
@@ -52,14 +53,12 @@ impl Module for QARater {
             vec![],
         );
         let rating_prediction = self.rater.forward(inputs).await?;
-        Ok(Prediction::new(
-            hashmap! {
-                "answer".to_string() => answer,
-                "question".to_string() => question,
-                "rating".to_string() => rating_prediction.data.get("rating").unwrap().clone()
-            },
-            rating_prediction.lm_usage,
-        ))
+        Ok(prediction! {
+            "answer"=> answer,
+            "question"=> question,
+            "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
+        }
+        .set_lm_usage(rating_prediction.lm_usage))
     }
 }
 
