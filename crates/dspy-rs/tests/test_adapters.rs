@@ -37,7 +37,7 @@ async fn test_chat_adapter() {
     );
     assert_eq!(
         json[1]["content"],
-        "[[ ## problem ## ]]\nWhat is the capital of France?\n\nRespond with the corresponding output fields, starting with the field `answer`, and then ending with the marker for `completed`."
+        "[[ ## problem ## ]]\nWhat is the capital of France?\n\nRespond with the corresponding output fields, starting with the field `answer`, and then ending with the marker for `completed`.".to_string()
     );
 
     let response = lm
@@ -46,8 +46,8 @@ async fn test_chat_adapter() {
                 Message::system("You are a helpful assistant."),
                 Message::user("Hello, world!"),
             ]),
-            "[[ ## answer ## ]]\n150 degrees\n\n[[ ## completed ## ]]",
-            "test".to_string(),
+            "test",
+            "[[ ## answer ## ]]\n150 degrees\n\n[[ ## completed ## ]]".to_string(),
         )
         .await
         .unwrap();
@@ -97,7 +97,7 @@ async fn test_chat_adapter_with_multiple_fields() {
 
     assert_eq!(
         json[0]["content"],
-        "Your input fields are:\n1. `problem` (String)\n2. `hint` (String)\n\nYour output fields are:\n1. `reasoning` (String)\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer."
+        "Your input fields are:\n1. `problem` (String)\n2. `hint` (String): Hint for the query\n\nYour output fields are:\n1. `reasoning` (String): Think step by step\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string()
     );
     assert_eq!(
         json[1]["content"],
@@ -110,8 +110,8 @@ async fn test_chat_adapter_with_multiple_fields() {
                 Message::system("You are a helpful assistant."),
                 Message::user("Hello, world!"),
             ]),
-            "[[ ## reasoning ## ]]\nThe capital of France is Paris.\n\n[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]",
-            "test".to_string(),
+            "test",
+            "[[ ## reasoning ## ]]\nThe capital of France is Paris.\n\n[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]".to_string(),
         )
         .await
         .unwrap();
@@ -172,7 +172,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
 
     assert_eq!(
         json[0]["content"],
-        "Your input fields are:\n1. `problem` (String)\n2. `hint` (i8)\n\nYour output fields are:\n1. `output` (TestOutput)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\t# note: the value you produce must be a single i8 value\n\n[[ ## output ## ]]\noutput\t# note: the value you produce must adhere to the JSON schema: {\"rating\":{\"format\":\"int8\",\"maximum\":127,\"minimum\":-128,\"type\":\"integer\"},\"reasoning\":{\"type\":\"string\"}}\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, `hint`, produce the fields `output`."
+        "Your input fields are:\n1. `problem` (String)\n2. `hint` (i8)\n\nYour output fields are:\n1. `output` (TestOutput)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\t# note: the value you produce must be a single i8 value\n\n[[ ## output ## ]]\noutput\t# note: the value you produce must adhere to the JSON schema: {\"reasoning\":{\"type\":\"string\"},\"rating\":{\"type\":\"integer\",\"format\":\"int8\",\"minimum\":-128,\"maximum\":127}}\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, `hint`, produce the fields `output`.".to_string()
     );
     assert_eq!(
         json[1]["content"],
@@ -185,8 +185,8 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
                 Message::system("You are a helpful assistant."),
                 Message::user("Hello, world!"),
             ]),
-            "[[ ## output ## ]]\n{\"reasoning\": \"The capital of France is Paris.\", \"rating\": 5}\n\n[[ ## completed ## ]]",
-            "test".to_string(),
+            "test",
+            "[[ ## output ## ]]\n{\"reasoning\": \"The capital of France is Paris.\", \"rating\": 5}\n\n[[ ## completed ## ]]".to_string(),
         )
         .await
         .unwrap();

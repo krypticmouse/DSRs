@@ -10,15 +10,22 @@ use crate::utils::get_iter_from_value;
 pub struct ChatAdapter;
 
 fn get_type_hint(field: &Value) -> String {
-    if field["schema"].as_str().unwrap().is_empty()
-        && field["data_type"].as_str().unwrap() == "String"
-    {
+    let schema = &field["schema"];
+    let type_str = field["type"].as_str().unwrap_or("String");
+    
+    // Check if schema exists and is not empty (either as string or object)
+    let has_schema = if let Some(s) = schema.as_str() {
+        !s.is_empty()
+    } else if schema.is_object() {
+        true
+    } else {
+        false
+    };
+    
+    if !has_schema && type_str == "String" {
         String::new()
     } else {
-        format!(
-            " (must be formatted as valid Rust {})",
-            field["data_type"].as_str().unwrap()
-        )
+        format!(" (must be formatted as valid Rust {})", type_str)
     }
 }
 
@@ -29,8 +36,8 @@ impl ChatAdapter {
     ) -> String {
         let mut field_attributes = String::new();
         for (i, (field_name, field)) in field_iter.enumerate() {
-            let data_type = field["data_type"].as_str().unwrap();
-            let desc = field["desc"].as_str().unwrap();
+            let data_type = field["type"].as_str().unwrap_or("String");
+            let desc = field["desc"].as_str().unwrap_or("");
 
             field_attributes.push_str(format!("{}. `{field_name}` ({data_type})", i + 1).as_str());
             if !desc.is_empty() {
@@ -44,17 +51,26 @@ impl ChatAdapter {
     fn get_field_structure(&self, field_iter: impl Iterator<Item = (String, Value)>) -> String {
         let mut field_structure = String::new();
         for (field_name, field) in field_iter {
-            let schema_str = field["schema"].as_str().unwrap();
-            let data_type = field["data_type"].as_str().unwrap();
+            let schema = &field["schema"];
+            let data_type = field["type"].as_str().unwrap_or("String");
 
-            let schema_prompt = if schema_str.is_empty() && data_type == "String" {
+            // Handle schema as either string or JSON object
+            let schema_prompt = if let Some(s) = schema.as_str() {
+                if s.is_empty() && data_type == "String" {
+                    "".to_string()
+                } else if !s.is_empty() {
+                    format!("\t# note: the value you produce must adhere to the JSON schema: {s}")
+                } else {
+                    format!("\t# note: the value you produce must be a single {data_type} value")
+                }
+            } else if schema.is_object() || schema.is_array() {
+                // Convert JSON object/array to string for display
+                let schema_str = schema.to_string();
+                format!("\t# note: the value you produce must adhere to the JSON schema: {schema_str}")
+            } else if data_type == "String" {
                 "".to_string()
-            } else if !schema_str.is_empty() {
-                format!(
-                    "\t# note: the value you produce must adhere to the JSON schema: {schema_str}"
-                )
             } else {
-                format!("\t# note: the value you produce must be a single {data_type} value",)
+                format!("\t# note: the value you produce must be a single {data_type} value")
             };
 
             field_structure.push_str(
@@ -125,11 +141,19 @@ impl ChatAdapter {
     fn format_user_message(&self, signature: &dyn MetaSignature, inputs: Example) -> String {
         let mut input_str = String::new();
         for (field_name, _) in get_iter_from_value(&signature.input_fields()) {
+            let field_value = inputs.get(field_name.as_str(), None);
+            // Extract the actual string value if it's a JSON string, otherwise use as is
+            let field_value_str = if let Some(s) = field_value.as_str() {
+                s.to_string()
+            } else {
+                field_value.to_string()
+            };
+            
             input_str.push_str(
                 format!(
-                    "[[ ## {field_name} ## ]]\n{field_value}\n\n",
+                    "[[ ## {field_name} ## ]]\n{field_value_str}\n\n",
                     field_name = field_name,
-                    field_value = inputs.get(field_name.as_str(), None)
+                    field_value_str = field_value_str
                 )
                 .as_str(),
             );
@@ -188,14 +212,27 @@ impl ChatAdapter {
         for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
             let field_value = response_content
                 .split(format!("[[ ## {field_name} ## ]]\n").as_str())
-                .nth(1)
-                .unwrap();
+                .nth(1);
+            
+            if field_value.is_none() {
+                continue; // Skip field if not found in response
+            }
+            let field_value = field_value.unwrap();
 
             let extracted_field = field_value.split("[[ ## ").nth(0).unwrap().trim();
-            let data_type = field["data_type"].as_str().unwrap();
-            let schema = field["schema"].as_str().unwrap();
+            let data_type = field["type"].as_str().unwrap();
+            let schema = &field["schema"];
+            
+            // Check if schema exists (as string or object)
+            let has_schema = if let Some(s) = schema.as_str() {
+                !s.is_empty()
+            } else if schema.is_object() || schema.is_array() {
+                true
+            } else {
+                false
+            };
 
-            if schema.is_empty() && data_type == "String" {
+            if !has_schema && data_type == "String" {
                 output.insert(field_name.clone(), json!(extracted_field));
             } else {
                 output.insert(

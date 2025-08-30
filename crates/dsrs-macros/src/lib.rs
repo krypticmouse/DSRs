@@ -25,15 +25,14 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Store schema update operations to be performed at runtime
     let mut schema_updates = Vec::new();
 
-    if has_hint {
-        input_schema["hint"] = json!({
+    if has_cot {
+        output_schema["reasoning"] = json!({
             "type": "String",
-            "desc": "Hint for the query",
+            "desc": "Think step by step",
             "schema": "",
-            "__dsrs_field_type": "input"
+            "__dsrs_field_type": "output"
         });
     }
-
     // Generate schema for the field
 
     match &input.data {
@@ -142,12 +141,12 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
         _ => panic!("Signature can only be applied to structs"),
     }
 
-    if has_cot {
-        output_schema["reasoning"] = json!({
+    if has_hint {
+        input_schema["hint"] = json!({
             "type": "String",
-            "desc": "Think step by step",
+            "desc": "Hint for the query",
             "schema": "",
-            "__dsrs_field_type": "output"
+            "__dsrs_field_type": "input"
         });
     }
 

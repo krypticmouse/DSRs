@@ -11,6 +11,6 @@ syn   = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 serde = { version = "1.0.219", features = ["derive"] }
-serde_json = "1.0.143"
+serde_json = { version = "1.0.143", features = ["preserve_order"] }
 anyhow = "1.0.99"
 schemars = "1.0.4"
