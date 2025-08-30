@@ -12,20 +12,18 @@ pub struct ChatAdapter;
 fn get_type_hint(field: &Value) -> String {
     let schema = &field["schema"];
     let type_str = field["type"].as_str().unwrap_or("String");
-    
+
     // Check if schema exists and is not empty (either as string or object)
     let has_schema = if let Some(s) = schema.as_str() {
         !s.is_empty()
-    } else if schema.is_object() {
-        true
     } else {
-        false
+        schema.is_object()
     };
-    
+
     if !has_schema && type_str == "String" {
         String::new()
     } else {
-        format!(" (must be formatted as valid Rust {})", type_str)
+        format!(" (must be formatted as valid Rust {type_str})")
     }
 }
 
@@ -66,7 +64,9 @@ impl ChatAdapter {
             } else if schema.is_object() || schema.is_array() {
                 // Convert JSON object/array to string for display
                 let schema_str = schema.to_string();
-                format!("\t# note: the value you produce must adhere to the JSON schema: {schema_str}")
+                format!(
+                    "\t# note: the value you produce must adhere to the JSON schema: {schema_str}"
+                )
             } else if data_type == "String" {
                 "".to_string()
             } else {
@@ -148,15 +148,9 @@ impl ChatAdapter {
             } else {
                 field_value.to_string()
             };
-            
-            input_str.push_str(
-                format!(
-                    "[[ ## {field_name} ## ]]\n{field_value_str}\n\n",
-                    field_name = field_name,
-                    field_value_str = field_value_str
-                )
-                .as_str(),
-            );
+
+            input_str
+                .push_str(format!("[[ ## {field_name} ## ]]\n{field_value_str}\n\n",).as_str());
         }
 
         let first_output_field = signature
@@ -213,7 +207,7 @@ impl ChatAdapter {
             let field_value = response_content
                 .split(format!("[[ ## {field_name} ## ]]\n").as_str())
                 .nth(1);
-            
+
             if field_value.is_none() {
                 continue; // Skip field if not found in response
             }
@@ -222,14 +216,12 @@ impl ChatAdapter {
             let extracted_field = field_value.split("[[ ## ").nth(0).unwrap().trim();
             let data_type = field["type"].as_str().unwrap();
             let schema = &field["schema"];
-            
+
             // Check if schema exists (as string or object)
             let has_schema = if let Some(s) = schema.as_str() {
                 !s.is_empty()
-            } else if schema.is_object() || schema.is_array() {
-                true
             } else {
-                false
+                schema.is_object() || schema.is_array()
             };
 
             if !has_schema && data_type == "String" {
