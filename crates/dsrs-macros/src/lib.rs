@@ -2,26 +2,26 @@ extern crate self as dsrs_macros;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Attribute, MetaNameValue, Lit};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
+use syn::{Attribute, DeriveInput, Lit, MetaNameValue, parse_macro_input};
 
 #[allow(unused_assignments, non_snake_case)]
 #[proc_macro_attribute]
 pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
-    
+
     // Parse the attributes (cot, hint, etc.)
     let attr_str = attr.to_string();
     let has_cot = attr_str.contains("cot");
     let has_hint = attr_str.contains("hint");
-    
+
     let struct_name = &input.ident;
-    
+
     let mut signature_instruction = String::new();
     // Store everything as serde Values
     let mut input_schema: Value = json!({});
     let mut output_schema: Value = json!({});
-    
+
     // Store schema update operations to be performed at runtime
     let mut schema_updates = Vec::new();
 
@@ -39,25 +39,27 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
         syn::Data::Struct(s) => {
             if let syn::Fields::Named(named) = &s.fields {
                 let mut found_first_input = false;
-                
+
                 for field in &named.named {
                     let field_name = field.ident.as_ref().unwrap().clone();
                     let field_type = field.ty.clone();
-                    
+
                     // Check for #[input] or #[output] attributes
                     let (is_input, desc) = has_in_attribute(&field.attrs);
                     let (is_output, desc2) = has_out_attribute(&field.attrs);
-                    
+
                     if is_input && is_output {
                         panic!("Field {field_name} cannot be both input and output");
                     }
-                    
+
                     if !is_input && !is_output {
-                        panic!("Field {field_name} must have either #[input] or #[output] attribute");
+                        panic!(
+                            "Field {field_name} must have either #[input] or #[output] attribute"
+                        );
                     }
-                    
+
                     let field_desc = if is_input { desc } else { desc2 };
-                    
+
                     // Collect doc comments from first input field as instruction
                     if is_input && !found_first_input {
                         signature_instruction = field
@@ -79,17 +81,17 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                             .join("\n");
                         found_first_input = true;
                     }
-                    
+
                     // Create the field metadata as a serde Value
                     let type_str = quote!(#field_type).to_string();
-                    
+
                     let field_metadata = json!({
                         "type": type_str,
                         "desc": field_desc,
                         "schema": "",
                         "__dsrs_field_type": if is_input { "input" } else { "output" }
                     });
-                    
+
                     if is_input {
                         input_schema[field_name.to_string()] = field_metadata;
                         // Check if type needs schema generation (not primitive types)
@@ -153,7 +155,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
     // Serialize the schemas to strings so we can embed them in the generated code
     let input_schema_str = serde_json::to_string(&input_schema).unwrap();
     let output_schema_str = serde_json::to_string(&output_schema).unwrap();
-    
+
     let generated = quote! {
         #[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
         struct #struct_name {
@@ -166,7 +168,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
             pub fn new() -> Self {
                 let mut input_fields: serde_json::Value = serde_json::from_str(#input_schema_str).unwrap();
                 let mut output_fields: serde_json::Value = serde_json::from_str(#output_schema_str).unwrap();
-                
+
                 // Update schemas for complex types
                 #(#schema_updates)*
 
@@ -203,7 +205,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 self.instruction = instruction;
                 Ok(())
             }
-        
+
             fn append(&mut self, name: &str, field_value: serde_json::Value) -> anyhow::Result<()> {
                 match field_value["__dsrs_field_type"].as_str() {
                     Some("input") => {
@@ -220,7 +222,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
     };
-    
+
     generated.into()
 }
 
@@ -259,7 +261,10 @@ fn has_out_attribute(attrs: &[Attribute]) -> (bool, String) {
 fn parse_desc_from_tokens(tokens: proc_macro2::TokenStream) -> String {
     if let Ok(nv) = syn::parse2::<MetaNameValue>(tokens) {
         if nv.path.is_ident("desc") {
-            if let syn::Expr::Lit(syn::ExprLit { lit: Lit::Str(s), .. }) = nv.value {
+            if let syn::Expr::Lit(syn::ExprLit {
+                lit: Lit::Str(s), ..
+            }) = nv.value
+            {
                 return s.value();
             }
         }
@@ -270,9 +275,23 @@ fn parse_desc_from_tokens(tokens: proc_macro2::TokenStream) -> String {
 fn is_primitive_type(type_str: &str) -> bool {
     matches!(
         type_str,
-        "String" | "str" | "bool" | 
-        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" |
-        "u8" | "u16" | "u32" | "u64" | "u128" | "usize" |
-        "f32" | "f64" | "char"
+        "String"
+            | "str"
+            | "bool"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "i128"
+            | "isize"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "u128"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "char"
     )
 }
