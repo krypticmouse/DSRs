@@ -18,7 +18,25 @@ iconType: "light"
   }}
 />
 
-DSRs is a rewrite of the DSPy framework, built from the ground up in Rust for programming robust, LLM-powered applications. By leveraging Rust’s type system, memory safety, and concurrency, DSRs offers a more efficient and reliable foundation for language model workflows.
+Welcome to the official documentation for `DSRs` (DSPy Rust). This guide provides a comprehensive walkthrough of the framework, from first principles to advanced pipeline construction. It's written for developers who are familiar with modern software engineering practices and are looking to build robust, high-performance applications powered by Language Models.
+
+### For the DSPy Veteran
+
+You understand the power of separating logic from prompting and optimizing complex pipelines. `DSRs` offers the same conceptual elegance you love, but supercharged with Rust's compile-time guarantees. Imagine your DSPy modules, but with:
+-   **Static Typing:** Catch schema mismatches at compile time, not runtime.
+-   **Blazing Performance:** Leverage Rust's efficiency for low-latency inference and data processing.
+-   **Fearless Concurrency:** Build highly parallel pipelines with native `async/await`.
+-   **Reliability:** Eliminate entire classes of bugs related to data shape and null values.
+
+### For the Rust Artisan
+
+You build fast, reliable systems. `DSRs` provides a principled, idiomatic Rust framework for taming the non-deterministic nature of LLMs. Instead of ad-hoc string formatting and manual JSON parsing, you get:
+-   **Declarative Macros:** Define complex LLM interactions with the `#[Signature]` macro.
+-   **Type-Safe Schemas:** Automatically generate and enforce JSON schemas for structured outputs.
+-   **Composable Modules:** Build complex logic graphs using the `Module` trait, just as you would with other systems-level components.
+-   **Asynchronous Core:** Designed from the ground up for the `tokio` ecosystem.
+
+---
 
 - **Not just a port:** DSRs reimagines DSPy’s abstractions with Rust’s strengths in mind.
 - **Modern Rust API:** Take advantage of Rust’s ecosystem, async support, and strong typing.
@@ -27,7 +45,29 @@ DSRs is a rewrite of the DSPy framework, built from the ground up in Rust for pr
 
 > _Inspired by the original [DSPy](https://github.com/stanfordnlp/dspy) framework, DSRs brings LLM application development to the Rust community._
 
+---
 
+## Table of Contents
+
+1.  [**Getting Started: Your First LLM Call**](#1-getting-started-your-first-llm-call)
+    -   Installation & Setup
+    -   A Complete, Runnable Example
+2.  [**Core Concepts: The Building Blocks**](#2-core-concepts-the-building-blocks)
+    -   **Signatures:** The Typed API for LLMs
+    -   **Predictors:** The Inference Engine
+    -   **Language Models (LM):** Configuring the Backend
+    -   **Modules:** Composing Complex Workflows
+    -   **Data Flow:** `Example` and `Prediction`
+3.  [**Practical Guides & Advanced Usage**](#3-practical-guides--advanced-usage)
+    -   **Guide 1: Structured Data Extraction**
+    -   **Guide 2: Building a Multi-Step Pipeline (Module Composition)**
+    -   **Guide 3: Chain-of-Thought (CoT) Reasoning**
+4.  [**Testing and Development**](#4-testing-and-development)
+    -   Unit Testing with `DummyLM`
+    -   CI and Quality Gates
+5.  [**API Reference**](#5-api-reference)
+
+---
 ## Setting up
 
 Get your documentation site up and running in minutes.

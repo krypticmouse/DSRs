@@ -4,78 +4,85 @@ description: "Start building awesome LLM pipelines in minutes"
 icon: "rocket"
 ---
 
-This guide will walk you through setting up DSRs in your Rust project and building your first LLM pipeline. You'll learn how to install the necessary dependencies, configure your language model provider, create a simple signature, and run your first prediction.
+We'll begin with a 2-minute quickstart to get you running immediately. Afterward, a more detailed, chapter-by-chapter guided tour will deconstruct the concepts, empowering you to build truly sophisticated AI pipelines.
 
-The entire process takes about 10-15 minutes and requires only basic Rust knowledge. We'll start with installation, then move through configuration, and finally build a practical example that you can extend for your own use cases.
-
-<Steps>
-<Step title="Install DSRs">
-
-You can add DSRs to your project just like any other Rust crate, using either of these two methods:
-
-**Option 1: Add via Cargo.toml**
-```toml
-[dependencies]
-dsrs = { package = "dspy-rs", version = "0.0.2-beta" }
+## Quickstart: Your First Prediction in 2 Minutes
+This section is designed for action. Follow these steps to get from a new project to a working LLM-powered program as fast as possible.
+**Prerequisites:**
+*   A working Rust toolchain.
+*   An [OpenAI API key](https://platform.openai.com/api-keys).
+### Step 1: Create a New Project
+```bash
+cargo new dsrs_quickstart
+cd dsrs_quickstart
 ```
-
-**Option 2: Add via cargo command**
+### Step 2: Add Dependencies
+We'll add `dspy-rs` (with the recommended `dsrs` alias) and a few essential support crates.
 ```bash
 cargo add dsrs --package dspy-rs
+cargo add tokio -F full
+cargo add anyhow
+cargo add secrecy
 ```
-
-This will create an alias `dsrs` for the `dspy-rs` crate which is the intended way to use it.
-
-<Note>
-The reason we wanna do aliasing is because `dsrs` was already a published crate so I couldn't get the name, but this is how we intend to use it.
-</Note>
-</Step>
-
-<Step title="Setting up your Language Model">
-
-Create a `.env` file in your project root to configure your language model provider:
-
+### Step 3: Set Your API Key
+Create a `.env` file in the root of your `dsrs_quickstart` project and add your API key.
+```dotenv
+# .env
+OPENAI_API_KEY="sk-..."
+```
+### Step 4: Write the Code
+Replace the contents of `src/main.rs` with the following complete example:
+```rust
+// src/main.rs
+use dsrs::prelude::*;
+use anyhow::Result;
+use secrecy::SecretString;
+// 1. Define a "Signature"
+// This is a typed contract for what the LLM should do.
+// The doc comment becomes the main instruction.
+#[Signature]
+/// Answer questions about geography.
+struct GeographyQA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+#[tokio::main]
+async fn main() -> Result<()> {
+    // 2. Configure the Language Model (one-time setup)
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .expect("OPENAI_API_KEY must be set in your .env file");
+    configure(
+        LM::builder()
+            .api_key(SecretString::from(api_key))
+            .build(),
+        ChatAdapter::default(),
+    );
+    // 3. Create a "Predictor" module for our signature
+    let qa_predictor = Predict::new(GeographyQA::new());
+    // 4. Prepare an "Example" with our input data
+    let user_question = example! {
+        "question": "input" => "What is the highest mountain in North America?",
+    };
+    // 5. Run the prediction
+    println!("Asking the LLM...");
+    let result = qa_predictor.forward(user_question).await?;
+    // 6. Use the strongly-typed "Prediction" output
+    println!("\nAnswer: {}", result.get("answer", None));
+    Ok(())
+}
+```
+### Step 5: Run It!
+Execute the program from your terminal:
 ```bash
-mint dev
+# cargo run
 ```
-
-A local preview of your documentation will be available at `http://localhost:3000`.
-
-</Step>
-
-<Step title="Define Task via Signatures">
-
-Create a `.env` file in your project root to configure your language model provider:
-
-```bash
-mint dev
+You should see output similar to this:
 ```
-
-A local preview of your documentation will be available at `http://localhost:3000`.
-
-</Step>
-
-<Step title="Setting Predictor for Signature Execution">
-
-Create a `.env` file in your project root to configure your language model provider:
-
-```bash
-mint dev
+Asking the LLM...
+Answer: "The highest mountain in North America is Denali."
 ```
+Congratulations! You've successfully executed your first `DSRs` pipeline. You defined a typed task, sent it to an LLM, and got a structured response back.
+To understand the magic behind each of these steps, continue to our Guided Tour.
 
-A local preview of your documentation will be available at `http://localhost:3000`.
-
-</Step>
-
-<Step title="Building Modules for Complex Pipelines">
-
-Create a `.env` file in your project root to configure your language model provider:
-
-```bash
-mint dev
-```
-
-A local preview of your documentation will be available at `http://localhost:3000`.
-
-</Step>
-</Steps>
