@@ -139,15 +139,8 @@ impl Module for CustomModule {
 
 #### 3. **Predictors** - Pre-built LLM Interaction Patterns
 ```rust
-// Simple prediction
+// Get prediction
 let predict = Predict::new(MySignature::new());
-
-// Chain of thought
-let cot_predict = Predict::new(MySignature::new().with_cot());
-
-// Future: More predictors coming
-// let chain = Chain::new(vec![step1, step2]);
-// let retry = Retry::new(predictor, max_attempts: 3);
 ```
 
 #### 4. **Language Models** - Configurable LLM Backends
@@ -159,10 +152,6 @@ let lm = LM::builder()
     .temperature(0.7)
     .max_tokens(1000)
     .build();
-
-// Future: Support for other providers
-// .provider(Provider::Anthropic)
-// .provider(Provider::Local(model_path))
 ```
 
 ## 📚 Examples
