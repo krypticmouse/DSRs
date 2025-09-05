@@ -14,3 +14,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.143", features = ["preserve_order"] }
 anyhow = "1.0.99"
 schemars = "1.0.4"
+
+[dev-dependencies]
+dspy-rs = { path = "../dspy-rs" }
+trybuild = "1.0.110"
