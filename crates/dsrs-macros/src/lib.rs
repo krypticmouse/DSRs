@@ -5,6 +5,13 @@ use quote::quote;
 use serde_json::{Value, json};
 use syn::{Attribute, DeriveInput, Lit, MetaNameValue, parse_macro_input};
 
+mod optim;
+
+#[proc_macro_derive(Optimizable, attributes(parameter))]
+pub fn derive_optimizable(input: TokenStream) -> TokenStream {
+    optim::optimizable_impl(input)
+}
+
 #[allow(unused_assignments, non_snake_case)]
 #[proc_macro_attribute]
 pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
