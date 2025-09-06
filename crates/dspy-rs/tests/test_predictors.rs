@@ -1,5 +1,5 @@
 use dspy_rs::DummyPredict;
-use dspy_rs::Module;
+use dspy_rs::Predictor;
 use dspy_rs::Signature;
 use dspy_rs::data::example::Example;
 use dspy_rs::hashmap;

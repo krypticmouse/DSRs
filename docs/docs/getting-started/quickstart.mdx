@@ -33,25 +33,46 @@ The reason we wanna do aliasing is because `dsrs` was already a published crate 
 
 <Step title="Setting up your Language Model">
 
-Create a `.env` file in your project root to configure your language model provider:
+You can configure `LM` and `ChatAdapter` as a global configuration using `configure` method. You can set `LM` using builder patterns and ChatAdapter can be passed as default:
 
-```bash
-mint dev
+```rust
+use dsrs::{configure, LM, ChatAdapter};
+
+configure(
+    LM::builder()
+        .api_key(env::var("OPENAI_API_KEY")?.into())
+        .build(),
+    ChatAdapter::default(),
+);
 ```
-
-A local preview of your documentation will be available at `http://localhost:3000`.
 
 </Step>
 
 <Step title="Define Task via Signatures">
 
-Create a `.env` file in your project root to configure your language model provider:
+A **Signature** defines the structure of your task: what inputs it takes and what outputs it should produce. Think of it as a schema for your LLM call, you can create it in 2 ways: inline macro and attribute macro. For example, to create a simple question-answering signature:
 
-```bash
-mint dev
+```rust
+let signature = sign! {
+    (question: String) -> answer: String
+};
 ```
 
-A local preview of your documentation will be available at `http://localhost:3000`.
+You can have more control over defining more granular aspect of the signature by defining signature using attribute macro on structs:
+
+```rust
+// COT Signature: Adds a reasoning output field on its own
+#[Signature(cot)]
+struct QASignature {
+    /// Answer the question concisely.
+
+    #[input(desc="Question to be answered.")]
+    pub question: String,
+
+    #[output]
+    pub answer: String,
+}
+```
 
 </Step>
 

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Index};
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Example {
@@ -95,5 +95,22 @@ impl Example {
                 .cloned()
                 .collect(),
         }
+    }
+}
+
+impl IntoIterator for Example {
+    type Item = (String, Value);
+    type IntoIter = std::collections::hash_map::IntoIter<String, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
+impl Index<String> for Example {
+    type Output = Value;
+
+    fn index(&self, index: String) -> &Self::Output {
+        &self.data[&index]
     }
 }

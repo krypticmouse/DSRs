@@ -1,8 +1,8 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Signature, configure, example, hashmap,
-    prediction,
+    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
+    example, hashmap, prediction,
 };
 use secrecy::SecretString;
 

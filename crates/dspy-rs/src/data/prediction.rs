@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Index};
 
 use crate::LmUsage;
 
@@ -32,5 +32,13 @@ impl Prediction {
     pub fn set_lm_usage(&mut self, lm_usage: LmUsage) -> Self {
         self.lm_usage = lm_usage;
         self.clone()
+    }
+}
+
+impl Index<String> for Prediction {
+    type Output = serde_json::Value;
+
+    fn index(&self, index: String) -> &Self::Output {
+        &self.data[&index]
     }
 }
