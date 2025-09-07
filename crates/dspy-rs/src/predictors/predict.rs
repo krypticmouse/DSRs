@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use crate::core::{MetaSignature, Optimizable};
 use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, adapter::Adapter};
@@ -35,8 +35,8 @@ impl super::Predictor for Predict {
 }
 
 impl Optimizable for Predict {
-    fn parameters(&mut self) -> HashMap<String, &mut dyn Optimizable> {
-        HashMap::new()
+    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
+        IndexMap::new()
     }
 
     fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {

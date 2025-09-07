@@ -28,7 +28,7 @@ fn new_predict() -> Predict {
 }
 
 #[rstest]
-fn flattens_two_levels_and_updates() {
+fn test_flattens_two_levels_and_updates() {
     let mut parent = Parent {
         a: new_predict(),
         b: Leaf {
@@ -53,7 +53,7 @@ fn flattens_two_levels_and_updates() {
 }
 
 #[rstest]
-fn flattens_three_levels_and_updates() {
+fn test_flattens_three_levels_and_updates() {
     let mut grand = GrandParent {
         p: Parent {
             a: new_predict(),
@@ -89,4 +89,26 @@ fn flattens_three_levels_and_updates() {
         grand.p.b.predictor.signature.instruction(),
         "Y p.b.predictor"
     );
+}
+
+#[rstest]
+fn test_ordering_of_parameters() {
+    let mut grand = GrandParent {
+        p: Parent {
+            a: new_predict(),
+            b: Leaf {
+                predictor: new_predict(),
+            },
+        },
+        c: new_predict(),
+    };
+
+    for _ in 0..50 {
+        let names: Vec<String> = grand.parameters().keys().cloned().collect();
+        let order = ["p.a", "p.b.predictor", "c"];
+
+        for (name1, name2) in names.iter().zip(order.iter()) {
+            assert_eq!(name1, name2);
+        }
+    }
 }

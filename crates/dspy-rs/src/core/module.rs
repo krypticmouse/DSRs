@@ -1,6 +1,7 @@
-use crate::{Example, Prediction};
 use anyhow::Result;
-use std::collections::HashMap;
+use indexmap::IndexMap;
+
+use crate::{Example, Prediction};
 
 #[allow(async_fn_in_trait)]
 pub trait Module {
@@ -9,7 +10,7 @@ pub trait Module {
 
 #[allow(unused_variables)]
 pub trait Optimizable {
-    fn parameters(&mut self) -> HashMap<String, &mut dyn Optimizable>;
+    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable>;
 
     fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
         todo!()
