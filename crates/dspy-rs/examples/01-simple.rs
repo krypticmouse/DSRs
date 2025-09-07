@@ -68,7 +68,7 @@ async fn main() {
         LM::builder()
             .api_key(SecretString::from(std::env::var("OPENAI_API_KEY").unwrap()))
             .build(),
-        ChatAdapter {},
+        ChatAdapter,
     );
 
     let example = example! {

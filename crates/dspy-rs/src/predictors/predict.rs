@@ -1,5 +1,7 @@
-use crate::core::MetaSignature;
-use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, Predictor};
+use std::collections::HashMap;
+
+use crate::core::{MetaSignature, Optimizable};
+use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, adapter::Adapter};
 
 pub struct Predict {
     pub signature: Box<dyn MetaSignature>,
@@ -13,7 +15,7 @@ impl Predict {
     }
 }
 
-impl Predictor for Predict {
+impl super::Predictor for Predict {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
         let (adapter, mut lm) = {
             let guard = GLOBAL_SETTINGS.read().unwrap();
@@ -29,5 +31,16 @@ impl Predictor for Predict {
         lm: &mut LM,
     ) -> anyhow::Result<Prediction> {
         ChatAdapter.call(lm, self.signature.as_ref(), inputs).await
+    }
+}
+
+impl Optimizable for Predict {
+    fn parameters(&mut self) -> HashMap<String, &mut dyn Optimizable> {
+        HashMap::new()
+    }
+
+    fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
+        let _ = self.signature.update_instruction(instruction);
+        Ok(())
     }
 }

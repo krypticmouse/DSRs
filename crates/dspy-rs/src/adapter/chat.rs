@@ -2,9 +2,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::core::{Chat, LM, Message, MetaSignature};
-use crate::data::{example::Example, prediction::Prediction};
+use super::Adapter;
 use crate::utils::get_iter_from_value;
+use crate::{Chat, Example, LM, Message, MetaSignature, Prediction};
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -182,8 +182,11 @@ impl ChatAdapter {
 
         format!("{input_str}{user_message}")
     }
+}
 
-    pub fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat {
+#[async_trait::async_trait]
+impl Adapter for ChatAdapter {
+    fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat {
         let system_message = self.format_system_message(signature);
         let user_message = self.format_user_message(signature, inputs);
 
@@ -194,7 +197,7 @@ impl ChatAdapter {
         chat
     }
 
-    pub fn parse_response(
+    fn parse_response(
         &self,
         signature: &dyn MetaSignature,
         response: Message,
@@ -237,7 +240,7 @@ impl ChatAdapter {
         output
     }
 
-    pub async fn call(
+    async fn call(
         &self,
         lm: &mut LM,
         signature: &dyn MetaSignature,

@@ -739,6 +739,7 @@ version = "0.0.1-beta"
 dependencies = [
  "anyhow",
  "async-openai",
+ "async-trait",
  "bon",
  "dsrs_macros",
  "futures",

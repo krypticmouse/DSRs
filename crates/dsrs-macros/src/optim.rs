@@ -19,15 +19,31 @@ pub fn optimizable_impl(input: TokenStream) -> TokenStream {
         .map(|field| field.ident.as_ref().unwrap())
         .collect();
 
-    // Generate the Optimizable implementation
+    // Generate the Optimizable implementation (flatten nested parameters with compound names)
     let expanded = quote! {
         impl #impl_generics #trait_path for #name #type_generics #where_clause {
             fn parameters(
                 &mut self,
             ) -> ::std::collections::HashMap<::std::string::String, &mut dyn #trait_path> {
-                let mut params = ::std::collections::HashMap::new();
+                let mut params: ::std::collections::HashMap<::std::string::String, &mut dyn #trait_path> = ::std::collections::HashMap::new();
                 #(
-                    params.insert(stringify!(#parameter_names).to_string(), &mut self.#parameter_names as &mut dyn #trait_path);
+                {
+                    let __field_name = stringify!(#parameter_names).to_string();
+                    // SAFETY: We only create disjoint mutable borrows to distinct struct fields
+                    let __field_ptr: *mut dyn #trait_path = &mut self.#parameter_names as *mut dyn #trait_path;
+                    let __child_params: ::std::collections::HashMap<::std::string::String, &mut dyn #trait_path> = unsafe { (&mut *__field_ptr).parameters() };
+                    if __child_params.is_empty() {
+                        // Leaf: insert the field itself
+                        unsafe {
+                            params.insert(__field_name, &mut *__field_ptr);
+                        }
+                    } else {
+                        // Composite: flatten children with compound names
+                        for (grand_name, grand_param) in __child_params.into_iter() {
+                            params.insert(format!("{}.{}", __field_name, grand_name), grand_param);
+                        }
+                    }
+                }
                 )*
                 params
             }
