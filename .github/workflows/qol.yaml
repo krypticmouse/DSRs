@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo test
+      - run: cargo test --features parquet
   
   miri-test:
     name: MIRI Test

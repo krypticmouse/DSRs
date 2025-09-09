@@ -1,0 +1,73 @@
+use anyhow::Result;
+use bon::Builder;
+use dspy_rs::{
+    ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
+    Predictor, Signature, configure,
+};
+use secrecy::SecretString;
+
+#[Signature(cot)]
+struct QASignature {
+    /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
+
+    #[input]
+    pub question: String,
+
+    #[output(desc = "Answer in less than 5 words.")]
+    pub answer: String,
+}
+
+#[derive(Builder, Optimizable)]
+pub struct QARater {
+    #[parameter]
+    #[builder(default = Predict::new(QASignature::new()))]
+    pub answerer: Predict,
+}
+
+impl Module for QARater {
+    async fn forward(&self, inputs: Example) -> Result<Prediction> {
+        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+
+        Ok(answerer_prediction)
+    }
+}
+
+impl Evaluator for QARater {
+    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
+        let answer = example.data.get("answer").unwrap().clone();
+        let prediction = prediction.data.get("answer").unwrap().clone();
+        println!("Answer: {answer}");
+        println!("Prediction: {prediction}");
+        if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    configure(
+        LM::builder()
+            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
+            .build(),
+        ChatAdapter {},
+    );
+
+    let examples = DataLoader::load_hf(
+        "hotpotqa/hotpot_qa",
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+        "fullwiki",
+        "validation",
+        true,
+    )?[..10]
+    .to_vec();
+
+    let evaluator = QARater::builder().build();
+    let metric = evaluator.evaluate(examples, &evaluator).await;
+
+    println!("Metric: {metric}");
+    Ok(())
+}
