@@ -63,7 +63,7 @@ async fn main() -> anyhow::Result<()> {
         "validation",
         true,
     )?[..10]
-    .to_vec();
+        .to_vec();
 
     let evaluator = QARater::builder().build();
     let metric = evaluator.evaluate(examples, &evaluator).await;
