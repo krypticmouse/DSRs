@@ -5,7 +5,7 @@ pub use predict::*;
 use crate::{Example, LM, LmUsage, Prediction};
 
 #[allow(async_fn_in_trait)]
-pub trait Predictor {
+pub trait Predictor: Send + Sync {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction>;
     async fn forward_with_config(&self, inputs: Example, lm: &mut LM)
     -> anyhow::Result<Prediction>;

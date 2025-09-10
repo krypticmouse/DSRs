@@ -1,17 +1,17 @@
 /*
-Script to evaluate the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
+Script to optimize the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa
+cargo run --example 04-optimize-hotpotqa
 ```
 */
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
-    Predictor, Signature, configure,
+    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict,
+    Prediction, Predictor, Signature, configure, Optimizer,
 };
 use secrecy::SecretString;
 
@@ -74,9 +74,17 @@ async fn main() -> anyhow::Result<()> {
     )?[..10]
         .to_vec();
 
-    let evaluator = QARater::builder().build();
-    let metric = evaluator.evaluate(examples).await;
+    let mut rater = QARater::builder().build();
+    let optimizer = COPRO::builder()
+    .breadth(10)
+    .depth(1)
+    .build();
 
-    println!("Metric: {metric}");
+    println!("Rater: {:?}", rater.answerer.get_signature().instruction());
+
+    optimizer.compile(&mut rater, examples.clone()).await?;
+
+    println!("Rater: {:?}", rater.answerer.get_signature().instruction());
+
     Ok(())
 }

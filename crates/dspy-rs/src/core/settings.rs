@@ -11,6 +11,10 @@ pub struct Settings {
 pub static GLOBAL_SETTINGS: LazyLock<RwLock<Option<Settings>>> =
     LazyLock::new(|| RwLock::new(None));
 
+pub fn get_lm() -> LM {
+    GLOBAL_SETTINGS.read().unwrap().as_ref().unwrap().lm.clone()
+}
+
 pub fn configure(lm: LM, adapter: impl Adapter + 'static) {
     let settings = Settings {
         lm,

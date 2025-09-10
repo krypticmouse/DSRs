@@ -1,3 +1,12 @@
+/*
+Script to iterate and update the parameters of a module.
+
+Run with:
+```
+cargo run --example 02-module-iteration-and-updation
+```
+*/
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{

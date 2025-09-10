@@ -35,7 +35,11 @@ impl super::Predictor for Predict {
 }
 
 impl Optimizable for Predict {
-    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
+    fn get_signature(&self) -> &dyn MetaSignature {
+        self.signature.as_ref()
+    }
+
+    fn parameters(&mut self) -> IndexMap<String, &mut (dyn Optimizable)> {
         IndexMap::new()
     }
 

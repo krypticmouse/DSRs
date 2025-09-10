@@ -3,11 +3,11 @@ use crate::data::{example::Example, prediction::Prediction};
 use futures::future::join_all;
 
 #[allow(async_fn_in_trait)]
-pub trait Evaluator {
-    async fn predict(&self, examples: Vec<Example>, module: &impl Module) -> Vec<Prediction> {
+pub trait Evaluator: Module {
+    async fn predict(&self, examples: Vec<Example>) -> Vec<Prediction> {
         let futures: Vec<_> = examples
             .iter()
-            .map(|example| module.forward(example.clone()))
+            .map(|example| self.forward(example.clone()))
             .collect();
 
         join_all(futures)
@@ -19,8 +19,8 @@ pub trait Evaluator {
 
     async fn metric(&self, example: &Example, prediction: &Prediction) -> f32;
 
-    async fn evaluate(&self, examples: Vec<Example>, module: &impl Module) -> f32 {
-        let predictions = self.predict(examples.clone(), module).await;
+    async fn evaluate(&self, examples: Vec<Example>) -> f32 {
+        let predictions = self.predict(examples.clone()).await;
 
         let futures: Vec<_> = examples
             .iter()

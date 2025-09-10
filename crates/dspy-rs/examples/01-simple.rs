@@ -1,3 +1,12 @@
+/*
+Script to run a simple pipeline.
+
+Run with:
+```
+cargo run --example 01-simple
+```
+*/
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{

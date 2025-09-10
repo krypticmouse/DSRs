@@ -2,6 +2,7 @@ pub mod adapter;
 pub mod core;
 pub mod data;
 pub mod evaluate;
+pub mod optimizer;
 pub mod predictors;
 pub mod utils;
 
@@ -9,6 +10,7 @@ pub use adapter::chat::*;
 pub use core::*;
 pub use data::*;
 pub use evaluate::*;
+pub use optimizer::*;
 pub use predictors::*;
 pub use utils::*;
 
@@ -32,7 +34,7 @@ macro_rules! example {
                 output_keys.push($key.to_string());
             }
 
-            fields.insert($key.to_string(), $value.to_string().into());
+            fields.insert($key.to_string(), serde_json::to_value($value).unwrap());
         )*
 
         Example::new(
@@ -51,7 +53,7 @@ macro_rules! prediction {
 
         let mut fields = HashMap::new();
         $(
-            fields.insert($key.to_string(), $value.to_string().into());
+            fields.insert($key.to_string(), serde_json::to_value($value).unwrap());
         )*
 
         Prediction::new(fields, LmUsage::default())
