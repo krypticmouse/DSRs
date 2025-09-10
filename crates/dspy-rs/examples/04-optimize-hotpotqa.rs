@@ -10,8 +10,8 @@ cargo run --example 04-optimize-hotpotqa
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict,
-    Prediction, Predictor, Signature, configure, Optimizer,
+    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
+    Predict, Prediction, Predictor, Signature, configure,
 };
 use secrecy::SecretString;
 
@@ -75,10 +75,7 @@ async fn main() -> anyhow::Result<()> {
         .to_vec();
 
     let mut rater = QARater::builder().build();
-    let optimizer = COPRO::builder()
-    .breadth(10)
-    .depth(1)
-    .build();
+    let optimizer = COPRO::builder().breadth(10).depth(1).build();
 
     println!("Rater: {:?}", rater.answerer.get_signature().instruction());
 

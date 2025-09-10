@@ -154,6 +154,71 @@ let lm = LM::builder()
     .build();
 ```
 
+#### 5. **Evaluation** - Evaluating your Modules
+
+```rust
+impl Evaluator for MyModule {
+    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
+        // Define your custom metric logic
+        let expected = example.get("answer", None);
+        let predicted = prediction.get("answer", None);
+        
+        // Example: Exact match metric
+        if expected.to_lowercase() == predicted.to_lowercase() {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+// Evaluate your module
+let test_examples = load_test_data();
+let module = MyModule::new();
+
+// Automatically runs predictions and computes average metric
+let score = module.evaluate(test_examples).await;
+println!("Average score: {}", score);
+```
+
+#### 6. **Optimization** - Optimize your Modules
+```rust
+#[derive(Optimizable)]
+pub struct MyModule {
+    #[parameter]
+    predictor: Predict,
+}
+
+// Create and configure the optimizer
+let optimizer = COPRO::builder()
+    .breadth(10)  // Number of candidates per iteration
+    .depth(3)     // Number of refinement iterations
+    .build();
+
+// Prepare training data
+let train_examples = load_training_data();
+
+// Compile optimizes the module in-place
+let mut module = MyModule::new();
+optimizer.compile(&mut module, train_examples).await?;
+```
+
+**Component Freezing:**
+```rust
+// The Optimizable derive macro automatically implements the trait and marks Module Optimizable
+#[derive(Builder, Optimizable)]
+pub struct ComplexPipeline {
+    #[parameter]  // Mark optimizable components
+    analyzer: Predict,
+    
+    // Non-parameter fields won't be optimized
+    summarizer: Predict,
+    
+    // Non-parameter fields won't be optimized
+    config: Config,
+}
+```
+
 ## 📚 Examples
 
 ### Example 1: Multi-Step Reasoning Pipeline
