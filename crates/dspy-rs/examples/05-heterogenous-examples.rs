@@ -1,9 +1,9 @@
 /*
-Script to evaluate the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
+Script to run a heterogenous example.
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa
+cargo run --example 05-heterogenous-examples
 ```
 */
 
