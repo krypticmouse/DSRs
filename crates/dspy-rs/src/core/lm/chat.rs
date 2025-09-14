@@ -120,6 +120,10 @@ impl Chat {
         self.messages.push(Message::new(role, content));
     }
 
+    pub fn push_all(&mut self, chat: &Chat) {
+        self.messages.extend(chat.messages.clone());
+    }
+
     pub fn pop(&mut self) -> Option<Message> {
         self.messages.pop()
     }

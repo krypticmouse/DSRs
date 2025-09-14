@@ -69,12 +69,11 @@ impl COPRO {
     fn get_output_field_prefix(&self, predictor: &dyn Optimizable) -> String {
         // Get the last output field's prefix/desc
         let output_fields = predictor.get_signature().output_fields();
-        if let Some(obj) = output_fields.as_object() {
-            if let Some((_, field)) = obj.iter().next_back() {
-                if let Some(desc) = field.get("desc") {
-                    return desc.as_str().unwrap_or("").to_string();
-                }
-            }
+        if let Some(obj) = output_fields.as_object()
+            && let Some((_, field)) = obj.iter().next_back()
+            && let Some(desc) = field.get("desc")
+        {
+            return desc.as_str().unwrap_or("").to_string();
         }
         "".to_string()
     }
@@ -451,10 +450,9 @@ impl Optimizer for COPRO {
             if let Some(best) = candidates_map
                 .values()
                 .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+                && (best_overall.is_none() || best.score > best_overall.as_ref().unwrap().1.score)
             {
-                if best_overall.is_none() || best.score > best_overall.as_ref().unwrap().1.score {
-                    best_overall = Some((predictor_name.clone(), best.clone()));
-                }
+                best_overall = Some((predictor_name.clone(), best.clone()));
             }
         }
 

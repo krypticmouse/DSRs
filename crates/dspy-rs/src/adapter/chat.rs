@@ -138,7 +138,7 @@ impl ChatAdapter {
         format!("In adhering to this structure, your objective is:\n\t{instruction}")
     }
 
-    fn format_user_message(&self, signature: &dyn MetaSignature, inputs: Example) -> String {
+    fn format_user_message(&self, signature: &dyn MetaSignature, inputs: &Example) -> String {
         let mut input_str = String::new();
         for (field_name, _) in get_iter_from_value(&signature.input_fields()) {
             let field_value = inputs.get(field_name.as_str(), None);
@@ -182,16 +182,51 @@ impl ChatAdapter {
 
         format!("{input_str}{user_message}")
     }
+
+    fn format_assistant_message(&self, signature: &dyn MetaSignature, outputs: &Example) -> String {
+        let mut assistant_message = String::new();
+        for (field_name, _) in get_iter_from_value(&signature.output_fields()) {
+            let field_value = outputs.get(field_name.as_str(), None);
+            // Extract the actual string value if it's a JSON string, otherwise use as is
+            let field_value_str = if let Some(s) = field_value.as_str() {
+                s.to_string()
+            } else {
+                field_value.to_string()
+            };
+
+            assistant_message
+                .push_str(format!("[[ ## {field_name} ## ]]\n{field_value_str}\n\n",).as_str());
+        }
+        assistant_message.push_str("[[ ## completed ## ]]\n");
+        assistant_message
+    }
+
+    fn format_demos(&self, signature: &dyn MetaSignature, demos: &Vec<Example>) -> Chat {
+        let mut chat = Chat::new(vec![]);
+
+        for demo in demos {
+            let user_message = self.format_user_message(signature, demo);
+            let assistant_message = self.format_assistant_message(signature, demo);
+            chat.push("user", &user_message);
+            chat.push("assistant", &assistant_message);
+        }
+
+        chat
+    }
 }
 
 #[async_trait::async_trait]
 impl Adapter for ChatAdapter {
     fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat {
         let system_message = self.format_system_message(signature);
-        let user_message = self.format_user_message(signature, inputs);
+        let user_message = self.format_user_message(signature, &inputs);
+
+        let demos = signature.demos();
+        let demos = self.format_demos(signature, &demos);
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system_message);
+        chat.push_all(&demos);
         chat.push("user", &user_message);
 
         chat

@@ -1,7 +1,8 @@
 use schemars::JsonSchema;
 
 use dspy_rs::{
-    Chat, ChatAdapter, DummyLM, Example, Message, Signature, adapter::Adapter, hashmap, sign,
+    Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, Signature, adapter::Adapter,
+    hashmap, sign,
 };
 
 #[tokio::test]
@@ -206,5 +207,221 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
     assert_eq!(
         output.get("output").unwrap()["rating"],
         parsed_output["rating"]
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_with_demos() {
+    let mut signature = sign! {
+        (problem: String) -> answer: String
+    };
+
+    let adapter = ChatAdapter;
+
+    // Create demo examples
+    let demo1 = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is 2 + 2?".to_string().into(),
+            "answer".to_string() => "4".to_string().into(),
+        },
+        vec!["problem".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    let demo2 = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is the largest planet?".to_string().into(),
+            "answer".to_string() => "Jupiter".to_string().into(),
+        },
+        vec!["problem".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    signature.set_demos(vec![demo1, demo2]).unwrap();
+
+    let current_input = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is the capital of France?".to_string().into(),
+        },
+        vec!["problem".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    let messages: Chat = adapter.format(&signature, current_input);
+
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
+    // Should have system message + 2 demo pairs (user + assistant) + current user message
+    assert_eq!(messages.len(), 6);
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[1]["role"], "user");
+    assert_eq!(json[2]["role"], "assistant");
+    assert_eq!(json[3]["role"], "user");
+    assert_eq!(json[4]["role"], "assistant");
+    assert_eq!(json[5]["role"], "user");
+
+    // Check demo 1 formatting
+    assert!(
+        json[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## problem ## ]]\nWhat is 2 + 2?")
+    );
+    assert!(
+        json[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## answer ## ]]\n4")
+    );
+    assert!(
+        json[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## completed ## ]]")
+    );
+
+    // Check demo 2 formatting
+    assert!(
+        json[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## problem ## ]]\nWhat is the largest planet?")
+    );
+    assert!(
+        json[4]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## answer ## ]]\nJupiter")
+    );
+    assert!(
+        json[4]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## completed ## ]]")
+    );
+
+    // Check current input formatting
+    assert!(
+        json[5]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## problem ## ]]\nWhat is the capital of France?")
+    );
+    assert!(
+        json[5]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Respond with the corresponding output fields")
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_with_empty_demos() {
+    let mut signature = sign! {
+        (problem: String) -> answer: String
+    };
+
+    let adapter = ChatAdapter;
+
+    let current_input = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is the capital of France?".to_string().into(),
+        },
+        vec!["problem".to_string()],
+        vec!["answer".to_string()],
+    );
+    signature.set_demos(vec![]).unwrap();
+
+    let messages: Chat = adapter.format(&signature, current_input);
+
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
+    // Should only have system message + current user message (no demos)
+    assert_eq!(messages.len(), 2);
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[1]["role"], "user");
+
+    // Check current input formatting
+    assert!(
+        json[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## problem ## ]]\nWhat is the capital of France?")
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_demo_format_multiple_fields() {
+    let mut signature = TestSignature::new();
+
+    let adapter = ChatAdapter;
+
+    let demo = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is 5 * 6?".to_string().into(),
+            "hint".to_string() => "Think about multiplication".to_string().into(),
+            "reasoning".to_string() => "5 multiplied by 6 equals 30".to_string().into(),
+            "answer".to_string() => "30".to_string().into(),
+        },
+        vec!["problem".to_string(), "hint".to_string()],
+        vec!["reasoning".to_string(), "answer".to_string()],
+    );
+
+    signature.set_demos(vec![demo]).unwrap();
+
+    let current_input = Example::new(
+        hashmap! {
+            "problem".to_string() => "What is 3 + 7?".to_string().into(),
+            "hint".to_string() => "Simple addition".to_string().into(),
+        },
+        vec!["problem".to_string(), "hint".to_string()],
+        vec!["reasoning".to_string(), "answer".to_string()],
+    );
+
+    let messages: Chat = adapter.format(&signature, current_input);
+
+    let json_value = messages.to_json();
+    let json = json_value.as_array().unwrap();
+
+    // Should have system + demo user + demo assistant + current user
+    assert_eq!(messages.len(), 4);
+
+    // Check demo user message contains both input fields
+    assert!(
+        json[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## problem ## ]]\nWhat is 5 * 6?")
+    );
+    assert!(
+        json[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## hint ## ]]\nThink about multiplication")
+    );
+
+    // Check demo assistant message contains both output fields and completion marker
+    assert!(
+        json[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## reasoning ## ]]\n5 multiplied by 6 equals 30")
+    );
+    assert!(
+        json[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## answer ## ]]\n30")
+    );
+    assert!(
+        json[2]["content"]
+            .as_str()
+            .unwrap()
+            .contains("[[ ## completed ## ]]")
     );
 }

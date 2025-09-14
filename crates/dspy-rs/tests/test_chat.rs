@@ -86,3 +86,51 @@ fn test_chat_from_json() {
     assert_eq!(json[1]["content"], "Hello, world!".to_string());
     assert_eq!(json[2]["content"], "Hello, world to you!".to_string());
 }
+
+#[rstest]
+fn test_chat_push_all() {
+    let mut chat1 = Chat::new(vec![
+        Message::system("You are a helpful assistant."),
+        Message::user("Hello!"),
+    ]);
+
+    let chat2 = Chat::new(vec![
+        Message::assistant("Hi there!"),
+        Message::user("How are you?"),
+        Message::assistant("I'm doing well, thank you!"),
+    ]);
+
+    chat1.push_all(&chat2);
+
+    assert_eq!(chat1.len(), 5);
+
+    let json_value = chat1.to_json();
+    let json = json_value.as_array().unwrap();
+
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[0]["content"], "You are a helpful assistant.");
+    assert_eq!(json[1]["role"], "user");
+    assert_eq!(json[1]["content"], "Hello!");
+    assert_eq!(json[2]["role"], "assistant");
+    assert_eq!(json[2]["content"], "Hi there!");
+    assert_eq!(json[3]["role"], "user");
+    assert_eq!(json[3]["content"], "How are you?");
+    assert_eq!(json[4]["role"], "assistant");
+    assert_eq!(json[4]["content"], "I'm doing well, thank you!");
+}
+
+#[rstest]
+fn test_chat_push_all_empty() {
+    let mut chat1 = Chat::new(vec![Message::system("System message")]);
+
+    let empty_chat = Chat::new(vec![]);
+    chat1.push_all(&empty_chat);
+
+    assert_eq!(chat1.len(), 1);
+
+    let json_value = chat1.to_json();
+    let json = json_value.as_array().unwrap();
+
+    assert_eq!(json[0]["role"], "system");
+    assert_eq!(json[0]["content"], "System message");
+}

@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
-      - run: cargo test --features parquet
+      - run: cargo test --all-features
   
   miri-test:
     name: MIRI Test
@@ -30,13 +30,13 @@ jobs:
         with:
           toolchain: nightly-2025-05-16  # https://github.com/rust-lang/miri/issues/4323
       - run: cargo miri setup
-      - run: cargo miri test --features parquet
+      - run: cargo miri test --all-features
 
   clippy:
     name: Clippy Lint
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    timeout-minutes: 45
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly

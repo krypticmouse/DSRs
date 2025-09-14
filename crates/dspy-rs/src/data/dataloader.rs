@@ -155,11 +155,11 @@ impl DataLoader {
                     let column = record_batch.column(col_idx);
                     let column_name = schema.field(col_idx).name();
 
-                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>() {
-                        if !string_array.is_null(row_idx) {
-                            let value = string_array.value(row_idx);
-                            data.insert(column_name.to_string(), value.to_string().into());
-                        }
+                    if let Some(string_array) = column.as_any().downcast_ref::<StringArray>()
+                        && !string_array.is_null(row_idx)
+                    {
+                        let value = string_array.value(row_idx);
+                        data.insert(column_name.to_string(), value.to_string().into());
                     }
                 }
 

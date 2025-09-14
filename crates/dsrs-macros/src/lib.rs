@@ -169,6 +169,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
             instruction: String,
             input_fields: serde_json::Value,
             output_fields: serde_json::Value,
+            demos: Vec<dspy_rs::Example>,
         }
 
         impl #struct_name {
@@ -183,6 +184,7 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
                     instruction: #signature_instruction.to_string(),
                     input_fields: input_fields,
                     output_fields: output_fields,
+                    demos: vec![],
                 }
             }
 
@@ -196,6 +198,15 @@ pub fn Signature(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
 
         impl dspy_rs::core::MetaSignature for #struct_name {
+            fn demos(&self) -> Vec<dspy_rs::Example> {
+                self.demos.clone()
+            }
+
+            fn set_demos(&mut self, demos: Vec<dspy_rs::Example>) -> anyhow::Result<()> {
+                self.demos = demos;
+                Ok(())
+            }
+
             fn instruction(&self) -> String {
                 self.instruction.clone()
             }
