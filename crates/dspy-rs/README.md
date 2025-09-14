@@ -27,10 +27,10 @@ Add DSRs to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Option 1: Use the shorter alias (recommended)
-dsrs = { package = "dspy-rs", version = "0.0.2-beta" }
+dsrs = { package = "dspy-rs", version = "0.5.0" }
 
 # Option 2: Use the full name
-dspy-rs = "0.0.2-beta"
+dspy-rs = "0.5.0"
 ```
 
 Or use cargo:
