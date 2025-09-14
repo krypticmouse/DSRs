@@ -1,5 +1,92 @@
 ---
-title: 'Language Model'
+title: 'Language Models'
 description: 'Configure and integrate language models in your pipelines'
 icon: 'arrow-down-a-z'
 ---
+
+DSRs treats the Language Model (`LM`) as a first–class, configurable client for chat-style inference. This page explains what an LM is in DSRs, how it’s structured in Rust terms, and how it cooperates with other building blocks.
+
+## What is an LM?
+
+- **Purpose:** Encapsulates a provider client (e.g., OpenAI) and model-level settings, and executes chat completions.
+- **Rust shape:** `LM` is a clonable struct built via a builder (`LM::builder()`), holding `LMConfig` and an internal client.
+- **Async-first:** `LM::call(...)` is `async` and returns a `(Message, LmUsage)` pair.
+- **History:** Each call is recorded; inspect recent calls via `lm.inspect_history(n)`.
+
+## Key types
+
+- **`LM` (struct):** Holds `api_key`, `base_url`, `config`, and a `history` of calls. Implements `Clone`.
+- **`LMConfig` (struct):** Builder-driven config (e.g., `model`, `temperature`, `max_tokens`).
+- **`Chat`, `Message` (structs):** Internal chat abstraction used by adapters to format/parse messages.
+- **`Adapter` (trait) and `ChatAdapter` (impl):** Orchestrate how a `Signature` + `Example` become a `Chat`, and parse the model’s response back to a `Prediction`.
+
+## Construction and configuration
+
+```rust
+use dsrs::{LM, LMConfig};
+
+let lm = LM::builder()
+    .api_key(std::env::var("OPENAI_API_KEY")?.into())
+    .config(
+        LMConfig::builder()
+            .model("gpt-4o-mini".to_string())
+            .temperature(0.7)
+            .max_tokens(512)
+            .build()
+    )
+    .build();
+```
+
+- **Builder pattern:** Idiomatic in Rust; keeps construction explicit and typed.
+- **Clone semantics:** `LM` implements `Clone`—cloning copies config and history for that instance.
+
+## Global vs explicit usage
+
+- **Global:** `configure(lm.clone(), ChatAdapter::default())` sets the process-wide default used by predictors.
+- **Explicit:** Some APIs accept a mutable `&mut LM` if you prefer local control: `predictor.forward_with_config(inputs, &mut lm).await`.
+
+## Async execution and sync entry
+
+- **Async:** Calls are `async`; prefer using an async runtime (Tokio).
+- **Sync-style:** If you need a plain `fn main`, create a runtime and `block_on` the async work.
+
+<Tabs>
+  <Tab title="Async (Tokio)">
+
+```rust
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // build + use LM here
+    Ok(())
+}
+```
+
+  </Tab>
+  <Tab title="Sync">
+
+```rust
+fn main() -> anyhow::Result<()> {
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        // build + use LM here
+        Ok(())
+    })
+}
+```
+
+  </Tab>
+</Tabs>
+
+## Inspecting history
+
+```rust
+let history = lm.inspect_history(3);
+for entry in history {
+    println!("Model: {} | Output: {}", entry.config.model, entry.output.content());
+}
+```
+
+## Where it fits
+
+- You rarely call `LM` directly; instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM.
+- This keeps business logic (your task) separate from transport (the model client), matching Rust’s trait-driven composition style.

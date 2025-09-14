@@ -14,10 +14,19 @@
         "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get started",
             "pages": [
               "index",
               "docs/getting-started/quickstart"
+            ]
+          },
+          {
+            "group": "Programming Concepts",
+            "pages": [
+              "docs/building-blocks/signature",
+              "docs/building-blocks/lm",
+              "docs/building-blocks/predictors",
+              "docs/building-blocks/module"
             ]
           },
           {
@@ -28,12 +37,9 @@
             ]
           },
           {
-            "group": "Building blocks",
+            "group": "Tutorials",
             "pages": [
-              "docs/building-blocks/signature",
-              "docs/building-blocks/lm",
-              "docs/building-blocks/predictors",
-              "docs/building-blocks/module"
+              "docs/tutorials/overview"
             ]
           }
         ]

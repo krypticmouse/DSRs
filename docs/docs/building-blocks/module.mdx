@@ -1,5 +1,39 @@
 ---
-title: 'Module'
+title: 'Modules'
 description: 'Building flows for complex LLM pipelines'
 icon: 'circle-nodes'
 ---
+
+Modules let you compose multiple predictors and arbitrary Rust logic into reusable units. In DSRs, a module is any type that implements the `Module` trait.
+
+## What is a module?
+
+- **Purpose:** Encapsulate a multi-step workflow (e.g., analysis then answer) as a single callable unit.
+- **Rust shape:** Any type implementing `Module` with an `async fn forward(&self, inputs: Example)`.
+- **Composition:** Typically holds one or more `Predict` fields and sequences their calls.
+
+## Minimal example
+
+```rust
+use dsrs::{Example, Module, Predict, Prediction, Signature};
+
+#[Signature]
+struct QA { #[input] question: String, #[output] answer: String }
+
+struct Answerer { predict: Predict }
+
+impl Default for Answerer { fn default() -> Self { Self { predict: Predict::new(QA::new()) } } }
+
+#[allow(async_fn_in_trait)]
+impl Module for Answerer {
+    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
+        self.predict.forward(inputs).await
+    }
+}
+```
+
+## Design notes
+
+- **Traits and async:** `Module` is a trait with an async method; implement it where your composition lives.
+- **State:** Keep structured state as fields (other predictors, config, toggles). Prefer builders for complex modules.
+- **Testability:** You can inject a `DummyLM` via `forward_with_config` in tests to avoid network calls.
