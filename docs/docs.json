@@ -21,7 +21,7 @@
             ]
           },
           {
-            "group": "Programming Concepts",
+            "group": "Building Blocks",
             "pages": [
               "docs/building-blocks/signature",
               "docs/building-blocks/lm",
