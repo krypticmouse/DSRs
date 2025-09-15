@@ -21,6 +21,21 @@ pub struct LMResponse {
     pub signature: String,
 }
 
+fn get_base_url(provider: &str) -> String {
+    match provider {
+        "openai" => "https://api.openai.com/v1".to_string(),
+        "anthropic" => "https://api.anthropic.com/v1".to_string(),
+        "google" => "https://generativelanguage.googleapis.com/v1beta/openai".to_string(),
+        "cohere" => "https://api.cohere.ai/compatibility/v1".to_string(),
+        "groq" => "https://api.groq.com/openai/v1".to_string(),
+        "openrouter" => "https://openrouter.ai/api/v1".to_string(),
+        "qwen" => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1".to_string(),
+        "together" => "https://api.together.xyz/v1".to_string(),
+        "xai" => "https://api.x.ai/v1".to_string(),
+        _ => "https://openrouter.ai/api/v1".to_string(),
+    }
+}
+
 #[derive(Clone, Builder)]
 pub struct LM {
     pub api_key: SecretString,
@@ -44,25 +59,44 @@ impl LM {
 
     pub async fn call(&mut self, messages: Chat, signature: &str) -> Result<(Message, LmUsage)> {
         if self.client.is_none() {
+            if self.config.model.contains("/") {
+                let model_str = self.config.model.clone();
+                let parts = model_str.split("/").collect::<Vec<&str>>();
+                let provider = parts[0];
+                
+                self.config.model = parts[1].to_string();
+                self.base_url = get_base_url(provider);
+            }
             self.setup_client();
         }
 
         let request_messages = messages.get_async_openai_messages();
 
+        
+        // Check if we're using a Gemini model
+        let is_gemini = self.config.model.starts_with("gemini-");
+        
+        // Build the base request
         let mut builder = CreateChatCompletionRequestArgs::default();
-
-        let request = builder
+        
+        builder
             .model(self.config.model.clone())
             .messages(request_messages)
             .temperature(self.config.temperature)
             .top_p(self.config.top_p)
             .n(self.config.n)
             .max_tokens(self.config.max_tokens)
-            .presence_penalty(self.config.presence_penalty)
-            .frequency_penalty(self.config.frequency_penalty)
-            .seed(self.config.seed)
-            .logit_bias(self.config.logit_bias.clone().unwrap_or_default())
-            .build()?;
+            .presence_penalty(self.config.presence_penalty);
+        
+        // Only add frequency_penalty, seed, and logit_bias for non-Gemini models
+        if !is_gemini {
+            builder
+                .frequency_penalty(self.config.frequency_penalty)
+                .seed(self.config.seed)
+                .logit_bias(self.config.logit_bias.clone().unwrap_or_default());
+        }
+        
+        let request = builder.build()?;
 
         let response = self.client.as_ref().unwrap().chat().create(request).await?;
         let first_choice = Message::from(response.choices.first().unwrap().message.clone());
