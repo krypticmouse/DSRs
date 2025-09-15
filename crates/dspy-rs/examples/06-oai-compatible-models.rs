@@ -92,7 +92,7 @@ async fn main() {
     };
 
     let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.forward(example).await.unwrap();
+    let prediction = qa_rater.forward(example.clone()).await.unwrap();
     println!("Anthropic: {prediction:?}");
 
     // Gemini
@@ -107,11 +107,6 @@ async fn main() {
         ChatAdapter,
     );
 
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-    };
-
-    let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
     println!("Gemini: {prediction:?}");
 }
