@@ -63,7 +63,7 @@ impl LM {
                 let model_str = self.config.model.clone();
                 let parts = model_str.split("/").collect::<Vec<&str>>();
                 let provider = parts[0];
-                
+
                 self.config.model = parts[1].to_string();
                 self.base_url = get_base_url(provider);
             }
@@ -72,13 +72,12 @@ impl LM {
 
         let request_messages = messages.get_async_openai_messages();
 
-        
         // Check if we're using a Gemini model
         let is_gemini = self.config.model.starts_with("gemini-");
-        
+
         // Build the base request
         let mut builder = CreateChatCompletionRequestArgs::default();
-        
+
         builder
             .model(self.config.model.clone())
             .messages(request_messages)
@@ -87,7 +86,7 @@ impl LM {
             .n(self.config.n)
             .max_tokens(self.config.max_tokens)
             .presence_penalty(self.config.presence_penalty);
-        
+
         // Only add frequency_penalty, seed, and logit_bias for non-Gemini models
         if !is_gemini {
             builder
@@ -95,7 +94,7 @@ impl LM {
                 .seed(self.config.seed)
                 .logit_bias(self.config.logit_bias.clone().unwrap_or_default());
         }
-        
+
         let request = builder.build()?;
 
         let response = self.client.as_ref().unwrap().chat().create(request).await?;

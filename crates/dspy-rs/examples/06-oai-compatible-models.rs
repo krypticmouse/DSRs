@@ -10,8 +10,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature, configure,
-    example, hashmap, prediction,
+    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
+    configure, example, hashmap, prediction,
 };
 use secrecy::SecretString;
 
@@ -76,7 +76,9 @@ async fn main() {
     // Anthropic
     configure(
         LM::builder()
-            .api_key(SecretString::from(std::env::var("ANTHROPIC_API_KEY").unwrap()))
+            .api_key(SecretString::from(
+                std::env::var("ANTHROPIC_API_KEY").unwrap(),
+            ))
             .config(LMConfig {
                 model: "anthropic/claude-sonnet-4-20250514".to_string(),
                 ..LMConfig::default()
