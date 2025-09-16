@@ -11,7 +11,7 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Documentation",
+        "tab": "Learn DSRs",
         "groups": [
           {
             "group": "Get Started",
@@ -35,25 +35,21 @@
               "docs/data/examples",
               "docs/data/prediction"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "tab": "Tutorials",
+        "groups": [
           {
-            "group": "Tutorials",
+            "group": "Overview",
             "pages": [
               "docs/tutorials/overview"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "DSPy Discord",
-          "href": "https://discord.com/invite/ZAEGgxjPUe",
-          "icon": "discord"
-        }
-      ]
-    }
+    ]
   },
   "logo": {
     "light": "/logo/main.png",
@@ -71,7 +67,8 @@
   "footer": {
     "socials": {
       "x": "https://x.com/krypticmouse",
-      "github": "https://github.com/krypticmouse/DSRs"
+      "github": "https://github.com/krypticmouse/DSRs",
+      "discord": "https://discord.com/invite/ZAEGgxjPUe"
     }
   }
 }
