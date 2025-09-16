@@ -48,45 +48,54 @@ cargo add dspy-rs
 Here's a simple example to get you started:
 
 ```rust
-use dsrs::prelude::*;
 use anyhow::Result;
+use dspy_rs::*;
 
 #[Signature]
-struct QASignature {
-    /// You are a helpful assistant that answers questions accurately.
-    
+struct SentimentAnalyzer {
+    /// Predict the sentiment of the given text 'Positive', 'Negative', or 'Neutral'.
+
     #[input]
-    pub question: String,
-    
+    pub text: String,
+
     #[output]
-    pub answer: String,
+    pub sentiment: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure your LM (Language Model)
-    configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build(),
-        ChatAdapter {},
-    );
-    
+    let lm = LM::builder()
+        .api_key(std::env::var("OPENAI_API_KEY")?.into())
+        .config(
+            LMConfig::builder()
+                .model("gpt-4.1-nano".to_string())
+                .temperature(0.5)
+                .build(),
+        )
+        .build();
+
+    configure(lm, ChatAdapter);
+
     // Create a predictor
-    let predictor = Predict::new(QASignature::new());
-    
+    let predictor = Predict::new(SentimentAnalyzer::new());
+
     // Prepare input
     let example = example! {
-        "question": "input" => "What is the capital of France?",
+        "text": "input" => "Acme is a great company with excellent customer service.",
     };
-    
+
     // Execute prediction
     let result = predictor.forward(example).await?;
-    
-    println!("Answer: {}", result.get("answer", None));
-    
+
+    println!("Answer: {}", result.get("sentiment", None));
+
     Ok(())
 }
+
+```
+Result:
+```
+Answer: "Positive"
 ```
 
 ## 🏗️ Architecture
