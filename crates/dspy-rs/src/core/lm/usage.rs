@@ -1,5 +1,6 @@
 use async_openai::types::CompletionUsage;
 use serde::{Deserialize, Serialize};
+use std::ops::Add;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct LmUsage {
@@ -22,8 +23,10 @@ impl From<CompletionUsage> for LmUsage {
     }
 }
 
-impl LmUsage {
-    pub fn add(self, other: LmUsage) -> Self {
+impl Add for LmUsage {
+    type Output = LmUsage;
+
+    fn add(self, other: LmUsage) -> Self {
         LmUsage {
             prompt_tokens: self.prompt_tokens + other.prompt_tokens,
             completion_tokens: self.completion_tokens + other.completion_tokens,

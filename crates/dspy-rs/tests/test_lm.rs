@@ -1,4 +1,5 @@
-use dspy_rs::{Chat, DummyLM, Message};
+use dspy_rs::{Chat, DummyLM, LmUsage, Message};
+use rstest::*;
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
@@ -42,5 +43,40 @@ async fn test_dummy_lm() {
     assert_eq!(
         history[0].chat.messages[1].content(),
         "Hello, world!".to_string(),
+    );
+}
+
+#[rstest]
+fn test_lm_usage_add() {
+    let usage1 = LmUsage {
+        prompt_tokens: 10,
+        completion_tokens: 20,
+        total_tokens: 30,
+        reasoning_tokens: Some(10),
+    };
+    let usage2 = LmUsage {
+        prompt_tokens: 10,
+        completion_tokens: 20,
+        total_tokens: 30,
+        reasoning_tokens: Some(10),
+    };
+
+    let usage3 = usage1.clone() + usage2.clone();
+
+    assert_eq!(
+        usage3.prompt_tokens,
+        usage1.prompt_tokens + usage2.prompt_tokens
+    );
+    assert_eq!(
+        usage3.completion_tokens,
+        usage1.completion_tokens + usage2.completion_tokens
+    );
+    assert_eq!(
+        usage3.total_tokens,
+        usage1.total_tokens + usage2.total_tokens
+    );
+    assert_eq!(
+        usage3.reasoning_tokens,
+        usage1.reasoning_tokens.or(usage2.reasoning_tokens)
     );
 }

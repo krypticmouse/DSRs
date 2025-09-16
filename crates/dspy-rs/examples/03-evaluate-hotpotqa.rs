@@ -48,7 +48,7 @@ impl Evaluator for QARater {
     async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
         let answer = example.data.get("answer").unwrap().clone();
         let prediction = prediction.data.get("answer").unwrap().clone();
-        
+
         if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
             1.0
         } else {

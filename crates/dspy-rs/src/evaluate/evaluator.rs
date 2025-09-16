@@ -10,7 +10,14 @@ pub trait Evaluator: Module {
     async fn metric(&self, example: &Example, prediction: &Prediction) -> f32;
 
     async fn evaluate(&self, examples: Vec<Example>) -> f32 {
-        let predictions = self.batch(examples.clone(), Self::MAX_CONCURRENCY, Self::DISPLAY_PROGRESS).await.unwrap();
+        let predictions = self
+            .batch(
+                examples.clone(),
+                Self::MAX_CONCURRENCY,
+                Self::DISPLAY_PROGRESS,
+            )
+            .await
+            .unwrap();
 
         let futures: Vec<_> = examples
             .iter()

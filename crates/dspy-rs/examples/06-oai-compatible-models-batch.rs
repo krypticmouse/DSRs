@@ -10,7 +10,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    configure, example, hashmap, prediction, ChatAdapter, Example, LMConfig, LmUsage, Module, Predict, Prediction, Predictor, Signature, LM
+    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
+    configure, example, hashmap, prediction,
 };
 use secrecy::SecretString;
 
@@ -69,7 +70,7 @@ impl Module for QARater {
             "question"=> question,
             "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
         }
-        .set_lm_usage(LmUsage::add(answer_lm_usage, rating_lm_usage)))
+        .set_lm_usage(answer_lm_usage + rating_lm_usage))
     }
 }
 
