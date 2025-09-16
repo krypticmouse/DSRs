@@ -1,5 +1,64 @@
 ---
-title: 'Signature'
-description: 'Define task specifications for LLM interactions'
+title: 'Signatures'
+description: 'Define task specifications for LM interactions'
 icon: 'pen-to-square'
 ---
+
+Signatures declare the schema of your LM task: the inputs you provide and the outputs you expect. In Rust terms, a `#[Signature]` macro generates an implementation of the `MetaSignature` trait for your type.
+
+## What is a signature?
+
+- **Purpose:** Describe a task contract: structured inputs, structured outputs, and an optional instruction.
+- **Rust shape:** A normal Rust `struct` annotated with `#[Signature]` and field attributes (`#[input]`, `#[output]`).
+- **Trait impl:** The macro implements `MetaSignature` (introspection of input/output fields, instruction, demos).
+
+## Defining a signature
+
+```rust
+use dsrs::Signature;
+
+#[Signature]
+struct QA {
+    /// Use Renaissance-era English to answer the question.
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+```
+
+- **Doc comments:** The `///` above the struct become the signature’s instruction (used by adapters).
+- **Field roles:** Mark inputs vs. outputs with attributes for clear orchestration.
+
+## Inline macro alternative
+
+```rust
+use dsrs::sign;
+let sig = sign! { (question: String) -> answer: String };
+```
+
+## Demos (few-shot examples)
+
+You can attach examples at runtime for few-shot prompting.
+
+```rust
+use dsrs::{Example, MetaSignature, hashmap};
+
+let mut sig = QA::new();
+sig.set_demos(vec![
+    Example::new(
+        hashmap!{
+            "question".to_string() => "What is gravity?".into(),
+            "answer".to_string() => "A natural power that draweth bodies earthward.".into()
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    )
+])?;
+```
+
+## Where it fits
+
+- A `Signature` does not call the LM by itself; a `Predictor` uses it, via an `Adapter`, to build a `Chat` and parse a `Prediction`.
+- Keeping the task contract as data (the signature) supports reuse, testing, and optimizer integration later.

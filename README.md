@@ -2,7 +2,7 @@
 <img width="768" alt="logo" src="https://github.com/user-attachments/assets/bdb80520-216e-4742-b016-b71ca6eaac03" />
 
 # DSRs
-<em>A high-performance DSPy rewrite in Rust for building LLM-powered applications</em>
+<em>A high-performance DSPy rewrite in Rust for building LM-powered applications</em>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
@@ -18,7 +18,7 @@
 
 ## 🚀 Overview
 
-**DSRs** (DSPy Rust) is a ground-up rewrite of the [DSPy framework](https://github.com/stanfordnlp/dspy) in Rust, designed for building robust, high-performance applications powered by Language Models. Unlike a simple port, DSRs leverages Rust's type system, memory safety, and concurrency features to provide a more efficient and reliable foundation for LLM applications.
+**DSRs** (DSPy Rust) is a ground-up rewrite of the [DSPy framework](https://github.com/stanfordnlp/dspy) in Rust, designed for building robust, high-performance applications powered by Language Models. Unlike a simple port, DSRs leverages Rust's type system, memory safety, and concurrency features to provide a more efficient and reliable foundation for LM applications.
 
 ## 📦 Installation
 
@@ -27,10 +27,10 @@ Add DSRs to your `Cargo.toml`:
 ```toml
 [dependencies]
 # Option 1: Use the shorter alias (recommended)
-dsrs = { package = "dspy-rs", version = "0.0.2-beta" }
+dsrs = { package = "dspy-rs", version = "0.5.0" }
 
 # Option 2: Use the full name
-dspy-rs = "0.0.2-beta"
+dspy-rs = "0.5.0"
 ```
 
 Or use cargo:
@@ -96,7 +96,7 @@ DSRs follows a modular architecture with clear separation of concerns:
 ```
 dsrs/
 ├── core/           # Core abstractions (LM, Module, Signature)
-├── adapter/        # LLM provider adapters (OpenAI, etc.)
+├── adapter/        # LM provider adapters (OpenAI, etc.)
 ├── data/           # Data structures (Example, Prediction)
 ├── predictors/     # Built-in predictors (Predict, Chain, etc.)
 ├── evaluate/       # Evaluation framework and metrics
@@ -137,13 +137,13 @@ impl Module for CustomModule {
 }
 ```
 
-#### 3. **Predictors** - Pre-built LLM Interaction Patterns
+#### 3. **Predictors** - Pre-built LM Interaction Patterns
 ```rust
 // Get prediction
 let predict = Predict::new(MySignature::new());
 ```
 
-#### 4. **Language Models** - Configurable LLM Backends
+#### 4. **Language Models** - Configurable LM Backends
 ```rust
 // Configure with OpenAI
 let lm = LM::builder()

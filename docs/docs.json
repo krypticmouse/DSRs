@@ -11,13 +11,22 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Documentation",
+        "tab": "Learn DSRs",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
               "index",
               "docs/getting-started/quickstart"
+            ]
+          },
+          {
+            "group": "Building Blocks",
+            "pages": [
+              "docs/building-blocks/signature",
+              "docs/building-blocks/lm",
+              "docs/building-blocks/predictors",
+              "docs/building-blocks/module"
             ]
           },
           {
@@ -26,28 +35,21 @@
               "docs/data/examples",
               "docs/data/prediction"
             ]
-          },
+          }
+        ]
+      },
+      {
+        "tab": "Tutorials",
+        "groups": [
           {
-            "group": "Building blocks",
+            "group": "Overview",
             "pages": [
-              "docs/building-blocks/signature",
-              "docs/building-blocks/lm",
-              "docs/building-blocks/predictors",
-              "docs/building-blocks/module"
+              "docs/tutorials/overview"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "DSPy Discord",
-          "href": "https://discord.com/invite/ZAEGgxjPUe",
-          "icon": "discord"
-        }
-      ]
-    }
+    ]
   },
   "logo": {
     "light": "/logo/main.png",
@@ -65,7 +67,8 @@
   "footer": {
     "socials": {
       "x": "https://x.com/krypticmouse",
-      "github": "https://github.com/krypticmouse/DSRs"
+      "github": "https://github.com/krypticmouse/DSRs",
+      "discord": "https://discord.com/invite/ZAEGgxjPUe"
     }
   }
 }
