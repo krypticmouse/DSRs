@@ -1,23 +1,32 @@
 use anyhow::Result;
 use futures::future::join_all;
 use indexmap::IndexMap;
+use kdam::tqdm;
 
 use crate::{Example, Prediction, core::MetaSignature};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
     async fn forward(&self, inputs: Example) -> Result<Prediction>;
+    
+    async fn batch(&self, inputs: Vec<Example>, max_concurrency: usize, display_progress: bool) -> Result<Vec<Prediction>> {
+        let batches = inputs.chunks(max_concurrency).collect::<Vec<_>>();
+        let mut predictions = Vec::new();
 
-    async fn batch(&self, inputs: Vec<Example>) -> Result<Vec<Prediction>> {
-        let futures: Vec<_> = inputs
-            .iter()
-            .map(|example| self.forward(example.clone()))
-            .collect();
+        for batch in tqdm!(batches.iter(), desc = "Processing Batch", disable = !display_progress) {
+            let futures: Vec<_> = batch
+                .iter()
+                .map(|example| self.forward(example.clone()))
+                .collect();
 
-        join_all(futures)
+            predictions.extend(join_all(futures)
             .await
             .into_iter()
-            .collect()
+            .map(|prediction| prediction.unwrap())
+            .collect::<Vec<_>>());
+        }
+
+        Ok(predictions)
     }
 }
 

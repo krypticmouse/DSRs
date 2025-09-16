@@ -102,7 +102,7 @@ async fn main() {
     ];
 
     let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.batch(example.clone()).await.unwrap();
+    let prediction = qa_rater.batch(example.clone(), 2, true).await.unwrap();
     println!("Anthropic: {prediction:?}");
 
     // Gemini
@@ -117,6 +117,6 @@ async fn main() {
         ChatAdapter,
     );
 
-    let prediction = qa_rater.batch(example).await.unwrap();
+    let prediction = qa_rater.batch(example, 2, true).await.unwrap();
     println!("Gemini: {prediction:?}");
 }

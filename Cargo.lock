@@ -761,6 +761,7 @@ dependencies = [
  "futures",
  "hf-hub",
  "indexmap",
+ "kdam",
  "parquet",
  "rayon",
  "regex",
@@ -1454,6 +1455,16 @@ checksum = "0c0b063578492ceec17683ef2f8c5e89121fbd0b172cbc280635ab7567db2738"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "kdam"
+version = "0.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5740f66a8d86a086ebcacfb937070e8be6eb2f8fb45e4ae7fa428ca2a98a7b1f"
+dependencies = [
+ "terminal_size",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2723,6 +2734,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60b8cb979cb11c32ce1603f8137b22262a9d131aaa5c37b5678025f22b8becd0"
+dependencies = [
+ "rustix",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]

@@ -42,11 +42,13 @@ impl Module for QARater {
 }
 
 impl Evaluator for QARater {
+    const MAX_CONCURRENCY: usize = 16;
+    const DISPLAY_PROGRESS: bool = true;
+
     async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
         let answer = example.data.get("answer").unwrap().clone();
         let prediction = prediction.data.get("answer").unwrap().clone();
-        println!("Answer: {answer}");
-        println!("Prediction: {prediction}");
+        
         if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
             1.0
         } else {
@@ -71,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
         "fullwiki",
         "validation",
         true,
-    )?[..10]
+    )?[..128]
         .to_vec();
 
     let evaluator = QARater::builder().build();
