@@ -3,3 +3,107 @@ title: 'Predictors'
 description: 'Learn how to create and use predictors for LM inference'
 icon: 'robot'
 ---
+
+
+## What is a predictor?
+
+Predictors execute LM calls for a signature and input data. In Rust terms, a `Predict` struct wraps a `MetaSignature` and calls the LM via an `Adapter`.
+
+- **Purpose:** Execute an LM call for a signature with the provided input data.
+- **Rust shape:** `Predict` holds a `Box<dyn MetaSignature>` and uses the configured `Adapter` + `LM` to run inference.
+- **Trait:** Anything that implements the `Predictor` trait can be invoked with `forward`/`forward_with_config`.
+
+## API surface
+
+- **`Predictor` trait:**
+  - `async fn forward(&self, inputs: Example) -> Result<Prediction>` — uses global settings (LM + Adapter).
+  - `async fn forward_with_config(&self, inputs: Example, lm: &mut LM) -> Result<Prediction>` — supply your own `LM` (uses `ChatAdapter`).
+- **`Predict` struct:** concrete predictor that wraps a `MetaSignature`.
+
+## Minimal usage
+
+```rust
+use dspy_rs::{
+    ChatAdapter, Example, LM, LMConfig, Predict, Predictor, Signature, configure, hashmap,
+};
+
+#[Signature]
+struct QA {
+    /// Use Renaissance-era English to answer the question.
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Configure global LM + adapter once
+    let lm = LM::builder()
+        .config(LMConfig::builder().model("gpt-4.1-nano".to_string()).build())
+        .api_key(std::env::var("OPENAI_API_KEY")?.into())
+        .build();
+    configure(lm, ChatAdapter::default());
+
+    // Create predictor for your signature
+    let predictor = Predict::new(QA::new());
+
+    // Provide inputs as an Example
+    let inputs = Example::new(
+        hashmap! { "question".to_string() => "What is gravity?".into() },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    let pred = predictor.forward(inputs).await?;
+    println!("Answer: {}", pred.get("answer", None).as_str().unwrap());
+    Ok(())
+}
+```
+
+## Inline signatures
+
+You can also build a predictor from an inline signature:
+
+```rust
+use dspy_rs::{Predict, sign};
+
+let predict = Predict::new(sign! { (question: String) -> answer: String });
+```
+
+## How it works under the hood
+
+- `Predict::forward` reads the globally configured `LM` and `Adapter` from `GLOBAL_SETTINGS` and calls the adapter with your signature and inputs.
+- `Predict::forward_with_config` lets you supply a mutable `&mut LM` directly and uses `ChatAdapter` for the call. This is helpful for tests or local overrides.
+
+## Testing and determinism
+
+In tests, inject a `DummyLM` and call `forward_with_config` to avoid network calls and ensure deterministic outputs.
+
+```rust
+use dspy_rs::{DummyLM, Example, Predict, Predictor, Signature, hashmap};
+
+#[Signature]
+struct QA { #[input] question: String, #[output] answer: String }
+
+#[tokio::test]
+async fn predicts_locally() -> anyhow::Result<()> {
+    let predict = Predict::new(QA::new());
+    let mut lm = DummyLM::default().into(); // convert into LM
+
+    let inputs = Example::new(
+        hashmap! { "question".to_string() => "Test?".into() },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    let out = predict.forward_with_config(inputs, &mut lm).await?;
+    assert!(out.get("answer", None).is_string());
+    Ok(())
+}
+```
+
+## Where predictors fit
+
+- A `Signature` defines the task schema; a `Predictor` executes it.
+- You can compose multiple predictors and custom logic into higher-level `Module`s. See the modules guide for composition patterns.

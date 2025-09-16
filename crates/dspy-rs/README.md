@@ -48,7 +48,7 @@ cargo add dspy-rs
 Here's a simple example to get you started:
 
 ```rust
-use dsrs::prelude::*;
+use dsrs::*;
 use anyhow::Result;
 
 #[Signature]
@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
     // Configure your LM (Language Model)
     configure(
         LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
+            .api_key(std::env::var("OPENAI_API_KEY")?)
             .build(),
         ChatAdapter {},
     );
