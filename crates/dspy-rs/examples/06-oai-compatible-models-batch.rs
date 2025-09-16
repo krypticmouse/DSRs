@@ -10,8 +10,7 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
-    configure, example, hashmap, prediction,
+    configure, example, hashmap, prediction, ChatAdapter, Example, LMConfig, LmUsage, Module, Predict, Prediction, Predictor, Signature, LM
 };
 use secrecy::SecretString;
 
@@ -52,6 +51,7 @@ impl Module for QARater {
 
         let question = inputs.data.get("question").unwrap().clone();
         let answer = answerer_prediction.data.get("answer").unwrap().clone();
+        let answer_lm_usage = answerer_prediction.lm_usage;
 
         let inputs = Example::new(
             hashmap! {
@@ -62,12 +62,14 @@ impl Module for QARater {
             vec![],
         );
         let rating_prediction = self.rater.forward(inputs).await?;
+        let rating_lm_usage = rating_prediction.lm_usage;
+
         Ok(prediction! {
             "answer"=> answer,
             "question"=> question,
             "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
         }
-        .set_lm_usage(rating_prediction.lm_usage))
+        .set_lm_usage(LmUsage::add(answer_lm_usage, rating_lm_usage)))
     }
 }
 
@@ -87,12 +89,20 @@ async fn main() {
         ChatAdapter,
     );
 
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-    };
+    let example = vec![
+        example! {
+            "question": "input" => "What is the capital of France?",
+        },
+        example! {
+            "question": "input" => "What is the capital of Germany?",
+        },
+        example! {
+            "question": "input" => "What is the capital of Italy?",
+        },
+    ];
 
     let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.forward(example.clone()).await.unwrap();
+    let prediction = qa_rater.batch(example.clone()).await.unwrap();
     println!("Anthropic: {prediction:?}");
 
     // Gemini
@@ -107,6 +117,6 @@ async fn main() {
         ChatAdapter,
     );
 
-    let prediction = qa_rater.forward(example).await.unwrap();
+    let prediction = qa_rater.batch(example).await.unwrap();
     println!("Gemini: {prediction:?}");
 }
