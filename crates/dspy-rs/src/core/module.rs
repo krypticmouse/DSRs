@@ -11,13 +11,13 @@ pub trait Module: Send + Sync {
     async fn batch(&self, inputs: Vec<Example>) -> Result<Vec<Prediction>> {
         let futures: Vec<_> = inputs
             .iter()
-            .map(|input| self.forward(input.clone()))
-            .collect::<Vec<_>>();
-        
-        let predictions = join_all(futures).await;
-        let predictions = predictions.into_iter().collect::<Result<Vec<_>>>()?;
+            .map(|example| self.forward(example.clone()))
+            .collect();
 
-        Ok(predictions)
+        join_all(futures)
+            .await
+            .into_iter()
+            .collect()
     }
 }
 

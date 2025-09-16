@@ -4,23 +4,10 @@ use futures::future::join_all;
 
 #[allow(async_fn_in_trait)]
 pub trait Evaluator: Module {
-    async fn predict(&self, examples: Vec<Example>) -> Vec<Prediction> {
-        let futures: Vec<_> = examples
-            .iter()
-            .map(|example| self.forward(example.clone()))
-            .collect();
-
-        join_all(futures)
-            .await
-            .into_iter()
-            .map(|x| x.unwrap())
-            .collect()
-    }
-
     async fn metric(&self, example: &Example, prediction: &Prediction) -> f32;
 
     async fn evaluate(&self, examples: Vec<Example>) -> f32 {
-        let predictions = self.predict(examples.clone()).await;
+        let predictions = self.batch(examples.clone()).await.unwrap();
 
         let futures: Vec<_> = examples
             .iter()
