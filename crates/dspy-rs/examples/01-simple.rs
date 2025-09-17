@@ -73,11 +73,10 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() {
-    let lm = LM::builder()
-        .api_key(SecretString::from(std::env::var("OPENAI_API_KEY").unwrap()))
-        .build();
     configure(
-        &lm,
+        LM::builder()
+        .api_key(SecretString::from(std::env::var("OPENAI_API_KEY").unwrap()))
+        .build(),
         ChatAdapter,
     );
 
@@ -88,6 +87,4 @@ async fn main() {
     let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
     println!("{prediction:?}");
-
-    println!("LM History: {:?}", lm.inspect_history(1));
 }
