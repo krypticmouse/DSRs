@@ -13,7 +13,6 @@ use dspy_rs::{
     ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
     example, hashmap, prediction,
 };
-use secrecy::SecretString;
 
 #[Signature(cot)]
 struct QASignature {
@@ -72,19 +71,21 @@ impl Module for QARater {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     configure(
         LM::builder()
-        .api_key(SecretString::from(std::env::var("OPENAI_API_KEY").unwrap()))
-        .build(),
+            .api_key(std::env::var("OPENAI_API_KEY")?.into())
+            .build(),
         ChatAdapter,
     );
 
     let example = example! {
-        "question": "input" => "What is the capital of India?",
+        "question": "input" => "What is the capital of France?",
     };
 
     let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
     println!("{prediction:?}");
+
+    Ok(())
 }

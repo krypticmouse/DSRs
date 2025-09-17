@@ -13,7 +13,7 @@ use async_openai::{Client, config::OpenAIConfig};
 use bon::Builder;
 use secrecy::{ExposeSecretMut, SecretString};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LMResponse {
     pub chat: Chat,
     pub config: LMConfig,

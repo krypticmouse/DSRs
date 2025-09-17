@@ -67,7 +67,7 @@ async fn main() -> Result<()> {
     // Configure your LM (Language Model)
     configure(
         LM::builder()
-            .api_key(std::env::var("OPENAI_API_KEY")?)
+            .api_key(std::env::var("OPENAI_API_KEY")?.into())
             .build(),
         ChatAdapter {},
     );
