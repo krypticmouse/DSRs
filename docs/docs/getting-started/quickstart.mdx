@@ -30,45 +30,40 @@ tokio = "1.47.1"
 cargo add dspy-rs anyhow serde serde_json tokio
 ```
 
-This will create an alias `dsrs` for the `dspy-rs` crate which is the intended way to use it.
-
 <Note>
 We need to install DSRS using the name `dspy-rs` for now, because
 `dsrs` is an already-published crate.
-This may change in the future if the `dsrs` crate name is donated back or becomes available.
+This may change in the future if the `dsrs` crate name is donated or becomes available.
 </Note>
 </Step>
 
 <Step title="Set up your language model">
 
 The first step in DSRs is to configure your Language Model (LM). DSRs supports
-any LM supported via the `async-openai` crate. You can define your LM
+any OpenAI compatible LM supported via the `async-openai` crate. You can define your LM
 configuration using the builder pattern as follows.
 
 Once the LM instance is created, pass it to the configure function along with
-a chat adapter to set the global LM and adapter for your application.
+a chat adapter to set the global LM and adapter for your application. An adapter sits on top of the LM and signature and
+is responsible for converting signatures to prompts and parse the output fields from the LM response.
 `ChatAdapter` is the default adapter in DSRs and is responsible for converting
-the instructions and the structure from your signature (defined in the next step)
-into a prompt that the LM can follow to complete the task.
+the signature (defined in the next step) to a list of messages that the `LM` can use to generate the output.
 
 ```rust
-use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
+use dspy_rs::{configure, ChatAdapter, LM};
 use std::env;
+use secrecy::SecretString;
 
 fn main() -> Result<(), anyhow::Error> {
-    //Define a config for the LM
-    let config = LMConfig::builder()
-        .model("gpt-4.1-nano".to_string())
-        .build();
-    // Create the LM instance via the builder
-    let lm = LM::builder()
-        .config(config)
-        .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build();
-    // Configure the global LM and adapter
-    configure(lm, ChatAdapter::default());
+    configure(
+        // Dec
+        LM::builder()
+            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
+            .build(),
+        ChatAdapter {},
+    );
 
-    Ok(())
+    ...
 }
 ```
 
@@ -76,11 +71,11 @@ fn main() -> Result<(), anyhow::Error> {
 
 <Step title="Define task via signatures">
 
-A signature defines the structure of your task: what inputs it takes and what outputs it should produce. Think of it as a schema for your LM call,
+A signature in DSRs specifies your task: it describes the instructions, the expected inputs, and the outputs your LM should generate. You can think of it as a schema that guides how your prompt for the LLM call is structured.
 
-You can create your signature in DSRs in one of two ways: using an inline macro, and via an attribute macro.
+You can create your signature in DSRs in one of two ways: using an inline signature or via structs.
 
-Let's create a question-answering signature using the inline macro:
+Let's create a question-answering signature using the inline signature:
 
 ```rust
 let signature = sign! {
@@ -90,11 +85,11 @@ let signature = sign! {
 The input fields are to the left of the `->` arrow, and the output fields are to the right. Multiple fields can be comma-separated, for e.g., `(question: String,
 context: String) -> answer: String`.
 
-Alternatively, you can have more control over defining more granular aspects of the signature by defining signature using attribute macro on structs.
+Alternatively, you can have more control over defining more granular aspects of the signature by defining them using structs.
 
 ```rust
 #[Signature]
-struct QASignature {
+struct QA {
     /// Answer the question concisely.
 
     #[input(desc="Question to be answered.")]
@@ -106,8 +101,7 @@ struct QASignature {
 ```
 
 The advantage of the latter approach is that you can add doc comments at the 
-top of the struct, specifying
-important domain information or specific instructions to the LM.
+top of the struct, specifying detailed instructions for the task. 
 Additionally, you can also annotate each field with `#[input]` and `#[output]`
 attributes, useful when you have multiple input and output fields, and when
 you want to add descriptions to each field.
@@ -116,7 +110,11 @@ you want to add descriptions to each field.
 
 <Step title="Create a simple predictor">
 
-A predictor is the simplest module in DSRs. It takes a signature and input data, and orchestrates the LM call to produce a prediction. Let's demonstrate this
+LM is what define the configuration of the LLM call being made. It takes a signature and input data and calls the LLM to produce a prediction.
+
+Let's say you want to generate output
+
+Let's demonstrate this
 with an example.
 
 Gravity was explained by Isaac Newton in 1687. To make this more interesting,
@@ -130,17 +128,6 @@ use dspy_rs::{
     ChatAdapter, Example, LM, LMConfig, Predict, Predictor, Signature, configure, hashmap,
 };
 use std::env;
-
-#[Signature]
-struct QA {
-    /// Use Renaissance-era English to answer the question.
-
-    #[input]
-    pub question: String,
-
-    #[output]
-    pub answer: String,
-}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
