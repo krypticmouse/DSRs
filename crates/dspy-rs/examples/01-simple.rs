@@ -10,8 +10,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature, configure,
-    example, prediction,
+    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
+    configure, example, prediction,
 };
 
 #[Signature(cot)]
@@ -56,7 +56,7 @@ impl Module for QARater {
             "question": "input" => question.clone(),
             "answer": "output" => answer.clone()
         };
-        
+
         let rating_prediction = self.rater.forward(inputs).await?;
         Ok(prediction! {
             "answer"=> answer,
