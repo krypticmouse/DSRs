@@ -61,10 +61,8 @@ impl LM {
         if self.client.is_none() {
             if self.config.model.contains("/") {
                 let model_str = self.config.model.clone();
-                let parts = model_str.split("/").collect::<Vec<&str>>();
-                let provider = parts[0];
-
-                self.config.model = parts[1].to_string();
+                let (provider, model_id) = model_str.split_once("/").unwrap();
+                self.config.model = model_id.to_string();
                 self.base_url = get_base_url(provider);
             }
             self.setup_client();

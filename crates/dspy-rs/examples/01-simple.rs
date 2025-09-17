@@ -10,10 +10,9 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
-    example, hashmap, prediction,
+    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
+    configure, example, prediction,
 };
-use secrecy::SecretString;
 
 #[Signature(cot)]
 struct QASignature {
@@ -53,14 +52,11 @@ impl Module for QARater {
         let question = inputs.data.get("question").unwrap().clone();
         let answer = answerer_prediction.data.get("answer").unwrap().clone();
 
-        let inputs = Example::new(
-            hashmap! {
-                "answer".to_string() => answer.clone(),
-                "question".to_string() => question.clone()
-            },
-            vec!["answer".to_string(), "question".to_string()],
-            vec![],
-        );
+        let inputs = example! {
+            "question": "input" => question.clone(),
+            "answer": "output" => answer.clone()
+        };
+
         let rating_prediction = self.rater.forward(inputs).await?;
         Ok(prediction! {
             "answer"=> answer,
@@ -72,10 +68,14 @@ impl Module for QARater {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     configure(
         LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY").unwrap()))
+            .api_key(std::env::var("OPENROUTER_API_KEY")?.into())
+            .config(LMConfig {
+                model: "openrouter/openai/gpt-4o-mini".to_string(),
+                ..LMConfig::default()
+            })
             .build(),
         ChatAdapter,
     );
@@ -87,4 +87,6 @@ async fn main() {
     let qa_rater = QARater::builder().build();
     let prediction = qa_rater.forward(example).await.unwrap();
     println!("{prediction:?}");
+
+    Ok(())
 }

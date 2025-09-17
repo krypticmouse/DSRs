@@ -8,7 +8,7 @@ pub struct LMConfig {
     pub model: String,
     #[builder(default = 0.7)]
     pub temperature: f32,
-    #[builder(default = 1.0)]
+    #[builder(default = 0.0)]
     pub top_p: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
