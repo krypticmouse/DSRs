@@ -1,6 +1,8 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use super::Adapter;
 use crate::utils::get_iter_from_value;
@@ -277,12 +279,12 @@ impl Adapter for ChatAdapter {
 
     async fn call(
         &self,
-        lm: &mut LM,
+        lm: Arc<Mutex<LM>>,
         signature: &dyn MetaSignature,
         inputs: Example,
     ) -> Result<Prediction> {
         let messages = self.format(signature, inputs);
-        let (response, usage) = lm.call(messages, "predict").await?;
+        let (response, usage) = lm.lock().await.call(messages, "predict").await?;
         let output = self.parse_response(signature, response);
 
         Ok(Prediction {
