@@ -13,7 +13,7 @@ use async_openai::{Client, config::OpenAIConfig};
 use bon::Builder;
 use secrecy::{ExposeSecretMut, SecretString};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LMResponse {
     pub chat: Chat,
     pub config: LMConfig,
@@ -109,8 +109,8 @@ impl LM {
         Ok((first_choice, usage))
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&LMResponse> {
-        self.history.iter().rev().take(n).collect()
+    pub fn inspect_history(&self, n: usize) -> Vec<LMResponse> {
+        self.history.iter().rev().take(n).cloned().collect()
     }
 }
 
@@ -149,7 +149,7 @@ impl DummyLM {
         ))
     }
 
-    pub fn inspect_history(&self, n: usize) -> Vec<&LMResponse> {
-        self.history.iter().rev().take(n).collect()
+    pub fn inspect_history(&self, n: usize) -> Vec<LMResponse> {
+        self.history.iter().rev().take(n).cloned().collect()
     }
 }

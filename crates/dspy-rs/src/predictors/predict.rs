@@ -1,4 +1,6 @@
 use indexmap::IndexMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use crate::core::{MetaSignature, Optimizable};
 use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, adapter::Adapter};
@@ -17,18 +19,18 @@ impl Predict {
 
 impl super::Predictor for Predict {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        let (adapter, mut lm) = {
+        let (adapter, lm) = {
             let guard = GLOBAL_SETTINGS.read().unwrap();
             let settings = guard.as_ref().unwrap();
-            (settings.adapter.clone(), settings.lm.clone())
+            (settings.adapter.clone(), Arc::clone(&settings.lm))
         }; // guard is dropped here
-        adapter.call(&mut lm, self.signature.as_ref(), inputs).await
+        adapter.call(lm, self.signature.as_ref(), inputs).await
     }
 
     async fn forward_with_config(
         &self,
         inputs: Example,
-        lm: &mut LM,
+        lm: Arc<Mutex<LM>>,
     ) -> anyhow::Result<Prediction> {
         ChatAdapter.call(lm, self.signature.as_ref(), inputs).await
     }

@@ -7,7 +7,9 @@ use anyhow::Result;
 use bon::Builder;
 use dsrs_macros::Signature;
 use futures::future::join_all;
+use std::sync::Arc;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::LazyLock};
+use tokio::sync::Mutex;
 
 #[Signature]
 struct BasicGenerateInstruction {
@@ -132,20 +134,20 @@ impl Optimizer for COPRO {
                                     example! {
                                         "basic_instruction": "input" => inst
                                     },
-                                    &mut prompt_model.clone(),
+                                    Arc::new(Mutex::new(prompt_model)),
                                 )
                                 .await
                         }));
                     } else {
-                        let mut lm = get_lm().clone();
-                        lm.config.temperature = self.init_temperature;
+                        let lm = get_lm();
+                        lm.lock().await.config.temperature = self.init_temperature;
                         futures.push(Box::pin(async move {
                             BASIC_GENERATOR
                                 .forward_with_config(
                                     example! {
                                         "basic_instruction": "input" => inst
                                     },
-                                    &mut lm.clone(),
+                                    Arc::clone(&get_lm()),
                                 )
                                 .await
                         }));
@@ -361,14 +363,14 @@ impl Optimizer for COPRO {
                                 example! {
                                     "attempted_instructions": "input" => attempts
                                 },
-                                &mut prompt_model.clone(),
+                                Arc::new(Mutex::new(prompt_model)),
                             )
                             .await
                     }));
                 } else {
-                    let mut lm = get_lm().clone();
-                    lm.config.temperature = self.init_temperature;
-                    lm.config.n = self.breadth as u8;
+                    let lm = get_lm();
+                    lm.lock().await.config.temperature = self.init_temperature;
+                    lm.lock().await.config.n = self.breadth as u8;
                     let attempts = attempts_str.clone();
                     futures.push(Box::pin(async move {
                         REFINEMENT_GENERATOR
@@ -376,7 +378,7 @@ impl Optimizer for COPRO {
                                 example! {
                                     "attempted_instructions": "input" => attempts
                                 },
-                                &mut lm.clone(),
+                                Arc::clone(&get_lm()),
                             )
                             .await
                     }));
