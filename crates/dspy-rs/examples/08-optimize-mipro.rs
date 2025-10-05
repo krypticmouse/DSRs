@@ -11,8 +11,10 @@ by leveraging prompting best practices and program understanding.
 
 Run with:
 ```
-cargo run --example 08-optimize-mipro
+cargo run --example 08-optimize-mipro --features parquet
 ```
+
+Note: The `parquet` feature is required for loading HuggingFace datasets.
 */
 
 use anyhow::Result;

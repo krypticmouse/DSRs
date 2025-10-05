@@ -233,6 +233,8 @@ let optimizer = MIPROv2::builder()
 optimizer.compile(&mut module, train_examples).await?;
 ```
 
+See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` feature).
+
 **Component Freezing:**
 ```rust
 // The Optimizable derive macro automatically implements the trait and marks Module Optimizable
