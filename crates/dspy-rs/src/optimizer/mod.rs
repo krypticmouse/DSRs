@@ -1,6 +1,8 @@
 pub mod copro;
+pub mod mipro;
 
 pub use copro::*;
+pub use mipro::*;
 
 use crate::{
     core::{Module, Optimizable},
