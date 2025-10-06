@@ -36,6 +36,7 @@ arrow = { version = "56.1.0", optional = true }
 regex = "1.11.2"
 reqwest = { version = "0.12.23", features = ["blocking"] }
 kdam = "0.6.3"
+rand = "0.8.5"
 
 [features]
 parquet = ["dep:parquet", "dep:arrow"]

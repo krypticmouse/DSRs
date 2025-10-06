@@ -1,8 +1,12 @@
 pub mod copro;
+pub mod gepa;
 pub mod mipro;
+pub mod pareto;
 
 pub use copro::*;
+pub use gepa::*;
 pub use mipro::*;
+pub use pareto::*;
 
 use crate::{
     core::{Module, Optimizable},
