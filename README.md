@@ -191,6 +191,10 @@ println!("Average score: {}", score);
 ```
 
 #### 6. **Optimization** - Optimize your Modules
+
+DSRs provides two powerful optimizers:
+
+**COPRO (Collaborative Prompt Optimization)**
 ```rust
 #[derive(Optimizable)]
 pub struct MyModule {
@@ -211,6 +215,25 @@ let train_examples = load_training_data();
 let mut module = MyModule::new();
 optimizer.compile(&mut module, train_examples).await?;
 ```
+
+**MIPROv2 (Multi-prompt Instruction Proposal Optimizer v2)** - Advanced optimizer using LLMs
+```rust
+// MIPROv2 uses a 3-stage process:
+// 1. Generate execution traces
+// 2. LLM generates candidate prompts with best practices
+// 3. Evaluate and select the best prompt
+
+let optimizer = MIPROv2::builder()
+    .num_candidates(10)    // Number of candidate prompts to generate
+    .num_trials(20)        // Number of evaluation trials
+    .minibatch_size(25)    // Examples per evaluation
+    .temperature(1.0)      // Temperature for prompt generation
+    .build();
+
+optimizer.compile(&mut module, train_examples).await?;
+```
+
+See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` feature).
 
 **Component Freezing:**
 ```rust
@@ -315,6 +338,28 @@ struct ComplexReasoningSignature {
 }
 ```
 
+### Optimizer Comparison
+
+| Feature | COPRO | MIPROv2 |
+|---------|-------|---------|
+| **Approach** | Iterative refinement | LLM-guided generation |
+| **Complexity** | Simple | Advanced |
+| **Best For** | Quick optimization | Best results |
+| **Training Data** | Uses scores | Uses traces & descriptions |
+| **Prompting Tips** | No | Yes (15+ best practices) |
+| **Program Understanding** | Basic | LLM-generated descriptions |
+| **Few-shot Examples** | No | Yes (auto-selected) |
+
+**When to use COPRO:**
+- Fast iteration needed
+- Simple tasks
+- Limited compute budget
+
+**When to use MIPROv2:**
+- Best possible results needed
+- Complex reasoning tasks
+- Have good training data (15+ examples recommended)
+
 ---
 
 ## 📈 Project Status
@@ -357,6 +402,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - Inspired by the original [DSPy](https://github.com/stanfordnlp/dspy) framework
 - Built with the amazing Rust ecosystem
 - Special thanks to the DSPy community for the discussion and ideas
+- MIPROv2 implementation
 
 ## 🔗 Resources
 
