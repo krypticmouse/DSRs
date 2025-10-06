@@ -9,22 +9,21 @@
 /// ```
 /// OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 /// ```
-
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Signature, Optimizable};
+use dsrs_macros::{Optimizable, Signature};
 
 #[Signature]
 struct SentimentSignature {
     /// Analyze the sentiment of the given text. Classify as 'Positive', 'Negative', or 'Neutral'.
-    
+
     #[input]
     pub text: String,
-    
+
     #[output]
     pub sentiment: String,
-    
+
     #[output]
     pub reasoning: String,
 }
@@ -56,30 +55,26 @@ impl FeedbackEvaluator for SentimentAnalyzer {
             .unwrap_or("")
             .to_string()
             .to_lowercase();
-        
+
         let expected = example
             .get("expected_sentiment", None)
             .as_str()
             .unwrap_or("")
             .to_string()
             .to_lowercase();
-        
-        let text = example
-            .get("text", None)
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-        
+
+        let text = example.get("text", None).as_str().unwrap_or("").to_string();
+
         let reasoning = prediction
             .get("reasoning", None)
             .as_str()
             .unwrap_or("")
             .to_string();
-        
+
         // Calculate score
         let correct = predicted == expected;
         let score = if correct { 1.0 } else { 0.0 };
-        
+
         // Create rich feedback
         let mut feedback = if correct {
             format!("Correct classification: \"{}\"\n", expected)
@@ -89,14 +84,14 @@ impl FeedbackEvaluator for SentimentAnalyzer {
                 expected, predicted
             )
         };
-        
+
         // Add context about the input
         feedback.push_str(&format!("  Input text: \"{}\"\n", text));
-        
+
         // Add reasoning analysis
         if !reasoning.is_empty() {
             feedback.push_str(&format!("  Reasoning: {}\n", reasoning));
-            
+
             // Check if reasoning mentions key sentiment words
             let has_reasoning_quality = if correct {
                 // For correct answers, check if reasoning is substantive
@@ -105,14 +100,14 @@ impl FeedbackEvaluator for SentimentAnalyzer {
                 // For incorrect answers, note what went wrong
                 false
             };
-            
+
             if has_reasoning_quality {
                 feedback.push_str("  Reasoning appears detailed\n");
             } else if !correct {
                 feedback.push_str("  May have misunderstood the text sentiment\n");
             }
         }
-        
+
         FeedbackMetric::new(score, feedback)
     }
 }
@@ -120,11 +115,11 @@ impl FeedbackEvaluator for SentimentAnalyzer {
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("GEPA Sentiment Analysis Optimization Example\n");
-    
+
     // Setup LM
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY environment variable not set");
-    
+    let api_key =
+        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
+
     let lm = LM::builder()
         .api_key(api_key.into())
         .config(
@@ -134,9 +129,9 @@ async fn main() -> Result<()> {
                 .build(),
         )
         .build();
-    
+
     configure(lm.clone(), ChatAdapter);
-    
+
     // Create training examples with diverse sentiments
     let trainset = vec![
         example! {
@@ -180,17 +175,17 @@ async fn main() -> Result<()> {
             "expected_sentiment": "input" => "neutral"
         },
     ];
-    
+
     // Create module
     let mut module = SentimentAnalyzer::builder()
         .predictor(Predict::new(SentimentSignature::new()))
         .build();
-    
+
     // Evaluate baseline performance
     println!("Baseline Performance:");
     let baseline_score = module.evaluate(trainset.clone()).await;
     println!("  Average score: {:.3}\n", baseline_score);
-    
+
     // Configure GEPA optimizer
     let gepa = GEPA::builder()
         .num_iterations(5)
@@ -199,41 +194,51 @@ async fn main() -> Result<()> {
         .temperature(0.9)
         .track_stats(true)
         .build();
-    
+
     // Run optimization
     println!("Starting GEPA optimization...\n");
-    let result = gepa.compile_with_feedback(&mut module, trainset.clone()).await?;
-    
+    let result = gepa
+        .compile_with_feedback(&mut module, trainset.clone())
+        .await?;
+
     // Display results
     println!("\nOptimization Results:");
-    println!("  Best average score: {:.3}", result.best_candidate.average_score());
+    println!(
+        "  Best average score: {:.3}",
+        result.best_candidate.average_score()
+    );
     println!("  Total rollouts: {}", result.total_rollouts);
     println!("  Total LM calls: {}", result.total_lm_calls);
     println!("  Generations: {}", result.evolution_history.len());
-    
+
     println!("\nBest Instruction:");
     println!("  {}", result.best_candidate.instruction);
-    
+
     if !result.evolution_history.is_empty() {
         println!("\nEvolution History:");
         for entry in &result.evolution_history {
             println!("  Generation {}: {:.3}", entry.0, entry.1);
         }
     }
-    
+
     // Test optimized module on a new example
     println!("\nTesting Optimized Module:");
     let test_example = example! {
         "text": "input" => "This product changed my life! Absolutely amazing!",
         "expected_sentiment": "input" => "positive"
     };
-    
+
     let test_prediction = module.forward(test_example.clone()).await?;
-    let test_feedback = module.feedback_metric(&test_example, &test_prediction).await;
-    
-    println!("  Test prediction: {}", test_prediction.get("sentiment", None));
+    let test_feedback = module
+        .feedback_metric(&test_example, &test_prediction)
+        .await;
+
+    println!(
+        "  Test prediction: {}",
+        test_prediction.get("sentiment", None)
+    );
     println!("  Test score: {:.3}", test_feedback.score);
     println!("  Feedback:\n{}", test_feedback.feedback);
-    
+
     Ok(())
 }

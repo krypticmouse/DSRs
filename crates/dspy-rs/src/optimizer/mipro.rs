@@ -1,3 +1,4 @@
+use crate as dspy_rs;
 /// MIPROv2 Optimizer Implementation
 ///
 /// Multi-prompt Instruction Proposal Optimizer (MIPROv2) is an advanced optimizer
@@ -24,14 +25,12 @@
 ///
 /// optimizer.compile(&mut module, train_examples).await?;
 /// ```
-
 use crate::{
     Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
     example, get_lm,
 };
 use anyhow::{Context, Result};
 use bon::Builder;
-use crate as dspy_rs;
 use dsrs_macros::Signature;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -102,20 +101,20 @@ impl Trace {
     pub fn format_for_prompt(&self) -> String {
         let mut result = String::new();
         result.push_str("Input:\n");
-        
+
         for (key, value) in &self.inputs.data {
             result.push_str(&format!("  {}: {}\n", key, value));
         }
-        
+
         result.push_str("Output:\n");
         for (key, value) in &self.outputs.data {
             result.push_str(&format!("  {}: {}\n", key, value));
         }
-        
+
         if let Some(score) = self.score {
             result.push_str(&format!("Score: {:.3}\n", score));
         }
-        
+
         result
     }
 }
@@ -240,17 +239,16 @@ impl MIPROv2 {
     // ========================================================================
 
     /// Generates execution traces by running the module on training examples
-    async fn generate_traces<M>(
-        &self,
-        module: &M,
-        examples: &[Example],
-    ) -> Result<Vec<Trace>>
+    async fn generate_traces<M>(&self, module: &M, examples: &[Example]) -> Result<Vec<Trace>>
     where
         M: Module + Evaluator,
     {
         let mut traces = Vec::with_capacity(examples.len());
 
-        println!("Stage 1: Generating traces from {} examples", examples.len());
+        println!(
+            "Stage 1: Generating traces from {} examples",
+            examples.len()
+        );
 
         for (idx, example) in examples.iter().enumerate() {
             if idx % 10 == 0 {
@@ -324,9 +322,7 @@ impl MIPROv2 {
         } else {
             let lm = get_lm();
             lm.lock().await.config.temperature = 0.7;
-            description_generator
-                .forward_with_config(input, lm)
-                .await?
+            description_generator.forward_with_config(input, lm).await?
         };
 
         Ok(prediction
@@ -355,7 +351,10 @@ impl MIPROv2 {
             .collect::<Vec<_>>()
             .join("\n---\n");
 
-        println!("Stage 2: Generating {} candidate instructions", num_candidates);
+        println!(
+            "Stage 2: Generating {} candidate instructions",
+            num_candidates
+        );
 
         let mut candidates = Vec::new();
 
@@ -396,7 +395,10 @@ impl MIPROv2 {
             }
         }
 
-        println!("Generated {} total candidate instructions", candidates.len());
+        println!(
+            "Generated {} total candidate instructions",
+            candidates.len()
+        );
         Ok(candidates)
     }
 
@@ -488,7 +490,11 @@ impl MIPROv2 {
         // Find best candidate
         let best = evaluated_candidates
             .into_iter()
-            .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
+            .max_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .context("No candidates to evaluate")?;
 
         println!("Best candidate score: {:.3}", best.score);
@@ -552,7 +558,11 @@ impl Optimizer for MIPROv2 {
             return Err(anyhow::anyhow!("No optimizable parameters found in module"));
         }
 
-        println!("  Optimizing {} predictor(s): {:?}\n", predictor_names.len(), predictor_names);
+        println!(
+            "  Optimizing {} predictor(s): {:?}\n",
+            predictor_names.len(),
+            predictor_names
+        );
 
         // Optimize each predictor
         for predictor_name in predictor_names {
@@ -599,7 +609,10 @@ impl Optimizer for MIPROv2 {
                 }
             }
 
-            println!("✓ Optimized {} with score {:.3}", predictor_name, best_candidate.score);
+            println!(
+                "✓ Optimized {} with score {:.3}",
+                predictor_name, best_candidate.score
+            );
             println!("  Instruction: {}\n", best_candidate.instruction);
         }
 

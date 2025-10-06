@@ -20,7 +20,7 @@ Note: The `parquet` feature is required for loading HuggingFace datasets.
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    MIPROv2, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
+    ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
     Predict, Prediction, Predictor, Signature, configure, example,
 };
 use secrecy::SecretString;
@@ -141,7 +141,9 @@ async fn main() -> Result<()> {
     println!("  4. Evaluate each candidate");
     println!("  5. Select and apply the best prompt\n");
 
-    optimizer.compile(&mut qa_module, train_subset.clone()).await?;
+    optimizer
+        .compile(&mut qa_module, train_subset.clone())
+        .await?;
 
     // Show optimized instruction
     println!("\nOptimized instruction:");

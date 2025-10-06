@@ -1,5 +1,5 @@
+use dspy_rs::{Example, LmUsage, MIPROv2, Prediction, PromptCandidate, PromptingTips, Trace};
 use rstest::*;
-use dspy_rs::{LmUsage, Example, Prediction, MIPROv2, Trace, PromptingTips, PromptCandidate};
 
 #[rstest]
 fn test_trace_formatting() {
@@ -54,7 +54,11 @@ fn test_trace_with_multiple_fields() {
             ("field3".to_string(), "value3".into()),
         ]
         .into(),
-        vec!["field1".to_string(), "field2".to_string(), "field3".to_string()],
+        vec![
+            "field1".to_string(),
+            "field2".to_string(),
+            "field3".to_string(),
+        ],
         vec![],
     );
 
@@ -81,10 +85,10 @@ fn test_trace_with_multiple_fields() {
 #[rstest]
 fn test_prompting_tips_default() {
     let tips = PromptingTips::default_tips();
-    
+
     assert!(!tips.tips.is_empty());
     assert!(tips.tips.len() >= 15, "Should have at least 15 tips");
-    
+
     // Verify some expected tips are present
     let tips_text = tips.tips.join(" ");
     assert!(tips_text.contains("clear"));
@@ -99,7 +103,7 @@ fn test_prompting_tips_formatting() {
     assert!(!formatted.is_empty());
     assert!(formatted.contains("1."));
     assert!(formatted.contains("\n"));
-    
+
     // Check that all tips are numbered
     for i in 1..=tips.tips.len() {
         assert!(formatted.contains(&format!("{}.", i)));
@@ -130,9 +134,9 @@ fn test_prompting_tips_custom() {
 fn test_prompt_candidate_creation() {
     let instruction = "Test instruction".to_string();
     let demos = vec![Example::default()];
-    
+
     let candidate = PromptCandidate::new(instruction.clone(), demos.clone());
-    
+
     assert_eq!(candidate.instruction, instruction);
     assert_eq!(candidate.demos.len(), 1);
     assert_eq!(candidate.score, 0.0);
@@ -140,9 +144,8 @@ fn test_prompt_candidate_creation() {
 
 #[rstest]
 fn test_prompt_candidate_with_score() {
-    let candidate = PromptCandidate::new("test".to_string(), vec![])
-        .with_score(0.85);
-    
+    let candidate = PromptCandidate::new("test".to_string(), vec![]).with_score(0.85);
+
     assert_eq!(candidate.score, 0.85);
     assert_eq!(candidate.instruction, "test");
 }
@@ -151,7 +154,7 @@ fn test_prompt_candidate_with_score() {
 fn test_prompt_candidate_score_update() {
     let candidate = PromptCandidate::new("test".to_string(), vec![]);
     assert_eq!(candidate.score, 0.0);
-    
+
     let updated = candidate.with_score(0.95);
     assert_eq!(updated.score, 0.95);
 }
@@ -163,7 +166,7 @@ fn test_prompt_candidate_score_update() {
 #[rstest]
 fn test_miprov2_default_configuration() {
     let optimizer = MIPROv2::builder().build();
-    
+
     assert_eq!(optimizer.num_candidates, 10);
     assert_eq!(optimizer.max_bootstrapped_demos, 3);
     assert_eq!(optimizer.max_labeled_demos, 3);
@@ -185,7 +188,7 @@ fn test_miprov2_custom_configuration() {
         .temperature(0.7)
         .track_stats(false)
         .build();
-    
+
     assert_eq!(optimizer.num_candidates, 5);
     assert_eq!(optimizer.max_bootstrapped_demos, 2);
     assert_eq!(optimizer.max_labeled_demos, 4);
@@ -201,7 +204,7 @@ fn test_miprov2_minimal_configuration() {
         .num_candidates(1)
         .minibatch_size(1)
         .build();
-    
+
     assert_eq!(optimizer.num_candidates, 1);
     assert_eq!(optimizer.minibatch_size, 1);
 }
@@ -289,9 +292,11 @@ fn test_select_best_traces_equal_scores() {
 fn test_select_best_traces_zero_selection() {
     let optimizer = MIPROv2::builder().build();
 
-    let traces = vec![
-        Trace::new(Example::default(), Prediction::default(), Some(0.8)),
-    ];
+    let traces = vec![Trace::new(
+        Example::default(),
+        Prediction::default(),
+        Some(0.8),
+    )];
 
     let best = optimizer.select_best_traces(&traces, 0);
     assert_eq!(best.len(), 0);
@@ -301,9 +306,11 @@ fn test_select_best_traces_zero_selection() {
 fn test_select_best_traces_single_trace() {
     let optimizer = MIPROv2::builder().build();
 
-    let traces = vec![
-        Trace::new(Example::default(), Prediction::default(), Some(0.75)),
-    ];
+    let traces = vec![Trace::new(
+        Example::default(),
+        Prediction::default(),
+        Some(0.75),
+    )];
 
     let best = optimizer.select_best_traces(&traces, 1);
     assert_eq!(best.len(), 1);
@@ -335,9 +342,7 @@ fn test_select_best_traces_descending_order() {
 
 #[rstest]
 fn test_create_prompt_candidates_basic() {
-    let optimizer = MIPROv2::builder()
-        .max_labeled_demos(2)
-        .build();
+    let optimizer = MIPROv2::builder().max_labeled_demos(2).build();
 
     let traces = vec![
         Trace::new(
@@ -360,10 +365,7 @@ fn test_create_prompt_candidates_basic() {
         ),
     ];
 
-    let instructions = vec![
-        "Instruction 1".to_string(),
-        "Instruction 2".to_string(),
-    ];
+    let instructions = vec!["Instruction 1".to_string(), "Instruction 2".to_string()];
 
     let candidates = optimizer.create_prompt_candidates(instructions, &traces);
 
@@ -377,9 +379,7 @@ fn test_create_prompt_candidates_basic() {
 
 #[rstest]
 fn test_create_prompt_candidates_more_traces_than_max() {
-    let optimizer = MIPROv2::builder()
-        .max_labeled_demos(2)
-        .build();
+    let optimizer = MIPROv2::builder().max_labeled_demos(2).build();
 
     let traces = vec![
         Trace::new(Example::default(), Prediction::default(), Some(0.5)),
@@ -399,9 +399,11 @@ fn test_create_prompt_candidates_more_traces_than_max() {
 #[rstest]
 fn test_create_prompt_candidates_empty_instructions() {
     let optimizer = MIPROv2::builder().build();
-    let traces = vec![
-        Trace::new(Example::default(), Prediction::default(), Some(0.8)),
-    ];
+    let traces = vec![Trace::new(
+        Example::default(),
+        Prediction::default(),
+        Some(0.8),
+    )];
 
     let candidates = optimizer.create_prompt_candidates(vec![], &traces);
     assert_eq!(candidates.len(), 0);
@@ -428,11 +430,7 @@ fn test_create_prompt_candidates_no_scored_traces() {
 
 #[rstest]
 fn test_trace_clone() {
-    let trace = Trace::new(
-        Example::default(),
-        Prediction::default(),
-        Some(0.85),
-    );
+    let trace = Trace::new(Example::default(), Prediction::default(), Some(0.85));
 
     let cloned = trace.clone();
     assert_eq!(cloned.score, Some(0.85));
@@ -440,10 +438,7 @@ fn test_trace_clone() {
 
 #[rstest]
 fn test_prompt_candidate_clone() {
-    let candidate = PromptCandidate::new(
-        "test instruction".to_string(),
-        vec![Example::default()],
-    );
+    let candidate = PromptCandidate::new("test instruction".to_string(), vec![Example::default()]);
 
     let cloned = candidate.clone();
     assert_eq!(cloned.instruction, "test instruction");
@@ -453,13 +448,13 @@ fn test_prompt_candidate_clone() {
 #[rstest]
 fn test_format_signature_fields_with_descriptions() {
     let optimizer = MIPROv2::builder().build();
-    
+
     // This is a basic structural test - in real usage, this would be tested
     // with actual signature implementations
     // Here we're just verifying the method exists and returns a string
     use dspy_rs::core::MetaSignature;
     use serde_json::Value;
-    
+
     struct TestSignature;
     impl MetaSignature for TestSignature {
         fn input_fields(&self) -> Value {
@@ -470,7 +465,7 @@ fn test_format_signature_fields_with_descriptions() {
                 }
             })
         }
-        
+
         fn output_fields(&self) -> Value {
             serde_json::json!({
                 "answer": {
@@ -479,31 +474,31 @@ fn test_format_signature_fields_with_descriptions() {
                 }
             })
         }
-        
+
         fn instruction(&self) -> String {
             "Test instruction".to_string()
         }
-        
+
         fn update_instruction(&mut self, _instruction: String) -> anyhow::Result<()> {
             Ok(())
         }
-        
+
         fn set_demos(&mut self, _demos: Vec<Example>) -> anyhow::Result<()> {
             Ok(())
         }
-        
+
         fn demos(&self) -> Vec<Example> {
             vec![]
         }
-        
+
         fn append(&mut self, _name: &str, _value: Value) -> anyhow::Result<()> {
             Ok(())
         }
     }
-    
+
     let sig = TestSignature;
     let formatted = optimizer.format_signature_fields(&sig);
-    
+
     assert!(formatted.contains("Input Fields:"));
     assert!(formatted.contains("Output Fields:"));
     assert!(formatted.contains("question"));
@@ -540,9 +535,11 @@ fn test_select_best_traces_always_returns_requested_or_less() {
 #[rstest]
 fn test_prompt_candidates_count_matches_instructions() {
     let optimizer = MIPROv2::builder().build();
-    let traces = vec![
-        Trace::new(Example::default(), Prediction::default(), Some(0.8)),
-    ];
+    let traces = vec![Trace::new(
+        Example::default(),
+        Prediction::default(),
+        Some(0.8),
+    )];
 
     for num_instructions in 0..=10 {
         let instructions: Vec<String> = (0..num_instructions)

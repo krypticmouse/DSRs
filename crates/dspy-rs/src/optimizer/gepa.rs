@@ -8,7 +8,6 @@
 ///
 /// Reference: "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning"
 /// (Agrawal et al., 2025, arxiv:2507.19457)
-
 use anyhow::{Context, Result};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -33,19 +32,19 @@ use super::pareto::ParetoFrontier;
 pub struct GEPACandidate {
     /// Unique identifier
     pub id: usize,
-    
+
     /// The instruction/prompt for this candidate
     pub instruction: String,
-    
+
     /// Name of the module this candidate targets
     pub module_name: String,
-    
+
     /// Scores achieved on each evaluation example
     pub example_scores: Vec<f32>,
-    
+
     /// Parent candidate ID (for lineage tracking)
     pub parent_id: Option<usize>,
-    
+
     /// Generation number in the evolutionary process
     pub generation: usize,
 }
@@ -62,7 +61,7 @@ impl GEPACandidate {
             generation: 0,
         }
     }
-    
+
     /// Calculate average score across all examples
     pub fn average_score(&self) -> f32 {
         if self.example_scores.is_empty() {
@@ -70,7 +69,7 @@ impl GEPACandidate {
         }
         self.example_scores.iter().sum::<f32>() / self.example_scores.len() as f32
     }
-    
+
     /// Create a mutated child candidate
     pub fn mutate(&self, new_instruction: String, generation: usize) -> Self {
         Self {
@@ -89,25 +88,25 @@ impl GEPACandidate {
 pub struct GEPAResult {
     /// Best candidate found
     pub best_candidate: GEPACandidate,
-    
+
     /// All candidates evaluated during optimization
     pub all_candidates: Vec<GEPACandidate>,
-    
+
     /// Total number of rollouts performed
     pub total_rollouts: usize,
-    
+
     /// Total LM calls made during optimization
     pub total_lm_calls: usize,
-    
+
     /// Evolution history: generation -> best score at that generation
     pub evolution_history: Vec<(usize, f32)>,
-    
+
     /// Highest score achieved on each validation task
     pub highest_score_achieved_per_val_task: Vec<f32>,
-    
+
     /// Best outputs on validation set (if tracked)
     pub best_outputs_valset: Option<Vec<Prediction>>,
-    
+
     /// Pareto frontier statistics over time
     pub frontier_history: Vec<ParetoStatistics>,
 }
@@ -242,7 +241,9 @@ impl GEPA {
 
         // Now evaluate each candidate (module is no longer borrowed mutably)
         for candidate in candidate_infos {
-            let scores = self.evaluate_candidate(module, trainset, &candidate).await?;
+            let scores = self
+                .evaluate_candidate(module, trainset, &candidate)
+                .await?;
             frontier.add_candidate(candidate, &scores);
         }
 
@@ -260,7 +261,7 @@ impl GEPA {
         M: Module + FeedbackEvaluator,
     {
         use futures::future::join_all;
-        
+
         let futures: Vec<_> = examples
             .iter()
             .map(|example| async move {
@@ -288,13 +289,13 @@ impl GEPA {
         for example in minibatch {
             let prediction = module.forward(example.clone()).await?;
             let feedback = module.feedback_metric(example, &prediction).await;
-            
+
             // Format trace for LLM reflection
             let trace_text = format!(
                 "Input: {:?}\nOutput: {:?}\nScore: {:.3}\nFeedback: {}",
                 example, prediction, feedback.score, feedback.feedback
             );
-            
+
             traces.push((example.clone(), prediction, trace_text));
         }
 
@@ -364,7 +365,6 @@ impl GEPA {
 
         Ok(improved)
     }
-
 }
 
 impl Optimizer for GEPA {
@@ -383,7 +383,11 @@ impl Optimizer for GEPA {
 
 impl GEPA {
     /// Compile method specifically for FeedbackEvaluator modules
-    pub async fn compile_with_feedback<M>(&self, module: &mut M, trainset: Vec<Example>) -> Result<GEPAResult>
+    pub async fn compile_with_feedback<M>(
+        &self,
+        module: &mut M,
+        trainset: Vec<Example>,
+    ) -> Result<GEPAResult>
     where
         M: Module + Optimizable + FeedbackEvaluator,
     {
@@ -423,14 +427,15 @@ impl GEPA {
                 .context("Failed to sample from frontier")?
                 .clone();
 
-            println!("  Sampled parent (ID {}): avg score {:.3}", parent.id, parent.average_score());
+            println!(
+                "  Sampled parent (ID {}): avg score {:.3}",
+                parent.id,
+                parent.average_score()
+            );
 
             // Sample minibatch
-            let minibatch: Vec<Example> = trainset
-                .iter()
-                .take(self.minibatch_size)
-                .cloned()
-                .collect();
+            let minibatch: Vec<Example> =
+                trainset.iter().take(self.minibatch_size).cloned().collect();
 
             // Apply parent instruction to module
             {
@@ -449,7 +454,7 @@ impl GEPA {
             let new_instruction = self
                 .generate_mutation(&parent.instruction, &traces, task_desc)
                 .await?;
-            
+
             total_lm_calls += 2; // Reflection + proposal
 
             println!("  Generated new instruction through reflection");
@@ -500,7 +505,10 @@ impl GEPA {
             .clone();
 
         println!("\nGEPA optimization complete");
-        println!("  Best average score: {:.3}", best_candidate.average_score());
+        println!(
+            "  Best average score: {:.3}",
+            best_candidate.average_score()
+        );
         println!("  Total rollouts: {}", total_rollouts);
         println!("  Total LM calls: {}", total_lm_calls);
 
