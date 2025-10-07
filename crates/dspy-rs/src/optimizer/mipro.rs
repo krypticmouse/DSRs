@@ -380,10 +380,10 @@ impl MIPROv2 {
                 instruction_generator.forward_with_config(input, lm).await
             };
 
-            if let Ok(pred) = result {
-                if let Some(instruction) = pred.data.get("instruction").and_then(|v| v.as_str()) {
-                    candidates.push(instruction.to_string());
-                }
+            if let Ok(pred) = result
+                && let Some(instruction) = pred.data.get("instruction").and_then(|v| v.as_str())
+            {
+                candidates.push(instruction.to_string());
             }
 
             if (i + 1) % 3 == 0 || i == num_candidates - 1 {

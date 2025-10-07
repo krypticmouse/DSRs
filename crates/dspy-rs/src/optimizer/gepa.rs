@@ -414,11 +414,11 @@ impl GEPA {
             println!("\nGeneration {}/{}", generation + 1, self.num_iterations);
 
             // Check budget constraints
-            if let Some(max_rollouts) = self.max_rollouts {
-                if total_rollouts >= max_rollouts {
-                    println!("  Budget limit reached: max rollouts");
-                    break;
-                }
+            if let Some(max_rollouts) = self.max_rollouts
+                && total_rollouts >= max_rollouts
+            {
+                println!("  Budget limit reached: max rollouts");
+                break;
             }
 
             // Sample candidate from frontier (proportional to coverage)
