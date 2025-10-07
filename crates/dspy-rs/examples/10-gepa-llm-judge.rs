@@ -8,11 +8,10 @@
 /// ```
 /// OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 /// ```
-
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Signature, Optimizable};
+use dsrs_macros::{Optimizable, Signature};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -23,13 +22,13 @@ use tokio::sync::Mutex;
 #[Signature(cot)]
 struct MathWordProblem {
     /// Solve the math word problem step by step. Show your work clearly.
-    
+
     #[input]
     pub problem: String,
-    
+
     #[output]
     pub reasoning: String,
-    
+
     #[output]
     pub answer: String,
 }
@@ -43,19 +42,19 @@ struct MathJudge {
     /// You are an expert math teacher evaluating student work. Analyze both
     /// the final answer and the reasoning process. Be specific about what
     /// went wrong or what was done well.
-    
+
     #[input(desc = "The math problem that was given")]
     pub problem: String,
-    
+
     #[input(desc = "The expected correct answer")]
     pub expected_answer: String,
-    
+
     #[input(desc = "The student's answer")]
     pub student_answer: String,
-    
+
     #[input(desc = "The student's reasoning/work shown")]
     pub student_reasoning: String,
-    
+
     #[output(desc = "Detailed evaluation of the work")]
     pub evaluation: String,
 }
@@ -69,10 +68,10 @@ struct MathSolver {
     // The main predictor we want to optimize
     #[parameter]
     solver: Predict,
-    
+
     // The judge predictor (not optimized, just used for evaluation)
     judge: Predict,
-    
+
     // LM for the judge (could be different/cheaper model)
     judge_lm: Arc<Mutex<LM>>,
 }
@@ -101,37 +100,35 @@ impl Evaluator for MathSolver {
 // ============================================================================
 
 impl FeedbackEvaluator for MathSolver {
-    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) 
-        -> FeedbackMetric 
-    {
+    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) -> FeedbackMetric {
         // Extract the problem and answers
         let problem = example
             .get("problem", None)
             .as_str()
             .unwrap_or("")
             .to_string();
-        
+
         let expected = example
             .get("expected_answer", None)
             .as_str()
             .unwrap_or("")
             .to_string();
-        
+
         let student_answer = prediction
             .get("answer", None)
             .as_str()
             .unwrap_or("")
             .to_string();
-        
+
         let student_reasoning = prediction
             .get("reasoning", None)
             .as_str()
             .unwrap_or("No reasoning provided")
             .to_string();
-        
+
         // Quick check: is the answer exactly correct?
         let answer_matches = student_answer.trim() == expected.trim();
-        
+
         // Use LLM judge to analyze the reasoning quality
         // This is where the magic happens - the judge provides rich feedback
         let judge_input = example! {
@@ -140,10 +137,11 @@ impl FeedbackEvaluator for MathSolver {
             "student_answer": "input" => &student_answer,
             "student_reasoning": "input" => &student_reasoning
         };
-        
-        let judge_output = match self.judge
+
+        let judge_output = match self
+            .judge
             .forward_with_config(judge_input, Arc::clone(&self.judge_lm))
-            .await 
+            .await
         {
             Ok(output) => output,
             Err(_) => {
@@ -151,56 +149,64 @@ impl FeedbackEvaluator for MathSolver {
                 let score = if answer_matches { 1.0 } else { 0.0 };
                 let simple_feedback = format!(
                     "Problem: {}\nExpected: {}\nPredicted: {}\nAnswer: {}",
-                    problem, expected, student_answer,
-                    if answer_matches { "CORRECT" } else { "INCORRECT" }
+                    problem,
+                    expected,
+                    student_answer,
+                    if answer_matches {
+                        "CORRECT"
+                    } else {
+                        "INCORRECT"
+                    }
                 );
                 return FeedbackMetric::new(score, simple_feedback);
             }
         };
-        
+
         let judge_evaluation = judge_output
             .get("evaluation", None)
             .as_str()
             .unwrap_or("Unable to evaluate")
             .to_string();
-        
+
         // Calculate score based on answer correctness and reasoning quality
         // The judge's evaluation helps us assign partial credit
         let score = if answer_matches {
             // Correct answer - check if reasoning is also sound
-            if judge_evaluation.to_lowercase().contains("sound reasoning") 
-                || judge_evaluation.to_lowercase().contains("correct approach") {
-                1.0  // Perfect: right answer, good reasoning
+            if judge_evaluation.to_lowercase().contains("sound reasoning")
+                || judge_evaluation.to_lowercase().contains("correct approach")
+            {
+                1.0 // Perfect: right answer, good reasoning
             } else {
-                0.7  // Right answer but flawed reasoning (lucky guess?)
+                0.7 // Right answer but flawed reasoning (lucky guess?)
             }
         } else {
             // Wrong answer - check if there's any partial credit
             if judge_evaluation.to_lowercase().contains("correct approach")
-                || judge_evaluation.to_lowercase().contains("good start") {
-                0.3  // Wrong answer but some valid steps
+                || judge_evaluation.to_lowercase().contains("good start")
+            {
+                0.3 // Wrong answer but some valid steps
             } else {
-                0.0  // Completely wrong
+                0.0 // Completely wrong
             }
         };
-        
+
         // Construct rich textual feedback
         // This combines factual info with the judge's analysis
         let mut feedback = String::new();
-        
+
         feedback.push_str(&format!("Problem: {}\n", problem));
         feedback.push_str(&format!("Expected: {}\n", expected));
         feedback.push_str(&format!("Predicted: {}\n", student_answer));
-        
+
         if answer_matches {
             feedback.push_str("Answer: CORRECT\n\n");
         } else {
             feedback.push_str("Answer: INCORRECT\n\n");
         }
-        
+
         feedback.push_str("Reasoning Quality Analysis:\n");
         feedback.push_str(&judge_evaluation);
-        
+
         // Return the feedback metric with score and rich text
         FeedbackMetric::new(score, feedback)
     }
@@ -215,11 +221,11 @@ async fn main() -> Result<()> {
     println!("GEPA with LLM-as-a-Judge Example\n");
     println!("This example shows how to use an LLM judge to automatically");
     println!("generate rich feedback for optimizing a math solver.\n");
-    
+
     // Setup: Configure the LLM
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .expect("OPENAI_API_KEY environment variable not set");
-    
+    let api_key =
+        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
+
     // Main LM for the task
     let task_lm = LM::builder()
         .api_key(api_key.clone().into())
@@ -230,20 +236,20 @@ async fn main() -> Result<()> {
                 .build(),
         )
         .build();
-    
+
     // Judge LM (could use a different/cheaper model)
     let judge_lm = LM::builder()
         .api_key(api_key.into())
         .config(
             LMConfig::builder()
                 .model("gpt-4o-mini".to_string())
-                .temperature(0.3)  // Lower temp for more consistent judging
+                .temperature(0.3) // Lower temp for more consistent judging
                 .build(),
         )
         .build();
-    
+
     configure(task_lm, ChatAdapter);
-    
+
     // Create training examples
     let trainset = vec![
         example! {
@@ -267,72 +273,87 @@ async fn main() -> Result<()> {
             "expected_answer": "input" => "30"
         },
     ];
-    
+
     // Create the module
     let mut module = MathSolver::builder()
         .solver(Predict::new(MathWordProblem::new()))
         .judge(Predict::new(MathJudge::new()))
         .judge_lm(Arc::new(Mutex::new(judge_lm)))
         .build();
-    
+
     // Evaluate baseline performance
     println!("Step 1: Baseline Performance");
     println!("Testing the solver before optimization...\n");
     let baseline_score = module.evaluate(trainset.clone()).await;
     println!("  Baseline average score: {:.3}\n", baseline_score);
-    
+
     // Configure GEPA optimizer
     println!("Step 2: Configure GEPA");
     println!("Setting up the optimizer with budget controls...\n");
-    
+
     let gepa = GEPA::builder()
-        .num_iterations(3)      // Fewer iterations for demo
-        .minibatch_size(3)       // Smaller batches
+        .num_iterations(3) // Fewer iterations for demo
+        .minibatch_size(3) // Smaller batches
         .temperature(0.9)
         .track_stats(true)
         .maybe_max_lm_calls(Some(100)) // Important: we're using 2x LM calls (task + judge)
         .build();
-    
+
     // Run GEPA optimization
     println!("Step 3: Run GEPA Optimization");
     println!("The judge will analyze reasoning quality and provide feedback...\n");
-    
-    let result = gepa.compile_with_feedback(&mut module, trainset.clone()).await?;
-    
+
+    let result = gepa
+        .compile_with_feedback(&mut module, trainset.clone())
+        .await?;
+
     // Display results
     println!("\nStep 4: Results");
     println!("===============\n");
     println!("Optimization complete!");
-    println!("  Best average score: {:.3}", result.best_candidate.average_score());
-    println!("  Improvement: {:.3}", result.best_candidate.average_score() - baseline_score);
+    println!(
+        "  Best average score: {:.3}",
+        result.best_candidate.average_score()
+    );
+    println!(
+        "  Improvement: {:.3}",
+        result.best_candidate.average_score() - baseline_score
+    );
     println!("  Total rollouts: {}", result.total_rollouts);
-    println!("  Total LM calls: {} (includes judge evaluations)", result.total_lm_calls);
-    
+    println!(
+        "  Total LM calls: {} (includes judge evaluations)",
+        result.total_lm_calls
+    );
+
     println!("\nEvolution over time:");
     for (generation, score) in &result.evolution_history {
         println!("  Generation {}: {:.3}", generation, score);
     }
-    
+
     println!("\nOptimized instruction:");
     println!("  {}", result.best_candidate.instruction);
-    
+
     // Test the optimized solver
     println!("\nStep 5: Test Optimized Solver");
     println!("==============================\n");
-    
+
     let test_problem = example! {
         "problem": "input" => "A store sells pencils for $0.25 each. If you buy 8 pencils, how much will you pay?",
         "expected_answer": "input" => "2"
     };
-    
+
     let test_prediction = module.forward(test_problem.clone()).await?;
-    let test_feedback = module.feedback_metric(&test_problem, &test_prediction).await;
-    
-    println!("Test problem: A store sells pencils for $0.25 each. If you buy 8 pencils, how much will you pay?");
+    let test_feedback = module
+        .feedback_metric(&test_problem, &test_prediction)
+        .await;
+
+    println!(
+        "Test problem: A store sells pencils for $0.25 each. If you buy 8 pencils, how much will you pay?"
+    );
     println!("\nAnswer: {}", test_prediction.get("answer", None));
     println!("Score: {:.3}\n", test_feedback.score);
     println!("Detailed Feedback from Judge:");
     println!("{}", test_feedback.feedback);
-    
+
     Ok(())
 }
