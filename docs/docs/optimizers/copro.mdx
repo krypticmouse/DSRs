@@ -1,0 +1,131 @@
+---
+title: 'COPRO'
+description: 'Fast iterative prompt refinement'
+icon: 'rotate'
+---
+
+COPRO (Collaborative Prompt Optimizer) is a simple but effective optimizer that iteratively refines prompts through generation and evaluation cycles.
+
+## How it Works
+
+COPRO uses a straightforward approach:
+
+1. **Generate candidates**: Create multiple prompt variations using an LLM
+2. **Evaluate**: Test each candidate on your training data
+3. **Refine**: Use the best candidates to generate improved versions
+4. **Repeat**: Continue for a fixed number of depth iterations
+
+## Configuration
+
+```rust
+let copro = COPRO::builder()
+    .breadth(10)              // Number of candidates per iteration
+    .depth(3)                 // Number of refinement iterations
+    .init_temperature(1.4)    // Temperature for generation
+    .track_stats(false)       // Track optimization statistics
+    .build();
+```
+
+## Usage Example
+
+```rust
+use dspy_rs::{COPRO, Optimizer};
+
+#[derive(Builder, Optimizable)]
+struct MyModule {
+    #[parameter]
+    predictor: Predict,
+}
+
+impl Module for MyModule {
+    async fn forward(&self, inputs: Example) -> Result<Prediction> {
+        self.predictor.forward(inputs).await
+    }
+}
+
+impl Evaluator for MyModule {
+    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
+        // Your evaluation logic
+        if prediction.get("answer", None) == example.get("expected", None) {
+            1.0
+        } else {
+            0.0
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let lm = LM::builder()...build();
+    configure(lm, ChatAdapter);
+    
+    let mut module = MyModule::builder()...build();
+    
+    let copro = COPRO::builder()
+        .breadth(10)
+        .depth(3)
+        .build();
+    
+    copro.compile(&mut module, trainset).await?;
+    
+    Ok(())
+}
+```
+
+## When to Use COPRO
+
+**Best for:**
+- Quick iteration cycles
+- Simple tasks
+- Limited compute budget
+- When you need results fast
+
+**Avoid when:**
+- You need best possible quality (use MIPROv2 or GEPA)
+- Task has complex failure modes (use GEPA)
+- You want to leverage prompting best practices (use MIPROv2)
+
+## Comparison with Other Optimizers
+
+| Feature | COPRO | MIPROv2 | GEPA |
+|---------|-------|---------|------|
+| **Speed** | Fast | Slow | Medium |
+| **Quality** | Good | Better | Best |
+| **Feedback** | Score | Score | Score + Text |
+| **Diversity** | Low | Medium | High |
+| **Setup** | Simple | Moderate | Moderate |
+
+## Configuration Details
+
+### Breadth
+Number of candidate prompts generated at each iteration. Higher breadth means more exploration but more compute.
+
+Recommended: 5-15
+
+### Depth
+Number of refinement iterations. Each iteration builds on the best candidates from the previous one.
+
+Recommended: 2-5
+
+### Temperature
+Controls randomness in prompt generation. Higher temperature means more diverse candidates.
+
+Recommended: 1.0-1.5
+
+### Track Stats
+When enabled, COPRO tracks detailed statistics about all evaluated candidates and their scores over time.
+
+## Implementation Notes
+
+COPRO maintains:
+- All evaluated candidates with their scores
+- Best candidates from each iteration
+- History of improvements over iterations
+
+The algorithm avoids re-evaluating candidates it has already seen by caching results.
+
+## Examples
+
+<Card title="COPRO Examples" icon="code" href="https://github.com/krypticmouse/DSRs/tree/main/crates/dspy-rs/examples">
+  See examples 03-evaluate-hotpotqa.rs and 04-optimize-hotpotqa.rs
+</Card>

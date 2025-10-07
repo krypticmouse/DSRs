@@ -1,4 +1,8 @@
-# Using LLM-as-a-Judge with GEPA
+---
+title: 'GEPA with LLM-as-Judge'
+description: 'Use an LLM judge to automatically generate rich feedback'
+icon: 'gavel'
+---
 
 This guide explains how to use an LLM judge to automatically generate rich textual feedback for GEPA optimization, making it easier to optimize complex tasks where manual feedback rules are hard to codify.
 
@@ -18,21 +22,26 @@ Better Task LM prompt
 
 ## Why Use LLM-as-a-Judge?
 
-**Good for:**
-- Subjective quality assessment (writing style, helpfulness, clarity)
-- Complex reasoning evaluation (is the logic sound?)
-- Tasks where rules are hard to codify
-- Analyzing reasoning quality beyond just answer correctness
-
-**When to avoid:**
-- You have deterministic checks (unit tests, schema validation)
-- Verifiable correctness (code compilation, exact matches)
-- Need fast/cheap evaluation
-- Simple binary pass/fail
+<Tabs>
+  <Tab title="Good For">
+    - Subjective quality assessment (writing style, helpfulness, clarity)
+    - Complex reasoning evaluation (is the logic sound?)
+    - Tasks where rules are hard to codify
+    - Analyzing reasoning quality beyond just answer correctness
+  </Tab>
+  <Tab title="When to Avoid">
+    - You have deterministic checks (unit tests, schema validation)
+    - Verifiable correctness (code compilation, exact matches)
+    - Need fast/cheap evaluation
+    - Simple binary pass/fail
+  </Tab>
+</Tabs>
 
 ## Complete Example Walkthrough
 
-See `examples/10-gepa-llm-judge.rs` for a full working example. Here are the key pieces:
+<Card title="Full Working Example" icon="code" href="https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/10-gepa-llm-judge.rs">
+  See the complete implementation with step-by-step comments
+</Card>
 
 ### 1. Task Signature with Reasoning
 
@@ -155,36 +164,45 @@ impl FeedbackEvaluator for MathSolver {
 
 ## Key Benefits
 
-**1. Catches lucky guesses:**
-```
-Answer: Correct (1.0)
-But reasoning: "I just multiplied random numbers"
-Score: 0.7 (penalized for bad reasoning)
-```
+<AccordionGroup>
+  <Accordion title="Catches Lucky Guesses">
+    ```
+    Answer: Correct (1.0)
+    But reasoning: "I just multiplied random numbers"
+    Score: 0.7 (penalized for bad reasoning)
+    ```
+    
+    The judge identifies when the model got the right answer for the wrong reasons.
+  </Accordion>
 
-**2. Rewards partial progress:**
-```
-Answer: Wrong
-But reasoning: "Correct approach, arithmetic error in final step"
-Score: 0.3 (partial credit)
-```
+  <Accordion title="Rewards Partial Progress">
+    ```
+    Answer: Wrong
+    But reasoning: "Correct approach, arithmetic error in final step"
+    Score: 0.3 (partial credit)
+    ```
+    
+    The judge recognizes valid methodology even when the final answer is wrong.
+  </Accordion>
 
-**3. Identifies systematic issues:**
-The judge notices patterns like:
-- "Model consistently skips showing intermediate steps"
-- "Model confuses similar concepts (area vs perimeter)"
-- "Model doesn't check units in answers"
-
-GEPA's reflection can then say:
-> "Add explicit instruction to show all intermediate steps and verify units"
+  <Accordion title="Identifies Systematic Issues">
+    The judge notices patterns like:
+    - "Model consistently skips showing intermediate steps"
+    - "Model confuses similar concepts (area vs perimeter)"
+    - "Model doesn't check units in answers"
+    
+    GEPA's reflection can then say:
+    > "Add explicit instruction to show all intermediate steps and verify units"
+  </Accordion>
+</AccordionGroup>
 
 ## Cost Considerations
 
-LLM judges double your evaluation cost since every prediction requires:
-1. Task LM call (generate answer)
-2. Judge LM call (evaluate quality)
+<Warning>
+LLM judges double your evaluation cost since every prediction requires both a task LM call and a judge LM call.
+</Warning>
 
-**Budget accordingly:**
+Budget accordingly:
 
 ```rust
 GEPA::builder()
@@ -194,13 +212,14 @@ GEPA::builder()
     .build()
 ```
 
-**Optimization tips:**
+### Optimization Tips
+
 - Use a cheaper model for judging (gpt-4o-mini vs gpt-4)
 - Judge only failed examples (not ones that passed)
 - Cache judge evaluations for identical outputs
 - Use parallel evaluation to reduce wall-clock time
 
-## When to Use Hybrid Approach
+## Hybrid Approach
 
 Best results often come from combining explicit checks with LLM judging:
 
@@ -236,19 +255,27 @@ async fn feedback_metric(&self, example: &Example, prediction: &Prediction)
 }
 ```
 
-## Example Output
+## Example Evolution
 
 When you run the example, GEPA will evolve prompts based on judge feedback:
 
-```
-Baseline: "Solve the math word problem step by step"
-  → Some solutions skip steps
-  → Judge: "Reasoning incomplete, jumped from step 2 to answer"
-
-After GEPA:
-  → "Solve step by step. Show ALL intermediate calculations. Label each step clearly."
-  → Judge: "Sound reasoning, all steps shown clearly"
-```
+<Steps>
+  <Step title="Baseline">
+    Instruction: "Solve the math word problem step by step"
+    
+    Result: Some solutions skip steps
+    
+    Judge: "Reasoning incomplete, jumped from step 2 to answer"
+  </Step>
+  
+  <Step title="After GEPA">
+    Instruction: "Solve step by step. Show ALL intermediate calculations. Label each step clearly."
+    
+    Result: Complete solutions with all steps shown
+    
+    Judge: "Sound reasoning, all steps shown clearly"
+  </Step>
+</Steps>
 
 The judge's analysis becomes the signal that drives prompt improvement.
 
