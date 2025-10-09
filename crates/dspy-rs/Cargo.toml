@@ -37,6 +37,8 @@ regex = "1.11.2"
 reqwest = { version = "0.12.23", features = ["blocking"] }
 kdam = "0.6.3"
 rand = "0.8.5"
+foyer = { version = "0.20.0", features = ["serde"]}
+tempfile = "3.23.0"
 
 [features]
 parquet = ["dep:parquet", "dep:arrow"]

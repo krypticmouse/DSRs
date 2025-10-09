@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use super::Adapter;
-use crate::utils::get_iter_from_value;
+use crate::serde_utils::get_iter_from_value;
 use crate::{Chat, Example, LM, Message, MetaSignature, Prediction};
 
 #[derive(Default, Clone)]
