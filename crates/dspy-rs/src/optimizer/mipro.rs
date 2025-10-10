@@ -12,7 +12,6 @@ use crate as dspy_rs;
 ///    - Execution traces
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
-
 use crate::{
     Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
     example, get_lm,

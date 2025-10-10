@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use super::Adapter;
 use crate::serde_utils::get_iter_from_value;
-use crate::{Chat, Example, LM, Message, MetaSignature, Prediction, Cache};
+use crate::{Cache, Chat, Example, LM, Message, MetaSignature, Prediction};
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -283,23 +283,38 @@ impl Adapter for ChatAdapter {
         signature: &dyn MetaSignature,
         inputs: Example,
     ) -> Result<Prediction> {
-        let local_lm = lm.lock().await;
-        if local_lm.config.cache {
-            if let Some(cache) = local_lm.cache_handler.as_ref() {
+        // Check cache first (release lock immediately after checking)
+        {
+            let local_lm = lm.lock().await;
+            if local_lm.config.cache
+                && let Some(cache) = local_lm.cache_handler.as_ref()
+            {
                 let cache_key = inputs.clone();
                 if let Some(cached) = cache.get(cache_key).await? {
                     return Ok(cached);
                 }
             }
-        }
+        } // Lock is released here
 
-        let messages = self.format(signature, inputs);
+        let messages = self.format(signature, inputs.clone());
         let (response, usage) = lm.lock().await.call(messages, "predict").await?;
         let output = self.parse_response(signature, response);
 
-        Ok(Prediction {
+        let prediction = Prediction {
             data: output,
             lm_usage: usage,
-        })
+        };
+
+        // Store in cache if enabled
+        {
+            let local_lm = lm.lock().await;
+            if local_lm.config.cache
+                && let Some(cache) = local_lm.cache_handler.as_ref()
+            {
+                cache.insert(inputs, prediction.clone())?;
+            }
+        }
+
+        Ok(prediction)
     }
 }

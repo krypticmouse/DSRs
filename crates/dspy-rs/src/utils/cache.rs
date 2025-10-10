@@ -6,6 +6,9 @@ use tempfile;
 
 use crate::{Example, Prediction};
 
+// Type alias to simplify HybridCache type
+type CacheEntry = Vec<(String, Value)>;
+
 #[async_trait]
 pub trait Cache: Send + Sync {
     async fn new() -> Self;
@@ -15,7 +18,7 @@ pub trait Cache: Send + Sync {
 
 #[derive(Clone)]
 pub struct ResponseCache {
-    handler: HybridCache<Vec<(String, Value)>, Vec<(String, Value)>>,
+    handler: HybridCache<CacheEntry, CacheEntry>,
 }
 
 #[async_trait]
@@ -28,19 +31,18 @@ impl Cache for ResponseCache {
             .build()
             .unwrap();
 
-        let hybrid: HybridCache<Vec<(String, Value)>, Vec<(String, Value)>> =
-            HybridCacheBuilder::new()
-                .memory(64 * 1024 * 1024)
-                .storage()
-                .with_engine_config(BlockEngineBuilder::new(device))
-                .build()
-                .await
-                .unwrap();
+        let hybrid: HybridCache<CacheEntry, CacheEntry> = HybridCacheBuilder::new()
+            .memory(64 * 1024 * 1024)
+            .storage()
+            .with_engine_config(BlockEngineBuilder::new(device))
+            .build()
+            .await
+            .unwrap();
         Self { handler: hybrid }
     }
 
     async fn get(&self, key: Example) -> Result<Option<Prediction>> {
-        let key = key.into_iter().collect::<Vec<(String, Value)>>();
+        let key = key.into_iter().collect::<CacheEntry>();
 
         let value = self.handler.get(&key).await?.map(|v| v.value().clone());
 
@@ -48,8 +50,8 @@ impl Cache for ResponseCache {
     }
 
     fn insert(&self, key: Example, value: Prediction) -> Result<()> {
-        let key = key.into_iter().collect::<Vec<(String, Value)>>();
-        let value = value.into_iter().collect::<Vec<(String, Value)>>();
+        let key = key.into_iter().collect::<CacheEntry>();
+        let value = value.into_iter().collect::<CacheEntry>();
         self.handler.insert(key, value);
 
         Ok(())
