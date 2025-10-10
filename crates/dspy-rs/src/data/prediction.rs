@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::{collections::HashMap, ops::Index};
 
 use crate::LmUsage;
@@ -40,5 +41,23 @@ impl Index<String> for Prediction {
 
     fn index(&self, index: String) -> &Self::Output {
         &self.data[&index]
+    }
+}
+
+impl IntoIterator for Prediction {
+    type Item = (String, Value);
+    type IntoIter = std::collections::hash_map::IntoIter<String, Value>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
+impl From<Vec<(String, Value)>> for Prediction {
+    fn from(value: Vec<(String, Value)>) -> Self {
+        Self {
+            data: value.into_iter().collect(),
+            lm_usage: LmUsage::default(),
+        }
     }
 }

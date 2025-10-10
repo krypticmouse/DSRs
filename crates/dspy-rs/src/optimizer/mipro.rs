@@ -12,19 +12,6 @@ use crate as dspy_rs;
 ///    - Execution traces
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
-///
-/// ## Example
-///
-/// ```rust,ignore
-/// use dspy_rs::{MIPROv2, Optimizer};
-///
-/// let optimizer = MIPROv2::builder()
-///     .num_candidates(10)
-///     .num_trials(20)
-///     .build();
-///
-/// optimizer.compile(&mut module, train_examples).await?;
-/// ```
 use crate::{
     Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
     example, get_lm,

@@ -10,6 +10,7 @@ use anyhow::Result;
 use async_openai::types::CreateChatCompletionRequestArgs;
 use async_openai::{Client, config::OpenAIConfig};
 
+use crate::utils::cache::{Cache, ResponseCache};
 use bon::Builder;
 use secrecy::{ExposeSecretMut, SecretString};
 
@@ -46,15 +47,20 @@ pub struct LM {
     #[builder(default = Vec::new())]
     pub history: Vec<LMResponse>,
     client: Option<Client<OpenAIConfig>>,
+    pub cache_handler: Option<ResponseCache>,
 }
 
 impl LM {
-    fn setup_client(&mut self) {
+    pub async fn setup_client(&mut self) {
         let config = OpenAIConfig::new()
             .with_api_key(self.api_key.expose_secret_mut().to_string())
             .with_api_base(self.base_url.clone());
 
         self.client = Some(Client::with_config(config));
+
+        if self.config.cache {
+            self.cache_handler = Some(ResponseCache::new().await);
+        }
     }
 
     pub async fn call(&mut self, messages: Chat, signature: &str) -> Result<(Message, LmUsage)> {
@@ -65,7 +71,7 @@ impl LM {
                 self.config.model = model_id.to_string();
                 self.base_url = get_base_url(provider);
             }
-            self.setup_client();
+            self.setup_client().await;
         }
 
         let request_messages = messages.get_async_openai_messages();
