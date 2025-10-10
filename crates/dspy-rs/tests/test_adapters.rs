@@ -1,8 +1,10 @@
 use schemars::JsonSchema;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use dspy_rs::{
-    Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, Signature, adapter::Adapter,
-    hashmap, sign,
+    Cache, Chat, ChatAdapter, DummyLM, Example, LM, LMConfig, Message, MetaSignature, Prediction,
+    Signature, adapter::Adapter, hashmap, sign,
 };
 
 #[tokio::test]
@@ -424,4 +426,145 @@ async fn test_chat_adapter_demo_format_multiple_fields() {
             .unwrap()
             .contains("[[ ## completed ## ]]")
     );
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_with_cache_hit() {
+    let signature = sign! {
+        (question: String) -> answer: String
+    };
+
+    // Create LM with cache enabled
+    let mut config = LMConfig::default();
+    config.cache = true;
+    
+    let mut lm = LM::builder()
+        .api_key("test_key".to_string().into())
+        .config(config)
+        .build();
+    
+    // Setup the LM client and cache
+    lm.setup_client().await;
+    
+    let adapter = ChatAdapter;
+    let lm = Arc::new(Mutex::new(lm));
+    
+    // Create test input
+    let input = Example::new(
+        hashmap! {
+            "question".to_string() => "What is 2 + 2?".to_string().into(),
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+    
+    // Mock the first response by inserting directly into cache
+    let mut output_data = std::collections::HashMap::new();
+    output_data.insert("answer".to_string(), serde_json::json!("4"));
+    let cached_prediction = Prediction::new(output_data, dspy_rs::LmUsage::default());
+    
+    // Insert into cache
+    {
+        let lm_guard = lm.lock().await;
+        if let Some(cache) = lm_guard.cache_handler.as_ref() {
+            cache.insert(input.clone(), cached_prediction.clone()).unwrap();
+        }
+    }
+    
+    // Call adapter - should hit cache
+    let result = adapter.call(lm.clone(), &signature, input.clone()).await.unwrap();
+    
+    assert_eq!(result.data.get("answer").unwrap(), &serde_json::json!("4"));
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_cache_miss_different_inputs() {
+    // Create LM with cache enabled
+    let mut config = LMConfig::default();
+    config.cache = true;
+    
+    let mut lm = LM::builder()
+        .api_key("test_key".to_string().into())
+        .config(config)
+        .build();
+    
+    // Setup the LM client and cache
+    lm.setup_client().await;
+    
+    let lm = Arc::new(Mutex::new(lm));
+    
+    // First input
+    let input1 = Example::new(
+        hashmap! {
+            "question".to_string() => "What is 2 + 2?".to_string().into(),
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+    
+    // Cache first input
+    let mut output1 = std::collections::HashMap::new();
+    output1.insert("answer".to_string(), serde_json::json!("4"));
+    let prediction1 = Prediction::new(output1, dspy_rs::LmUsage::default());
+    
+    {
+        let lm_guard = lm.lock().await;
+        if let Some(cache) = lm_guard.cache_handler.as_ref() {
+            cache.insert(input1.clone(), prediction1.clone()).unwrap();
+        }
+    }
+    
+    // Second (different) input
+    let input2 = Example::new(
+        hashmap! {
+            "question".to_string() => "What is 3 + 3?".to_string().into(),
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+    
+    // Check that second input is not cached
+    {
+        let lm_guard = lm.lock().await;
+        if let Some(cache) = lm_guard.cache_handler.as_ref() {
+            let cached = cache.get(input2.clone()).await.unwrap();
+            assert!(cached.is_none());
+        }
+    }
+    
+    // But first input should still be cached
+    {
+        let lm_guard = lm.lock().await;
+        if let Some(cache) = lm_guard.cache_handler.as_ref() {
+            let cached = cache.get(input1.clone()).await.unwrap();
+            assert!(cached.is_some());
+            assert_eq!(cached.unwrap().data.get("answer").unwrap(), &serde_json::json!("4"));
+        }
+    }
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_chat_adapter_cache_disabled() {
+    // Create LM with cache disabled
+    let mut config = LMConfig::default();
+    config.cache = false;
+    
+    let mut lm = LM::builder()
+        .api_key("test_key".to_string().into())
+        .config(config)
+        .build();
+    
+    // Setup the LM client (no cache will be initialized)
+    lm.setup_client().await;
+    
+    let lm = Arc::new(Mutex::new(lm));
+    
+    // Verify cache handler is None when cache is disabled
+    {
+        let lm_guard = lm.lock().await;
+        assert!(lm_guard.cache_handler.is_none());
+    }
 }

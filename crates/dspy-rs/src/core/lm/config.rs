@@ -23,6 +23,8 @@ pub struct LMConfig {
     #[builder(default = 42)]
     pub seed: i64,
     pub logit_bias: Option<HashMap<String, Value>>,
+    #[builder(default = false)]
+    pub cache: bool,
 }
 
 impl Default for LMConfig {

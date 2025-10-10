@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use super::Adapter;
 use crate::serde_utils::get_iter_from_value;
-use crate::{Chat, Example, LM, Message, MetaSignature, Prediction};
+use crate::{Chat, Example, LM, Message, MetaSignature, Prediction, Cache};
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -283,6 +283,16 @@ impl Adapter for ChatAdapter {
         signature: &dyn MetaSignature,
         inputs: Example,
     ) -> Result<Prediction> {
+        let local_lm = lm.lock().await;
+        if local_lm.config.cache {
+            if let Some(cache) = local_lm.cache_handler.as_ref() {
+                let cache_key = inputs.clone();
+                if let Some(cached) = cache.get(cache_key).await? {
+                    return Ok(cached);
+                }
+            }
+        }
+
         let messages = self.format(signature, inputs);
         let (response, usage) = lm.lock().await.call(messages, "predict").await?;
         let output = self.parse_response(signature, response);

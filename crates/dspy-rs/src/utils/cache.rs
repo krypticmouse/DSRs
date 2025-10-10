@@ -9,10 +9,11 @@ use crate::{Example, Prediction};
 #[async_trait]
 pub trait Cache: Send + Sync {
     async fn new() -> Self;
-    async fn get(&self, key: Example) -> Result<Prediction>;
+    async fn get(&self, key: Example) -> Result<Option<Prediction>>;
     fn insert(&self, key: Example, value: Prediction) -> Result<()>;
 }
 
+#[derive(Clone)]
 pub struct ResponseCache {
     handler: HybridCache<Vec<(String, Value)>, Vec<(String, Value)>>,
 }
@@ -38,12 +39,12 @@ impl Cache for ResponseCache {
         Self { handler: hybrid }
     }
 
-    async fn get(&self, key: Example) -> Result<Prediction> {
+    async fn get(&self, key: Example) -> Result<Option<Prediction>> {
         let key = key.into_iter().collect::<Vec<(String, Value)>>();
 
-        let value = self.handler.get(&key).await?.unwrap().value().clone();
+        let value = self.handler.get(&key).await?.map(|v| v.value().clone());
 
-        Ok(Prediction::from(value))
+        Ok(value.map(Prediction::from))
     }
 
     fn insert(&self, key: Example, value: Prediction) -> Result<()> {
