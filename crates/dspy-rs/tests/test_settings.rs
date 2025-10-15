@@ -3,6 +3,7 @@ use dspy_rs::{ChatAdapter, LM, LMConfig, configure, get_lm};
 use secrecy::SecretString;
 
 #[tokio::test]
+#[cfg_attr(miri, ignore)]
 async fn test_settings() {
     configure(
         LM::builder()
