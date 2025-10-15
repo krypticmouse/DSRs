@@ -20,7 +20,6 @@ use anyhow::{Context, Result};
 use bon::Builder;
 use dsrs_macros::Signature;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // ============================================================================
 // Signature Definitions for LLM-based Prompt Generation
@@ -304,11 +303,10 @@ impl MIPROv2 {
         let prediction = if let Some(mut pm) = self.prompt_model.clone() {
             pm.config.temperature = 0.7;
             description_generator
-                .forward_with_config(input, Arc::new(Mutex::new(pm)))
+                .forward_with_config(input, Arc::new(pm))
                 .await?
         } else {
             let lm = get_lm();
-            lm.lock().await.config.temperature = 0.7;
             description_generator.forward_with_config(input, lm).await?
         };
 
@@ -356,14 +354,10 @@ impl MIPROv2 {
             let result = if let Some(mut pm) = self.prompt_model.clone() {
                 pm.config.temperature = self.temperature;
                 instruction_generator
-                    .forward_with_config(input, Arc::new(Mutex::new(pm)))
+                    .forward_with_config(input, Arc::new(pm))
                     .await
             } else {
                 let lm = get_lm();
-                {
-                    let mut guard = lm.lock().await;
-                    guard.config.temperature = self.temperature;
-                }
                 instruction_generator.forward_with_config(input, lm).await
             };
 

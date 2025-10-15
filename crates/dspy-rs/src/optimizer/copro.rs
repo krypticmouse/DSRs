@@ -9,7 +9,6 @@ use dsrs_macros::Signature;
 use futures::future::join_all;
 use std::sync::Arc;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::LazyLock};
-use tokio::sync::Mutex;
 
 #[Signature]
 struct BasicGenerateInstruction {
@@ -134,13 +133,11 @@ impl Optimizer for COPRO {
                                     example! {
                                         "basic_instruction": "input" => inst
                                     },
-                                    Arc::new(Mutex::new(prompt_model)),
+                                    Arc::new(prompt_model),
                                 )
                                 .await
                         }));
                     } else {
-                        let lm = get_lm();
-                        lm.lock().await.config.temperature = self.init_temperature;
                         futures.push(Box::pin(async move {
                             BASIC_GENERATOR
                                 .forward_with_config(
@@ -363,14 +360,16 @@ impl Optimizer for COPRO {
                                 example! {
                                     "attempted_instructions": "input" => attempts
                                 },
-                                Arc::new(Mutex::new(prompt_model)),
+                                Arc::new(prompt_model),
                             )
                             .await
                     }));
                 } else {
-                    let lm = get_lm();
-                    lm.lock().await.config.temperature = self.init_temperature;
-                    lm.lock().await.config.n = self.breadth as u8;
+                    assert_eq!(
+                        get_lm().config.n,
+                        self.breadth as u8,
+                        "Breadth must be the same as `config.n` in lm config."
+                    );
                     let attempts = attempts_str.clone();
                     futures.push(Box::pin(async move {
                         REFINEMENT_GENERATOR

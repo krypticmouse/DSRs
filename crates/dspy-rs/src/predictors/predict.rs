@@ -1,6 +1,5 @@
 use indexmap::IndexMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::core::{MetaSignature, Optimizable};
 use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, adapter::Adapter};
@@ -30,7 +29,7 @@ impl super::Predictor for Predict {
     async fn forward_with_config(
         &self,
         inputs: Example,
-        lm: Arc<Mutex<LM>>,
+        lm: Arc<LM>,
     ) -> anyhow::Result<Prediction> {
         ChatAdapter.call(lm, self.signature.as_ref(), inputs).await
     }

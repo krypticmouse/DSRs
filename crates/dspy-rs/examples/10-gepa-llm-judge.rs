@@ -13,7 +13,6 @@ use bon::Builder;
 use dspy_rs::*;
 use dsrs_macros::{Optimizable, Signature};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 // ============================================================================
 // Step 1: Define the task signature with chain-of-thought reasoning
@@ -73,7 +72,7 @@ struct MathSolver {
     judge: Predict,
 
     // LM for the judge (could be different/cheaper model)
-    judge_lm: Arc<Mutex<LM>>,
+    judge_lm: Arc<LM>,
 }
 
 impl Module for MathSolver {
@@ -235,7 +234,8 @@ async fn main() -> Result<()> {
                 .temperature(0.7)
                 .build(),
         )
-        .build();
+        .build()
+        .await;
 
     // Judge LM (could use a different/cheaper model)
     let judge_lm = LM::builder()
@@ -246,7 +246,8 @@ async fn main() -> Result<()> {
                 .temperature(0.3) // Lower temp for more consistent judging
                 .build(),
         )
-        .build();
+        .build()
+        .await;
 
     configure(task_lm, ChatAdapter);
 
@@ -278,7 +279,7 @@ async fn main() -> Result<()> {
     let mut module = MathSolver::builder()
         .solver(Predict::new(MathWordProblem::new()))
         .judge(Predict::new(MathJudge::new()))
-        .judge_lm(Arc::new(Mutex::new(judge_lm)))
+        .judge_lm(Arc::new(judge_lm))
         .build();
 
     // Evaluate baseline performance

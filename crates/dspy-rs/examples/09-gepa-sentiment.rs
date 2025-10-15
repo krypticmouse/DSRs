@@ -128,7 +128,8 @@ async fn main() -> Result<()> {
                 .temperature(0.7)
                 .build(),
         )
-        .build();
+        .build()
+        .await;
 
     configure(lm.clone(), ChatAdapter);
 
