@@ -86,7 +86,8 @@ async fn main() {
                 model: "anthropic/claude-sonnet-4-20250514".to_string(),
                 ..LMConfig::default()
             })
-            .build(),
+            .build()
+            .await,
         ChatAdapter,
     );
 
@@ -114,7 +115,8 @@ async fn main() {
                 model: "google/gemini-2.0-flash".to_string(),
                 ..LMConfig::default()
             })
-            .build(),
+            .build()
+            .await,
         ChatAdapter,
     );
 

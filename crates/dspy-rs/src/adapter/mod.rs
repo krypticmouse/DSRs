@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[async_trait]
 pub trait Adapter: Send + Sync + 'static {
@@ -20,7 +19,7 @@ pub trait Adapter: Send + Sync + 'static {
     ) -> HashMap<String, Value>;
     async fn call(
         &self,
-        lm: Arc<Mutex<LM>>,
+        lm: Arc<LM>,
         signature: &dyn MetaSignature,
         inputs: Example,
     ) -> Result<Prediction>;

@@ -76,7 +76,8 @@ async fn main() -> Result<()> {
                 model: "openrouter/openai/gpt-4o-mini".to_string(),
                 ..LMConfig::default()
             })
-            .build(),
+            .build()
+            .await,
         ChatAdapter,
     );
 

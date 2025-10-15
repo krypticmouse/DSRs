@@ -34,7 +34,8 @@ async fn main() {
             model: "gpt-4o-mini".to_string(),
             ..LMConfig::default()
         })
-        .build();
+        .build()
+        .await;
     configure(lm, ChatAdapter);
 
     let example = example! {
@@ -45,6 +46,6 @@ async fn main() {
     let prediction = qa_rater.forward(example.clone()).await.unwrap();
     println!("Prediction: {prediction:?}");
 
-    let history = get_lm().lock().await.inspect_history(1);
+    let history = get_lm().inspect_history(1).await;
     println!("History: {history:?}");
 }

@@ -1,49 +1,51 @@
-use dspy_rs::{Cache, Chat, DummyLM, LM, LMConfig, LmUsage, Message};
+use dspy_rs::{Cache, Chat, DummyLM, Example, LM, LMConfig, LmUsage, Message, hashmap};
 use rstest::*;
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
 #[tokio::test]
 async fn test_dummy_lm() {
-    let mut dummy_lm = DummyLM::default();
-
-    assert_eq!(dummy_lm.history.len(), 0);
+    let dummy_lm = DummyLM::new().await;
 
     let chat = Chat::new(vec![
         Message::system("You are a helpful assistant."),
         Message::user("Hello, world!"),
     ]);
 
+    let example = Example::new(
+        hashmap! {
+            "input".to_string() => "test".to_string().into(),
+        },
+        vec!["input".to_string()],
+        vec![],
+    );
+
     let output = dummy_lm
-        .call(chat, "DummySignature", "Hello, world!".to_string())
+        .call(example.clone(), chat.clone(), "Hello, world!".to_string())
         .await
         .unwrap();
-    let choice = &output.0.content();
-    assert_eq!(choice, "Hello, world!");
-    assert_eq!(dummy_lm.history.len(), 1);
+    assert_eq!(output.output.content(), "Hello, world!");
 
-    // Check that the chat was stored in history
-    let stored_history = &dummy_lm.history[0];
-    assert_eq!(stored_history.chat.len(), 2);
+    // Verify the response structure
+    assert_eq!(output.chat.len(), 3); // original 2 messages + assistant response
     assert_eq!(
-        stored_history.chat.messages[0].content(),
+        output.chat.messages[0].content(),
         "You are a helpful assistant.".to_string(),
     );
     assert_eq!(
-        stored_history.chat.messages[1].content(),
+        output.chat.messages[1].content(),
+        "Hello, world!".to_string(),
+    );
+    assert_eq!(
+        output.chat.messages[2].content(),
         "Hello, world!".to_string(),
     );
 
-    let history = dummy_lm.inspect_history(1);
-    assert_eq!(history.len(), 1);
-    assert_eq!(history[0].chat.len(), 2);
-    assert_eq!(
-        history[0].chat.messages[0].content(),
-        "You are a helpful assistant.".to_string(),
-    );
-    assert_eq!(
-        history[0].chat.messages[1].content(),
-        "Hello, world!".to_string(),
-    );
+    // Check cache functionality if caching is enabled
+    if dummy_lm.config.cache {
+        let history = dummy_lm.inspect_history(1).await;
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].prompt, chat.to_json().to_string());
+    }
 }
 
 #[rstest]
@@ -90,13 +92,11 @@ async fn test_lm_with_cache_enabled() {
         ..Default::default()
     };
 
-    let mut lm = LM::builder()
+    let lm = LM::builder()
         .api_key("test_key".to_string().into())
         .config(config)
-        .build();
-
-    // Setup the LM client and cache
-    lm.setup_client().await;
+        .build()
+        .await;
 
     // Verify cache handler is initialized
     assert!(lm.cache_handler.is_some());
@@ -111,13 +111,11 @@ async fn test_lm_with_cache_disabled() {
         ..Default::default()
     };
 
-    let mut lm = LM::builder()
+    let lm = LM::builder()
         .api_key("test_key".to_string().into())
         .config(config)
-        .build();
-
-    // Setup the LM client
-    lm.setup_client().await;
+        .build()
+        .await;
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
@@ -132,18 +130,13 @@ async fn test_lm_cache_initialization_on_first_call() {
         ..Default::default()
     };
 
-    let mut lm = LM::builder()
+    let lm = LM::builder()
         .api_key("test_key".to_string().into())
         .config(config)
-        .build();
+        .build()
+        .await;
 
-    // Initially, cache_handler should be None
-    assert!(lm.cache_handler.is_none());
-
-    // Setup happens on first call
-    lm.setup_client().await;
-
-    // After setup, cache_handler should be initialized
+    // After build, cache_handler should be initialized
     assert!(lm.cache_handler.is_some());
 }
 
@@ -159,12 +152,11 @@ async fn test_lm_cache_direct_operations() {
         ..Default::default()
     };
 
-    let mut lm = LM::builder()
+    let lm = LM::builder()
         .api_key("test_key".to_string().into())
         .config(config)
-        .build();
-
-    lm.setup_client().await;
+        .build()
+        .await;
 
     // Get cache handler
     let cache = lm
@@ -181,7 +173,7 @@ async fn test_lm_cache_direct_operations() {
     let key = Example::new(input_data, vec!["question".to_string()], vec![]);
 
     // Initially cache should be empty
-    let cached = cache.get(key.clone()).await.unwrap();
+    let cached = cache.lock().await.get(key.clone()).await.unwrap();
     assert!(cached.is_none());
 
     // Insert data
@@ -190,10 +182,20 @@ async fn test_lm_cache_direct_operations() {
     output_data.insert("confidence".to_string(), serde_json::json!(0.95));
     let value = Prediction::new(output_data, LmUsage::default());
 
-    cache.insert(key.clone(), value.clone()).unwrap();
+    // Create a channel to send the result
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    use dspy_rs::CallResult;
+    tx.send(CallResult {
+        prompt: "test prompt".to_string(),
+        prediction: value.clone(),
+    })
+    .await
+    .unwrap();
+
+    cache.lock().await.insert(key.clone(), rx).await.unwrap();
 
     // Now cache should return the value
-    let cached = cache.get(key).await.unwrap();
+    let cached = cache.lock().await.get(key).await.unwrap();
     assert!(cached.is_some());
 
     let cached_prediction = cached.unwrap();
@@ -224,12 +226,11 @@ async fn test_lm_cache_with_different_models() {
             ..Default::default()
         };
 
-        let mut lm = LM::builder()
+        let lm = LM::builder()
             .api_key("test_key".to_string().into())
             .config(config)
-            .build();
-
-        lm.setup_client().await;
+            .build()
+            .await;
 
         // Cache should be initialized regardless of model
         assert!(
@@ -252,12 +253,11 @@ async fn test_cache_with_complex_inputs() {
         ..Default::default()
     };
 
-    let mut lm = LM::builder()
+    let lm = LM::builder()
         .api_key("test_key".to_string().into())
         .config(config)
-        .build();
-
-    lm.setup_client().await;
+        .build()
+        .await;
 
     let cache = lm
         .cache_handler
@@ -308,15 +308,25 @@ async fn test_cache_with_complex_inputs() {
     );
 
     // Insert and retrieve
-    cache.insert(key.clone(), value.clone()).unwrap();
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    use dspy_rs::CallResult;
+    tx.send(CallResult {
+        prompt: "complex test prompt".to_string(),
+        prediction: value.clone(),
+    })
+    .await
+    .unwrap();
 
-    let cached = cache.get(key).await.unwrap().unwrap();
+    cache.lock().await.insert(key.clone(), rx).await.unwrap();
+
+    let cached = cache.lock().await.get(key).await.unwrap().unwrap();
     assert_eq!(cached.data.len(), 3);
     assert_eq!(cached.data.get("answer"), output.get("answer"));
     assert_eq!(cached.data.get("confidence"), output.get("confidence"));
     assert_eq!(cached.data.get("reasoning"), output.get("reasoning"));
-    // Note: lm_usage is reset to default when converting from cached Vec<(String, Value)>
-    // This is expected behavior due to the From<Vec<(String, Value)>> implementation
-    assert_eq!(cached.lm_usage.prompt_tokens, 0); // Default value
-    assert_eq!(cached.lm_usage.completion_tokens, 0); // Default value
+    // The cache stores and retrieves the full Prediction including usage stats
+    assert_eq!(cached.lm_usage.prompt_tokens, 50); // Preserved from original
+    assert_eq!(cached.lm_usage.completion_tokens, 30); // Preserved from original
+    assert_eq!(cached.lm_usage.total_tokens, 80); // Preserved from original
+    assert_eq!(cached.lm_usage.reasoning_tokens, Some(15)); // Preserved from original
 }

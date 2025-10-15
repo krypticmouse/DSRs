@@ -2,11 +2,10 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use super::Adapter;
 use crate::serde_utils::get_iter_from_value;
-use crate::{Cache, Chat, Example, LM, Message, MetaSignature, Prediction};
+use crate::{Cache, CallResult, Chat, Example, LM, Message, MetaSignature, Prediction};
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -279,40 +278,43 @@ impl Adapter for ChatAdapter {
 
     async fn call(
         &self,
-        lm: Arc<Mutex<LM>>,
+        lm: Arc<LM>,
         signature: &dyn MetaSignature,
         inputs: Example,
     ) -> Result<Prediction> {
         // Check cache first (release lock immediately after checking)
+        if lm.config.cache
+            && let Some(cache) = lm.cache_handler.as_ref()
         {
-            let local_lm = lm.lock().await;
-            if local_lm.config.cache
-                && let Some(cache) = local_lm.cache_handler.as_ref()
-            {
-                let cache_key = inputs.clone();
-                if let Some(cached) = cache.get(cache_key).await? {
-                    return Ok(cached);
-                }
+            let cache_key = inputs.clone();
+            if let Some(cached) = cache.lock().await.get(cache_key).await? {
+                return Ok(cached);
             }
-        } // Lock is released here
+        }
 
         let messages = self.format(signature, inputs.clone());
-        let (response, usage) = lm.lock().await.call(messages, "predict").await?;
-        let output = self.parse_response(signature, response);
+        let response = lm.call(messages).await?;
+        let prompt_str = response.chat.to_json().to_string();
+
+        let output = self.parse_response(signature, response.output);
 
         let prediction = Prediction {
             data: output,
-            lm_usage: usage,
+            lm_usage: response.usage,
         };
 
         // Store in cache if enabled
+        if lm.config.cache
+            && let Some(cache) = lm.cache_handler.as_ref()
         {
-            let local_lm = lm.lock().await;
-            if local_lm.config.cache
-                && let Some(cache) = local_lm.cache_handler.as_ref()
-            {
-                cache.insert(inputs, prediction.clone())?;
-            }
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            cache.lock().await.insert(inputs, rx).await?;
+            tx.send(CallResult {
+                prompt: prompt_str,
+                prediction: prediction.clone(),
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
         }
 
         Ok(prediction)

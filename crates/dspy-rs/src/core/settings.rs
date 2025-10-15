@@ -1,18 +1,17 @@
 use std::sync::{Arc, LazyLock, RwLock};
-use tokio::sync::Mutex;
 
 use super::LM;
 use crate::adapter::Adapter;
 
 pub struct Settings {
-    pub lm: Arc<Mutex<LM>>,
+    pub lm: Arc<LM>,
     pub adapter: Arc<dyn Adapter>,
 }
 
 impl Settings {
     pub fn new(lm: LM, adapter: impl Adapter + 'static) -> Self {
         Self {
-            lm: Arc::new(Mutex::new(lm)),
+            lm: Arc::new(lm),
             adapter: Arc::new(adapter),
         }
     }
@@ -21,7 +20,7 @@ impl Settings {
 pub static GLOBAL_SETTINGS: LazyLock<RwLock<Option<Settings>>> =
     LazyLock::new(|| RwLock::new(None));
 
-pub fn get_lm() -> Arc<Mutex<LM>> {
+pub fn get_lm() -> Arc<LM> {
     Arc::clone(&GLOBAL_SETTINGS.read().unwrap().as_ref().unwrap().lm)
 }
 

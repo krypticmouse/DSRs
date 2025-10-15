@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate as dspy_rs;
 use crate::{
@@ -328,7 +327,7 @@ impl GEPA {
         let reflection_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
             prompt_model.config.temperature = self.temperature;
             reflect_predictor
-                .forward_with_config(reflection_input, Arc::new(Mutex::new(prompt_model)))
+                .forward_with_config(reflection_input, Arc::new(prompt_model))
                 .await?
         } else {
             reflect_predictor.forward(reflection_input).await?
@@ -351,7 +350,7 @@ impl GEPA {
         let proposal_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
             prompt_model.config.temperature = self.temperature;
             propose_predictor
-                .forward_with_config(proposal_input, Arc::new(Mutex::new(prompt_model)))
+                .forward_with_config(proposal_input, Arc::new(prompt_model))
                 .await?
         } else {
             propose_predictor.forward(proposal_input).await?

@@ -89,7 +89,8 @@ async fn main() -> Result<()> {
     configure(
         LM::builder()
             .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build(),
+            .build()
+            .await,
         ChatAdapter {},
     );
 

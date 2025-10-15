@@ -5,16 +5,16 @@ use secrecy::SecretString;
 #[tokio::test]
 async fn test_settings() {
     configure(
-        LM::builder().api_key(SecretString::from("test")).build(),
+        LM::builder()
+            .api_key(SecretString::from("test"))
+            .build()
+            .await,
         ChatAdapter {},
     );
 
     let lm = get_lm();
-    assert_eq!(lm.lock().await.config.model, "gpt-4o-mini");
-    assert_eq!(
-        lm.lock().await.base_url,
-        "https://api.openai.com/v1".to_string()
-    );
+    assert_eq!(lm.config.model, "gpt-4o-mini");
+    assert_eq!(lm.base_url, "https://api.openai.com/v1".to_string());
 
     configure(
         LM::builder()
@@ -23,15 +23,13 @@ async fn test_settings() {
                 ..LMConfig::default()
             })
             .api_key(SecretString::from("test"))
-            .build(),
+            .build()
+            .await,
         ChatAdapter {},
     );
 
     let lm = get_lm();
 
-    assert_eq!(lm.lock().await.config.model, "gpt-4o");
-    assert_eq!(
-        lm.lock().await.base_url,
-        "https://api.openai.com/v1".to_string()
-    );
+    assert_eq!(lm.config.model, "gpt-4o");
+    assert_eq!(lm.base_url, "https://api.openai.com/v1".to_string());
 }
