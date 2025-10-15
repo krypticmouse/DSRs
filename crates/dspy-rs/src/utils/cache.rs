@@ -77,6 +77,7 @@ impl Cache for ResponseCache {
     }
 
     async fn get_history(&self, n: usize) -> Result<Vec<CallResult>> {
-        Ok(self.history_window[..n].to_vec())
+        let actual_n = n.min(self.history_window.len());
+        Ok(self.history_window[..actual_n].to_vec())
     }
 }

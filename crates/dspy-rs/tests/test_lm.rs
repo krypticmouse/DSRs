@@ -40,6 +40,9 @@ async fn test_dummy_lm() {
         "Hello, world!".to_string(),
     );
 
+    // sleep for 5 seconds
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
     // Check cache functionality if caching is enabled
     if dummy_lm.config.cache {
         let history = dummy_lm.inspect_history(1).await;

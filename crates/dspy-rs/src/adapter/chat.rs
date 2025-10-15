@@ -308,7 +308,15 @@ impl Adapter for ChatAdapter {
             && let Some(cache) = lm.cache_handler.as_ref()
         {
             let (tx, rx) = tokio::sync::mpsc::channel(1);
-            cache.lock().await.insert(inputs, rx).await?;
+            let cache_clone = cache.clone();
+            let inputs_clone = inputs.clone();
+
+            // Spawn the cache insert operation to avoid deadlock
+            tokio::spawn(async move {
+                let _ = cache_clone.lock().await.insert(inputs_clone, rx).await;
+            });
+
+            // Send the result to the cache
             tx.send(CallResult {
                 prompt: prompt_str,
                 prediction: prediction.clone(),

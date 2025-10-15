@@ -83,7 +83,7 @@ async fn main() {
                 std::env::var("ANTHROPIC_API_KEY").unwrap(),
             ))
             .config(LMConfig {
-                model: "anthropic/claude-sonnet-4-20250514".to_string(),
+                model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
                 ..LMConfig::default()
             })
             .build()

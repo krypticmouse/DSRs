@@ -73,19 +73,17 @@ impl<S: State> LMBuilder<S> {
         S::CacheHandler: IsUnset,
     {
         let mut lm = self.build_internal();
-        let mut config = lm.config.clone();
-        let mut base_url = lm.base_url.clone();
 
-        if config.model.contains("/") {
-            let model_str = config.model.clone();
+        if lm.config.model.contains("/") {
+            let model_str = lm.config.model.clone();
             let (provider, model_id) = model_str.split_once("/").unwrap();
-            config.model = model_id.to_string();
-            base_url = get_base_url_by_provider(provider).to_string();
+            lm.config.model = model_id.to_string();
+            lm.base_url = get_base_url_by_provider(provider).to_string();
         }
 
         let openai_config = OpenAIConfig::new()
             .with_api_key(lm.api_key.expose_secret().to_string())
-            .with_api_base(base_url);
+            .with_api_base(lm.base_url.clone());
         let client = Client::with_config(openai_config);
         lm.client = Some(client);
 
