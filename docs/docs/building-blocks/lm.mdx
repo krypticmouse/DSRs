@@ -158,7 +158,7 @@ for entry in history {
 
 ## LMConfig reference
 
-`LMConfig` centralizes inference settings. All fields have sensible defaults, so you can override only what you need. The builder exposes fluent setters for each field.
+`LMConfig` centralizes inference settings. All fields have sensible defaults, so you can override only what you need. The builder exposes setters for each field.
 
 | Field                   | Type                             | Default         | Notes                                                                           |
 |-------------------------|----------------------------------|-----------------|---------------------------------------------------------------------------------|
@@ -173,7 +173,7 @@ for entry in history {
 | `logit_bias`            | `Option<HashMap<String, Value>>` | `None`          | Token-level logit adjustments; ignored for Gemini models.                       |
 | `cache`                 | `bool`                           | `true`          | Enables the shared `ResponseCache` and `inspect_history` support.               |
 
-Build configs fluently:
+
 
 ```rust
 let config = LMConfig::builder()
