@@ -55,16 +55,18 @@ into a prompt that the LM can follow to complete the task.
 use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
 use std::env;
 
-fn main() -> Result<(), anyhow::Error> {
-    //Define a config for the LM
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
+    // Define a config for the LM
     let config = LMConfig::builder()
         .model("gpt-4.1-nano".to_string())
         .build();
-    // Create the LM instance via the builder
+    // Create the LM instance via the async builder
     let lm = LM::builder()
         .config(config)
         .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build();
+        .build()
+        .await;
     // Configure the global LM and adapter
     configure(lm, ChatAdapter::default());
 
@@ -149,10 +151,11 @@ async fn main() -> Result<(), anyhow::Error> {
     let lm = LM::builder()
         .config(config)
         .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build();
+        .build()
+        .await;
 
     configure(lm.clone(), ChatAdapter::default());
-    // Create a questin-answering signature instance
+    // Create a question-answering signature instance
     let signature = QA::new();
     // Create a predictor
     let predictor = Predict::new(signature);
@@ -233,7 +236,8 @@ async fn main() -> anyhow::Result<()> {
     let lm: LM = LM::builder()
         .config(config)
         .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build();
+        .build()
+        .await;
 
     configure(lm, ChatAdapter::default());
     // Create the module instance
