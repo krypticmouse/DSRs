@@ -74,8 +74,6 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 ```
 
-Because `LM::builder().build()` performs asynchronous setup (creating the HTTP client and cache), it must be awaited inside an async context such as `#[tokio::main]`.
-
 </Step>
 
 <Step title="Define task via signatures">
