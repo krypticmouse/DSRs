@@ -32,6 +32,7 @@ It handles three core responsibilities:
 
 Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
 
+
 ## Where it fits
 
 You rarely call `LM` directly—It's the lowest-level DSRs primitive. Instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM. This keeps business logic (your task) separate from transport (the model client).
@@ -63,49 +64,9 @@ async fn main() -> anyhow::Result<()> {
 
 - **Clone semantics:** `LM` implements `Clone`; clones share the underlying client and cache via `Arc`, so they see the same history while carrying their own config copy.
 
-## Key Methods
+## API Reference
 
-### `LM::builder()`
-
-Returns an `LMBuilder` to configure the LM instance. Chain setters like `.api_key()`, `.config()`, and `.base_url()` before calling `.build().await`.
-
-```rust
-let lm = LM::builder()
-    .api_key(api_key)
-    .config(config)
-    .build()
-    .await;
-```
-
-### `async fn build(self) -> LM`
-
-Finalizes construction. This method:
-- Infers the base URL from `config.model` (if using `provider/model` format)
-- Creates the OpenAI-compatible HTTP client
-- Initializes the response cache (if `config.cache = true`)
-
-### `async fn call(&self, messages: Chat) -> Result<LMResponse>`
-
-Executes a chat completion with pre-formatted messages.
-
-**Parameters:** `Chat` - A sequence of system/user/assistant messages
-
-**Returns:** `LMResponse` containing:
-- `output` - The assistant's response message
-- `usage` - Token counts (`LmUsage`)
-- `chat` - Full conversation including the new response
-
-Adapters call this method after formatting your `Signature` inputs into `Chat` format.
-
-### `async fn inspect_history(&self, n: usize) -> Vec<CallResult>`
-
-Returns the `n` most recent cached calls.
-
-**Returns:** Vector of `CallResult`, each containing:
-- `prompt` - The full formatted chat as JSON string
-- `prediction` - The parsed prediction with usage stats
-
-**Note:** Requires `config.cache = true` (the default). Panics if caching is disabled.
+Need exact method signatures or field-level documentation? The generated Rust docs on [docs.rs/dsrs](https://docs.rs/dsrs/latest/dsrs/core/lm/) reflect the inline doc comments from the source of `LM`, `LMConfig`, and related types.
 
 ## Global vs explicit usage
 
