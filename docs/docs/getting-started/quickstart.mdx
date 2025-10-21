@@ -5,17 +5,30 @@ icon: "rocket"
 ---
 
 This guide will walk you through setting up your Rust project and building your first LM pipeline in DSRs.
-The entire process takes a few minutes and requires only basic Rust 
-knowledge. The goal in this quickstart demo is to get you up and running configuring your LM in DSRs,
-define a signature, run a prediction, and see the results. Let's go! 🚀
+The entire process takes a few minutes and requires only basic Rust
+knowledge.
 
+Building your LM pipeline in DSRs requires the following steps:
+
+1. Install DSRs
+2. Set up your language model
+3. Define a signature
+4. Create a module
+5. Execute the pipeline and see the results
 
 <Steps>
 <Step title="Install DSRs">
 
-You can add DSRs to your project just like any other Rust crate, using either of these two methods:
+You can add DSRs to your project just like any other Rust crate, using either of the following two methods:
 
-**Option 1: Add to Cargo.toml**
+**Option 1: Add via Cargo command**
+```bash
+cargo add dspy-rs anyhow serde serde_json tokio
+```
+
+This creates an alias `dsrs` for the `dspy-rs` crate which is the intended way to use it.
+
+**Option 2: Add to Cargo.toml**
 ```toml
 [dependencies]
 anyhow = "1.0.99"
@@ -24,13 +37,6 @@ serde = "1.0.221"
 serde_json = "1.0.145"
 tokio = "1.47.1"
 ```
-
-**Option 2: Add via Cargo command**
-```bash
-cargo add dspy-rs anyhow serde serde_json tokio
-```
-
-This will create an alias `dsrs` for the `dspy-rs` crate which is the intended way to use it.
 
 <Note>
 We need to install DSRS using the name `dspy-rs` for now, because
@@ -45,13 +51,16 @@ The first step in DSRs is to configure your Language Model (LM). DSRs supports
 any LM supported via the `async-openai` crate. You can define your LM
 configuration using the builder pattern as follows.
 
-Once the LM instance is created, pass it to the configure function along with
+Once the LM instance is created, pass it to the `configure` function along with
 a chat adapter to set the global LM and adapter for your application.
+
 `ChatAdapter` is the default adapter in DSRs and is responsible for converting
 the instructions and the structure from your signature (defined in the next step)
 into a prompt that the LM can follow to complete the task.
 
-```rust
+<Tabs>
+<Tab title="OpenAI">
+```rust lines
 use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
 use std::env;
 
@@ -71,80 +80,84 @@ fn main() -> Result<(), anyhow::Error> {
     Ok(())
 }
 ```
+</Tab>
+<Tab title="Ollama">
+```rust lines highlight={7, 12}
+use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
+use std::env;
 
+fn main() -> Result<(), anyhow::Error> {
+    //Define a config for the LM
+    let config = LMConfig::builder()
+        .model("gpt-oss:20b".to_string())
+        .build();
+    // Create the LM instance via the builder
+    let lm = LM::builder()
+        .config(config)
+        .base_url("http://localhost:11434")
+        .api_key("".into()) // Don't need an API key for Ollama
+        .build();
+    // Configure the global LM and adapter
+    configure(lm, ChatAdapter::default());
+
+    Ok(())
+}
+```
+</Tab>
+</Tabs>
 </Step>
 
-<Step title="Define task via signatures">
+<Step title="Define the task via a signature">
 
-A signature defines the structure of your task: what inputs it takes and what outputs it should produce. Think of it as a schema for your LM call,
+A *signature* is a declarative definition of the inputs and outputs of your task. In defining a signature, you define a schema for your LM call.
 
-You can create your signature in DSRs in one of two ways: using an inline macro, and via an attribute macro.
+You can create your signature in DSRs in one of two ways: either using an
+inline macro, or via an attribute macro. While the inline macro is more concise (and easier to get started), the attribute macro gives you more control over the signature.
 
-Let's create a question-answering signature using the inline macro:
+Let us define a signature using the inline macro:
 
-```rust
-let signature = sign! {
+**Inline Macro**
+
+```rust lines
+let qa = sign! {
     (question: String) -> answer: String
 };
 ```
-The input fields are to the left of the `->` arrow, and the output fields are to the right. Multiple fields can be comma-separated, for e.g., `(question: String,
-context: String) -> answer: String`.
 
-Alternatively, you can have more control over defining more granular aspects of the signature by defining signature using attribute macro on structs.
-
-```rust
-#[Signature]
-struct QASignature {
-    /// Answer the question concisely.
-
-    #[input(desc="Question to be answered.")]
-    pub question: String,
-
-    #[output]
-    pub answer: String,
-}
-```
-
-The advantage of the latter approach is that you can add doc comments at the 
-top of the struct, specifying
-important domain information or specific instructions to the LM.
-Additionally, you can also annotate each field with `#[input]` and `#[output]`
-attributes, useful when you have multiple input and output fields, and when
-you want to add descriptions to each field.
-
+The input fields are to the left of the `->` arrow, and the output fields are to the right. Multiple fields can be comma-separated, for e.g., `(question: String, context: String) -> answer: String`.
 </Step>
 
-<Step title="Create a simple predictor">
+<Step title="Create a Module">
 
-A predictor is the simplest module in DSRs. It takes a signature and input data, and orchestrates the LM call to produce a prediction. Let's demonstrate this
-with an example.
+Modules in DSRs are the building blocks of your application. They encapsulate the logic for a specific task and can be composed together to create complex workflows.
 
-Gravity was explained by Isaac Newton in 1687. To make this more interesting,
-let's ask the LM to answer in Renaissance-era English! We can do this by asking
-for this explicitly in the signature doc comment.
+A `Predictor` is the simplest module in DSRs. It takes a signature and input data, and orchestrates the LM call to produce a prediction.
+
+```rust lines
+let predictor = Predictor::new(qa);
+```
+</Step>
+
+<Step title="Execute the Pipeline">
 
 LM calls in DSRs are asynchronous and return a future, so we need to use the `tokio` runtime to execute a function that uses a predictor.
 
-```rust
+```rust lines
 use dspy_rs::{
     ChatAdapter, Example, LM, LMConfig, Predict, Predictor, Signature, configure, hashmap,
 };
 use std::env;
 
-#[Signature]
-struct QA {
-    /// Use Renaissance-era English to answer the question.
-
-    #[input]
-    pub question: String,
-
-    #[output]
-    pub answer: String,
-}
-
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    let config = LMConfig::builder().model("gpt-4.1-nano".to_string()).build();
+
+    // The signature we defined above
+    let qa = sign! {
+        (question: String) -> answer: String
+    };
+
+    let config = LMConfig::builder().model("gpt-4.1-nano".to_string())
+        .build();
 
     let lm = LM::builder()
         .config(config)
@@ -152,8 +165,8 @@ async fn main() -> Result<(), anyhow::Error> {
         .build();
 
     configure(lm.clone(), ChatAdapter::default());
-    // Create a questin-answering signature instance
-    let signature = QA::new();
+    // Create a question-answering signature instance
+    let signature = qa::new();
     // Create a predictor
     let predictor = Predict::new(signature);
     // Define the question
@@ -173,29 +186,113 @@ async fn main() -> Result<(), anyhow::Error> {
 }
 ```
 
-The predictor takes an `Example` as input, which is a mapping from field names to values. The following result is obtained.
-
-Result:
+The predictor takes an `Example` as input, which is a mapping from field names to values. The output would be similar to the following:
 
 ```txt
-Answer: "Gravity, good sir or madam, is the unseen force that draweth all things
-unto the center of the Earth, binding the celestial spheres and ensuring that
-objects fall when cast down. It is the natural power ordained by the divine
-hand to keep the heavens in their orbits and men grounded upon the earth."
+Answer: "Gravity is a fundamental force of nature that causes objects
+with mass to attract each other. It is responsible for the Earth's pull that
+keeps us grounded, the orbits of planets around the sun, and the overall
+structure and behavior of the universe. According to Einstein's theory of
+general relativity, gravity is the curvature of spacetime
+caused by mass and energy."
+```
+</Step>
+</Steps>
+
+## Going Further
+
+Now that you have built your first pipeline using DSRs, you can explore some of the more advanced features of the library.
+
+### Create Signatures with Attribute Macros
+
+If you want to exert more fine-grained control over the signature, you can define it by using an attribute macro over a `struct.` In the example below, notice how
+
+1. we use the attribute macro, `[#Signature]` to indicate that the underlying `struct` is a signature, and
+2. the doc comment specifically asks the LM to answer the question like a pirate.
+
+```rust lines highlight={1,3}
+#[Signature]
+struct QASignature {
+    /// Answer the question like a pirate.
+
+    #[input(desc="Question to be answered.")]
+    pub question: String,
+
+    #[output]
+    pub answer: String,
+}
 ```
 
-There we go. You can imagine that as being explained by Isaac Newton himself! 🧐
+Additionally, you can also annotate each field with `#[input]` and `#[output]`
+attributes, which is useful when you have multiple input and output fields, and
+when you want to add descriptions to each field.
 
-</Step>
+The advantage of this approach is that you can use doc comments at the
+top of the struct, to specify important domain information or provide specific
+instructions to the LM.
 
-<Step title="Build modules for complex pipelines">
-Predictors are the simples module calls in DSRs. You can also compose together
-a more complex module that wraps a predictor and your own forwards calls.
+Let us use the above signature in our pipeline to answer questions like a pirate.
+
+```rust lines highlight={16}
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
+    dotenv().ok();
+
+    let config = LMConfig::builder()
+        .model("gpt-4.1-nano".to_string())
+        .build();
+
+    let lm = LM::builder()
+        .config(config)
+        .api_key(env::var("OPENAI_API_KEY")?.into())
+        .build();
+
+    configure(lm.clone(), ChatAdapter::default());
+
+    let qa = QASignature::new(); // The new pirate-y signature
+
+    // Create a predictor
+    let predictor = Predict::new(qa);
+
+    // Define the question
+    let question = "What is gravity?";
+
+    // Create an example input to the predictor
+    let inputs = Example::new(
+        hashmap! {
+            "question".to_string() => question.to_string().into()
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
+
+    let result = predictor.forward(inputs).await?;
+    println!("Answer: {:?}", result.get("answer", None).as_str().unwrap());
+    Ok(())
+}
+```
+
+Running this pipeline would possibly generate the following output:
+
+```txt
+Arrr, gravity be the mighty force of the seas that keeps all the ships and
+treasures close to the earth, matey! It be what pulls ye down when ye be
+walkin' the plank or standin' on deck, keepin' everything from floatin'
+off into the vast blue. Aye, 'tis the invisible hand of the universe,
+guidin' all in its watery grip!
+```
+
+Notice how all it takes for us to change the behavior of the pipeline is to just change the signature used by the predictor.
+
+### Build Modules for Complex Pipelines
+
+Predictors are the simplest modules in DSRs. You can also compose
+more complex modules that define your own logic. Let us examine how to do that.
 
 ```rust
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
-    configure, hashmap,
+    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction,
+    Predictor, Signature, configure, hashmap,
 };
 use std::env;
 
@@ -217,30 +314,39 @@ impl Module for AnswerQuestion {
     }
 }
 ```
+
 You can define an implementation of the `Module` trait for your own struct that
 composes together one or more predictors and your own arbitrary logic. In this case, the `AnswerQuestion` module wraps a predictor that uses the `QA` signature defined earlier.
+
 The forward method is async because it wraps a predictor call.
 
-We can define the main function to use this module as follows.
+We can define the main function to use this module as follows:
 
-```rust
+1. Create a new instance of the module (line 16).
+2. Call the `forward` method on the module (line 30).
+
+```rust lines highlight={16,30}
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), anyhow::Error> {
+    dotenv().ok();
+
     let config = LMConfig::builder()
         .model("gpt-4.1-nano".to_string())
         .build();
 
-    let lm: LM = LM::builder()
+    let lm = LM::builder()
         .config(config)
         .api_key(env::var("OPENAI_API_KEY")?.into())
         .build();
 
-    configure(lm, ChatAdapter::default());
-    // Create the module instance
+    configure(lm.clone(), ChatAdapter::default());
+
     let module = AnswerQuestion::new();
+
     // Define the question
     let question = "What is gravity?";
-    // Create an example input to the module
+
+    // Create an example input to the predictor
     let inputs = Example::new(
         hashmap! {
             "question".to_string() => question.to_string().into()
@@ -248,25 +354,19 @@ async fn main() -> anyhow::Result<()> {
         vec!["question".to_string()],
         vec!["answer".to_string()],
     );
-    
+
     let result = module.forward(inputs).await?;
     println!("Answer: {:?}", result.get("answer", None).as_str().unwrap());
     Ok(())
 }
 ```
-This produces a similar result.
+This produces a similar result to the previous example with the attribute macro-based signature.
 
+```txt
+Arrr, matey! Gravity be the mighty force that keeps ye anchored to the deck
+and the planets holdin' their orbits, pullin' all things toward the center of
+the Earth or any other celestial body. 'Tis like an invisible hand, guidin'
+the stars and the seas alike!
 ```
-Answer: "Gravity is the divine force, as understood by the wise of the
-Renaissance, that draweth all things towards the center of the Earth, binding
-the heavens and the earth in a harmonious embrace. It is the unseen hand that
-keeps the celestial bodies in their courses and the objects upon the ground
-in their place."
-```
 
-</Step>
-</Steps>
-
-This is just the tip of the iceberg. DSRs supports many more features, including
-an Optimizable trait for modules that can help improve your modules via
-optimizers. Continue exploring the rest of the documentation to learn more!
+DSRs supports many more features, including an Optimizable trait for modules that can help improve your modules via optimizers. Continue exploring the rest of the documentation to learn more!
