@@ -57,13 +57,11 @@ fn test_lm_usage_add() {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
     let usage2 = LmUsage {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
 
     let usage3 = usage1.clone() + usage2.clone();
@@ -80,10 +78,6 @@ fn test_lm_usage_add() {
         usage3.total_tokens,
         usage1.total_tokens + usage2.total_tokens
     );
-    assert_eq!(
-        usage3.reasoning_tokens,
-        usage1.reasoning_tokens.or(usage2.reasoning_tokens)
-    );
 }
 
 #[tokio::test]
@@ -95,11 +89,7 @@ async fn test_lm_with_cache_enabled() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config);
 
     // Verify cache handler is initialized
     assert!(lm.cache_handler.is_some());
@@ -114,11 +104,7 @@ async fn test_lm_with_cache_disabled() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config);
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
@@ -133,11 +119,7 @@ async fn test_lm_cache_initialization_on_first_call() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config);
 
     // After build, cache_handler should be initialized
     assert!(lm.cache_handler.is_some());
@@ -155,11 +137,7 @@ async fn test_lm_cache_direct_operations() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config);
 
     // Get cache handler
     let cache = lm
@@ -229,11 +207,7 @@ async fn test_lm_cache_with_different_models() {
             ..Default::default()
         };
 
-        let lm = LM::builder()
-            .api_key("test_key".to_string().into())
-            .config(config)
-            .build()
-            .await;
+        let lm = LM::new(config);
 
         // Cache should be initialized regardless of model
         assert!(
@@ -256,11 +230,7 @@ async fn test_cache_with_complex_inputs() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config);
 
     let cache = lm
         .cache_handler
@@ -306,7 +276,6 @@ async fn test_cache_with_complex_inputs() {
             prompt_tokens: 50,
             completion_tokens: 30,
             total_tokens: 80,
-            reasoning_tokens: Some(15),
         },
     );
 
@@ -326,10 +295,9 @@ async fn test_cache_with_complex_inputs() {
     assert_eq!(cached.data.len(), 3);
     assert_eq!(cached.data.get("answer"), output.get("answer"));
     assert_eq!(cached.data.get("confidence"), output.get("confidence"));
-    assert_eq!(cached.data.get("reasoning"), output.get("reasoning"));
+
     // The cache stores and retrieves the full Prediction including usage stats
     assert_eq!(cached.lm_usage.prompt_tokens, 50); // Preserved from original
     assert_eq!(cached.lm_usage.completion_tokens, 30); // Preserved from original
     assert_eq!(cached.lm_usage.total_tokens, 80); // Preserved from original
-    assert_eq!(cached.lm_usage.reasoning_tokens, Some(15)); // Preserved from original
 }

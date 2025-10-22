@@ -70,14 +70,10 @@ impl Module for QARater {
 #[tokio::main]
 async fn main() -> Result<()> {
     configure(
-        LM::builder()
-            .api_key(std::env::var("OPENROUTER_API_KEY")?.into())
-            .config(LMConfig {
-                model: "openrouter/openai/gpt-4o-mini".to_string(),
-                ..LMConfig::default()
-            })
-            .build()
-            .await,
+        LM::new(LMConfig {
+            model: "openai:gpt-4o-mini".to_string(),
+            ..LMConfig::default()
+        }),
         ChatAdapter,
     );
 

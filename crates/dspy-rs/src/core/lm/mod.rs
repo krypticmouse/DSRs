@@ -7,14 +7,17 @@ pub use config::*;
 pub use usage::*;
 
 use anyhow::Result;
-use async_openai::types::CreateChatCompletionRequestArgs;
-use async_openai::{Client, config::OpenAIConfig};
+use rig::{
+    client::builder::DynClientBuilder,
+    completion::{AssistantContent, CompletionModelDyn},
+};
 
-use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
 use bon::Builder;
-use secrecy::{ExposeSecret, SecretString};
+use rig::client::builder::ClientBuildError;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+
+use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -23,39 +26,21 @@ pub struct LMResponse {
     pub chat: Chat,
 }
 
-fn get_base_url_by_provider(provider: &str) -> &str {
-    match provider {
-        "openai" => "https://api.openai.com/v1",
-        "anthropic" => "https://api.anthropic.com/v1",
-        "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
-        "cohere" => "https://api.cohere.ai/compatibility/v1",
-        "groq" => "https://api.groq.com/openai/v1",
-        "openrouter" => "https://openrouter.ai/api/v1",
-        "qwen" => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "together" => "https://api.together.xyz/v1",
-        "xai" => "https://api.x.ai/v1",
-        _ => "https://openrouter.ai/api/v1",
-    }
+pub struct LM {
+    pub config: LMConfig,
+    client: Arc<Box<dyn CompletionModelDyn>>,
+    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
 }
 
-#[derive(Builder)]
-#[builder(finish_fn(vis = "", name = build_internal))]
-pub struct LM {
-    #[builder(getter)]
-    pub api_key: SecretString,
-    #[builder(default = "https://api.openai.com/v1".to_string(), getter)]
-    pub base_url: String,
-    #[builder(default = LMConfig::default(), getter)]
-    pub config: LMConfig,
-    client: Option<Client<OpenAIConfig>>,
-    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
+impl Default for LM {
+    fn default() -> Self {
+        Self::new(LMConfig::default())
+    }
 }
 
 impl Clone for LM {
     fn clone(&self) -> Self {
         Self {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
             config: self.config.clone(),
             client: self.client.clone(),
             cache_handler: self.cache_handler.clone(),
@@ -63,70 +48,54 @@ impl Clone for LM {
     }
 }
 
-use l_m_builder::{IsSet, IsUnset, State};
-
-impl<S: State> LMBuilder<S> {
-    pub async fn build(self) -> LM
-    where
-        S::ApiKey: IsSet,
-        S::Client: IsUnset,
-        S::CacheHandler: IsUnset,
-    {
-        let mut lm = self.build_internal();
-
-        if lm.config.model.contains("/") {
-            let model_str = lm.config.model.clone();
-            let (provider, model_id) = model_str.split_once("/").unwrap();
-            lm.config.model = model_id.to_string();
-            lm.base_url = get_base_url_by_provider(provider).to_string();
-        }
-
-        let openai_config = OpenAIConfig::new()
-            .with_api_key(lm.api_key.expose_secret().to_string())
-            .with_api_base(lm.base_url.clone());
-        let client = Client::with_config(openai_config);
-        lm.client = Some(client);
-
-        if lm.config.cache {
-            let cache_handler = Arc::new(Mutex::new(ResponseCache::new().await));
-            lm.cache_handler = Some(cache_handler);
-        }
-        lm
-    }
-}
-
 impl LM {
-    pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
-        let request_messages = messages.get_async_openai_messages();
+    pub fn new(config: LMConfig) -> Self {
+        let client_builder = DynClientBuilder::default();
+        let (provider, model_id) = client_builder.parse(&config.model).unwrap();
 
-        // Check if we're using a Gemini model
-        let is_gemini = self.config.model.starts_with("gemini-");
+        let client = client_builder
+            .build(provider)
+            .unwrap()
+            .as_completion()
+            .ok_or(ClientBuildError::UnsupportedFeature(
+                provider.to_string(),
+                "completion".to_owned(),
+            ))
+            .unwrap()
+            .completion_model(model_id);
 
-        // Build the base request
-        let mut builder = CreateChatCompletionRequestArgs::default();
-
-        builder
-            .model(self.config.model.clone())
-            .messages(request_messages)
-            .temperature(self.config.temperature)
-            .top_p(self.config.top_p)
-            .n(self.config.n)
-            .max_tokens(self.config.max_tokens)
-            .presence_penalty(self.config.presence_penalty);
-
-        // Only add frequency_penalty, seed, and logit_bias for non-Gemini models
-        if !is_gemini {
-            builder
-                .frequency_penalty(self.config.frequency_penalty)
-                .seed(self.config.seed)
-                .logit_bias(self.config.logit_bias.clone().unwrap_or_default());
+        Self {
+            config,
+            client: Arc::new(client),
+            cache_handler: None,
         }
+    }
 
-        let request = builder.build()?;
+    pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
+        let request_messages = messages.get_rig_messages();
 
-        let response = self.client.as_ref().unwrap().chat().create(request).await?;
-        let first_choice = Message::from(response.choices.first().unwrap().message.clone());
-        let usage = LmUsage::from(response.usage.unwrap());
+        // Build and send the completion request
+        let response = self
+            .client
+            .completion_request(request_messages.prompt)
+            .preamble(request_messages.system)
+            .messages(request_messages.conversation)
+            .temperature(self.config.temperature as f64)
+            .max_tokens(self.config.max_tokens as u64)
+            .send()
+            .await?;
+
+        let first_choice = match response.choice.first() {
+            AssistantContent::Text(text) => Message::assistant(text.text),
+            AssistantContent::Reasoning(reasoning) => {
+                Message::assistant(reasoning.reasoning.join("\n"))
+            }
+            AssistantContent::ToolCall(_tool_call) => {
+                todo!()
+            }
+        };
+
+        let usage = LmUsage::from(response.usage);
 
         let mut full_chat = messages.clone();
         full_chat.push_message(first_choice.clone());
@@ -152,7 +121,7 @@ impl LM {
 
 #[derive(Clone, Builder, Default)]
 pub struct DummyLM {
-    pub api_key: SecretString,
+    pub api_key: String,
     #[builder(default = "https://api.openai.com/v1".to_string())]
     pub base_url: String,
     #[builder(default = LMConfig::default())]

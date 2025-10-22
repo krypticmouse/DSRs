@@ -222,32 +222,17 @@ async fn main() -> Result<()> {
     println!("generate rich feedback for optimizing a math solver.\n");
 
     // Setup: Configure the LLM
-    let api_key =
-        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
-
     // Main LM for the task
-    let task_lm = LM::builder()
-        .api_key(api_key.clone().into())
-        .config(
-            LMConfig::builder()
-                .model("gpt-4o-mini".to_string())
-                .temperature(0.7)
-                .build(),
-        )
-        .build()
-        .await;
+    let task_lm = LM::new(LMConfig {
+        temperature: 0.7,
+        ..LMConfig::default()
+    });
 
     // Judge LM (could use a different/cheaper model)
-    let judge_lm = LM::builder()
-        .api_key(api_key.into())
-        .config(
-            LMConfig::builder()
-                .model("gpt-4o-mini".to_string())
-                .temperature(0.3) // Lower temp for more consistent judging
-                .build(),
-        )
-        .build()
-        .await;
+    let judge_lm = LM::new(LMConfig {
+        temperature: 0.3,
+        ..LMConfig::default()
+    });
 
     configure(task_lm, ChatAdapter);
 

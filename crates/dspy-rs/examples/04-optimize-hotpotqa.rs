@@ -13,7 +13,6 @@ use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
     Predict, Prediction, Predictor, Signature, configure,
 };
-use secrecy::SecretString;
 
 #[Signature(cot)]
 struct QASignature {
@@ -57,13 +56,7 @@ impl Evaluator for QARater {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build()
-            .await,
-        ChatAdapter {},
-    );
+    configure(LM::default(), ChatAdapter {});
 
     let examples = DataLoader::load_hf(
         "hotpotqa/hotpot_qa",

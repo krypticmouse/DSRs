@@ -22,7 +22,6 @@ schemars = "1.0.4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.140", features = ["preserve_order"] } 
 tokio = { version = "1.46.1", features = ["full"] }
-async-openai = "0.29.0"
 async-trait = "0.1.83"
 anyhow = "1.0.99"
 bon = "3.7.0"
@@ -39,6 +38,9 @@ kdam = "0.6.3"
 rand = "0.8.5"
 foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
+flamegraph = { version = "0.6.9", optional = true }
+rig-core = "0.22.0"
 
 [features]
 parquet = ["dep:parquet", "dep:arrow"]
+profiling = ["dep:flamegraph"]

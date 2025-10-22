@@ -20,10 +20,6 @@ fn test_prediction_initialization() {
         lm_usage.completion_tokens
     );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(
-        prediction.lm_usage.reasoning_tokens,
-        lm_usage.reasoning_tokens
-    );
 }
 
 #[rstest]
@@ -33,7 +29,6 @@ fn test_prediction_get() {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
     let prediction = Prediction::new(data, lm_usage.clone());
 
@@ -49,10 +44,6 @@ fn test_prediction_get() {
         lm_usage.completion_tokens
     );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(
-        prediction.lm_usage.reasoning_tokens,
-        lm_usage.reasoning_tokens
-    );
 }
 
 #[rstest]
@@ -86,16 +77,11 @@ fn test_prediction_set_lm_usage() {
         lm_usage.completion_tokens
     );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(
-        prediction.lm_usage.reasoning_tokens,
-        lm_usage.reasoning_tokens
-    );
 
     let lm_usage = LmUsage {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
     prediction.set_lm_usage(lm_usage.clone());
     assert_eq!(prediction.lm_usage.prompt_tokens, lm_usage.prompt_tokens);
@@ -104,8 +90,4 @@ fn test_prediction_set_lm_usage() {
         lm_usage.completion_tokens
     );
     assert_eq!(prediction.lm_usage.total_tokens, lm_usage.total_tokens);
-    assert_eq!(
-        prediction.lm_usage.reasoning_tokens,
-        lm_usage.reasoning_tokens
-    );
 }

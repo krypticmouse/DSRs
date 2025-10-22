@@ -117,19 +117,10 @@ async fn main() -> Result<()> {
     println!("GEPA Sentiment Analysis Optimization Example\n");
 
     // Setup LM
-    let api_key =
-        std::env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
-
-    let lm = LM::builder()
-        .api_key(api_key.into())
-        .config(
-            LMConfig::builder()
-                .model("gpt-4o-mini".to_string())
-                .temperature(0.7)
-                .build(),
-        )
-        .build()
-        .await;
+    let lm = LM::new(LMConfig {
+        temperature: 0.7,
+        ..LMConfig::default()
+    });
 
     configure(lm.clone(), ChatAdapter);
 

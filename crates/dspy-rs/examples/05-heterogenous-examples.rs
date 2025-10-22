@@ -8,17 +8,10 @@ cargo run --example 05-heterogenous-examples
 */
 
 use dspy_rs::{ChatAdapter, LM, Predict, Predictor, configure, example, sign};
-use secrecy::SecretString;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build()
-            .await,
-        ChatAdapter {},
-    );
+    configure(LM::default(), ChatAdapter {});
 
     let exp = example! {
         "number": "input" => 10,
