@@ -21,8 +21,11 @@ use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
+    /// Assistant message chosen by the provider.
     pub output: Message,
+    /// Token usage reported by the provider for this call.
     pub usage: LmUsage,
+    /// Chat history including the freshly appended assistant response.
     pub chat: Chat,
 }
 
@@ -71,6 +74,12 @@ impl LM {
         }
     }
 
+impl LM {
+    /// Executes a chat completion against the configured provider.
+    ///
+    /// `messages` must already be formatted as OpenAI-compatible chat turns.
+    /// The call returns an [`LMResponse`] containing the assistant output,
+    /// token usage, and chat history including the new response.
     pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
         let request_messages = messages.get_rig_messages();
 
@@ -107,6 +116,9 @@ impl LM {
         })
     }
 
+    /// Returns the `n` most recent cached calls.
+    ///
+    /// Panics if caching is disabled for this `LM`.
     pub async fn inspect_history(&self, n: usize) -> Vec<CallResult> {
         self.cache_handler
             .as_ref()
@@ -119,17 +131,21 @@ impl LM {
     }
 }
 
+/// In-memory LM used for deterministic tests and examples.
 #[derive(Clone, Builder, Default)]
 pub struct DummyLM {
     pub api_key: String,
     #[builder(default = "https://api.openai.com/v1".to_string())]
     pub base_url: String,
+    /// Static configuration applied to stubbed responses.
     #[builder(default = LMConfig::default())]
     pub config: LMConfig,
+    /// Cache backing storage shared with the real implementation.
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
 }
 
 impl DummyLM {
+    /// Creates a new [`DummyLM`] with an enabled in-memory cache.
     pub async fn new() -> Self {
         let cache_handler = Arc::new(Mutex::new(ResponseCache::new().await));
         Self {
@@ -140,6 +156,10 @@ impl DummyLM {
         }
     }
 
+    /// Mimics [`LM::call`] without hitting a remote provider.
+    ///
+    /// The provided `prediction` becomes the assistant output and is inserted
+    /// into the shared cache when caching is enabled.
     pub async fn call(
         &self,
         example: Example,
@@ -184,6 +204,7 @@ impl DummyLM {
         })
     }
 
+    /// Returns cached entries just like [`LM::inspect_history`].
     pub async fn inspect_history(&self, n: usize) -> Vec<CallResult> {
         self.cache_handler
             .as_ref()

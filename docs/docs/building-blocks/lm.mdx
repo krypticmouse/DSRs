@@ -4,46 +4,74 @@ description: 'Configure and integrate language models in your pipelines'
 icon: 'arrow-down-a-z'
 ---
 
-DSRs treats the Language Model (`LM`) as a first–class, configurable client for chat-style inference. This page explains what an LM is in DSRs, how it’s structured in Rust terms, and how it cooperates with other building blocks.
+The Language Model (`LM`) struct is a configurable client for calling LLM providers, with built-in caching and history tracking.
+
+This page explains what an LM is in DSRs, how it’s structured in Rust terms, and how it cooperates with other building blocks.
 
 ## What is an LM?
 
-- **Purpose:** Encapsulates a provider client (e.g., OpenAI) and model-level settings, and executes chat completions.
-- **Rust shape:** `LM` is a clonable struct built via a builder (`LM::builder()`), holding `LMConfig` and an internal client.
-- **Async-first:** `LM::call(...)` is `async` and returns a `(Message, LmUsage)` pair.
-- **History:** Each call is recorded; inspect recent calls via `lm.inspect_history(n)`.
+The `LM` struct is a thin wrapper around OpenAI-compatible API clients, with built-in support for multiple providers.
 
-## Key types
+It handles three core responsibilities:
 
-- **`LM` (struct):** Holds `api_key`, `base_url`, `config`, and a `history` of calls. Implements `Clone`.
-- **`LMConfig` (struct):** Builder-driven config (e.g., `model`, `temperature`, `max_tokens`).
-- **`Chat`, `Message` (structs):** Internal chat abstraction used by adapters to format/parse messages.
-- **`Adapter` (trait) and `ChatAdapter` (impl):** Orchestrate how a `Signature` + `Example` become a `Chat`, and parse the model’s response back to a `Prediction`.
+1. **Configuration** - Stores provider credentials, model selection, and inference parameters (eg: temperature)
+
+2. **API Execution** - Takes pre-formatted `Chat` messages and executes HTTP calls to the LLM provider
+
+3. **Response Caching** - Optionally stores input/output pairs to avoid duplicate API calls
+
+
+### Structure
+
+`LM` is built using the builder pattern and holds:
+  - `api_key` - Provider API credentials (stored as `SecretString`)
+  - `base_url` - API endpoint URL
+  - `config` - An `LMConfig` with model settings
+  - `client` - Internal HTTP client (OpenAI-compatible)
+  - `cache_handler` - Optional response cache (enabled by default)
+
+Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
+
+
+## Where it fits
+
+You rarely call `LM` directly—It's the lowest-level DSRs primitive. Instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM. This keeps business logic (your task) separate from transport (the model client).
+
 
 ## Construction and configuration
 
 ```rust
 use dsrs::{LM, LMConfig};
 
-let lm = LM::builder()
-    .api_key(std::env::var("OPENAI_API_KEY")?.into())
-    .config(
-        LMConfig::builder()
-            .model("gpt-4o-mini".to_string())
-            .temperature(0.7)
-            .max_tokens(512)
-            .build()
-    )
-    .build();
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let lm = LM::builder()
+        .api_key(std::env::var("OPENAI_API_KEY")?.into())
+        .config(
+            LMConfig::builder()
+                .model("gpt-4o-mini".to_string())
+                .temperature(0.7)
+                .max_tokens(512)
+                .build()
+        )
+        .build()
+        .await;
+
+    // use lm here
+    Ok(())
+}
 ```
 
-- **Builder pattern:** Idiomatic in Rust; keeps construction explicit and typed.
-- **Clone semantics:** `LM` implements `Clone`—cloning copies config and history for that instance.
+- **Clone semantics:** `LM` implements `Clone`; clones share the underlying client and cache via `Arc`, so they see the same history while carrying their own config copy.
+
+## API Reference
+
+You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/index.html).
 
 ## Global vs explicit usage
 
 - **Global:** `configure(lm.clone(), ChatAdapter::default())` sets the process-wide default used by predictors.
-- **Explicit:** Some APIs accept a mutable `&mut LM` if you prefer local control: `predictor.forward_with_config(inputs, &mut lm).await`.
+- **Explicit:** Wrap the model in an `Arc` when you want to override the global instance: `let shared = Arc::new(lm); predictor.forward_with_config(inputs, Arc::clone(&shared)).await`.
 
 ## Async execution and sync entry
 
@@ -80,13 +108,82 @@ fn main() -> anyhow::Result<()> {
 ## Inspecting history
 
 ```rust
-let history = lm.inspect_history(3);
+let history = lm.inspect_history(3).await;
 for entry in history {
-    println!("Model: {} | Output: {}", entry.config.model, entry.output.content());
+    println!("Prompt: {}", entry.prompt);
+    println!("Prediction: {:?}", entry.prediction.data);
 }
 ```
 
-## Where it fits
+> `inspect_history` requires caching to be enabled on the LM; otherwise no history is recorded.
 
-- You rarely call `LM` directly; instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM.
-- This keeps business logic (your task) separate from transport (the model client), matching Rust’s trait-driven composition style.
+## LMConfig reference
+
+`LMConfig` centralizes inference settings. All fields have sensible defaults, so you can override only what you need. The builder exposes setters for each field.
+
+| Field                   | Type                             | Default         | Notes                                                                           |
+|-------------------------|----------------------------------|-----------------|---------------------------------------------------------------------------------|
+| `model`                 | `String`                         | `"gpt-4o-mini"` | Supports bare IDs or `provider/model` prefixed IDs; affects base URL inference. |
+| `temperature`           | `f32`                            | `0.7`           | Higher values increase randomness.                                              |
+| `top_p`                 | `f32`                            | `0.0`           | Nucleus sampling; set one of `temperature` or `top_p`.                          |
+| `max_tokens`            | `u32`                            | `512`           | Upper bound on completion tokens.                                               |
+| `max_completion_tokens` | `u32`                            | `512`           | Not currently sent to providers; Reserved for future use.                       |
+| `presence_penalty`      | `f32`                            | `0.0`           | Penalizes repeated tokens globally.                                             |
+| `frequency_penalty`     | `f32`                            | `0.0`           | Penalizes repeated tokens proportionally; ignored for Gemini models.            |
+| `seed`                  | `i64`                            | `42`            | Optional seed for deterministic sampling; ignored for Gemini models.            |
+| `logit_bias`            | `Option<HashMap<String, Value>>` | `None`          | Token-level logit adjustments; ignored for Gemini models.                       |
+| `cache`                 | `bool`                           | `true`          | Enables the shared `ResponseCache` and `inspect_history` support.               |
+
+
+
+```rust
+let config = LMConfig::builder()
+    .model("anthropic/claude-4.5-sonnet".into())
+    .temperature(0.3)
+    .max_tokens(1_024)
+    .cache(true)
+    .build();
+```
+
+> Tip: stick to either `temperature` or `top_p`; providers often ignore one when both are set.
+
+### Provider Support & Base URLs
+
+DSRs supports multiple LLM providers through automatic endpoint detection. When you pass a `provider/model` string, the builder splits it, rewrites `config.model` to just the model id, and swaps `base_url` to the matching OpenAI-compatible endpoint. Bare model names keep the default OpenAI base URL, and any unknown prefix falls back to OpenRouter.
+
+| Prefix       | Base URL                                                  |
+|--------------|-----------------------------------------------------------|
+| `openai`     | `https://api.openai.com/v1`                               |
+| `anthropic`  | `https://api.anthropic.com/v1`                            |
+| `google`     | `https://generativelanguage.googleapis.com/v1beta/openai` |
+| `cohere`     | `https://api.cohere.ai/compatibility/v1`                  |
+| `groq`       | `https://api.groq.com/openai/v1`                          |
+| `openrouter` | `https://openrouter.ai/api/v1`                            |
+| `qwen`       | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`  |
+| `together`   | `https://api.together.xyz/v1`                             |
+| `xai`        | `https://api.x.ai/v1`                                     |
+
+You can still override the base URL manually via the builder if you need a self-hosted proxy.
+
+Use the `provider/model` format to target specific hosts:
+
+```rust
+// Anthropic
+.model("anthropic/claude-4-5-sonnet".to_string())
+
+// Google
+.model("google/gemini-2.0-flash".to_string())
+
+// Groq
+.model("groq/mixtral-8x7b-32768".to_string())
+
+// OpenAI (or just use model name directly)
+.model("openai/gpt-4.1".to_string())
+.model("gpt-4.1-mini".to_string())  // defaults to OpenAI
+```
+
+Supported prefixes: `openai`, `anthropic`, `google`, `cohere`, `groq`, `openrouter`, `qwen`, `together`, `xai`. Unrecognised prefixes default to OpenRouter.
+
+### Gemini compatibility
+
+Gemini models (names starting with `gemini-`) reject several OpenAI parameters. DSRs automatically omits `frequency_penalty`, `seed`, and `logit_bias` when the configured model begins with `gemini-`, so you can keep the same `LMConfig` across providers without triggering errors. Other settings such as `temperature`, `top_p`, `max_tokens`, and `presence_penalty` are still forwarded.
