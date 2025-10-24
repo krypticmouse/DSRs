@@ -753,7 +753,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dspy-rs"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "dsrs_macros"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "anyhow",
  "dspy-rs",
