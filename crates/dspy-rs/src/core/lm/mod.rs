@@ -1,19 +1,17 @@
 pub mod chat;
 pub mod config;
 pub mod usage;
+pub mod client_registry;
 
 pub use chat::*;
 pub use config::*;
 pub use usage::*;
+pub use client_registry::*;
 
 use anyhow::Result;
-use rig::{
-    client::builder::DynClientBuilder,
-    completion::{AssistantContent, CompletionModelDyn},
-};
+use rig::completion::AssistantContent;
 
 use bon::Builder;
-use rig::client::builder::ClientBuildError;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -31,7 +29,7 @@ pub struct LMResponse {
 
 pub struct LM {
     pub config: LMConfig,
-    client: Arc<Box<dyn CompletionModelDyn>>,
+    client: Arc<LMClient>,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
 }
 
@@ -52,20 +50,11 @@ impl Clone for LM {
 }
 
 impl LM {
+    /// Creates a new LM with the given configuration.
+    /// Uses enum dispatch for optimal runtime performance.
     pub fn new(config: LMConfig) -> Self {
-        let client_builder = DynClientBuilder::default();
-        let (provider, model_id) = client_builder.parse(&config.model).unwrap();
-
-        let client = client_builder
-            .build(provider)
-            .unwrap()
-            .as_completion()
-            .ok_or(ClientBuildError::UnsupportedFeature(
-                provider.to_string(),
-                "completion".to_owned(),
-            ))
-            .unwrap()
-            .completion_model(model_id);
+        let client = LMClient::from_model_string(&config.model)
+            .expect("Failed to create client from model string");
 
         Self {
             config,
@@ -73,29 +62,42 @@ impl LM {
             cache_handler: None,
         }
     }
-
-impl LM {
+    
     /// Executes a chat completion against the configured provider.
     ///
     /// `messages` must already be formatted as OpenAI-compatible chat turns.
     /// The call returns an [`LMResponse`] containing the assistant output,
     /// token usage, and chat history including the new response.
     pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
+        use rig::completion::CompletionRequest;
+        use rig::OneOrMany;
+        
         let request_messages = messages.get_rig_messages();
 
-        // Build and send the completion request
-        let response = self
-            .client
-            .completion_request(request_messages.prompt)
-            .preamble(request_messages.system)
-            .messages(request_messages.conversation)
-            .temperature(self.config.temperature as f64)
-            .max_tokens(self.config.max_tokens as u64)
-            .send()
-            .await?;
+        // Build the completion request manually
+        let mut chat_history = request_messages.conversation;
+        chat_history.push(request_messages.prompt);
+
+        let request = CompletionRequest {
+            preamble: Some(request_messages.system),
+            chat_history: if chat_history.len() == 1 {
+                OneOrMany::one(chat_history.into_iter().next().unwrap())
+            } else {
+                OneOrMany::many(chat_history).expect("chat_history should not be empty")
+            },
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens as u64),
+            tool_choice: None,
+            additional_params: None,
+        };
+
+        // Execute the completion using enum dispatch (zero-cost abstraction)
+        let response = self.client.completion(request).await?;
 
         let first_choice = match response.choice.first() {
-            AssistantContent::Text(text) => Message::assistant(text.text),
+            AssistantContent::Text(text) => Message::assistant(&text.text),
             AssistantContent::Reasoning(reasoning) => {
                 Message::assistant(reasoning.reasoning.join("\n"))
             }

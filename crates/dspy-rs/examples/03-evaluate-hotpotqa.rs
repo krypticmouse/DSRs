@@ -3,16 +3,20 @@ Script to evaluate the answerer of the QARater module for a tiny sample of the H
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa
+cargo run --example 03-evaluate-hotpotqa --features dataloaders
 ```
+
+Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
+    ChatAdapter, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
     Predictor, Signature, configure,
 };
+
+use dspy_rs::DataLoader;
 
 #[Signature(cot)]
 struct QASignature {

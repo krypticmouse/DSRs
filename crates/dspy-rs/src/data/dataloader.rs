@@ -5,16 +5,11 @@ use rayon::prelude::*;
 use reqwest;
 use std::fs;
 use std::io::Cursor;
+use arrow::array::{Array, StringArray};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::{collections::HashMap, path::Path};
 
-#[cfg(feature = "parquet")]
-use {
-    arrow::array::{Array, StringArray},
-    parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder,
-    std::{collections::HashMap, path::Path},
-};
-
-use crate::Example;
-use crate::data::utils::{is_url, string_record_to_example};
+use crate::{Example, is_url, string_record_to_example};
 
 pub struct DataLoader;
 
@@ -128,7 +123,6 @@ impl DataLoader {
         Ok(())
     }
 
-    #[cfg(feature = "parquet")]
     #[allow(clippy::while_let_on_iterator)]
     pub fn load_parquet(
         path: &str,
@@ -222,15 +216,8 @@ impl DataLoader {
                 }
 
                 if os_str.ends_with(".parquet") {
-                    #[cfg(feature = "parquet")]
-                    {
-                        DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone())
-                            .ok()
-                    }
-                    #[cfg(not(feature = "parquet"))]
-                    {
-                        panic!("Parquet feature not enabled");
-                    }
+                    DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone())
+                        .ok()
                 } else if os_str.ends_with(".json") || os_str.ends_with(".jsonl") {
                     let is_jsonl = os_str.ends_with(".jsonl");
                     DataLoader::load_json(os_str, is_jsonl, input_keys.clone(), output_keys.clone())

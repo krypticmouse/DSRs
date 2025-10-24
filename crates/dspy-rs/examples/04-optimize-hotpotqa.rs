@@ -3,8 +3,10 @@ Script to optimize the answerer of the QARater module for a tiny sample of the H
 
 Run with:
 ```
-cargo run --example 04-optimize-hotpotqa
+cargo run --example 04-optimize-hotpotqa --features dataloaders
 ```
+
+Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
