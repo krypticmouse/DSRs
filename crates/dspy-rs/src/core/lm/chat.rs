@@ -3,11 +3,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use async_openai::types::{
-    ChatCompletionRequestAssistantMessageArgs, ChatCompletionRequestMessage,
-    ChatCompletionRequestSystemMessageArgs, ChatCompletionRequestUserMessageArgs,
-    ChatCompletionResponseMessage, Role,
-};
+use rig::completion::{AssistantContent, Message as RigMessage, message::UserContent};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Message {
@@ -52,23 +48,11 @@ impl Message {
         }
     }
 
-    pub fn get_message_turn(&self) -> ChatCompletionRequestMessage {
+    pub fn get_message_turn(&self) -> RigMessage {
         match self {
-            Message::System { content } => ChatCompletionRequestSystemMessageArgs::default()
-                .content(content.as_str())
-                .build()
-                .unwrap()
-                .into(),
-            Message::User { content } => ChatCompletionRequestUserMessageArgs::default()
-                .content(content.as_str())
-                .build()
-                .unwrap()
-                .into(),
-            Message::Assistant { content } => ChatCompletionRequestAssistantMessageArgs::default()
-                .content(content.as_str())
-                .build()
-                .unwrap()
-                .into(),
+            Message::User { content } => RigMessage::user(content.clone()),
+            Message::Assistant { content } => RigMessage::assistant(content.clone()),
+            _ => panic!("Invalid role: {:?}", self),
         }
     }
 
@@ -81,21 +65,43 @@ impl Message {
     }
 }
 
-impl From<ChatCompletionResponseMessage> for Message {
-    fn from(message: ChatCompletionResponseMessage) -> Self {
-        match message.role {
-            Role::System => Message::System {
-                content: message.content.unwrap(),
-            },
-            Role::User => Message::User {
-                content: message.content.unwrap(),
-            },
-            Role::Assistant => Message::Assistant {
-                content: message.content.unwrap(),
-            },
-            _ => panic!("Invalid role: {:?}", message.role),
+impl From<RigMessage> for Message {
+    fn from(message: RigMessage) -> Self {
+        match message {
+            RigMessage::User { content } => {
+                let text = content
+                    .into_iter()
+                    .find_map(|c| {
+                        if let UserContent::Text(t) = c {
+                            Some(t.text)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                Message::user(text)
+            }
+            RigMessage::Assistant { content, .. } => {
+                let text = content
+                    .into_iter()
+                    .find_map(|c| {
+                        if let AssistantContent::Text(t) = c {
+                            Some(t.text)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+                Message::assistant(text)
+            }
         }
     }
+}
+
+pub struct RigChatMessage {
+    pub system: String,
+    pub conversation: Vec<RigMessage>,
+    pub prompt: RigMessage,
 }
 
 #[derive(Clone, Debug)]
@@ -155,10 +161,22 @@ impl Chat {
         json!(messages)
     }
 
-    pub fn get_async_openai_messages(&self) -> Vec<ChatCompletionRequestMessage> {
-        self.messages
-            .iter()
-            .map(|message| message.get_message_turn())
-            .collect()
+    pub fn get_rig_messages(&self) -> RigChatMessage {
+        let system: String = self.messages[0].content();
+        let conversation: Vec<RigMessage> = if self.messages.len() > 2 {
+            self.messages[1..self.messages.len() - 1]
+                .iter()
+                .map(|message| message.get_message_turn())
+                .collect::<Vec<RigMessage>>()
+        } else {
+            vec![]
+        };
+        let prompt = self.messages.last().unwrap().get_message_turn();
+
+        RigChatMessage {
+            system,
+            conversation,
+            prompt,
+        }
     }
 }

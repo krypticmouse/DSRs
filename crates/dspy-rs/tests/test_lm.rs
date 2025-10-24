@@ -57,13 +57,11 @@ fn test_lm_usage_add() {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
     let usage2 = LmUsage {
         prompt_tokens: 10,
         completion_tokens: 20,
         total_tokens: 30,
-        reasoning_tokens: Some(10),
     };
 
     let usage3 = usage1.clone() + usage2.clone();
@@ -80,26 +78,21 @@ fn test_lm_usage_add() {
         usage3.total_tokens,
         usage1.total_tokens + usage2.total_tokens
     );
-    assert_eq!(
-        usage3.reasoning_tokens,
-        usage1.reasoning_tokens.or(usage2.reasoning_tokens)
-    );
 }
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_with_cache_enabled() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     // Create LM with cache enabled
     let config = LMConfig {
         cache: true,
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config).await;
 
     // Verify cache handler is initialized
     assert!(lm.cache_handler.is_some());
@@ -108,17 +101,16 @@ async fn test_lm_with_cache_enabled() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_with_cache_disabled() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     // Create LM with cache explicitly disabled
     let config = LMConfig {
         cache: false,
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config).await;
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
@@ -127,17 +119,16 @@ async fn test_lm_with_cache_disabled() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_initialization_on_first_call() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     // Create LM with cache enabled
     let config = LMConfig {
         cache: true,
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config).await;
 
     // After build, cache_handler should be initialized
     assert!(lm.cache_handler.is_some());
@@ -146,6 +137,9 @@ async fn test_lm_cache_initialization_on_first_call() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_direct_operations() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     use dspy_rs::{Example, Prediction};
     use std::collections::HashMap;
 
@@ -155,11 +149,7 @@ async fn test_lm_cache_direct_operations() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config).await;
 
     // Get cache handler
     let cache = lm
@@ -215,12 +205,12 @@ async fn test_lm_cache_direct_operations() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_with_different_models() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+        std::env::set_var("ANTHROPIC_API_KEY", "test");
+    }
     // Test that cache works with different model configurations
-    let models = vec![
-        "gpt-4o-mini",
-        "openai/gpt-3.5-turbo",
-        "anthropic/claude-3-haiku-20240307",
-    ];
+    let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
 
     for model in models {
         let config = LMConfig {
@@ -229,11 +219,7 @@ async fn test_lm_cache_with_different_models() {
             ..Default::default()
         };
 
-        let lm = LM::builder()
-            .api_key("test_key".to_string().into())
-            .config(config)
-            .build()
-            .await;
+        let lm = LM::new(config).await;
 
         // Cache should be initialized regardless of model
         assert!(
@@ -247,6 +233,9 @@ async fn test_lm_cache_with_different_models() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_cache_with_complex_inputs() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     use dspy_rs::{Example, Prediction};
     use std::collections::HashMap;
 
@@ -256,11 +245,7 @@ async fn test_cache_with_complex_inputs() {
         ..Default::default()
     };
 
-    let lm = LM::builder()
-        .api_key("test_key".to_string().into())
-        .config(config)
-        .build()
-        .await;
+    let lm = LM::new(config).await;
 
     let cache = lm
         .cache_handler
@@ -306,7 +291,6 @@ async fn test_cache_with_complex_inputs() {
             prompt_tokens: 50,
             completion_tokens: 30,
             total_tokens: 80,
-            reasoning_tokens: Some(15),
         },
     );
 
@@ -326,10 +310,9 @@ async fn test_cache_with_complex_inputs() {
     assert_eq!(cached.data.len(), 3);
     assert_eq!(cached.data.get("answer"), output.get("answer"));
     assert_eq!(cached.data.get("confidence"), output.get("confidence"));
-    assert_eq!(cached.data.get("reasoning"), output.get("reasoning"));
+
     // The cache stores and retrieves the full Prediction including usage stats
     assert_eq!(cached.lm_usage.prompt_tokens, 50); // Preserved from original
     assert_eq!(cached.lm_usage.completion_tokens, 30); // Preserved from original
     assert_eq!(cached.lm_usage.total_tokens, 80); // Preserved from original
-    assert_eq!(cached.lm_usage.reasoning_tokens, Some(15)); // Preserved from original
 }

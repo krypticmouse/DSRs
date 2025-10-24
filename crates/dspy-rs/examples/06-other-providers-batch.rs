@@ -13,7 +13,6 @@ use dspy_rs::{
     ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
     configure, example, hashmap, prediction,
 };
-use secrecy::SecretString;
 
 #[Signature(cot)]
 struct QASignature {
@@ -78,16 +77,11 @@ impl Module for QARater {
 async fn main() {
     // Anthropic
     configure(
-        LM::builder()
-            .api_key(SecretString::from(
-                std::env::var("ANTHROPIC_API_KEY").unwrap(),
-            ))
-            .config(LMConfig {
-                model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
-                ..LMConfig::default()
-            })
-            .build()
-            .await,
+        LM::new(LMConfig {
+            model: "anthropic:claude-sonnet-4-5-20250929".to_string(),
+            ..LMConfig::default()
+        })
+        .await,
         ChatAdapter,
     );
 
@@ -109,14 +103,11 @@ async fn main() {
 
     // Gemini
     configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("GEMINI_API_KEY").unwrap()))
-            .config(LMConfig {
-                model: "google/gemini-2.0-flash".to_string(),
-                ..LMConfig::default()
-            })
-            .build()
-            .await,
+        LM::new(LMConfig {
+            model: "gemini:gemini-2.0-flash".to_string(),
+            ..LMConfig::default()
+        })
+        .await,
         ChatAdapter,
     );
 

@@ -455,7 +455,7 @@ async fn test_chat_adapter_with_cache_hit() {
     };
 
     let dummy_lm = DummyLM {
-        api_key: "test_key".to_string().into(),
+        api_key: "test_key".to_string(),
         base_url: "https://api.openai.com/v1".to_string(),
         config,
         cache_handler: Some(Arc::new(Mutex::new(Cache::new().await))),
@@ -511,7 +511,7 @@ async fn test_chat_adapter_cache_miss_different_inputs() {
 
     let cache_handler = Arc::new(Mutex::new(Cache::new().await));
     let dummy_lm = DummyLM {
-        api_key: "test_key".to_string().into(),
+        api_key: "test_key".to_string(),
         base_url: "https://api.openai.com/v1".to_string(),
         config,
         cache_handler: Some(cache_handler.clone()),
@@ -574,7 +574,7 @@ async fn test_chat_adapter_cache_disabled() {
     };
 
     let dummy_lm = DummyLM {
-        api_key: "test_key".to_string().into(),
+        api_key: "test_key".to_string(),
         base_url: "https://api.openai.com/v1".to_string(),
         config,
         cache_handler: None, // No cache handler when cache is disabled

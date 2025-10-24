@@ -1,26 +1,22 @@
 pub mod chat;
+pub mod client_registry;
 pub mod config;
 pub mod usage;
 
 pub use chat::*;
+pub use client_registry::*;
 pub use config::*;
 pub use usage::*;
 
 use anyhow::Result;
-use async_openai::types::CreateChatCompletionRequestArgs;
-use async_openai::{Client, config::OpenAIConfig};
+use rig::completion::AssistantContent;
 
-use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
 use bon::Builder;
-use secrecy::{ExposeSecret, SecretString};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-/// A single completion returned by [`LM::call`].
-///
-/// Captures the assistant reply (`output`), the provider token accounting
-/// (`usage`), and the final chat transcript (`chat`) so higher-level modules
-/// can inspect the full exchange.
+use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
+
 #[derive(Clone, Debug)]
 pub struct LMResponse {
     /// Assistant message chosen by the provider.
@@ -31,48 +27,24 @@ pub struct LMResponse {
     pub chat: Chat,
 }
 
-fn get_base_url_by_provider(provider: &str) -> &str {
-    match provider {
-        "openai" => "https://api.openai.com/v1",
-        "anthropic" => "https://api.anthropic.com/v1",
-        "google" => "https://generativelanguage.googleapis.com/v1beta/openai",
-        "cohere" => "https://api.cohere.ai/compatibility/v1",
-        "groq" => "https://api.groq.com/openai/v1",
-        "openrouter" => "https://openrouter.ai/api/v1",
-        "qwen" => "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-        "together" => "https://api.together.xyz/v1",
-        "xai" => "https://api.x.ai/v1",
-        _ => "https://openrouter.ai/api/v1",
-    }
+pub struct LM {
+    pub config: LMConfig,
+    client: Arc<LMClient>,
+    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
 }
 
-/// OpenAI-compatible language model client used throughout DSRs.
-///
-/// `LM` owns provider credentials, request configuration, and optional
-/// response caching. Builders are cheap to clone; clones share the same HTTP
-/// client and cache via `Arc` so they remain lightweight for concurrent use.
-#[derive(Builder)]
-#[builder(finish_fn(vis = "", name = build_internal))]
-pub struct LM {
-    /// Provider API credential stored as a [`SecretString`].
-    #[builder(getter)]
-    pub api_key: SecretString,
-    /// Base URL for the OpenAI-compatible endpoint.
-    #[builder(default = "https://api.openai.com/v1".to_string(), getter)]
-    pub base_url: String,
-    /// Model inference settings applied to each call.
-    #[builder(default = LMConfig::default(), getter)]
-    pub config: LMConfig,
-    client: Option<Client<OpenAIConfig>>,
-    /// Optional shared cache used to deduplicate identical requests.
-    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
+impl Default for LM {
+    fn default() -> Self {
+        // Use a blocking tokio runtime to call the async new function
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create tokio runtime")
+            .block_on(Self::new(LMConfig::default()))
+    }
 }
 
 impl Clone for LM {
     fn clone(&self) -> Self {
         Self {
-            api_key: self.api_key.clone(),
-            base_url: self.base_url.clone(),
             config: self.config.clone(),
             client: self.client.clone(),
             cache_handler: self.cache_handler.clone(),
@@ -80,77 +52,74 @@ impl Clone for LM {
     }
 }
 
-use l_m_builder::{IsSet, IsUnset, State};
-
-impl<S: State> LMBuilder<S> {
-    /// Finalizes construction of an [`LM`], initializing the HTTP client and
-    /// optional response cache.
-    pub async fn build(self) -> LM
-    where
-        S::ApiKey: IsSet,
-        S::Client: IsUnset,
-        S::CacheHandler: IsUnset,
-    {
-        let mut lm = self.build_internal();
-
-        if lm.config.model.contains("/") {
-            let model_str = lm.config.model.clone();
-            let (provider, model_id) = model_str.split_once("/").unwrap();
-            lm.config.model = model_id.to_string();
-            lm.base_url = get_base_url_by_provider(provider).to_string();
-        }
-
-        let openai_config = OpenAIConfig::new()
-            .with_api_key(lm.api_key.expose_secret().to_string())
-            .with_api_base(lm.base_url.clone());
-        let client = Client::with_config(openai_config);
-        lm.client = Some(client);
-
-        if lm.config.cache {
-            let cache_handler = Arc::new(Mutex::new(ResponseCache::new().await));
-            lm.cache_handler = Some(cache_handler);
-        }
-        lm
-    }
-}
-
 impl LM {
+    /// Creates a new LM with the given configuration.
+    /// Uses enum dispatch for optimal runtime performance.
+    ///
+    /// This is an async function because it initializes the cache handler when
+    /// `config.cache` is `true`. For synchronous contexts where cache initialization
+    /// is not needed, use `new_sync` instead.
+    pub async fn new(config: LMConfig) -> Self {
+        let client = LMClient::from_model_string(&config.model)
+            .expect("Failed to create client from model string");
+
+        let cache_handler = if config.cache {
+            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
+        } else {
+            None
+        };
+
+        Self {
+            config,
+            client: Arc::new(client),
+            cache_handler,
+        }
+    }
+
     /// Executes a chat completion against the configured provider.
     ///
     /// `messages` must already be formatted as OpenAI-compatible chat turns.
     /// The call returns an [`LMResponse`] containing the assistant output,
     /// token usage, and chat history including the new response.
     pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
-        let request_messages = messages.get_async_openai_messages();
+        use rig::OneOrMany;
+        use rig::completion::CompletionRequest;
 
-        // Check if we're using a Gemini model
-        let is_gemini = self.config.model.starts_with("gemini-");
+        let request_messages = messages.get_rig_messages();
 
-        // Build the base request
-        let mut builder = CreateChatCompletionRequestArgs::default();
+        // Build the completion request manually
+        let mut chat_history = request_messages.conversation;
+        chat_history.push(request_messages.prompt);
 
-        builder
-            .model(self.config.model.clone())
-            .messages(request_messages)
-            .temperature(self.config.temperature)
-            .top_p(self.config.top_p)
-            .n(self.config.n)
-            .max_tokens(self.config.max_tokens)
-            .presence_penalty(self.config.presence_penalty);
+        let request = CompletionRequest {
+            preamble: Some(request_messages.system),
+            chat_history: if chat_history.len() == 1 {
+                OneOrMany::one(chat_history.into_iter().next().unwrap())
+            } else {
+                OneOrMany::many(chat_history).expect("chat_history should not be empty")
+            },
+            documents: Vec::new(),
+            tools: Vec::new(),
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens as u64),
+            tool_choice: None,
+            additional_params: None,
+        };
 
-        // Only add frequency_penalty, seed, and logit_bias for non-Gemini models
-        if !is_gemini {
-            builder
-                .frequency_penalty(self.config.frequency_penalty)
-                .seed(self.config.seed)
-                .logit_bias(self.config.logit_bias.clone().unwrap_or_default());
-        }
+        // Execute the completion using enum dispatch (zero-cost abstraction)
+        let response = self.client.completion(request).await?;
 
-        let request = builder.build()?;
+        let first_choice = match response.choice.first() {
+            AssistantContent::Text(text) => Message::assistant(&text.text),
+            AssistantContent::Reasoning(reasoning) => {
+                Message::assistant(reasoning.reasoning.join("\n"))
+            }
+            AssistantContent::ToolCall(_tool_call) => {
+                todo!()
+            }
+        };
 
-        let response = self.client.as_ref().unwrap().chat().create(request).await?;
-        let first_choice = Message::from(response.choices.first().unwrap().message.clone());
-        let usage = LmUsage::from(response.usage.unwrap());
+        let usage = LmUsage::from(response.usage);
 
         let mut full_chat = messages.clone();
         full_chat.push_message(first_choice.clone());
@@ -180,9 +149,7 @@ impl LM {
 /// In-memory LM used for deterministic tests and examples.
 #[derive(Clone, Builder, Default)]
 pub struct DummyLM {
-    /// Synthetic API key; unused but mirrors [`LM`].
-    pub api_key: SecretString,
-    /// Base URL retained for parity with [`LM`].
+    pub api_key: String,
     #[builder(default = "https://api.openai.com/v1".to_string())]
     pub base_url: String,
     /// Static configuration applied to stubbed responses.

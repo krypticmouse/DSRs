@@ -3,17 +3,20 @@ Script to evaluate the answerer of the QARater module for a tiny sample of the H
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa
+cargo run --example 03-evaluate-hotpotqa --features dataloaders
 ```
+
+Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
-    Predictor, Signature, configure,
+    ChatAdapter, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction, Predictor,
+    Signature, configure,
 };
-use secrecy::SecretString;
+
+use dspy_rs::DataLoader;
 
 #[Signature(cot)]
 struct QASignature {
@@ -59,13 +62,7 @@ impl Evaluator for QARater {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build()
-            .await,
-        ChatAdapter {},
-    );
+    configure(LM::default(), ChatAdapter {});
 
     let examples = DataLoader::load_hf(
         "hotpotqa/hotpot_qa",

@@ -347,44 +347,39 @@ impl Optimizer for COPRO {
                 let attempts_str = attempts_list.join("\n");
 
                 // Generate new candidates
-                let mut futures: Vec<Pin<Box<dyn Future<Output = Result<Prediction>> + Send>>> =
-                    Vec::new();
-
-                if let Some(mut prompt_model) = self.prompt_model.clone() {
+                let results = if let Some(mut prompt_model) = self.prompt_model.clone() {
                     prompt_model.config.temperature = self.init_temperature;
-                    prompt_model.config.n = self.breadth as u8;
                     let attempts = attempts_str.clone();
-                    futures.push(Box::pin(async move {
-                        REFINEMENT_GENERATOR
-                            .forward_with_config(
-                                example! {
-                                    "attempted_instructions": "input" => attempts
-                                },
-                                Arc::new(prompt_model),
-                            )
-                            .await
-                    }));
-                } else {
-                    assert_eq!(
-                        get_lm().config.n,
-                        self.breadth as u8,
-                        "Breadth must be the same as `config.n` in lm config."
-                    );
-                    let attempts = attempts_str.clone();
-                    futures.push(Box::pin(async move {
-                        REFINEMENT_GENERATOR
-                            .forward_with_config(
-                                example! {
-                                    "attempted_instructions": "input" => attempts
-                                },
-                                Arc::clone(&get_lm()),
-                            )
-                            .await
-                    }));
-                }
 
-                let results = join_all(futures).await;
-                if let Ok(predictions) = results.into_iter().collect::<Result<Vec<_>>>() {
+                    REFINEMENT_GENERATOR
+                        .batch_with_config(
+                            (0..self.breadth)
+                                .map(|_| {
+                                    example! {
+                                        "attempted_instructions": "input" => attempts.clone()
+                                    }
+                                })
+                                .collect(),
+                            Arc::new(prompt_model),
+                        )
+                        .await
+                } else {
+                    let attempts = attempts_str.clone();
+                    REFINEMENT_GENERATOR
+                        .batch_with_config(
+                            (0..self.breadth)
+                                .map(|_| {
+                                    example! {
+                                        "attempted_instructions": "input" => attempts.clone()
+                                    }
+                                })
+                                .collect(),
+                            Arc::clone(&get_lm()),
+                        )
+                        .await
+                };
+
+                if let Ok(predictions) = results {
                     let mut new_candidates = Vec::new();
 
                     for pred in predictions {

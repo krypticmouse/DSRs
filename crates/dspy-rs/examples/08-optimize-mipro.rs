@@ -11,10 +11,10 @@ by leveraging prompting best practices and program understanding.
 
 Run with:
 ```
-cargo run --example 08-optimize-mipro --features parquet
+cargo run --example 08-optimize-mipro --features dataloaders
 ```
 
-Note: The `parquet` feature is required for loading HuggingFace datasets.
+Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
@@ -23,7 +23,6 @@ use dspy_rs::{
     ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
     Predict, Prediction, Predictor, Signature, configure, example,
 };
-use secrecy::SecretString;
 
 #[Signature]
 struct QuestionAnswering {
@@ -86,13 +85,7 @@ async fn main() -> Result<()> {
     println!("=== MIPROv2 Optimizer Example ===\n");
 
     // Configure the LM
-    configure(
-        LM::builder()
-            .api_key(SecretString::from(std::env::var("OPENAI_API_KEY")?))
-            .build()
-            .await,
-        ChatAdapter {},
-    );
+    configure(LM::default(), ChatAdapter);
 
     // Load training data from HuggingFace
     println!("Loading training data from HuggingFace...");

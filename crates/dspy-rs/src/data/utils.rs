@@ -1,8 +1,8 @@
+use crate::data::example::Example;
 use csv::StringRecord;
+
 use regex::Regex;
 use std::sync::LazyLock;
-
-use crate::data::example::Example;
 
 #[allow(dead_code)]
 static IS_URL_PAT: LazyLock<Regex> = LazyLock::new(|| {
