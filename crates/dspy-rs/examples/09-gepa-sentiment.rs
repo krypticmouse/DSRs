@@ -120,7 +120,8 @@ async fn main() -> Result<()> {
     let lm = LM::new(LMConfig {
         temperature: 0.7,
         ..LMConfig::default()
-    });
+    })
+    .await;
 
     configure(lm.clone(), ChatAdapter);
 

@@ -1,12 +1,12 @@
 use anyhow::Result;
+use arrow::array::{Array, StringArray};
 use csv::{ReaderBuilder, WriterBuilder};
 use hf_hub::api::sync::Api;
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use rayon::prelude::*;
 use reqwest;
 use std::fs;
 use std::io::Cursor;
-use arrow::array::{Array, StringArray};
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::{collections::HashMap, path::Path};
 
 use crate::{Example, is_url, string_record_to_example};
@@ -216,8 +216,7 @@ impl DataLoader {
                 }
 
                 if os_str.ends_with(".parquet") {
-                    DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone())
-                        .ok()
+                    DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone()).ok()
                 } else if os_str.ends_with(".json") || os_str.ends_with(".jsonl") {
                     let is_jsonl = os_str.ends_with(".jsonl");
                     DataLoader::load_json(os_str, is_jsonl, input_keys.clone(), output_keys.clone())

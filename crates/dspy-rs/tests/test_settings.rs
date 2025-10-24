@@ -7,7 +7,8 @@ async fn test_settings() {
         LM::new(LMConfig {
             model: "openai:gpt-4o-mini".to_string(),
             ..LMConfig::default()
-        }),
+        })
+        .await,
         ChatAdapter {},
     );
 
@@ -18,7 +19,8 @@ async fn test_settings() {
         LM::new(LMConfig {
             model: "openai:gpt-4o".to_string(),
             ..LMConfig::default()
-        }),
+        })
+        .await,
         ChatAdapter {},
     );
 

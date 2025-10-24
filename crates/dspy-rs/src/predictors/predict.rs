@@ -40,7 +40,7 @@ impl Optimizable for Predict {
         self.signature.as_ref()
     }
 
-    fn parameters(&mut self) -> IndexMap<String, &mut (dyn Optimizable)> {
+    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
         IndexMap::new()
     }
 

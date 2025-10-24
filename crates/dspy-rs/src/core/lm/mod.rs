@@ -1,12 +1,12 @@
 pub mod chat;
+pub mod client_registry;
 pub mod config;
 pub mod usage;
-pub mod client_registry;
 
 pub use chat::*;
+pub use client_registry::*;
 pub use config::*;
 pub use usage::*;
-pub use client_registry::*;
 
 use anyhow::Result;
 use rig::completion::AssistantContent;
@@ -35,7 +35,10 @@ pub struct LM {
 
 impl Default for LM {
     fn default() -> Self {
-        Self::new(LMConfig::default())
+        // Use a blocking tokio runtime to call the async new function
+        tokio::runtime::Runtime::new()
+            .expect("Failed to create tokio runtime")
+            .block_on(Self::new(LMConfig::default()))
     }
 }
 
@@ -52,26 +55,36 @@ impl Clone for LM {
 impl LM {
     /// Creates a new LM with the given configuration.
     /// Uses enum dispatch for optimal runtime performance.
-    pub fn new(config: LMConfig) -> Self {
+    ///
+    /// This is an async function because it initializes the cache handler when
+    /// `config.cache` is `true`. For synchronous contexts where cache initialization
+    /// is not needed, use `new_sync` instead.
+    pub async fn new(config: LMConfig) -> Self {
         let client = LMClient::from_model_string(&config.model)
             .expect("Failed to create client from model string");
+
+        let cache_handler = if config.cache {
+            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
+        } else {
+            None
+        };
 
         Self {
             config,
             client: Arc::new(client),
-            cache_handler: None,
+            cache_handler,
         }
     }
-    
+
     /// Executes a chat completion against the configured provider.
     ///
     /// `messages` must already be formatted as OpenAI-compatible chat turns.
     /// The call returns an [`LMResponse`] containing the assistant output,
     /// token usage, and chat history including the new response.
     pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
-        use rig::completion::CompletionRequest;
         use rig::OneOrMany;
-        
+        use rig::completion::CompletionRequest;
+
         let request_messages = messages.get_rig_messages();
 
         // Build the completion request manually

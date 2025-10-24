@@ -80,7 +80,8 @@ async fn main() {
         LM::new(LMConfig {
             model: "anthropic:claude-sonnet-4-5-20250929".to_string(),
             ..LMConfig::default()
-        }),
+        })
+        .await,
         ChatAdapter,
     );
 
@@ -105,7 +106,8 @@ async fn main() {
         LM::new(LMConfig {
             model: "gemini:gemini-2.0-flash".to_string(),
             ..LMConfig::default()
-        }),
+        })
+        .await,
         ChatAdapter,
     );
 

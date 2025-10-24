@@ -12,8 +12,8 @@ Note: The `dataloaders` feature is required for loading datasets.
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction,
-    Predictor, Signature, configure,
+    ChatAdapter, Evaluator, Example, LM, Module, Optimizable, Predict, Prediction, Predictor,
+    Signature, configure,
 };
 
 use dspy_rs::DataLoader;

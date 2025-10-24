@@ -73,7 +73,8 @@ async fn main() -> Result<()> {
         LM::new(LMConfig {
             model: "openai:gpt-4o-mini".to_string(),
             ..LMConfig::default()
-        }),
+        })
+        .await,
         ChatAdapter,
     );
 

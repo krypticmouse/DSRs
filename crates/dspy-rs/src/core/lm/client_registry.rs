@@ -1,10 +1,10 @@
 use anyhow::Result;
 use enum_dispatch::enum_dispatch;
+use reqwest;
 use rig::{
     completion::{CompletionError, CompletionRequest, CompletionResponse},
     providers::{anthropic, cohere, gemini, groq, openai, perplexity},
 };
-use reqwest;
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
@@ -127,25 +127,35 @@ impl LMClient {
                 let api_key = std::env::var("OPENAI_API_KEY")
                     .map_err(|_| anyhow::anyhow!("OPENAI_API_KEY environment variable not set"))?;
                 let client = openai::ClientBuilder::new(&api_key).build();
-                Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(client, model_id)))
+                Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
+                    client, model_id,
+                )))
             }
             "anthropic" => {
-                let api_key = std::env::var("ANTHROPIC_API_KEY")
-                    .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY environment variable not set"))?;
+                let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                    anyhow::anyhow!("ANTHROPIC_API_KEY environment variable not set")
+                })?;
                 let client = anthropic::ClientBuilder::new(&api_key).build()?;
-                Ok(LMClient::Anthropic(anthropic::completion::CompletionModel::new(client, model_id)))
+                Ok(LMClient::Anthropic(
+                    anthropic::completion::CompletionModel::new(client, model_id),
+                ))
             }
             "cohere" => {
                 let api_key = std::env::var("COHERE_API_KEY")
                     .map_err(|_| anyhow::anyhow!("COHERE_API_KEY environment variable not set"))?;
                 let client = cohere::client::ClientBuilder::new(&api_key).build();
-                Ok(LMClient::Cohere(cohere::completion::CompletionModel::new(client, model_id)))
+                Ok(LMClient::Cohere(cohere::completion::CompletionModel::new(
+                    client, model_id,
+                )))
             }
             "gemini" => {
                 let api_key = std::env::var("GEMINI_API_KEY")
                     .map_err(|_| anyhow::anyhow!("GEMINI_API_KEY environment variable not set"))?;
-                let client = gemini::client::ClientBuilder::<reqwest::Client>::new(&api_key).build()?;
-                Ok(LMClient::Gemini(gemini::completion::CompletionModel::new(client, model_id)))
+                let client =
+                    gemini::client::ClientBuilder::<reqwest::Client>::new(&api_key).build()?;
+                Ok(LMClient::Gemini(gemini::completion::CompletionModel::new(
+                    client, model_id,
+                )))
             }
             "groq" => {
                 let api_key = std::env::var("GROQ_API_KEY")
@@ -154,10 +164,13 @@ impl LMClient {
                 Ok(LMClient::Groq(groq::CompletionModel::new(client, model_id)))
             }
             "perplexity" => {
-                let api_key = std::env::var("PERPLEXITY_API_KEY")
-                    .map_err(|_| anyhow::anyhow!("PERPLEXITY_API_KEY environment variable not set"))?;
+                let api_key = std::env::var("PERPLEXITY_API_KEY").map_err(|_| {
+                    anyhow::anyhow!("PERPLEXITY_API_KEY environment variable not set")
+                })?;
                 let client = perplexity::ClientBuilder::new(&api_key).build();
-                Ok(LMClient::Perplexity(perplexity::CompletionModel::new(client, model_id)))
+                Ok(LMClient::Perplexity(perplexity::CompletionModel::new(
+                    client, model_id,
+                )))
             }
             _ => anyhow::bail!("Unsupported provider: {}", provider),
         }

@@ -1,5 +1,5 @@
-use csv::StringRecord;
 use crate::data::example::Example;
+use csv::StringRecord;
 
 use regex::Regex;
 use std::sync::LazyLock;
