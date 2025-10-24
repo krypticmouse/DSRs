@@ -3,6 +3,9 @@ use dspy_rs::{ChatAdapter, LM, LMConfig, configure, get_lm};
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_settings() {
+    unsafe {
+        std::env::set_var("OPENAI_API_KEY", "test");
+    }
     configure(
         LM::new(LMConfig {
             model: "openai:gpt-4o-mini".to_string(),
