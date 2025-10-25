@@ -56,10 +56,16 @@ impl Evaluator for MyModule {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let lm = LM::builder()...build();
-    configure(lm, ChatAdapter);
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
     
-    let mut module = MyModule::builder()...build();
+    let mut module = MyModule::builder().build();
     
     let copro = COPRO::builder()
         .breadth(10)

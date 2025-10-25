@@ -64,17 +64,15 @@ struct SentimentAnalyzer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let lm = LM::builder()
-        .api_key(std::env::var("OPENAI_API_KEY")?.into())
-        .config(
-            LMConfig::builder()
-                .model("gpt-4.1-nano".to_string())
-                .temperature(0.5)
-                .build(),
-        )
-        .build();
-
-    configure(lm, ChatAdapter);
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .temperature(0.5)
+            .build()
+            .await?,
+        ChatAdapter,
+    );
 
     // Create a predictor
     let predictor = Predict::new(SentimentAnalyzer::new());
@@ -154,13 +152,20 @@ let predict = Predict::new(MySignature::new());
 
 #### 4. **Language Models** - Configurable LM Backends
 ```rust
-// Configure with OpenAI
+// Configure with OpenAI (API key read from OPENAI_API_KEY env var)
 let lm = LM::builder()
-    .api_key(secret_key)
-    .model("gpt-4")
+    .model("gpt-4o-mini".to_string())
     .temperature(0.7)
     .max_tokens(1000)
-    .build();
+    .build()
+    .await?;
+
+// For local models (e.g., vLLM, Ollama)
+let lm = LM::builder()
+    .base_url("http://localhost:11434".to_string())
+    .model("llama3".to_string())
+    .build()
+    .await?;
 ```
 
 #### 5. **Evaluation** - Evaluating your Modules

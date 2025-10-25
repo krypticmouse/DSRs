@@ -24,11 +24,14 @@ It handles three core responsibilities:
 ### Structure
 
 `LM` is built using the builder pattern and holds:
-  - `api_key` - Provider API credentials (stored as `SecretString`)
-  - `base_url` - API endpoint URL
-  - `config` - An `LMConfig` with model settings
-  - `client` - Internal HTTP client (OpenAI-compatible)
-  - `cache_handler` - Optional response cache (enabled by default)
+  - `model` - Model identifier (e.g., "gpt-4o-mini" or "openai:gpt-4o-mini")
+  - `api_key` - Provider API credentials (optional for local servers)
+  - `base_url` - API endpoint URL (optional, inferred from model provider)
+  - `temperature` - Sampling temperature (default: 0.7)
+  - `max_tokens` - Maximum completion tokens (default: 512)
+  - `cache` - Enable response caching (default: true)
+  - `client` - Internal HTTP client (initialized during build)
+  - `cache_handler` - Optional response cache (initialized during build if enabled)
 
 Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
 
@@ -40,26 +43,57 @@ You rarely call `LM` directly—It's the lowest-level DSRs primitive. Instead, a
 
 ## Construction and configuration
 
+The `LM::builder()` must be awaited with `.build().await` because client initialization is async.
+
+### Basic usage
+
 ```rust
-use dsrs::{LM, LMConfig};
+use dspy_rs::LM;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // OpenAI - API key automatically read from OPENAI_API_KEY env var
     let lm = LM::builder()
-        .api_key(std::env::var("OPENAI_API_KEY")?.into())
-        .config(
-            LMConfig::builder()
-                .model("gpt-4o-mini".to_string())
-                .temperature(0.7)
-                .max_tokens(512)
-                .build()
-        )
+        .model("gpt-4o-mini".to_string())
+        .temperature(0.7)
+        .max_tokens(512)
         .build()
-        .await;
+        .await?;
 
-    // use lm here
+    // Or explicitly provide API key
+    let lm = LM::builder()
+        .model("gpt-4o-mini".to_string())
+        .api_key("your-api-key".into())
+        .build()
+        .await?;
+
     Ok(())
 }
+```
+
+### Local server usage
+
+For local OpenAI-compatible servers (vLLM, Ollama, etc.), provide `base_url` without an `api_key`:
+
+```rust
+let lm = LM::builder()
+    .base_url("http://localhost:11434".to_string())
+    .model("llama3".to_string())
+    .build()
+    .await?;
+```
+
+### Custom OpenAI-compatible endpoints
+
+For custom endpoints requiring authentication, provide both `base_url` and `api_key`:
+
+```rust
+let lm = LM::builder()
+    .base_url("https://my-custom-api.com/v1".to_string())
+    .api_key(my_api_key.into())
+    .model("custom-model".to_string())
+    .build()
+    .await?;
 ```
 
 - **Clone semantics:** `LM` implements `Clone`; clones share the underlying client and cache via `Arc`, so they see the same history while carrying their own config copy.
@@ -70,12 +104,12 @@ You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-
 
 ## Global vs explicit usage
 
-- **Global:** `configure(lm.clone(), ChatAdapter::default())` sets the process-wide default used by predictors.
+- **Global:** `configure(lm, ChatAdapter)` sets the process-wide default used by predictors.
 - **Explicit:** Wrap the model in an `Arc` when you want to override the global instance: `let shared = Arc::new(lm); predictor.forward_with_config(inputs, Arc::clone(&shared)).await`.
 
 ## Async execution and sync entry
 
-- **Async:** Calls are `async`; prefer using an async runtime (Tokio).
+- **Async:** LM building and calls are `async`; prefer using an async runtime (Tokio).
 - **Sync-style:** If you need a plain `fn main`, create a runtime and `block_on` the async work.
 
 <Tabs>
@@ -84,7 +118,10 @@ You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-
 ```rust
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // build + use LM here
+    let lm = LM::builder()
+        .model("gpt-4o-mini".to_string())
+        .build()
+        .await?;
     Ok(())
 }
 ```
@@ -96,7 +133,10 @@ async fn main() -> anyhow::Result<()> {
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        // build + use LM here
+        let lm = LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?;
         Ok(())
     })
 }
@@ -117,73 +157,86 @@ for entry in history {
 
 > `inspect_history` requires caching to be enabled on the LM; otherwise no history is recorded.
 
-## LMConfig reference
+## Configuration options
 
-`LMConfig` centralizes inference settings. All fields have sensible defaults, so you can override only what you need. The builder exposes setters for each field.
+All `LM` builder parameters have sensible defaults, so you only need to override what you need.
 
-| Field                   | Type                             | Default         | Notes                                                                           |
-|-------------------------|----------------------------------|-----------------|---------------------------------------------------------------------------------|
-| `model`                 | `String`                         | `"gpt-4o-mini"` | Supports bare IDs or `provider/model` prefixed IDs; affects base URL inference. |
-| `temperature`           | `f32`                            | `0.7`           | Higher values increase randomness.                                              |
-| `top_p`                 | `f32`                            | `0.0`           | Nucleus sampling; set one of `temperature` or `top_p`.                          |
-| `max_tokens`            | `u32`                            | `512`           | Upper bound on completion tokens.                                               |
-| `max_completion_tokens` | `u32`                            | `512`           | Not currently sent to providers; Reserved for future use.                       |
-| `presence_penalty`      | `f32`                            | `0.0`           | Penalizes repeated tokens globally.                                             |
-| `frequency_penalty`     | `f32`                            | `0.0`           | Penalizes repeated tokens proportionally; ignored for Gemini models.            |
-| `seed`                  | `i64`                            | `42`            | Optional seed for deterministic sampling; ignored for Gemini models.            |
-| `logit_bias`            | `Option<HashMap<String, Value>>` | `None`          | Token-level logit adjustments; ignored for Gemini models.                       |
-| `cache`                 | `bool`                           | `true`          | Enables the shared `ResponseCache` and `inspect_history` support.               |
+| Parameter    | Type            | Default              | Notes                                                                           |
+|--------------|-----------------|----------------------|---------------------------------------------------------------------------------|
+| `model`      | `String`        | `"openai:gpt-4o-mini"` | Supports "provider:model" format or bare model name (defaults to OpenAI)      |
+| `api_key`    | `Option<String>`| `None`               | Provider API key; omit for local servers                                       |
+| `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
+| `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
+| `max_tokens` | `u32`           | `512`                | Upper bound on completion tokens                                               |
+| `cache`      | `bool`          | `true`               | Enables response caching and `inspect_history` support                         |
 
-
+### Example with custom settings
 
 ```rust
-let config = LMConfig::builder()
-    .model("anthropic/claude-4.5-sonnet".into())
+// API key automatically read from ANTHROPIC_API_KEY env var
+let lm = LM::builder()
+    .model("anthropic:claude-3-5-sonnet-20241022".to_string())
     .temperature(0.3)
     .max_tokens(1_024)
     .cache(true)
-    .build();
+    .build()
+    .await?;
 ```
 
-> Tip: stick to either `temperature` or `top_p`; providers often ignore one when both are set.
+### Provider Support
 
-### Provider Support & Base URLs
+DSRs supports multiple LLM providers through [Rig](https://github.com/0xPlaygrounds/rig). Use the `provider:model` format to specify which provider to use. Bare model names default to OpenAI.
 
-DSRs supports multiple LLM providers through automatic endpoint detection. When you pass a `provider/model` string, the builder splits it, rewrites `config.model` to just the model id, and swaps `base_url` to the matching OpenAI-compatible endpoint. Bare model names keep the default OpenAI base URL, and any unknown prefix falls back to OpenRouter.
+**Supported providers:**
+- `openai` - OpenAI models (requires `OPENAI_API_KEY`)
+- `anthropic` - Anthropic models (requires `ANTHROPIC_API_KEY`)
+- `gemini` - Google Gemini models (requires `GEMINI_API_KEY`)
+- `groq` - Groq models (requires `GROQ_API_KEY`)
+- `openrouter` - OpenRouter (requires `OPENROUTER_API_KEY`)
+- `ollama` - Local Ollama models (no API key required)
 
-| Prefix       | Base URL                                                  |
-|--------------|-----------------------------------------------------------|
-| `openai`     | `https://api.openai.com/v1`                               |
-| `anthropic`  | `https://api.anthropic.com/v1`                            |
-| `google`     | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `cohere`     | `https://api.cohere.ai/compatibility/v1`                  |
-| `groq`       | `https://api.groq.com/openai/v1`                          |
-| `openrouter` | `https://openrouter.ai/api/v1`                            |
-| `qwen`       | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`  |
-| `together`   | `https://api.together.xyz/v1`                             |
-| `xai`        | `https://api.x.ai/v1`                                     |
+**API keys are automatically read from environment variables.** You only need to provide `.api_key()` if you want to override the default environment variable.
 
-You can still override the base URL manually via the builder if you need a self-hosted proxy.
+You can also use `base_url` to connect to any OpenAI-compatible server (vLLM, LiteLLM, etc.).
 
-Use the `provider/model` format to target specific hosts:
+### Usage examples
 
 ```rust
-// Anthropic
-.model("anthropic/claude-4-5-sonnet".to_string())
+// Anthropic - reads from ANTHROPIC_API_KEY env var
+let lm = LM::builder()
+    .model("anthropic:claude-3-5-sonnet-20241022".to_string())
+    .build()
+    .await?;
 
-// Google
-.model("google/gemini-2.0-flash".to_string())
+// Google Gemini - reads from GEMINI_API_KEY env var
+let lm = LM::builder()
+    .model("gemini:gemini-2.0-flash-exp".to_string())
+    .build()
+    .await?;
 
-// Groq
-.model("groq/mixtral-8x7b-32768".to_string())
+// Groq - reads from GROQ_API_KEY env var
+let lm = LM::builder()
+    .model("groq:mixtral-8x7b-32768".to_string())
+    .build()
+    .await?;
 
-// OpenAI (or just use model name directly)
-.model("openai/gpt-4.1".to_string())
-.model("gpt-4.1-mini".to_string())  // defaults to OpenAI
+// OpenAI (or just use model name directly) - reads from OPENAI_API_KEY env var
+let lm = LM::builder()
+    .model("gpt-4o".to_string())  // defaults to OpenAI
+    .build()
+    .await?;
+
+// Ollama (local, no API key needed)
+let lm = LM::builder()
+    .model("ollama:llama3".to_string())
+    .build()
+    .await?;
+
+// OpenRouter - reads from OPENROUTER_API_KEY env var
+let lm = LM::builder()
+    .model("openrouter:anthropic/claude-3-opus".to_string())
+    .build()
+    .await?;
 ```
 
-Supported prefixes: `openai`, `anthropic`, `google`, `cohere`, `groq`, `openrouter`, `qwen`, `together`, `xai`. Unrecognised prefixes default to OpenRouter.
-
-### Gemini compatibility
-
-Gemini models (names starting with `gemini-`) reject several OpenAI parameters. DSRs automatically omits `frequency_penalty`, `seed`, and `logit_bias` when the configured model begins with `gemini-`, so you can keep the same `LMConfig` across providers without triggering errors. Other settings such as `temperature`, `top_p`, `max_tokens`, and `presence_penalty` are still forwarded.
+All provider integrations are powered by [Rig](https://github.com/0xPlaygrounds/rig), which handles the provider-specific API details.

@@ -61,46 +61,38 @@ into a prompt that the LM can follow to complete the task.
 <Tabs>
 <Tab title="OpenAI">
 ```rust lines
-use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
-use std::env;
+use dspy_rs::{configure, ChatAdapter, LM};
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
-    // Define a config for the LM
-    let config = LMConfig::builder()
-        .model("gpt-4.1-nano".to_string())
-        .build();
-    // Create the LM instance via the async builder
-    let lm = LM::builder()
-        .config(config)
-        .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build()
-        .await;
-    // Configure the global LM and adapter
-    configure(lm, ChatAdapter::default());
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
 
     Ok(())
 }
 ```
 </Tab>
 <Tab title="Ollama">
-```rust lines highlight={7, 12}
-use dspy_rs::{configure, ChatAdapter, LM, LMConfig};
-use std::env;
+```rust lines
+use dspy_rs::{configure, ChatAdapter, LM};
 
-fn main() -> Result<(), anyhow::Error> {
-    //Define a config for the LM
-    let config = LMConfig::builder()
-        .model("gpt-oss:20b".to_string())
-        .build();
-    // Create the LM instance via the builder
-    let lm = LM::builder()
-        .config(config)
-        .base_url("http://localhost:11434")
-        .api_key("".into()) // Don't need an API key for Ollama
-        .build();
-    // Configure the global LM and adapter
-    configure(lm, ChatAdapter::default());
+#[tokio::main]
+async fn main() -> Result<(), anyhow::Error> {
+    // Create the LM instance for local Ollama server
+    configure(
+        LM::builder()
+            .base_url("http://localhost:11434".to_string())
+            .model("llama3".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
 
     Ok(())
 }
@@ -146,9 +138,8 @@ LM calls in DSRs are asynchronous and return a future, so we need to use the `to
 
 ```rust lines
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Predict, Predictor, Signature, configure, hashmap,
+    ChatAdapter, Example, LM, Predict, Predictor, Signature, configure, hashmap,
 };
-use std::env;
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -158,15 +149,14 @@ async fn main() -> Result<(), anyhow::Error> {
         (question: String) -> answer: String
     };
 
-    let config = LMConfig::builder().model("gpt-4.1-nano".to_string())
-        .build();
-
-    let lm = LM::builder()
-        .config(config)
-        .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build();
-
-    configure(lm.clone(), ChatAdapter::default());
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
     // Create a question-answering signature instance
     let signature = qa::new();
     // Create a predictor
@@ -235,22 +225,19 @@ instructions to the LM.
 
 Let us use the above signature in our pipeline to answer questions like a pirate.
 
-```rust lines highlight={16}
+```rust lines highlight={4}
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     dotenv().ok();
 
-    let config = LMConfig::builder()
-        .model("gpt-4.1-nano".to_string())
-        .build();
-
-    let lm = LM::builder()
-        .config(config)
-        .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build()
-        .await;
-
-    configure(lm.clone(), ChatAdapter::default());
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
     // Create a question-answering signature instance
     let signature = QA::new();
     // Create a predictor
@@ -293,7 +280,7 @@ more complex modules that define your own logic. Let us examine how to do that.
 
 ```rust
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction,
+    ChatAdapter, Example, LM, Module, Predict, Prediction,
     Predictor, Signature, configure, hashmap,
 };
 use std::env;
@@ -327,22 +314,19 @@ We can define the main function to use this module as follows:
 1. Create a new instance of the module (line 16).
 2. Call the `forward` method on the module (line 30).
 
-```rust lines highlight={16,30}
+```rust lines highlight={4,15}
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     dotenv().ok();
 
-    let config = LMConfig::builder()
-        .model("gpt-4.1-nano".to_string())
-        .build();
-
-    let lm = LM::builder()
-        .config(config)
-        .api_key(env::var("OPENAI_API_KEY")?.into())
-        .build()
-        .await;
-
-    configure(lm.clone(), ChatAdapter::default());
+    // API key automatically read from OPENAI_API_KEY env var
+    configure(
+        LM::builder()
+            .model("gpt-4o-mini".to_string())
+            .build()
+            .await?,
+        ChatAdapter,
+    );
 
     let module = AnswerQuestion::new();
 
