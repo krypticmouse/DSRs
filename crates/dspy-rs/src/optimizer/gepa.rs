@@ -325,7 +325,7 @@ impl GEPA {
         };
 
         let reflection_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
-            prompt_model.config.temperature = self.temperature;
+            prompt_model.temperature = self.temperature;
             reflect_predictor
                 .forward_with_config(reflection_input, Arc::new(prompt_model))
                 .await?
@@ -348,7 +348,7 @@ impl GEPA {
         };
 
         let proposal_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
-            prompt_model.config.temperature = self.temperature;
+            prompt_model.temperature = self.temperature;
             propose_predictor
                 .forward_with_config(proposal_input, Arc::new(prompt_model))
                 .await?

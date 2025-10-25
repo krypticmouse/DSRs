@@ -117,11 +117,7 @@ async fn main() -> Result<()> {
     println!("GEPA Sentiment Analysis Optimization Example\n");
 
     // Setup LM
-    let lm = LM::new(LMConfig {
-        temperature: 0.7,
-        ..LMConfig::default()
-    })
-    .await;
+    let lm = LM::builder().temperature(0.7).build().await.unwrap();
 
     configure(lm.clone(), ChatAdapter);
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use dspy_rs::{
-    Cache, Chat, ChatAdapter, DummyLM, Example, LMConfig, Message, MetaSignature, Signature,
+    Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, Signature,
     adapter::Adapter, example, hashmap, sign,
 };
 
@@ -448,18 +448,7 @@ async fn test_chat_adapter_demo_format_multiple_fields() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_cache_hit() {
-    // Create DummyLM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
-
-    let dummy_lm = DummyLM {
-        api_key: "test_key".to_string(),
-        base_url: "https://api.openai.com/v1".to_string(),
-        config,
-        cache_handler: Some(Arc::new(Mutex::new(Cache::new().await))),
-    };
+    let dummy_lm = DummyLM::default();
 
     // Create test input example
     let input = example! {
@@ -504,18 +493,12 @@ async fn test_chat_adapter_with_cache_hit() {
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_cache_miss_different_inputs() {
     // Create DummyLM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
 
     let cache_handler = Arc::new(Mutex::new(Cache::new().await));
-    let dummy_lm = DummyLM {
-        api_key: "test_key".to_string(),
-        base_url: "https://api.openai.com/v1".to_string(),
-        config,
-        cache_handler: Some(cache_handler.clone()),
-    };
+    let dummy_lm = DummyLM::builder()
+        .cache_handler(cache_handler)
+        .api_key("test_key".to_string())
+        .build();
 
     // First input
     let input1 = example! {
@@ -568,17 +551,7 @@ async fn test_chat_adapter_cache_miss_different_inputs() {
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_cache_disabled() {
     // Create DummyLM with cache disabled
-    let config = LMConfig {
-        cache: false,
-        ..Default::default()
-    };
-
-    let dummy_lm = DummyLM {
-        api_key: "test_key".to_string(),
-        base_url: "https://api.openai.com/v1".to_string(),
-        config,
-        cache_handler: None, // No cache handler when cache is disabled
-    };
+    let dummy_lm = DummyLM::default();
 
     // Create test input
     let input = example! {

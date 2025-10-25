@@ -62,7 +62,14 @@ impl Evaluator for QARater {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    configure(LM::default(), ChatAdapter {});
+    configure(
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await
+            .unwrap(),
+        ChatAdapter {},
+    );
 
     let examples = DataLoader::load_hf(
         "hotpotqa/hotpot_qa",

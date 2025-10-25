@@ -1,11 +1,9 @@
 pub mod chat;
 pub mod client_registry;
-pub mod config;
 pub mod usage;
 
 pub use chat::*;
 pub use client_registry::*;
-pub use config::*;
 pub use usage::*;
 
 use anyhow::Result;
@@ -27,55 +25,111 @@ pub struct LMResponse {
     pub chat: Chat,
 }
 
+#[derive(Builder)]
+#[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LM {
-    pub config: LMConfig,
-    client: Arc<LMClient>,
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    #[builder(default = "openai:gpt-4o-mini".to_string())]
+    pub model: String,
+    #[builder(default = 0.7)]
+    pub temperature: f32,
+    #[builder(default = 512)]
+    pub max_tokens: u32,
+    #[builder(default = true)]
+    pub cache: bool,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
+    #[builder(skip)]
+    client: Option<Arc<LMClient>>,
 }
 
 impl Default for LM {
     fn default() -> Self {
-        // Use a blocking tokio runtime to call the async new function
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create tokio runtime")
-            .block_on(Self::new(LMConfig::default()))
+        tokio::runtime::Handle::current().block_on(async { Self::builder().build().await.unwrap() })
     }
 }
 
 impl Clone for LM {
     fn clone(&self) -> Self {
         Self {
-            config: self.config.clone(),
-            client: self.client.clone(),
+            base_url: self.base_url.clone(),
+            api_key: self.api_key.clone(),
+            model: self.model.clone(),
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            cache: self.cache,
             cache_handler: self.cache_handler.clone(),
+            client: self.client.clone(),
         }
     }
 }
 
 impl LM {
-    /// Creates a new LM with the given configuration.
-    /// Uses enum dispatch for optimal runtime performance.
+    /// Finalizes construction of an [`LM`], initializing the HTTP client and
+    /// optional response cache based on provided parameters.
     ///
-    /// This is an async function because it initializes the cache handler when
-    /// `config.cache` is `true`. For synchronous contexts where cache initialization
-    /// is not needed, use `new_sync` instead.
-    pub async fn new(config: LMConfig) -> Self {
-        let client = LMClient::from_model_string(&config.model)
-            .expect("Failed to create client from model string");
-
-        let cache_handler = if config.cache {
-            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
-        } else {
-            None
+    /// Supports 3 build cases:
+    /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
+    ///    → Uses OpenAI client with custom base URL
+    /// 2. Local OpenAI-compatible: `base_url` only (no `api_key`)
+    ///    → Uses OpenAI client for vLLM/local servers (dummy key)
+    /// 3. Provider via model string: no `base_url`, model in "provider:model" format
+    ///    → Uses provider-specific client (openai, anthropic, gemini, etc.)
+    async fn initialize_client(mut self) -> Result<Self> {
+        // Determine which build case based on what's provided
+        let client = match (&self.base_url, &self.api_key, &self.model) {
+            // Case 1: OpenAI-compatible with authentication (base_url + api_key)
+            // For custom OpenAI-compatible APIs that require API keys
+            (Some(base_url), Some(api_key), _) => Arc::new(LMClient::from_openai_compatible(
+                base_url,
+                api_key,
+                &self.model,
+            )?),
+            // Case 2: Local OpenAI-compatible server (base_url only, no api_key)
+            // For vLLM, text-generation-inference, and other local OpenAI-compatible servers
+            (Some(base_url), None, _) => Arc::new(LMClient::from_local(base_url, &self.model)?),
+            // Case 3: Provider via model string (no base_url, model in "provider:model" format)
+            // Uses provider-specific clients
+            (None, api_key, model) if model.contains(':') => {
+                Arc::new(LMClient::from_model_string(model, api_key.as_deref())?)
+            }
+            // Default case: assume OpenAI provider if no colon in model name
+            (None, api_key, model) => {
+                let model_str = if model.contains(':') {
+                    model.to_string()
+                } else {
+                    format!("openai:{}", model)
+                };
+                Arc::new(LMClient::from_model_string(&model_str, api_key.as_deref())?)
+            }
         };
 
-        Self {
-            config,
-            client: Arc::new(client),
-            cache_handler,
-        }
-    }
+        self.client = Some(client);
 
+        // Initialize cache if enabled
+        if self.cache && self.cache_handler.is_none() {
+            self.cache_handler = Some(Arc::new(Mutex::new(ResponseCache::new().await)));
+        }
+
+        Ok(self)
+    }
+}
+
+// Implement build() for all builder states since optional fields don't require setting
+impl<S: l_m_builder::State> LMBuilder<S> {
+    /// Builds the LM instance with proper client initialization
+    ///
+    /// Supports 3 build cases:
+    /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
+    /// 2. Local OpenAI-compatible: `base_url` only (for vLLM, etc.)
+    /// 3. Provider via model string: model in "provider:model" format
+    pub async fn build(self) -> Result<LM> {
+        let lm = self.__internal_build();
+        lm.initialize_client().await
+    }
+}
+
+impl LM {
     /// Executes a chat completion against the configured provider.
     ///
     /// `messages` must already be formatted as OpenAI-compatible chat turns.
@@ -100,14 +154,21 @@ impl LM {
             },
             documents: Vec::new(),
             tools: Vec::new(),
-            temperature: Some(self.config.temperature as f64),
-            max_tokens: Some(self.config.max_tokens as u64),
+            temperature: Some(self.temperature as f64),
+            max_tokens: Some(self.max_tokens as u64),
             tool_choice: None,
             additional_params: None,
         };
 
         // Execute the completion using enum dispatch (zero-cost abstraction)
-        let response = self.client.completion(request).await?;
+        let response = self
+            .client
+            .as_ref()
+            .ok_or_else(|| {
+                anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+            })?
+            .completion(request)
+            .await?;
 
         let first_choice = match response.choice.first() {
             AssistantContent::Text(text) => Message::assistant(&text.text),
@@ -152,9 +213,12 @@ pub struct DummyLM {
     pub api_key: String,
     #[builder(default = "https://api.openai.com/v1".to_string())]
     pub base_url: String,
-    /// Static configuration applied to stubbed responses.
-    #[builder(default = LMConfig::default())]
-    pub config: LMConfig,
+    #[builder(default = 0.7)]
+    pub temperature: f32,
+    #[builder(default = 512)]
+    pub max_tokens: u32,
+    #[builder(default = true)]
+    pub cache: bool,
     /// Cache backing storage shared with the real implementation.
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
 }
@@ -166,7 +230,9 @@ impl DummyLM {
         Self {
             api_key: "".into(),
             base_url: "https://api.openai.com/v1".to_string(),
-            config: LMConfig::default(),
+            temperature: 0.7,
+            max_tokens: 512,
+            cache: true,
             cache_handler: Some(cache_handler),
         }
     }
@@ -186,7 +252,7 @@ impl DummyLM {
             content: prediction.clone(),
         });
 
-        if self.config.cache
+        if self.cache
             && let Some(cache) = self.cache_handler.as_ref()
         {
             let (tx, rx) = tokio::sync::mpsc::channel(1);

@@ -1,4 +1,4 @@
-use dspy_rs::{Cache, Chat, DummyLM, Example, LM, LMConfig, LmUsage, Message, hashmap};
+use dspy_rs::{Cache, Chat, DummyLM, Example, LM, LmUsage, Message, hashmap};
 use rstest::*;
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
@@ -44,7 +44,7 @@ async fn test_dummy_lm() {
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
     // Check cache functionality if caching is enabled
-    if dummy_lm.config.cache {
+    if dummy_lm.cache {
         let history = dummy_lm.inspect_history(1).await;
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].prompt, chat.to_json().to_string());
@@ -87,12 +87,12 @@ async fn test_lm_with_cache_enabled() {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
     // Create LM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
-
-    let lm = LM::new(config).await;
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
+        .build()
+        .await
+        .unwrap();
 
     // Verify cache handler is initialized
     assert!(lm.cache_handler.is_some());
@@ -105,12 +105,12 @@ async fn test_lm_with_cache_disabled() {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
     // Create LM with cache explicitly disabled
-    let config = LMConfig {
-        cache: false,
-        ..Default::default()
-    };
-
-    let lm = LM::new(config).await;
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .cache(false)
+        .build()
+        .await
+        .unwrap();
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
@@ -123,12 +123,12 @@ async fn test_lm_cache_initialization_on_first_call() {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
     // Create LM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
-
-    let lm = LM::new(config).await;
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
+        .build()
+        .await
+        .unwrap();
 
     // After build, cache_handler should be initialized
     assert!(lm.cache_handler.is_some());
@@ -144,12 +144,12 @@ async fn test_lm_cache_direct_operations() {
     use std::collections::HashMap;
 
     // Create LM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
-
-    let lm = LM::new(config).await;
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
+        .build()
+        .await
+        .unwrap();
 
     // Get cache handler
     let cache = lm
@@ -213,13 +213,12 @@ async fn test_lm_cache_with_different_models() {
     let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
 
     for model in models {
-        let config = LMConfig {
-            cache: true,
-            model: model.to_string(),
-            ..Default::default()
-        };
-
-        let lm = LM::new(config).await;
+        let lm = LM::builder()
+            .model(model.to_string())
+            .cache(true)
+            .build()
+            .await
+            .unwrap();
 
         // Cache should be initialized regardless of model
         assert!(
@@ -240,12 +239,12 @@ async fn test_cache_with_complex_inputs() {
     use std::collections::HashMap;
 
     // Create LM with cache enabled
-    let config = LMConfig {
-        cache: true,
-        ..Default::default()
-    };
-
-    let lm = LM::new(config).await;
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
+        .build()
+        .await
+        .unwrap();
 
     let cache = lm
         .cache_handler

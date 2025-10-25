@@ -28,7 +28,11 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() {
-    let lm = LM::default();
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .build()
+        .await
+        .unwrap();
     configure(lm, ChatAdapter);
 
     let example = example! {

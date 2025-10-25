@@ -10,8 +10,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
-    configure, example, prediction,
+    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
+    example, prediction,
 };
 
 #[Signature(cot)]
@@ -70,11 +70,11 @@ impl Module for QARater {
 #[tokio::main]
 async fn main() -> Result<()> {
     configure(
-        LM::new(LMConfig {
-            model: "openai:gpt-4o-mini".to_string(),
-            ..LMConfig::default()
-        })
-        .await,
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await
+            .unwrap(),
         ChatAdapter,
     );
 
