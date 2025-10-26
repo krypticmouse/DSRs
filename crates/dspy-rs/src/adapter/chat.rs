@@ -283,7 +283,7 @@ impl Adapter for ChatAdapter {
         inputs: Example,
     ) -> Result<Prediction> {
         // Check cache first (release lock immediately after checking)
-        if lm.config.cache
+        if lm.cache
             && let Some(cache) = lm.cache_handler.as_ref()
         {
             let cache_key = inputs.clone();
@@ -304,7 +304,7 @@ impl Adapter for ChatAdapter {
         };
 
         // Store in cache if enabled
-        if lm.config.cache
+        if lm.cache
             && let Some(cache) = lm.cache_handler.as_ref()
         {
             let (tx, rx) = tokio::sync::mpsc::channel(1);

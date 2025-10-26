@@ -126,7 +126,7 @@ impl Optimizer for COPRO {
                 for _ in 0..self.breadth - 1 {
                     let inst = basic_instruction.clone();
                     if let Some(mut prompt_model) = self.prompt_model.clone() {
-                        prompt_model.config.temperature = self.init_temperature;
+                        prompt_model.temperature = self.init_temperature;
                         futures.push(Box::pin(async move {
                             BASIC_GENERATOR
                                 .forward_with_config(
@@ -348,7 +348,7 @@ impl Optimizer for COPRO {
 
                 // Generate new candidates
                 let results = if let Some(mut prompt_model) = self.prompt_model.clone() {
-                    prompt_model.config.temperature = self.init_temperature;
+                    prompt_model.temperature = self.init_temperature;
                     let attempts = attempts_str.clone();
 
                     REFINEMENT_GENERATOR

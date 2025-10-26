@@ -223,18 +223,10 @@ async fn main() -> Result<()> {
 
     // Setup: Configure the LLM
     // Main LM for the task
-    let task_lm = LM::new(LMConfig {
-        temperature: 0.7,
-        ..LMConfig::default()
-    })
-    .await;
+    let task_lm = LM::builder().temperature(0.7).build().await.unwrap();
 
     // Judge LM (could use a different/cheaper model)
-    let judge_lm = LM::new(LMConfig {
-        temperature: 0.3,
-        ..LMConfig::default()
-    })
-    .await;
+    let judge_lm = LM::builder().temperature(0.3).build().await.unwrap();
 
     configure(task_lm, ChatAdapter);
 

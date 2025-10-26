@@ -10,8 +10,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMConfig, Module, Predict, Prediction, Predictor, Signature,
-    configure, example, hashmap, prediction,
+    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
+    example, hashmap, prediction,
 };
 
 #[Signature(cot)]
@@ -77,11 +77,11 @@ impl Module for QARater {
 async fn main() {
     // Anthropic
     configure(
-        LM::new(LMConfig {
-            model: "anthropic:claude-sonnet-4-5-20250929".to_string(),
-            ..LMConfig::default()
-        })
-        .await,
+        LM::builder()
+            .model("anthropic:claude-sonnet-4-5-20250929".to_string())
+            .build()
+            .await
+            .unwrap(),
         ChatAdapter,
     );
 
@@ -103,11 +103,11 @@ async fn main() {
 
     // Gemini
     configure(
-        LM::new(LMConfig {
-            model: "gemini:gemini-2.0-flash".to_string(),
-            ..LMConfig::default()
-        })
-        .await,
+        LM::builder()
+            .model("gemini:gemini-2.0-flash".to_string())
+            .build()
+            .await
+            .unwrap(),
         ChatAdapter,
     );
 

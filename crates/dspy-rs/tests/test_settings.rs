@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, LM, LMConfig, configure, get_lm};
+use dspy_rs::{ChatAdapter, LM, configure, get_lm};
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
@@ -7,27 +7,27 @@ async fn test_settings() {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
     configure(
-        LM::new(LMConfig {
-            model: "openai:gpt-4o-mini".to_string(),
-            ..LMConfig::default()
-        })
-        .await,
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await
+            .unwrap(),
         ChatAdapter {},
     );
 
     let lm = get_lm();
-    assert_eq!(lm.config.model, "openai:gpt-4o-mini");
+    assert_eq!(lm.model, "openai:gpt-4o-mini");
 
     configure(
-        LM::new(LMConfig {
-            model: "openai:gpt-4o".to_string(),
-            ..LMConfig::default()
-        })
-        .await,
+        LM::builder()
+            .model("openai:gpt-4o".to_string())
+            .build()
+            .await
+            .unwrap(),
         ChatAdapter {},
     );
 
     let lm = get_lm();
 
-    assert_eq!(lm.config.model, "openai:gpt-4o");
+    assert_eq!(lm.model, "openai:gpt-4o");
 }

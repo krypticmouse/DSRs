@@ -11,7 +11,14 @@ use dspy_rs::{ChatAdapter, LM, Predict, Predictor, configure, example, sign};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    configure(LM::default(), ChatAdapter {});
+    configure(
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await
+            .unwrap(),
+        ChatAdapter {},
+    );
 
     let exp = example! {
         "number": "input" => 10,
