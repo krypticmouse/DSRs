@@ -4,7 +4,7 @@ pub use predict::*;
 
 use crate::{Example, LM, LmUsage, Prediction};
 use anyhow::Result;
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use std::sync::Arc;
 
 #[allow(async_fn_in_trait)]
@@ -14,14 +14,25 @@ pub trait Predictor: Send + Sync {
     -> anyhow::Result<Prediction>;
 
     async fn batch(&self, inputs: Vec<Example>) -> Result<Vec<Prediction>> {
-        let futures: Vec<_> = inputs
-            .iter()
-            .map(|input| self.forward(input.clone()))
-            .collect();
-        let predictions = join_all(futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<Prediction>>>()?;
+        let indexed_results: Vec<(usize, Result<Prediction>)> =
+            stream::iter(inputs.into_iter().enumerate())
+                .map(|(idx, input)| async move {
+                    let result = self.forward(input).await;
+                    (idx, result)
+                })
+                .buffer_unordered(32) // Match MAX_CONCURRENCY from Evaluator
+                .collect()
+                .await;
+
+        // Sort results back to original order
+        let mut indexed_results = indexed_results;
+        indexed_results.sort_by_key(|(idx, _)| *idx);
+
+        // Collect predictions and handle errors
+        let mut predictions = Vec::with_capacity(indexed_results.len());
+        for (_, result) in indexed_results {
+            predictions.push(result?);
+        }
         Ok(predictions)
     }
 
@@ -30,14 +41,29 @@ pub trait Predictor: Send + Sync {
         inputs: Vec<Example>,
         lm: Arc<LM>,
     ) -> Result<Vec<Prediction>> {
-        let futures: Vec<_> = inputs
-            .iter()
-            .map(|input| self.forward_with_config(input.clone(), lm.clone()))
-            .collect();
-        let predictions = join_all(futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<Prediction>>>()?;
+        let lm_ref = lm.clone();
+        let indexed_results: Vec<(usize, Result<Prediction>)> =
+            stream::iter(inputs.into_iter().enumerate())
+                .map(|(idx, input)| {
+                    let lm_clone = lm_ref.clone();
+                    async move {
+                        let result = self.forward_with_config(input, lm_clone).await;
+                        (idx, result)
+                    }
+                })
+                .buffer_unordered(32) // Match MAX_CONCURRENCY from Evaluator
+                .collect()
+                .await;
+
+        // Sort results back to original order
+        let mut indexed_results = indexed_results;
+        indexed_results.sort_by_key(|(idx, _)| *idx);
+
+        // Collect predictions and handle errors
+        let mut predictions = Vec::with_capacity(indexed_results.len());
+        for (_, result) in indexed_results {
+            predictions.push(result?);
+        }
         Ok(predictions)
     }
 }

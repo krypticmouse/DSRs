@@ -1,6 +1,6 @@
 use crate::core::Module;
 use crate::data::{example::Example, prediction::Prediction};
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 
 #[allow(async_fn_in_trait)]
 pub trait Evaluator: Module {
@@ -19,16 +19,18 @@ pub trait Evaluator: Module {
             .await
             .unwrap();
 
-        let futures: Vec<_> = examples
-            .iter()
-            .zip(predictions.iter())
-            .map(|(example, prediction)| {
+        let total = examples.len();
+
+        // Pair examples with predictions and evaluate with controlled concurrency
+        let metrics: Vec<f32> = stream::iter(examples.iter().zip(predictions.iter()).enumerate())
+            .map(|(_, (example, prediction))| {
                 let prediction = prediction.clone();
                 async move { self.metric(example, &prediction).await }
             })
-            .collect();
+            .buffer_unordered(Self::MAX_CONCURRENCY)
+            .collect()
+            .await;
 
-        let metrics = join_all(futures).await;
-        metrics.iter().sum::<f32>() / examples.len() as f32
+        metrics.iter().sum::<f32>() / total as f32
     }
 }
