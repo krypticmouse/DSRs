@@ -1,6 +1,8 @@
 pub mod predict;
+pub mod tooler;
 
 pub use predict::*;
+pub use tooler::*;
 
 use crate::{Example, LM, LmUsage, Prediction};
 use anyhow::Result;

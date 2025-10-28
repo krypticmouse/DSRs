@@ -66,8 +66,7 @@ async fn main() -> anyhow::Result<()> {
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await
-            .unwrap(),
+            .await?,
         ChatAdapter {},
     );
 

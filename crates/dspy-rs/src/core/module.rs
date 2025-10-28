@@ -1,7 +1,7 @@
 use anyhow::Result;
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use indexmap::IndexMap;
-use kdam::tqdm;
+use kdam::{BarExt, tqdm};
 
 use crate::{Example, Prediction, core::MetaSignature};
 
@@ -15,26 +15,37 @@ pub trait Module: Send + Sync {
         max_concurrency: usize,
         display_progress: bool,
     ) -> Result<Vec<Prediction>> {
-        let batches = inputs.chunks(max_concurrency).collect::<Vec<_>>();
-        let mut predictions = Vec::new();
+        let total = inputs.len();
+        let mut pb = if display_progress {
+            Some(tqdm!(total = total, desc = "Processing"))
+        } else {
+            None
+        };
 
-        for batch in tqdm!(
-            batches.iter(),
-            desc = "Processing Batch",
-            disable = !display_progress
-        ) {
-            let futures: Vec<_> = batch
-                .iter()
-                .map(|example| self.forward(example.clone()))
-                .collect();
+        // Pair each input with its index to maintain order
+        let indexed_results: Vec<(usize, Result<Prediction>)> =
+            stream::iter(inputs.into_iter().enumerate())
+                .map(|(idx, example)| async move {
+                    let result = self.forward(example).await;
+                    (idx, result)
+                })
+                .buffer_unordered(max_concurrency)
+                .inspect(|_| {
+                    if let Some(ref mut progress) = pb {
+                        let _ = progress.update(1);
+                    }
+                })
+                .collect()
+                .await;
 
-            predictions.extend(
-                join_all(futures)
-                    .await
-                    .into_iter()
-                    .map(|prediction| prediction.unwrap())
-                    .collect::<Vec<_>>(),
-            );
+        // Sort results back to original order
+        let mut indexed_results = indexed_results;
+        indexed_results.sort_by_key(|(idx, _)| *idx);
+
+        // Collect predictions and handle errors
+        let mut predictions = Vec::with_capacity(total);
+        for (_, result) in indexed_results {
+            predictions.push(result?);
         }
 
         Ok(predictions)

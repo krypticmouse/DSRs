@@ -36,7 +36,7 @@ pub struct LM {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
-    #[builder(default = true)]
+    #[builder(default = false)]
     pub cache: bool,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
     #[builder(skip)]
