@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -281,6 +282,7 @@ impl Adapter for ChatAdapter {
         lm: Arc<LM>,
         signature: &dyn MetaSignature,
         inputs: Example,
+        tools: Vec<Arc<dyn ToolDyn>>,
     ) -> Result<Prediction> {
         // Check cache first (release lock immediately after checking)
         if lm.cache
@@ -293,7 +295,7 @@ impl Adapter for ChatAdapter {
         }
 
         let messages = self.format(signature, inputs.clone());
-        let response = lm.call(messages).await?;
+        let response = lm.call(messages, tools).await?;
         let prompt_str = response.chat.to_json().to_string();
 
         let output = self.parse_response(signature, response.output);

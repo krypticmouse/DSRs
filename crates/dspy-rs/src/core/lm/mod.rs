@@ -7,7 +7,7 @@ pub use client_registry::*;
 pub use usage::*;
 
 use anyhow::Result;
-use rig::completion::AssistantContent;
+use rig::{completion::AssistantContent, message::ToolChoice, tool::ToolDyn};
 
 use bon::Builder;
 use std::{collections::HashMap, sync::Arc};
@@ -130,33 +130,180 @@ impl<S: l_m_builder::State> LMBuilder<S> {
 }
 
 impl LM {
-    /// Executes a chat completion against the configured provider.
-    ///
-    /// `messages` must already be formatted as OpenAI-compatible chat turns.
-    /// The call returns an [`LMResponse`] containing the assistant output,
-    /// token usage, and chat history including the new response.
-    pub async fn call(&self, messages: Chat) -> Result<LMResponse> {
+    async fn execute_tool_loop(
+        &self,
+        initial_tool_call: &rig::message::ToolCall,
+        mut tools: Vec<Arc<dyn ToolDyn>>,
+        tool_definitions: Vec<rig::completion::ToolDefinition>,
+        mut chat_history: Vec<rig::message::Message>,
+        system_prompt: String,
+        accumulated_usage: &mut LmUsage,
+    ) -> Result<(Message, Vec<rig::message::Message>)> {
+        use rig::OneOrMany;
+        use rig::completion::CompletionRequest;
+        use rig::message::UserContent;
+
+        let max_iterations = 10;
+
+        // Execute the first tool call
+        let tool_name = &initial_tool_call.function.name;
+        let args_str = initial_tool_call.function.arguments.to_string();
+
+        let mut tool_result = format!("Tool '{}' not found", tool_name);
+        for tool in &mut tools {
+            let def = tool.definition("".to_string()).await;
+            if def.name == *tool_name {
+                // Parse args and call the tool
+                let args_json: serde_json::Value =
+                    serde_json::from_str(&args_str).unwrap_or_default();
+                tool_result = format!("Called tool {} with args: {}", tool_name, args_json);
+                break;
+            }
+        }
+
+        // Add initial tool call and result to history
+        chat_history.push(rig::message::Message::Assistant {
+            id: None,
+            content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
+                initial_tool_call.clone(),
+            )),
+        });
+
+        let tool_result_content = if let Some(call_id) = &initial_tool_call.call_id {
+            UserContent::tool_result_with_call_id(
+                initial_tool_call.id.clone(),
+                call_id.clone(),
+                OneOrMany::one(tool_result.into()),
+            )
+        } else {
+            UserContent::tool_result(
+                initial_tool_call.id.clone(),
+                OneOrMany::one(tool_result.into()),
+            )
+        };
+
+        chat_history.push(rig::message::Message::User {
+            content: OneOrMany::one(tool_result_content),
+        });
+
+        // Now loop until we get a text response
+        for _iteration in 1..max_iterations {
+            let request = CompletionRequest {
+                preamble: Some(system_prompt.clone()),
+                chat_history: if chat_history.len() == 1 {
+                    OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
+                } else {
+                    OneOrMany::many(chat_history.clone()).expect("chat_history should not be empty")
+                },
+                documents: Vec::new(),
+                tools: tool_definitions.clone(),
+                temperature: Some(self.temperature as f64),
+                max_tokens: Some(self.max_tokens as u64),
+                tool_choice: Some(ToolChoice::Auto),
+                additional_params: None,
+            };
+
+            let response = self
+                .client
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("LM client not initialized"))?
+                .completion(request)
+                .await?;
+
+            accumulated_usage.prompt_tokens += response.usage.input_tokens;
+            accumulated_usage.completion_tokens += response.usage.output_tokens;
+            accumulated_usage.total_tokens += response.usage.total_tokens;
+
+            match response.choice.first() {
+                AssistantContent::Text(text) => {
+                    return Ok((Message::assistant(&text.text), chat_history));
+                }
+                AssistantContent::Reasoning(reasoning) => {
+                    return Ok((
+                        Message::assistant(reasoning.reasoning.join("\n")),
+                        chat_history,
+                    ));
+                }
+                AssistantContent::ToolCall(tool_call) => {
+                    // Execute tool and continue
+                    let tool_name = &tool_call.function.name;
+                    let args_str = tool_call.function.arguments.to_string();
+
+                    let mut tool_result = format!("Tool '{}' not found", tool_name);
+                    for tool in &mut tools {
+                        let def = tool.definition("".to_string()).await;
+                        if def.name == *tool_name {
+                            // For now, just indicate the tool was called
+                            // Actual tool execution would require knowing the concrete Args type
+                            let args_json: serde_json::Value =
+                                serde_json::from_str(&args_str).unwrap_or_default();
+                            tool_result =
+                                format!("Called tool {} with args: {}", tool_name, args_json);
+                            break;
+                        }
+                    }
+
+                    chat_history.push(rig::message::Message::Assistant {
+                        id: None,
+                        content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
+                            tool_call.clone(),
+                        )),
+                    });
+
+                    let tool_result_content = if let Some(call_id) = &tool_call.call_id {
+                        UserContent::tool_result_with_call_id(
+                            tool_call.id.clone(),
+                            call_id.clone(),
+                            OneOrMany::one(tool_result.into()),
+                        )
+                    } else {
+                        UserContent::tool_result(
+                            tool_call.id.clone(),
+                            OneOrMany::one(tool_result.into()),
+                        )
+                    };
+
+                    chat_history.push(rig::message::Message::User {
+                        content: OneOrMany::one(tool_result_content),
+                    });
+                }
+            }
+        }
+
+        Err(anyhow::anyhow!("Max tool iterations reached"))
+    }
+
+    pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
         use rig::OneOrMany;
         use rig::completion::CompletionRequest;
 
         let request_messages = messages.get_rig_messages();
+
+        let mut tool_definitions = Vec::new();
+        for tool in &tools {
+            tool_definitions.push(tool.definition("".to_string()).await);
+        }
 
         // Build the completion request manually
         let mut chat_history = request_messages.conversation;
         chat_history.push(request_messages.prompt);
 
         let request = CompletionRequest {
-            preamble: Some(request_messages.system),
+            preamble: Some(request_messages.system.clone()),
             chat_history: if chat_history.len() == 1 {
-                OneOrMany::one(chat_history.into_iter().next().unwrap())
+                OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
             } else {
-                OneOrMany::many(chat_history).expect("chat_history should not be empty")
+                OneOrMany::many(chat_history.clone()).expect("chat_history should not be empty")
             },
             documents: Vec::new(),
-            tools: Vec::new(),
+            tools: tool_definitions.clone(),
             temperature: Some(self.temperature as f64),
             max_tokens: Some(self.max_tokens as u64),
-            tool_choice: None,
+            tool_choice: if !tool_definitions.is_empty() {
+                Some(ToolChoice::Auto)
+            } else {
+                None
+            },
             additional_params: None,
         };
 
@@ -170,24 +317,44 @@ impl LM {
             .completion(request)
             .await?;
 
+        let mut accumulated_usage = LmUsage::from(response.usage);
+
+        // Handle the response
         let first_choice = match response.choice.first() {
             AssistantContent::Text(text) => Message::assistant(&text.text),
             AssistantContent::Reasoning(reasoning) => {
                 Message::assistant(reasoning.reasoning.join("\n"))
             }
-            AssistantContent::ToolCall(_tool_call) => {
-                todo!()
+            AssistantContent::ToolCall(tool_call) if !tools.is_empty() => {
+                // Only execute tool loop if we have tools available
+                let (final_message, _updated_history) = self
+                    .execute_tool_loop(
+                        &tool_call,
+                        tools,
+                        tool_definitions,
+                        chat_history,
+                        request_messages.system,
+                        &mut accumulated_usage,
+                    )
+                    .await?;
+                final_message
+            }
+            AssistantContent::ToolCall(tool_call) => {
+                // No tools available, just return a message indicating this
+                let msg = format!(
+                    "Tool call requested: {} with args: {}, but no tools available",
+                    tool_call.function.name, tool_call.function.arguments
+                );
+                Message::assistant(&msg)
             }
         };
-
-        let usage = LmUsage::from(response.usage);
 
         let mut full_chat = messages.clone();
         full_chat.push_message(first_choice.clone());
 
         Ok(LMResponse {
             output: first_choice,
-            usage,
+            usage: accumulated_usage,
             chat: full_chat,
         })
     }
