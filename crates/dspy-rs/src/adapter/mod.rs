@@ -5,6 +5,7 @@ pub use chat::*;
 use crate::{Chat, Example, LM, Message, MetaSignature, Prediction};
 use anyhow::Result;
 use async_trait::async_trait;
+use rig::tool::ToolDyn;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -22,5 +23,6 @@ pub trait Adapter: Send + Sync + 'static {
         lm: Arc<LM>,
         signature: &dyn MetaSignature,
         inputs: Example,
+        tools: Vec<Arc<dyn ToolDyn>>,
     ) -> Result<Prediction>;
 }
