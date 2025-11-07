@@ -7,7 +7,7 @@ pub use client_registry::*;
 pub use usage::*;
 
 use anyhow::Result;
-use rig::{completion::AssistantContent, message::ToolChoice, tool::ToolDyn};
+use rig::{completion::AssistantContent, message::ToolCall, message::ToolChoice, tool::ToolDyn};
 
 use bon::Builder;
 use std::{collections::HashMap, sync::Arc};
@@ -23,6 +23,10 @@ pub struct LMResponse {
     pub usage: LmUsage,
     /// Chat history including the freshly appended assistant response.
     pub chat: Chat,
+    /// Tool calls made by the provider.
+    pub tool_calls: Vec<ToolCall>,
+    /// Tool executions made by the provider.
+    pub tool_executions: Vec<String>,
 }
 
 #[derive(Builder)]
@@ -129,6 +133,14 @@ impl<S: l_m_builder::State> LMBuilder<S> {
     }
 }
 
+struct ToolLoopResult {
+    message: Message,
+    #[allow(unused)]
+    chat_history: Vec<rig::message::Message>,
+    tool_calls: Vec<ToolCall>,
+    tool_executions: Vec<String>,
+}
+
 impl LM {
     async fn execute_tool_loop(
         &self,
@@ -138,12 +150,15 @@ impl LM {
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
         accumulated_usage: &mut LmUsage,
-    ) -> Result<(Message, Vec<rig::message::Message>)> {
+    ) -> Result<ToolLoopResult> {
         use rig::OneOrMany;
         use rig::completion::CompletionRequest;
         use rig::message::UserContent;
 
         let max_iterations = 10;
+
+        let mut tool_calls = Vec::new();
+        let mut tool_executions = Vec::new();
 
         // Execute the first tool call
         let tool_name = &initial_tool_call.function.name;
@@ -157,6 +172,8 @@ impl LM {
                 let args_json: serde_json::Value =
                     serde_json::from_str(&args_str).unwrap_or_default();
                 tool_result = format!("Called tool {} with args: {}", tool_name, args_json);
+                tool_calls.push(initial_tool_call.clone());
+                tool_executions.push(tool_result.clone());
                 break;
             }
         }
@@ -216,13 +233,20 @@ impl LM {
 
             match response.choice.first() {
                 AssistantContent::Text(text) => {
-                    return Ok((Message::assistant(&text.text), chat_history));
+                    return Ok(ToolLoopResult {
+                        message: Message::assistant(&text.text),
+                        chat_history,
+                        tool_calls,
+                        tool_executions,
+                    });
                 }
                 AssistantContent::Reasoning(reasoning) => {
-                    return Ok((
-                        Message::assistant(reasoning.reasoning.join("\n")),
+                    return Ok(ToolLoopResult {
+                        message: Message::assistant(reasoning.reasoning.join("\n")),
                         chat_history,
-                    ));
+                        tool_calls,
+                        tool_executions,
+                    });
                 }
                 AssistantContent::ToolCall(tool_call) => {
                     // Execute tool and continue
@@ -239,6 +263,8 @@ impl LM {
                                 serde_json::from_str(&args_str).unwrap_or_default();
                             tool_result =
                                 format!("Called tool {} with args: {}", tool_name, args_json);
+                            tool_calls.push(tool_call.clone());
+                            tool_executions.push(tool_result.clone());
                             break;
                         }
                     }
@@ -320,6 +346,7 @@ impl LM {
         let mut accumulated_usage = LmUsage::from(response.usage);
 
         // Handle the response
+        let mut tool_loop_result = None;
         let first_choice = match response.choice.first() {
             AssistantContent::Text(text) => Message::assistant(&text.text),
             AssistantContent::Reasoning(reasoning) => {
@@ -327,7 +354,7 @@ impl LM {
             }
             AssistantContent::ToolCall(tool_call) if !tools.is_empty() => {
                 // Only execute tool loop if we have tools available
-                let (final_message, _updated_history) = self
+                let result = self
                     .execute_tool_loop(
                         &tool_call,
                         tools,
@@ -336,8 +363,11 @@ impl LM {
                         request_messages.system,
                         &mut accumulated_usage,
                     )
-                    .await?;
-                final_message
+                    .await
+                    .unwrap();
+                let message = result.message.clone();
+                tool_loop_result = Some(result);
+                message
             }
             AssistantContent::ToolCall(tool_call) => {
                 // No tools available, just return a message indicating this
@@ -356,6 +386,13 @@ impl LM {
             output: first_choice,
             usage: accumulated_usage,
             chat: full_chat,
+            tool_calls: tool_loop_result
+                .as_ref()
+                .map(|result| result.tool_calls.clone())
+                .unwrap_or_default(),
+            tool_executions: tool_loop_result
+                .map(|result| result.tool_executions)
+                .unwrap_or_default(),
         })
     }
 
@@ -449,6 +486,8 @@ impl DummyLM {
             },
             usage: LmUsage::default(),
             chat: full_chat,
+            tool_calls: Vec::new(),
+            tool_executions: Vec::new(),
         })
     }
 

@@ -298,7 +298,25 @@ impl Adapter for ChatAdapter {
         let response = lm.call(messages, tools).await?;
         let prompt_str = response.chat.to_json().to_string();
 
-        let output = self.parse_response(signature, response.output);
+        let mut output = self.parse_response(signature, response.output);
+        if !response.tool_calls.is_empty() {
+            output.insert(
+                "tool_calls".to_string(),
+                response
+                    .tool_calls
+                    .into_iter()
+                    .map(|call| json!(call))
+                    .collect::<Value>(),
+            );
+            output.insert(
+                "tool_executions".to_string(),
+                response
+                    .tool_executions
+                    .into_iter()
+                    .map(|execution| json!(execution))
+                    .collect::<Value>(),
+            );
+        }
 
         let prediction = Prediction {
             data: output,
