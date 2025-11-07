@@ -40,6 +40,8 @@ pub struct LM {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
+    #[builder(default = 10)]
+    pub max_tool_iterations: u32,
     #[builder(default = false)]
     pub cache: bool,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
@@ -61,6 +63,7 @@ impl Clone for LM {
             model: self.model.clone(),
             temperature: self.temperature,
             max_tokens: self.max_tokens,
+            max_tool_iterations: self.max_tool_iterations,
             cache: self.cache,
             cache_handler: self.cache_handler.clone(),
             client: self.client.clone(),
@@ -155,7 +158,7 @@ impl LM {
         use rig::completion::CompletionRequest;
         use rig::message::UserContent;
 
-        let max_iterations = 10;
+        let max_iterations = self.max_tool_iterations as usize;
 
         let mut tool_calls = Vec::new();
         let mut tool_executions = Vec::new();
