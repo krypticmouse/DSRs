@@ -12,7 +12,6 @@ cargo run --example 11-custom-client
 
 use anyhow::Result;
 use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Predictor, Signature, configure, example};
-use reqwest;
 use rig::providers::*;
 use std::env;
 

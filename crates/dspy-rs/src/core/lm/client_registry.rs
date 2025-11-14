@@ -288,8 +288,7 @@ impl LMClient {
     /// This function accepts concrete types that can be converted to LMClient.
     /// The enum_dispatch macro automatically generates From implementations for
     /// each variant type, so you can use this with any concrete completion model.
-    pub fn from_custom<T: Into<LMClient>>(client: T) -> Self
-    {
+    pub fn from_custom<T: Into<LMClient>>(client: T) -> Self {
         client.into()
     }
 }
