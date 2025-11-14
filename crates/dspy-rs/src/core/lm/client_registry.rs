@@ -3,7 +3,7 @@ use enum_dispatch::enum_dispatch;
 use reqwest;
 use rig::{
     completion::{CompletionError, CompletionRequest, CompletionResponse},
-    providers::{anthropic, gemini, groq, ollama, openai, openrouter},
+    providers::*,
 };
 use std::borrow::Cow;
 
@@ -25,6 +25,12 @@ pub enum LMClient {
     Groq(groq::CompletionModel<reqwest::Client>),
     OpenRouter(openrouter::completion::CompletionModel),
     Ollama(ollama::CompletionModel<reqwest::Client>),
+    Azure(azure::CompletionModel<reqwest::Client>),
+    XAI(xai::completion::CompletionModel),
+    Cohere(cohere::completion::CompletionModel),
+    Mistral(mistral::completion::CompletionModel),
+    Together(together::completion::CompletionModel),
+    Deepseek(deepseek::CompletionModel<reqwest::Client>),
 }
 
 // Implement the trait for each concrete provider type using the CompletionModel trait from rig
@@ -100,6 +106,89 @@ impl CompletionProvider for openrouter::completion::CompletionModel {
 }
 
 impl CompletionProvider for ollama::CompletionModel<reqwest::Client> {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+
+impl CompletionProvider for azure::CompletionModel<reqwest::Client> {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+impl CompletionProvider for xai::completion::CompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+
+impl CompletionProvider for cohere::completion::CompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+
+impl CompletionProvider for mistral::completion::CompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+
+impl CompletionProvider for together::completion::CompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
+        Ok(CompletionResponse {
+            choice: response.choice,
+            usage: response.usage,
+            raw_response: (),
+        })
+    }
+}
+
+impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
     async fn completion(
         &self,
         request: CompletionRequest,
@@ -192,5 +281,15 @@ impl LMClient {
                 );
             }
         }
+    }
+
+    /// Convert a concrete completion model to LMClient
+    ///
+    /// This function accepts concrete types that can be converted to LMClient.
+    /// The enum_dispatch macro automatically generates From implementations for
+    /// each variant type, so you can use this with any concrete completion model.
+    pub fn from_custom<T: Into<LMClient>>(client: T) -> Self
+    {
+        client.into()
     }
 }

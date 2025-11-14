@@ -120,6 +120,13 @@ impl LM {
 
         Ok(self)
     }
+
+    pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        Ok(LM {
+            client: Some(Arc::new(client)),
+            ..self
+        })
+    }
 }
 
 // Implement build() for all builder states since optional fields don't require setting
