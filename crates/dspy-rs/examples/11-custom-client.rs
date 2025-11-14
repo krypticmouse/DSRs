@@ -1,5 +1,5 @@
 /*
-Example demonstrating how to use LMClient::from_custom() with a custom OpenAI client
+Example demonstrating how to use LMClient::from_custom() with a custom Azure OpenAI client
 in a simple pipeline, similar to 01-simple.rs.
 
 This shows how to create a completion model directly and use it with LM.
@@ -26,15 +26,16 @@ struct QASignature {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Create a custom OpenAI completion model directly
-    let api_key = env::var("OPENAI_API_KEY").unwrap_or_else(|_| "dummy-key".to_string());
+    // Create a custom Azure OpenAI completion model directly
+    let api_key = env::var("AZURE_OPENAI_API_KEY").unwrap_or_else(|_| "dummy-key".to_string());
+    let endpoint = env::var("AZURE_OPENAI_ENDPOINT")
+        .unwrap_or_else(|_| "https://your-resource.openai.azure.com".to_string());
 
-    let openai_client: openai::Client<reqwest::Client> =
-        openai::ClientBuilder::new(&api_key).build();
-    let openai_model = openai::completion::CompletionModel::new(openai_client, "gpt-4o-mini");
+    let azure_client = azure::Client::builder(api_key, &endpoint).build();
+    let azure_model = azure::CompletionModel::new(azure_client, "gpt-4o-mini"); // deployment name
 
     // Convert to LMClient using Into trait (enum_dispatch generates From implementations)
-    let custom_lm_client: LMClient = openai_model.into();
+    let custom_lm_client: LMClient = azure_model.into();
 
     // Create LM with the custom client
     let lm = LM::builder()
