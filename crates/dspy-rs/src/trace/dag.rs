@@ -1,36 +1,35 @@
-use crate::{Example, Prediction, MetaSignature};
+use crate::{Example, MetaSignature, Prediction};
 use std::fmt;
 use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum NodeType {
     Root, // Initial input
-    Predict { 
+    Predict {
         signature_name: String,
         signature: Arc<dyn MetaSignature>,
     },
-    Operator { name: String },
+    Operator {
+        name: String,
+    },
     Map {
         // Describes: for each field in output, where does it come from?
         // Key: output field name
         // Value: (Node Index, input field name)
         mapping: Vec<(String, (usize, String))>,
-    }
+    },
 }
 
 impl fmt::Debug for NodeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Root => write!(f, "Root"),
-            Self::Predict { signature_name, .. } => f.debug_struct("Predict")
+            Self::Predict { signature_name, .. } => f
+                .debug_struct("Predict")
                 .field("signature_name", signature_name)
                 .finish(),
-            Self::Operator { name } => f.debug_struct("Operator")
-                .field("name", name)
-                .finish(),
-            Self::Map { mapping } => f.debug_struct("Map")
-                .field("mapping", mapping)
-                .finish(),
+            Self::Operator { name } => f.debug_struct("Operator").field("name", name).finish(),
+            Self::Map { mapping } => f.debug_struct("Map").field("mapping", mapping).finish(),
         }
     }
 }
@@ -65,8 +64,13 @@ impl Graph {
     pub fn new() -> Self {
         Self::default()
     }
-    
-    pub fn add_node(&mut self, node_type: NodeType, inputs: Vec<usize>, input_data: Option<Example>) -> usize {
+
+    pub fn add_node(
+        &mut self,
+        node_type: NodeType,
+        inputs: Vec<usize>,
+        input_data: Option<Example>,
+    ) -> usize {
         let id = self.nodes.len();
         self.nodes.push(Node {
             id,
@@ -77,13 +81,13 @@ impl Graph {
         });
         id
     }
-    
+
     pub fn set_output(&mut self, id: usize, output: Prediction) {
         if let Some(node) = self.nodes.get_mut(id) {
             node.output = Some(output);
         }
     }
-    
+
     pub fn get_node(&self, id: usize) -> Option<&Node> {
         self.nodes.get(id)
     }

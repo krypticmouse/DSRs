@@ -21,8 +21,7 @@ impl Example {
             output_keys
         } else if !input_keys.is_empty() {
             data.keys()
-            // ...
-
+                // ...
                 .filter(|key| !input_keys.contains(key))
                 .cloned()
                 .collect()

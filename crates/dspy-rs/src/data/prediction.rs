@@ -14,7 +14,11 @@ pub struct Prediction {
 
 impl Prediction {
     pub fn new(data: HashMap<String, serde_json::Value>, lm_usage: LmUsage) -> Self {
-        Self { data, lm_usage, node_id: None }
+        Self {
+            data,
+            lm_usage,
+            node_id: None,
+        }
     }
 
     pub fn get(&self, key: &str, default: Option<&str>) -> serde_json::Value {

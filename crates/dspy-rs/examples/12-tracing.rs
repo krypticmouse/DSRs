@@ -2,7 +2,8 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, LM, Module, Predict, Prediction, Predictor, Signature, configure, example,
-    trace::{self, IntoTracked}, prediction,
+    prediction,
+    trace::{self, IntoTracked},
 };
 
 #[Signature]
@@ -47,7 +48,7 @@ impl Module for QARater {
         };
 
         let rating_prediction = self.rater.forward(inputs).await?;
-        
+
         // Final output
         Ok(prediction! {
             "answer"=> answer.value,
@@ -69,47 +70,48 @@ async fn main() -> Result<()> {
             .unwrap(),
         ChatAdapter,
     );
-    
+
     let module = QARater::builder().build();
     let example = example! {
         "question": "input" => "Hello",
     };
-    
+
     println!("Starting trace...");
-    let (result, graph) = trace::trace(|| async {
-        module.forward(example).await
-    }).await;
-    
+    let (result, graph) = trace::trace(|| async { module.forward(example).await }).await;
+
     match result {
         Ok(pred) => println!("Prediction keys: {:?}", pred.data.keys()),
         Err(e) => println!("Error (expected if no API key/network): {}", e),
     }
-    
+
     println!("Graph Nodes: {}", graph.nodes.len());
     for node in &graph.nodes {
-        println!("Node {}: Type={:?}, Inputs={:?}", node.id, node.node_type, node.inputs);
+        println!(
+            "Node {}: Type={:?}, Inputs={:?}",
+            node.id, node.node_type, node.inputs
+        );
     }
-    
+
     // Check if the graph is connected:
     // Expected:
     // Node 0: Root (Initial input)
     // Node 1: Predict (Answerer) -> Inputs: [0]
     // Node 2: Map (Data Transform) -> Inputs: [0, 1]
     // Node 3: Predict (Rater)    -> Inputs: [2]
-    
+
     // Execute the graph with new input
     println!("\nExecuting Graph with new input...");
     let executor = dspy_rs::trace::Executor::new(graph);
     let new_input = example! {
         "question": "input" => "What is the capital of Germany?",
     };
-    
+
     match executor.execute(new_input).await {
         Ok(preds) => {
             if let Some(final_pred) = preds.first() {
                 println!("Final Prediction from Graph: {:?}", final_pred);
             }
-        },
+        }
         Err(e) => println!("Graph Execution Error: {}", e),
     }
 

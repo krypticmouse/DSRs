@@ -135,21 +135,23 @@ impl Optimizable for Predict {
 
     fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
         if let Some(sig) = Arc::get_mut(&mut self.signature) {
-             sig.update_instruction(instruction)?;
-             Ok(())
+            sig.update_instruction(instruction)?;
+            Ok(())
         } else {
             // If Arc is shared, we might need to clone it first?
             // But Optimizable usually assumes exclusive access for modification.
             // If we are optimizing, we should have ownership or mutable access.
             // If tracing is active, `Predict` instances might be shared in Graph, but here we are modifying the instance.
-            // If we can't get mut, it means it's shared. 
+            // If we can't get mut, it means it's shared.
             // We can clone-on-write? But MetaSignature is a trait object, so we can't easily clone it unless we implement Clone for Box<dyn MetaSignature>.
             // However, we changed it to Arc.
             // If we are running optimization, we probably shouldn't be tracing or the graph is already built.
             // For now, let's error or assume we can clone if we had a way.
             // But actually, we can't clone `dyn MetaSignature` easily without more boilerplate.
             // Let's assume unique ownership for optimization.
-            anyhow::bail!("Cannot update signature instruction: Signature is shared (Arc has multiple strong references)")
+            anyhow::bail!(
+                "Cannot update signature instruction: Signature is shared (Arc has multiple strong references)"
+            )
         }
     }
 }
