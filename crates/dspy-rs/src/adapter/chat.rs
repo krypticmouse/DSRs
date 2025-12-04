@@ -321,6 +321,7 @@ impl Adapter for ChatAdapter {
         let prediction = Prediction {
             data: output,
             lm_usage: response.usage,
+            node_id: None,
         };
 
         // Store in cache if enabled

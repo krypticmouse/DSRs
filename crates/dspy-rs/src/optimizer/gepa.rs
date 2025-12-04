@@ -320,7 +320,7 @@ impl GEPA {
         let reflect_predictor = Predict::new(ReflectOnTrace::new());
         let reflection_input = example! {
             "current_instruction": "input" => current_instruction,
-            "traces": "input" => &traces_text,
+            "traces": "input" => traces_text.clone(),
             "task_description": "input" => task_description
         };
 
@@ -343,8 +343,8 @@ impl GEPA {
         let propose_predictor = Predict::new(ProposeImprovedInstruction::new());
         let proposal_input = example! {
             "current_instruction": "input" => current_instruction,
-            "reflection": "input" => &reflection,
-            "traces_and_feedback": "input" => &traces_text
+            "reflection": "input" => reflection.clone(),
+            "traces_and_feedback": "input" => traces_text.clone()
         };
 
         let proposal_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
