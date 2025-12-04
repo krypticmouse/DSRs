@@ -7,6 +7,8 @@ pub struct Example {
     pub data: HashMap<String, Value>,
     pub input_keys: Vec<String>,
     pub output_keys: Vec<String>,
+    #[serde(skip)]
+    pub node_id: Option<usize>,
 }
 
 impl Example {
@@ -19,6 +21,8 @@ impl Example {
             output_keys
         } else if !input_keys.is_empty() {
             data.keys()
+            // ...
+
                 .filter(|key| !input_keys.contains(key))
                 .cloned()
                 .collect()
@@ -30,6 +34,7 @@ impl Example {
             data,
             input_keys,
             output_keys,
+            node_id: None,
         }
     }
 
@@ -71,6 +76,7 @@ impl Example {
             data: self.data.clone(),
             input_keys: keys,
             output_keys,
+            node_id: self.node_id,
         }
     }
 
@@ -94,6 +100,7 @@ impl Example {
                 .filter(|key| !keys.contains(key))
                 .cloned()
                 .collect(),
+            node_id: self.node_id,
         }
     }
 }

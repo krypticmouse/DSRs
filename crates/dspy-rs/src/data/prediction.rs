@@ -8,11 +8,13 @@ use crate::LmUsage;
 pub struct Prediction {
     pub data: HashMap<String, serde_json::Value>,
     pub lm_usage: LmUsage,
+    #[serde(skip)]
+    pub node_id: Option<usize>,
 }
 
 impl Prediction {
     pub fn new(data: HashMap<String, serde_json::Value>, lm_usage: LmUsage) -> Self {
-        Self { data, lm_usage }
+        Self { data, lm_usage, node_id: None }
     }
 
     pub fn get(&self, key: &str, default: Option<&str>) -> serde_json::Value {
@@ -20,6 +22,14 @@ impl Prediction {
             .get(key)
             .unwrap_or(&default.unwrap_or_default().to_string().into())
             .clone()
+    }
+
+    pub fn get_tracked(&self, key: &str) -> crate::trace::TrackedValue {
+        let val = self.get(key, None);
+        crate::trace::TrackedValue {
+            value: val,
+            source: self.node_id.map(|id| (id, key.to_string())),
+        }
     }
 
     pub fn keys(&self) -> Vec<String> {
@@ -58,6 +68,7 @@ impl From<Vec<(String, Value)>> for Prediction {
         Self {
             data: value.into_iter().collect(),
             lm_usage: LmUsage::default(),
+            node_id: None,
         }
     }
 }

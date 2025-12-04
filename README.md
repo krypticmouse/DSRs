@@ -343,6 +343,110 @@ struct ComplexReasoningSignature {
 }
 ```
 
+### Tracing System
+
+The tracing system allows you to capture the dataflow through modules and build a Directed Acyclic Graph (DAG) representation of the execution flow.
+
+#### Overview
+
+The tracing system consists of:
+
+1. **Graph**: A DAG structure representing nodes (modules/predictors) and edges (data dependencies)
+2. **Trace Context**: Captures execution traces and builds the DAG using `tokio::task_local`
+3. **Executor**: Executes captured graphs with new inputs
+
+#### Basic Usage
+
+Use `trace::trace()` to wrap your execution and capture the DAG:
+
+```rust
+use dspy_rs::{trace, example, Predict, Signature};
+
+#[Signature]
+struct QASignature {
+    #[input]
+    pub question: String,
+    #[output]
+    pub answer: String,
+}
+
+let predictor = Predict::new(QASignature::new());
+let example = example! {
+    "question": "input" => "Hello",
+};
+
+// Trace the execution
+let (result, graph) = trace::trace(|| async {
+    predictor.forward(example).await
+}).await;
+
+// Inspect the graph
+println!("Graph Nodes: {}", graph.nodes.len());
+for node in &graph.nodes {
+    println!("Node {}: Type={:?}, Inputs={:?}", node.id, node.node_type, node.inputs);
+}
+
+// Execute the graph with new input
+let executor = trace::Executor::new(graph);
+let new_input = example! {
+    "question": "input" => "What is the capital of France?",
+};
+let predictions = executor.execute(new_input).await?;
+```
+
+#### Tracked Values
+
+When building pipelines, use `get_tracked()` to preserve data lineage:
+
+```rust
+let prediction = predictor.forward(inputs).await?;
+let answer = prediction.get_tracked("answer"); // Preserves source node info
+
+// The example! macro automatically detects tracked values and records Map nodes
+let next_input = example! {
+    "answer": "input" => answer.clone(),
+};
+```
+
+#### Graph Structure
+
+**Node**: Represents a single execution step:
+- `id`: Unique identifier
+- `node_type`: Type of node (`Root`, `Predict`, `Map`, `Operator`)
+- `inputs`: IDs of parent nodes
+- `output`: Output Prediction
+- `input_data`: Input Example (for root nodes)
+
+**Graph**: Contains all nodes and provides execution capabilities:
+- `nodes`: Vector of all nodes
+- `Executor`: Can execute the graph with new inputs
+
+#### Modifying the Graph
+
+The graph is fully modifiable - you can:
+- Split nodes (add intermediate steps)
+- Remove nodes
+- Fuse nodes (combine operations)
+- Insert nodes between existing ones
+- Modify node configurations (signatures, instructions)
+
+```rust
+// Example: Modify a node's signature
+if let Some(node) = graph.nodes.get_mut(1) {
+    if let NodeType::Predict { signature, .. } = &mut node.node_type {
+        // Modify signature instruction, demos, etc.
+    }
+}
+```
+
+#### Example
+
+See `examples/12-tracing.rs` for a complete example demonstrating:
+- Tracing module execution
+- Inspecting the DAG
+- Executing graphs with new inputs
+- Modifying graph structure
+
 ### Optimizer Comparison
 
 | Feature | COPRO | MIPROv2 |

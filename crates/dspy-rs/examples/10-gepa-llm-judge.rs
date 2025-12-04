@@ -131,10 +131,10 @@ impl FeedbackEvaluator for MathSolver {
         // Use LLM judge to analyze the reasoning quality
         // This is where the magic happens - the judge provides rich feedback
         let judge_input = example! {
-            "problem": "input" => &problem,
-            "expected_answer": "input" => &expected,
-            "student_answer": "input" => &student_answer,
-            "student_reasoning": "input" => &student_reasoning
+            "problem": "input" => problem.clone(),
+            "expected_answer": "input" => expected.clone(),
+            "student_answer": "input" => student_answer.clone(),
+            "student_reasoning": "input" => student_reasoning.clone()
         };
 
         let judge_output = match self

@@ -4,6 +4,7 @@ pub mod data;
 pub mod evaluate;
 pub mod optimizer;
 pub mod predictors;
+pub mod trace;
 pub mod utils;
 
 pub use adapter::chat::*;
@@ -22,11 +23,14 @@ macro_rules! example {
     { $($key:literal : $field_type:literal => $value:expr),* $(,)? } => {{
         use std::collections::HashMap;
         use dspy_rs::data::example::Example;
-
+        use dspy_rs::trace::{NodeType, record_node};
+        
         let mut input_keys = vec![];
         let mut output_keys = vec![];
-
         let mut fields = HashMap::new();
+        let mut mappings = vec![];
+        let mut parent_ids = vec![];
+
         $(
             if $field_type == "input" {
                 input_keys.push($key.to_string());
@@ -34,15 +38,50 @@ macro_rules! example {
                 output_keys.push($key.to_string());
             }
 
-            fields.insert($key.to_string(), serde_json::to_value($value).unwrap());
+            let tracked = {
+                use dspy_rs::trace::IntoTracked;
+                $value.into_tracked()
+            };
+            
+            fields.insert($key.to_string(), tracked.value);
+            
+            if let Some((node_id, source_key)) = tracked.source {
+                mappings.push(($key.to_string(), (node_id, source_key)));
+                if !parent_ids.contains(&node_id) {
+                    parent_ids.push(node_id);
+                }
+            }
         )*
 
-        Example::new(
+        let mut example = Example::new(
             fields,
             input_keys,
             output_keys,
-        )
+        );
+
+        // If we found mappings and we are tracing, record a Map node
+        if !mappings.is_empty() {
+             if let Some(map_node_id) = record_node(
+                NodeType::Map { mapping: mappings },
+                parent_ids,
+                None 
+             ) {
+                example.node_id = Some(map_node_id);
+             }
+        }
+
+        example
     }};
+    
+    // Pattern without field type (defaulting to input usually? or implicit?)
+    // The previous macro definition had a second pattern which was slightly different.
+    // Wait, the original macro only had the first pattern for `example!`.
+    // The `prediction!` macro was separate.
+    
+    // Original pattern from lib.rs:22
+    // { $($key:literal : $field_type:literal => $value:expr),* $(,)? }
+    
+    // Wait, I should also support the simpler syntax if user uses it, but looking at lib.rs, `example!` only has one pattern.
 }
 
 #[macro_export]
