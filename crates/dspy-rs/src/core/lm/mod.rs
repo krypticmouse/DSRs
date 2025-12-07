@@ -178,10 +178,8 @@ impl LM {
         for tool in &mut tools {
             let def = tool.definition("".to_string()).await;
             if def.name == *tool_name {
-                // Parse args and call the tool
-                let args_json: serde_json::Value =
-                    serde_json::from_str(&args_str).unwrap_or_default();
-                tool_result = format!("Called tool {} with args: {}", tool_name, args_json);
+                // Actually execute the tool
+                tool_result = tool.call(args_str.clone()).await.unwrap();
                 tool_calls.push(initial_tool_call.clone());
                 tool_executions.push(tool_result.clone());
                 break;
@@ -267,12 +265,8 @@ impl LM {
                     for tool in &mut tools {
                         let def = tool.definition("".to_string()).await;
                         if def.name == *tool_name {
-                            // For now, just indicate the tool was called
-                            // Actual tool execution would require knowing the concrete Args type
-                            let args_json: serde_json::Value =
-                                serde_json::from_str(&args_str).unwrap_or_default();
-                            tool_result =
-                                format!("Called tool {} with args: {}", tool_name, args_json);
+                            // Actually execute the tool
+                            tool_result = tool.call(args_str.clone()).await.unwrap();
                             tool_calls.push(tool_call.clone());
                             tool_executions.push(tool_result.clone());
                             break;

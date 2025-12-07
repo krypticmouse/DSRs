@@ -214,6 +214,10 @@ impl LMClient {
 
     /// Build case 1: OpenAI-compatible API from base_url + api_key
     pub fn from_openai_compatible(base_url: &str, api_key: &str, model: &str) -> Result<Self> {
+        println!(
+            "Building OpenAI-compatible model from base_url: {} and api_key: {} and model: {}",
+            base_url, api_key, model
+        );
         let client = openai::ClientBuilder::new(api_key)
             .base_url(base_url)
             .build();
@@ -225,6 +229,10 @@ impl LMClient {
     /// Build case 2: Local OpenAI-compatible model from base_url (vLLM, etc.)
     /// Uses a dummy API key since local servers don't require authentication
     pub fn from_local(base_url: &str, model: &str) -> Result<Self> {
+        println!(
+            "Building local OpenAI-compatible model from base_url: {} and model: {}",
+            base_url, model
+        );
         let client = openai::ClientBuilder::new("dummy-key-for-local-server")
             .base_url(base_url)
             .build();
