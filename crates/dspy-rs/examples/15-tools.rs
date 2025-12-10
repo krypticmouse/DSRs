@@ -137,7 +137,7 @@ struct MathQuestionSignature {
 async fn main() -> Result<()> {
     // Setup LM
     let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
+        .model("groq:openai/gpt-oss-120b".to_string())
         .build()
         .await?;
     configure(lm.clone(), ChatAdapter);

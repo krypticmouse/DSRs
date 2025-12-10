@@ -297,6 +297,7 @@ impl LM {
                         content: OneOrMany::one(tool_result_content),
                     });
                 }
+                AssistantContent::Image(_image) => todo!(),
             }
         }
 
@@ -381,6 +382,7 @@ impl LM {
                 );
                 Message::assistant(&msg)
             }
+            AssistantContent::Image(_image) => todo!(),
         };
 
         let mut full_chat = messages.clone();

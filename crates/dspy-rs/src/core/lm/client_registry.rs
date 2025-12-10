@@ -2,6 +2,7 @@ use anyhow::Result;
 use enum_dispatch::enum_dispatch;
 use reqwest;
 use rig::{
+    client::Nothing,
     completion::{CompletionError, CompletionRequest, CompletionResponse},
     providers::*,
 };
@@ -218,9 +219,10 @@ impl LMClient {
             "Building OpenAI-compatible model from base_url: {} and api_key: {} and model: {}",
             base_url, api_key, model
         );
-        let client = openai::ClientBuilder::new(api_key)
+        let client = openai::CompletionsClient::builder()
+            .api_key(api_key)
             .base_url(base_url)
-            .build();
+            .build()?;
         Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
             client, model,
         )))
@@ -233,9 +235,10 @@ impl LMClient {
             "Building local OpenAI-compatible model from base_url: {} and model: {}",
             base_url, model
         );
-        let client = openai::ClientBuilder::new("dummy-key-for-local-server")
+        let client = openai::CompletionsClient::builder()
+            .api_key("dummy-key-for-local-server")
             .base_url(base_url)
-            .build();
+            .build()?;
         Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
             client, model,
         )))
@@ -250,37 +253,42 @@ impl LMClient {
         match provider {
             "openai" => {
                 let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
-                let client = openai::ClientBuilder::new(&key).build();
+                let client = openai::CompletionsClient::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
                     client, model_id,
                 )))
             }
             "anthropic" => {
                 let key = Self::get_api_key(api_key, "ANTHROPIC_API_KEY")?;
-                let client = anthropic::ClientBuilder::new(&key).build()?;
+                let client = anthropic::Client::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::Anthropic(
                     anthropic::completion::CompletionModel::new(client, model_id),
                 ))
             }
             "gemini" => {
                 let key = Self::get_api_key(api_key, "GEMINI_API_KEY")?;
-                let client = gemini::client::ClientBuilder::<reqwest::Client>::new(&key).build()?;
+                let client = gemini::Client::<reqwest::Client>::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::Gemini(gemini::completion::CompletionModel::new(
                     client, model_id,
                 )))
             }
             "ollama" => {
-                let client = ollama::ClientBuilder::new().build();
+                let client = ollama::Client::builder().api_key(Nothing).build()?;
                 Ok(LMClient::Ollama(ollama::CompletionModel::new(
                     client, model_id,
                 )))
             }
             "openrouter" => {
                 let key = Self::get_api_key(api_key, "OPENROUTER_API_KEY")?;
-                let client = openrouter::ClientBuilder::new(&key).build();
+                let client = openrouter::Client::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::OpenRouter(
                     openrouter::completion::CompletionModel::new(client, model_id),
                 ))
+            }
+            "groq" => {
+                let key = Self::get_api_key(api_key, "GROQ_API_KEY")?;
+                let client = groq::Client::builder().api_key(key.as_ref()).build()?;
+                Ok(LMClient::Groq(groq::CompletionModel::new(client, model_id)))
             }
             _ => {
                 anyhow::bail!(

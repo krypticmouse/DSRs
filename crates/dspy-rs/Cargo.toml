@@ -36,5 +36,5 @@ kdam = "0.6.3"
 rand = "0.8.5"
 foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
-rig-core = "0.22.0"
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
 enum_dispatch = "0.3.13"
