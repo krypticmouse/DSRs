@@ -1,9 +1,13 @@
 pub mod copro;
+pub mod flop;
+pub mod flop_tools;
 pub mod gepa;
 pub mod mipro;
 pub mod pareto;
 
 pub use copro::*;
+pub use flop::*;
+pub use flop_tools::*;
 pub use gepa::*;
 pub use mipro::*;
 pub use pareto::*;

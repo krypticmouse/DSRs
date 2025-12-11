@@ -71,9 +71,7 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     configure(
         LM::builder()
-            .base_url("http://localhost:8000".to_string())
-            .model("openai/gpt-oss-120b".to_string())
-            .api_key("dummy-key-for-local-server".to_string())
+            .model("openai:gpt-4o-mini".to_string())
             .build()
             .await
             .unwrap(),

@@ -253,7 +253,9 @@ impl LMClient {
         match provider {
             "openai" => {
                 let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
-                let client = openai::CompletionsClient::builder().api_key(key.as_ref()).build()?;
+                let client = openai::CompletionsClient::builder()
+                    .api_key(key.as_ref())
+                    .build()?;
                 Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
                     client, model_id,
                 )))
@@ -267,7 +269,9 @@ impl LMClient {
             }
             "gemini" => {
                 let key = Self::get_api_key(api_key, "GEMINI_API_KEY")?;
-                let client = gemini::Client::<reqwest::Client>::builder().api_key(key.as_ref()).build()?;
+                let client = gemini::Client::<reqwest::Client>::builder()
+                    .api_key(key.as_ref())
+                    .build()?;
                 Ok(LMClient::Gemini(gemini::completion::CompletionModel::new(
                     client, model_id,
                 )))
@@ -280,7 +284,9 @@ impl LMClient {
             }
             "openrouter" => {
                 let key = Self::get_api_key(api_key, "OPENROUTER_API_KEY")?;
-                let client = openrouter::Client::builder().api_key(key.as_ref()).build()?;
+                let client = openrouter::Client::builder()
+                    .api_key(key.as_ref())
+                    .build()?;
                 Ok(LMClient::OpenRouter(
                     openrouter::completion::CompletionModel::new(client, model_id),
                 ))

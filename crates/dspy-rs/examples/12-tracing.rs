@@ -85,19 +85,9 @@ async fn main() -> Result<()> {
     }
 
     println!("Graph Nodes: {}", graph.nodes.len());
-    for node in &graph.nodes {
-        println!(
-            "Node {}: Type={:?}, Inputs={:?}",
-            node.id, node.node_type, node.inputs
-        );
-    }
 
-    // Check if the graph is connected:
-    // Expected:
-    // Node 0: Root (Initial input)
-    // Node 1: Predict (Answerer) -> Inputs: [0]
-    // Node 2: Map (Data Transform) -> Inputs: [0, 1]
-    // Node 3: Predict (Rater)    -> Inputs: [2]
+    // Get text representation of the graph
+    println!("\n{}", graph.get_prompt());
 
     // Execute the graph with new input
     println!("\nExecuting Graph with new input...");
