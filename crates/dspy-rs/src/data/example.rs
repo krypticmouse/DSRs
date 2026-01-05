@@ -120,3 +120,11 @@ impl Index<String> for Example {
         &self.data[&index]
     }
 }
+
+impl Index<&str> for Example {
+    type Output = Value;
+
+    fn index(&self, index: &str) -> &Self::Output {
+        &self.data[index]
+    }
+}

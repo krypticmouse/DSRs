@@ -58,6 +58,14 @@ impl Index<String> for Prediction {
     }
 }
 
+impl Index<&str> for Prediction {
+    type Output = serde_json::Value;
+
+    fn index(&self, index: &str) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
 impl IntoIterator for Prediction {
     type Item = (String, Value);
     type IntoIter = std::collections::hash_map::IntoIter<String, Value>;

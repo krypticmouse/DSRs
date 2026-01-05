@@ -31,7 +31,10 @@ async fn main() -> Result<()> {
     let endpoint = env::var("AZURE_OPENAI_ENDPOINT")
         .unwrap_or_else(|_| "https://your-resource.openai.azure.com".to_string());
 
-    let azure_client = azure::Client::builder(api_key, &endpoint).build();
+    let azure_client = azure::Client::builder()
+        .api_key(api_key)
+        .azure_endpoint(endpoint)
+        .build()?;
     let azure_model = azure::CompletionModel::new(azure_client, "gpt-4o-mini"); // deployment name
 
     // Convert to LMClient using Into trait (enum_dispatch generates From implementations)

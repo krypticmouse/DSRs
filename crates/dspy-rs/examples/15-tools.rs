@@ -197,20 +197,19 @@ async fn main() -> Result<()> {
         if let Some(calls_array) = tool_calls.as_array() {
             println!("Tool calls made: {}", calls_array.len());
             for (i, call) in calls_array.iter().enumerate() {
-                if let Some(call_obj) = call.as_object() {
-                    if let Some(func) = call_obj.get("function") {
-                        if let Some(func_obj) = func.as_object() {
-                            let name = func_obj
-                                .get("name")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("unknown");
-                            let args = func_obj
-                                .get("arguments")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("{}");
-                            println!("  Tool call {}: {} with args: {}", i + 1, name, args);
-                        }
-                    }
+                if let Some(call_obj) = call.as_object()
+                    && let Some(func) = call_obj.get("function")
+                    && let Some(func_obj) = func.as_object()
+                {
+                    let name = func_obj
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let args = func_obj
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}");
+                    println!("  Tool call {}: {} with args: {}", i + 1, name, args);
                 }
             }
         }
