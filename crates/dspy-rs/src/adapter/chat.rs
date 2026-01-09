@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::Adapter;
+use crate::baml_bridge::BamlType;
 use crate::baml_bridge::BamlValueConvert;
 use crate::baml_bridge::ToBamlValue;
 use crate::baml_bridge::jsonish;
@@ -16,7 +17,8 @@ use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, ParseError, Prediction, RenderOptions, Signature,
+    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
+    RenderOptions, Signature,
 };
 
 #[derive(Default, Clone)]
@@ -313,12 +315,17 @@ impl ChatAdapter {
         let Some(fields) = baml_value_fields(&baml_value) else {
             return String::new();
         };
+        let input_output_format = <S::Input as BamlType>::baml_output_format();
 
         let mut result = String::new();
         for field_spec in S::input_fields() {
             if let Some(value) = fields.get(field_spec.rust_name) {
                 result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
-                result.push_str(&format_baml_value_for_prompt(value));
+                result.push_str(&format_baml_value_for_prompt_typed(
+                    value,
+                    input_output_format,
+                    field_spec.format,
+                ));
                 result.push_str("\n\n");
             }
         }
@@ -507,6 +514,25 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
         BamlValue::Null => "null".to_string(),
         other => serde_json::to_string(other).unwrap_or_else(|_| "<error>".to_string()),
     }
+}
+
+fn format_baml_value_for_prompt_typed(
+    value: &BamlValue,
+    output_format: &OutputFormatContent,
+    format: Option<&str>,
+) -> String {
+    let format = match format {
+        Some(format) => format,
+        None => {
+            if let BamlValue::String(s) = value {
+                return s.clone();
+            }
+            "json"
+        }
+    };
+
+    crate::baml_bridge::internal_baml_jinja::format_baml_value(value, output_format, format)
+        .unwrap_or_else(|_| "<error>".to_string())
 }
 
 fn collect_flags(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {

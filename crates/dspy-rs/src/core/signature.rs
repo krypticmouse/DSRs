@@ -9,6 +9,7 @@ pub struct FieldSpec {
     pub description: &'static str,
     pub type_ir: fn() -> TypeIR,
     pub constraints: &'static [ConstraintSpec],
+    pub format: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Copy)]

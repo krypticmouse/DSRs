@@ -18,7 +18,7 @@ pub fn derive_optimizable(input: TokenStream) -> TokenStream {
     optim::optimizable_impl(input)
 }
 
-#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias))]
+#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format))]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_signature(&input) {
@@ -60,6 +60,7 @@ struct ParsedField {
     is_output: bool,
     description: String,
     alias: Option<String>,
+    format: Option<String>,
     constraints: Vec<ParsedConstraint>,
 }
 
@@ -181,6 +182,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let mut is_input = false;
     let mut is_output = false;
     let mut alias = None;
+    let mut format = None;
     let mut constraints = Vec::new();
     let mut desc_override = None;
 
@@ -196,11 +198,38 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 desc_override = Some(desc);
             }
         } else if attr.path().is_ident("alias") {
-            alias = Some(parse_string_attr(attr)?);
+            alias = Some(parse_string_attr(attr, "alias")?);
+        } else if attr.path().is_ident("format") {
+            if format.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[format] can only be specified once per field",
+                ));
+            }
+            format = Some(parse_string_attr(attr, "format")?);
         } else if attr.path().is_ident("check") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Check)?);
         } else if attr.path().is_ident("assert") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Assert)?);
+        }
+    }
+
+    if format.is_some() && !is_input {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[format] is only supported on #[input] fields",
+        ));
+    }
+
+    if let Some(format_value) = format.as_deref() {
+        match format_value.to_ascii_lowercase().as_str() {
+            "json" | "yaml" | "toon" => {}
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    field,
+                    "unsupported #[format] value; use \"json\", \"yaml\", or \"toon\"",
+                ))
+            }
         }
     }
 
@@ -214,6 +243,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         is_output,
         description,
         alias,
+        format,
         constraints,
     })
 }
@@ -224,7 +254,7 @@ fn parse_desc_from_attr(attr: &Attribute) -> Option<String> {
     if desc.is_empty() { None } else { Some(desc) }
 }
 
-fn parse_string_attr(attr: &Attribute) -> syn::Result<String> {
+fn parse_string_attr(attr: &Attribute, attr_name: &str) -> syn::Result<String> {
     match &attr.meta {
         Meta::NameValue(meta) => parse_string_expr(&meta.value, meta.span()),
         Meta::List(list) => {
@@ -233,7 +263,7 @@ fn parse_string_attr(attr: &Attribute) -> syn::Result<String> {
         }
         _ => Err(syn::Error::new_spanned(
             attr,
-            "expected #[alias = \"...\"] or #[alias(\"...\")]",
+            format!("expected #[{attr_name} = \"...\"] or #[{attr_name}(\"...\")]"),
         )),
     }
 }
@@ -396,6 +426,13 @@ fn generate_field_specs(
         let llm_name = LitStr::new(llm_name, proc_macro2::Span::call_site());
         let rust_name = LitStr::new(&field_name, proc_macro2::Span::call_site());
         let description = LitStr::new(&field.description, proc_macro2::Span::call_site());
+        let format = match &field.format {
+            Some(value) => {
+                let lit = LitStr::new(value, proc_macro2::Span::call_site());
+                quote! { Some(#lit) }
+            }
+            None => quote! { None },
+        };
 
         let type_ir_fn_name = format_ident!("__{}_{}_type_ir", prefix, field_name_ident);
 
@@ -480,6 +517,7 @@ fn generate_field_specs(
                 description: #description,
                 type_ir: #type_ir_fn_name,
                 constraints: #constraints_name,
+                format: #format,
             }
         });
     }
