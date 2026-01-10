@@ -200,7 +200,7 @@ struct Rate {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_i32_rating_parses_correctly() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("rating", "8")]);
     let _client = configure_test_lm(vec![response]).await;
 
@@ -217,7 +217,7 @@ async fn typed_i32_rating_parses_correctly() {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_i32_rating_parses_fraction() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     // LLMs often return ratings like "8/10"
     let response = response_with_fields(&[("rating", "8/10")]);
     let _client = configure_test_lm(vec![response]).await;
@@ -236,7 +236,7 @@ async fn typed_i32_rating_parses_fraction() {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_i32_rating_parses_with_text() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     // LLMs might add text before or after the number
     let response = response_with_fields(&[("rating", "I would rate this 8 out of 10")]);
     let _client = configure_test_lm(vec![response]).await;

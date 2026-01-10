@@ -15,29 +15,24 @@ cargo run --example 01-simple
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    configure, ChatAdapter, Example, LM, Module, Predict, Prediction, Signature,
-};
+use dspy_rs::{configure, ChatAdapter, Example, LM, Module, Predict, Prediction};
 
-/// A question-answering signature with chain-of-thought reasoning.
-/// The doc comment becomes the instruction prompt.
-#[derive(Signature, Clone, Debug)]
-/// Answer the question step by step.
+const QA_INSTRUCTION: &str = "Answer the question step by step.";
+const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
+
+#[derive(dspy_rs::Signature, Clone, Debug)]
 pub struct QA {
     #[input]
     pub question: String,
 
-    /// Think step by step before answering
-    #[output]
+    #[output(desc = "Think step by step before answering")]
     pub reasoning: String,
 
     #[output]
     pub answer: String,
 }
 
-/// A rating signature to evaluate answer quality.
-#[derive(Signature, Clone, Debug)]
-/// Rate the answer on a scale of 1 (very bad) to 10 (very good).
+#[derive(dspy_rs::Signature, Clone, Debug)]
 pub struct Rate {
     #[input]
     pub question: String,
@@ -53,9 +48,9 @@ pub struct Rate {
 /// Demonstrates how typed predictors work with the Module trait for composition.
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = Predict::<QA>::new())]
+    #[builder(default = Predict::<QA>::builder().instruction(QA_INSTRUCTION).build())]
     pub answerer: Predict<QA>,
-    #[builder(default = Predict::<Rate>::new())]
+    #[builder(default = Predict::<Rate>::builder().instruction(RATE_INSTRUCTION).build())]
     pub rater: Predict<Rate>,
 }
 
@@ -81,7 +76,10 @@ impl Module for QARater {
         let rate_result = self.rater.call(rate_input).await?;
 
         // Step 3: Compose the final prediction with all fields
-        let mut combined = Prediction::new();
+        let mut combined = Prediction {
+            lm_usage: answerer_prediction.lm_usage.clone(),
+            ..Prediction::default()
+        };
         combined.data.insert("question".into(), question);
         combined.data.insert("reasoning".into(), reasoning);
         combined.data.insert("answer".into(), answer);
@@ -106,7 +104,9 @@ async fn main() -> Result<()> {
     // =========================================================================
     println!("=== Example 1: Direct Typed API ===\n");
 
-    let predict = Predict::<QA>::new();
+    let predict = Predict::<QA>::builder()
+        .instruction(QA_INSTRUCTION)
+        .build();
     let input = QAInput {
         question: "What is the capital of France?".to_string(),
     };
@@ -131,7 +131,7 @@ async fn main() -> Result<()> {
     let qa_rater = QARater::builder().build();
 
     // Create an Example for Module::forward()
-    let mut example = Example::new();
+    let mut example = Example::default();
     example
         .data
         .insert("question".into(), "Why is the sky blue?".into());
@@ -149,6 +149,7 @@ async fn main() -> Result<()> {
     println!("\n=== Example 3: With Demos ===\n");
 
     let predict_with_demos = Predict::<QA>::builder()
+        .instruction(QA_INSTRUCTION)
         .demo(QA {
             question: "What is 2+2?".to_string(),
             reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4."
