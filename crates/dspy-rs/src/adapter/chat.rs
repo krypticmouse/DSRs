@@ -1,9 +1,10 @@
 use anyhow::Result;
 use indexmap::IndexMap;
+use regex::Regex;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::Adapter;
 use crate::baml_bridge::BamlType;
@@ -23,6 +24,9 @@ use crate::{
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
+
+static FIELD_HEADER_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[\[ ## (\w+) ## \]\]").unwrap());
 
 fn get_type_hint(_field: &Value) -> String {
     String::new()
@@ -369,6 +373,7 @@ impl ChatAdapter {
     ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
         let content = response.content();
         let output_format = S::output_format_content();
+        let sections = parse_sections(&content);
 
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
@@ -378,9 +383,9 @@ impl ChatAdapter {
             let rust_name = field.rust_name.to_string();
             let type_ir = (field.type_ir)();
 
-            let raw_text = match extract_field(&content, field.name) {
-                Ok(text) => text,
-                Err(_) => {
+            let raw_text = match sections.get(field.name) {
+                Some(text) => text.clone(),
+                None => {
                     errors.push(ParseError::MissingField {
                         field: rust_name.clone(),
                         raw_response: content.to_string(),
@@ -482,16 +487,38 @@ impl ChatAdapter {
     }
 }
 
-fn extract_field(content: &str, field_name: &str) -> std::result::Result<String, String> {
-    let start_marker = format!("[[ ## {} ## ]]", field_name);
-    let start_pos = content
-        .find(&start_marker)
-        .ok_or_else(|| format!("marker not found: {start_marker}"))?;
-    let after_marker = start_pos + start_marker.len();
-    let remaining = &content[after_marker..];
-    let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
-    let extracted = remaining[..end_pos].trim();
-    Ok(extracted.to_string())
+fn parse_sections(content: &str) -> IndexMap<String, String> {
+    let mut sections: Vec<(Option<String>, Vec<String>)> = vec![(None, Vec::new())];
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(caps) = FIELD_HEADER_PATTERN.captures(trimmed) {
+            let header = caps.get(1).unwrap().as_str().to_string();
+            let marker = caps.get(0).unwrap();
+            let remaining = trimmed[marker.end()..].trim();
+
+            let mut lines = Vec::new();
+            if !remaining.is_empty() {
+                lines.push(remaining.to_string());
+            }
+            sections.push((Some(header), lines));
+        } else if let Some((_, lines)) = sections.last_mut() {
+            lines.push(line.to_string());
+        }
+    }
+
+    let mut parsed = IndexMap::new();
+    for (header, lines) in sections {
+        let Some(name) = header else {
+            continue;
+        };
+        if parsed.contains_key(&name) {
+            continue;
+        }
+        parsed.insert(name, lines.join("\n").trim().to_string());
+    }
+
+    parsed
 }
 
 fn baml_value_fields(
@@ -609,18 +636,13 @@ impl Adapter for ChatAdapter {
         let mut output = HashMap::new();
 
         let response_content = response.content();
+        let sections = parse_sections(&response_content);
 
         for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
-            let field_value = response_content
-                .split(format!("[[ ## {field_name} ## ]]\n").as_str())
-                .nth(1);
-
-            if field_value.is_none() {
+            let Some(field_value) = sections.get(&field_name) else {
                 continue; // Skip field if not found in response
-            }
-            let field_value = field_value.unwrap();
-
-            let extracted_field = field_value.split("[[ ## ").nth(0).unwrap().trim();
+            };
+            let extracted_field = field_value.as_str();
             let data_type = field["type"].as_str().unwrap();
             let schema = &field["schema"];
 
