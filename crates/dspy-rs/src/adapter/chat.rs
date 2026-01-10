@@ -1,12 +1,22 @@
 use anyhow::Result;
+use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::Adapter;
+use crate::baml_bridge::BamlValueConvert;
+use crate::baml_bridge::ToBamlValue;
+use crate::baml_bridge::jsonish;
+use crate::baml_bridge::jsonish::BamlValueWithFlags;
+use crate::baml_bridge::jsonish::deserializer::coercer::run_user_checks;
+use crate::baml_bridge::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use crate::serde_utils::get_iter_from_value;
-use crate::{Cache, Chat, Example, LM, Message, MetaSignature, Prediction};
+use crate::{
+    BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
+    JsonishError, LM, Message, MetaSignature, ParseError, Prediction, RenderOptions, Signature,
+};
 use crate::utils::cache::CallResult as CacheCallResult;
 
 #[derive(Default, Clone)]
@@ -216,6 +226,333 @@ impl ChatAdapter {
 
         chat
     }
+
+    pub fn format_system_message_typed<S: Signature>(&self) -> Result<String> {
+        let mut parts = Vec::new();
+        parts.push(self.format_field_descriptions_typed::<S>());
+        parts.push(self.format_field_structure_typed::<S>());
+
+        let schema = S::output_format_content()
+            .render(RenderOptions::default())?
+            .unwrap_or_default();
+        if !schema.is_empty() {
+            parts.push(format!("Answer in this schema:\n{schema}"));
+        }
+
+        let instruction = S::instruction();
+        if !instruction.is_empty() {
+            parts.push(instruction.to_string());
+        }
+
+        Ok(parts.join("\n\n"))
+    }
+
+    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
+        let mut lines = Vec::new();
+        lines.push("Your input fields are:".to_string());
+        for (i, field) in S::input_fields().iter().enumerate() {
+            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
+            if !field.description.is_empty() {
+                line.push_str(": ");
+                line.push_str(field.description);
+            }
+            lines.push(line);
+        }
+
+        lines.push(String::new());
+        lines.push("Your output fields are:".to_string());
+        for (i, field) in S::output_fields().iter().enumerate() {
+            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
+            if !field.description.is_empty() {
+                line.push_str(": ");
+                line.push_str(field.description);
+            }
+            lines.push(line);
+        }
+
+        lines.join("\n")
+    }
+
+    fn format_field_structure_typed<S: Signature>(&self) -> String {
+        let mut lines = vec![
+            "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
+            String::new(),
+        ];
+
+        for field in S::input_fields() {
+            lines.push(format!("[[ ## {} ## ]]", field.name));
+            lines.push(field.name.to_string());
+            lines.push(String::new());
+        }
+
+        for field in S::output_fields() {
+            lines.push(format!("[[ ## {} ## ]]", field.name));
+            lines.push(field.name.to_string());
+            lines.push(String::new());
+        }
+
+        lines.push("[[ ## completed ## ]]".to_string());
+
+        lines.join("\n")
+    }
+
+    pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
+    where
+        S::Input: ToBamlValue,
+    {
+        let baml_value = input.to_baml_value();
+        let Some(fields) = baml_value_fields(&baml_value) else {
+            return String::new();
+        };
+
+        let mut result = String::new();
+        for field_spec in S::input_fields() {
+            if let Some(value) = fields.get(field_spec.rust_name) {
+                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
+                result.push_str(&format_baml_value_for_prompt(value));
+                result.push_str("\n\n");
+            }
+        }
+
+        result
+    }
+
+    pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
+    where
+        S::Output: ToBamlValue,
+    {
+        let baml_value = output.to_baml_value();
+        let Some(fields) = baml_value_fields(&baml_value) else {
+            return String::new();
+        };
+
+        let mut result = String::new();
+        for field_spec in S::output_fields() {
+            if let Some(value) = fields.get(field_spec.rust_name) {
+                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
+                result.push_str(&format_baml_value_for_prompt(value));
+                result.push_str("\n\n");
+            }
+        }
+        result.push_str("[[ ## completed ## ]]\n");
+
+        result
+    }
+
+    pub fn format_demo_typed<S: Signature>(&self, demo: S) -> (String, String)
+    where
+        S::Input: ToBamlValue,
+        S::Output: ToBamlValue,
+    {
+        let (input, output) = demo.into_parts();
+        let user_msg = self.format_user_message_typed::<S>(&input);
+        let assistant_msg = self.format_assistant_message_typed::<S>(&output);
+        (user_msg, assistant_msg)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn parse_response_typed<S: Signature>(
+        &self,
+        response: &Message,
+    ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.content();
+        let output_format = S::output_format_content();
+
+        let mut metas = IndexMap::new();
+        let mut errors = Vec::new();
+        let mut output_map = crate::baml_bridge::baml_types::BamlMap::new();
+
+        for field in S::output_fields() {
+            let rust_name = field.rust_name.to_string();
+            let type_ir = (field.type_ir)();
+
+            let raw_text = match extract_field(&content, field.name) {
+                Ok(text) => text,
+                Err(_) => {
+                    errors.push(ParseError::MissingField {
+                        field: rust_name.clone(),
+                        raw_response: content.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+            let parsed: BamlValueWithFlags =
+                match jsonish::from_str(output_format, &type_ir, &raw_text, true) {
+                    Ok(value) => value,
+                    Err(err) => {
+                        errors.push(ParseError::CoercionFailed {
+                            field: rust_name.clone(),
+                            expected_type: type_ir.diagnostic_repr().to_string(),
+                            raw_text: raw_text.clone(),
+                            source: JsonishError::from(err),
+                        });
+                        continue;
+                    }
+                };
+
+            let baml_value: BamlValue = parsed.clone().into();
+
+            let mut flags = Vec::new();
+            collect_flags(&parsed, &mut flags);
+
+            let mut checks = Vec::new();
+            match run_user_checks(&baml_value, &type_ir) {
+                Ok(results) => {
+                    for (constraint, passed) in results {
+                        let label = constraint.label.as_deref().unwrap_or_else(|| {
+                            if constraint.level == ConstraintLevel::Assert {
+                                "assert"
+                            } else {
+                                "check"
+                            }
+                        });
+                        let expression = constraint.expression.to_string();
+                        if constraint.level == ConstraintLevel::Assert && !passed {
+                            errors.push(ParseError::AssertFailed {
+                                field: rust_name.clone(),
+                                label: label.to_string(),
+                                expression: expression.clone(),
+                                value: baml_value.clone(),
+                            });
+                        }
+                        if constraint.level == ConstraintLevel::Check {
+                            checks.push(ConstraintResult {
+                                label: label.to_string(),
+                                expression,
+                                passed,
+                            });
+                        }
+                    }
+                }
+                Err(err) => {
+                    errors.push(ParseError::ExtractionFailed {
+                        field: rust_name.clone(),
+                        raw_response: content.to_string(),
+                        reason: err.to_string(),
+                    });
+                    continue;
+                }
+            }
+
+            metas.insert(
+                rust_name.clone(),
+                FieldMeta {
+                    raw_text,
+                    flags,
+                    checks,
+                },
+            );
+
+            output_map.insert(rust_name, baml_value);
+        }
+
+        if !errors.is_empty() {
+            let partial = if output_map.is_empty() {
+                None
+            } else {
+                Some(BamlValue::Map(output_map))
+            };
+            return Err(ParseError::Multiple { errors, partial });
+        }
+
+        let typed_output = <S::Output as BamlValueConvert>::try_from_baml_value(
+            BamlValue::Map(output_map),
+            Vec::new(),
+        )
+        .map_err(|err| ParseError::ExtractionFailed {
+            field: "<all>".to_string(),
+            raw_response: content.to_string(),
+            reason: err.to_string(),
+        })?;
+
+        Ok((typed_output, metas))
+    }
+}
+
+fn extract_field(content: &str, field_name: &str) -> std::result::Result<String, String> {
+    let start_marker = format!("[[ ## {} ## ]]", field_name);
+    let start_pos = content
+        .find(&start_marker)
+        .ok_or_else(|| format!("marker not found: {start_marker}"))?;
+    let after_marker = start_pos + start_marker.len();
+    let remaining = &content[after_marker..];
+    let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
+    let extracted = remaining[..end_pos].trim();
+    Ok(extracted.to_string())
+}
+
+fn baml_value_fields(
+    value: &BamlValue,
+) -> Option<&crate::baml_bridge::baml_types::BamlMap<String, BamlValue>> {
+    match value {
+        BamlValue::Class(_, fields) => Some(fields),
+        BamlValue::Map(fields) => Some(fields),
+        _ => None,
+    }
+}
+
+fn format_baml_value_for_prompt(value: &BamlValue) -> String {
+    match value {
+        BamlValue::String(s) => s.clone(),
+        BamlValue::Null => "null".to_string(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "<error>".to_string()),
+    }
+}
+
+fn collect_flags(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {
+    collect_flags_recursive(value, flags);
+}
+
+fn collect_flags_recursive(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {
+    match value {
+        BamlValueWithFlags::String(v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::Int(v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::Float(v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::Bool(v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::Enum(_, _, v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::Media(_, v) => {
+            collect_from_conditions(&v.flags, flags);
+        }
+        BamlValueWithFlags::List(conds, _, items) => {
+            collect_from_conditions(conds, flags);
+            for item in items {
+                collect_flags_recursive(item, flags);
+            }
+        }
+        BamlValueWithFlags::Map(conds, _, items) => {
+            collect_from_conditions(conds, flags);
+            for (_, (entry_flags, entry_value)) in items {
+                collect_from_conditions(entry_flags, flags);
+                collect_flags_recursive(entry_value, flags);
+            }
+        }
+        BamlValueWithFlags::Class(_, conds, _, fields) => {
+            collect_from_conditions(conds, flags);
+            for (_, field_value) in fields {
+                collect_flags_recursive(field_value, flags);
+            }
+        }
+        BamlValueWithFlags::Null(_, conds) => {
+            collect_from_conditions(conds, flags);
+        }
+    }
+}
+
+fn collect_from_conditions(conditions: &DeserializerConditions, flags: &mut Vec<Flag>) {
+    flags.extend(conditions.flags.iter().cloned());
 }
 
 #[async_trait::async_trait]
