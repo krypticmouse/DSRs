@@ -185,7 +185,7 @@ impl ChatAdapter {
     }
 
     fn format_assistant_message(&self, signature: &dyn MetaSignature, outputs: &Example) -> String {
-        let mut assistant_message = String::new();
+        let mut sections = Vec::new();
         for (field_name, _) in get_iter_from_value(&signature.output_fields()) {
             let field_value = outputs.get(field_name.as_str(), None);
             // Extract the actual string value if it's a JSON string, otherwise use as is
@@ -195,10 +195,10 @@ impl ChatAdapter {
                 field_value.to_string()
             };
 
-            assistant_message
-                .push_str(format!("[[ ## {field_name} ## ]]\n{field_value_str}\n\n",).as_str());
+            sections.push(format!("[[ ## {field_name} ## ]]\n{field_value_str}"));
         }
-        assistant_message.push_str("[[ ## completed ## ]]\n");
+        let mut assistant_message = sections.join("\n\n");
+        assistant_message.push_str("\n\n[[ ## completed ## ]]\n");
         assistant_message
     }
 
@@ -328,15 +328,18 @@ impl ChatAdapter {
             return String::new();
         };
 
-        let mut result = String::new();
+        let mut sections = Vec::new();
         for field_spec in S::output_fields() {
             if let Some(value) = fields.get(field_spec.rust_name) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
-                result.push_str(&format_baml_value_for_prompt(value));
-                result.push_str("\n\n");
+                sections.push(format!(
+                    "[[ ## {} ## ]]\n{}",
+                    field_spec.name,
+                    format_baml_value_for_prompt(value)
+                ));
             }
         }
-        result.push_str("[[ ## completed ## ]]\n");
+        let mut result = sections.join("\n\n");
+        result.push_str("\n\n[[ ## completed ## ]]\n");
 
         result
     }
