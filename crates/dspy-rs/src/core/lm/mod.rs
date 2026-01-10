@@ -13,7 +13,8 @@ use bon::Builder;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::{Cache, CallResult, Example, Prediction, ResponseCache};
+use crate::{Cache, Example, Prediction, ResponseCache};
+use crate::utils::cache::CallResult as CacheCallResult;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -405,7 +406,7 @@ impl LM {
     /// Returns the `n` most recent cached calls.
     ///
     /// Panics if caching is disabled for this `LM`.
-    pub async fn inspect_history(&self, n: usize) -> Vec<CallResult> {
+    pub async fn inspect_history(&self, n: usize) -> Vec<CacheCallResult> {
         self.cache_handler
             .as_ref()
             .unwrap()
@@ -475,7 +476,7 @@ impl DummyLM {
             });
 
             // Send the result to the cache
-            tx.send(CallResult {
+            tx.send(CacheCallResult {
                 prompt: messages.to_json().to_string(),
                 prediction: Prediction::new(
                     HashMap::from([("prediction".to_string(), prediction.clone().into())]),
@@ -498,7 +499,7 @@ impl DummyLM {
     }
 
     /// Returns cached entries just like [`LM::inspect_history`].
-    pub async fn inspect_history(&self, n: usize) -> Vec<CallResult> {
+    pub async fn inspect_history(&self, n: usize) -> Vec<CacheCallResult> {
         self.cache_handler
             .as_ref()
             .unwrap()

@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use super::Adapter;
 use crate::serde_utils::get_iter_from_value;
-use crate::{Cache, CallResult, Chat, Example, LM, Message, MetaSignature, Prediction};
+use crate::{Cache, Chat, Example, LM, Message, MetaSignature, Prediction};
+use crate::utils::cache::CallResult as CacheCallResult;
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -338,7 +339,7 @@ impl Adapter for ChatAdapter {
             });
 
             // Send the result to the cache
-            tx.send(CallResult {
+            tx.send(CacheCallResult {
                 prompt: prompt_str,
                 prediction: prediction.clone(),
             })

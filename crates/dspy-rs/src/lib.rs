@@ -9,6 +9,10 @@ pub mod utils;
 
 pub use adapter::chat::*;
 pub use core::*;
+pub use core::{
+    CallResult, ConstraintKind, ConstraintResult, ConstraintSpec, ConversionError, ErrorClass,
+    FieldMeta, FieldSpec, JsonishError, LmError, ParseError, PredictError, Signature,
+};
 pub use data::*;
 pub use evaluate::*;
 pub use optimizer::*;
