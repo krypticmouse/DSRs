@@ -1,11 +1,21 @@
-use dspy_rs::{MetaSignature, field, sign};
+use dspy_rs::{LegacySignature, MetaSignature, field};
 use rstest::*;
+
+#[LegacySignature]
+struct InlineSignature {
+    #[input]
+    inp1: String,
+    #[input]
+    inp2: String,
+    #[output]
+    out1: String,
+    #[output]
+    out2: String,
+}
 
 #[rstest]
 fn test_signature_from_string() {
-    let signature = sign! {
-        (inp1: String, inp2: String) -> out1: String, out2: String
-    };
+    let signature = InlineSignature::new();
 
     assert_eq!(signature.instruction, "");
     assert_eq!(signature.input_fields_len(), 2);
@@ -14,9 +24,7 @@ fn test_signature_from_string() {
 
 #[rstest]
 fn test_signature_append() {
-    let mut signature = sign! {
-        (inp1: String, inp2: String) -> out1: String, out2: String
-    };
+    let mut signature = InlineSignature::new();
     let field_obj = field! {
         input => inp3 : String
     };

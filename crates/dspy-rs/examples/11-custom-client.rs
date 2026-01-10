@@ -10,6 +10,8 @@ cargo run --example 11-custom-client
 ```
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use dspy_rs::{ChatAdapter, LM, LMClient, LegacyPredict, Predictor, LegacySignature, configure, example};
 use rig::providers::*;

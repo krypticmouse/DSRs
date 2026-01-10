@@ -7,6 +7,8 @@ cargo run --example 01-simple
 ```
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{

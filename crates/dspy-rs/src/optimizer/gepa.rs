@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 /// GEPA (Genetic-Pareto) Optimizer Implementation
 ///
 /// GEPA is a reflective prompt optimizer that uses:

@@ -1,18 +1,26 @@
+#![allow(deprecated)]
+
 use schemars::JsonSchema;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use dspy_rs::{
     Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, LegacySignature,
-    adapter::Adapter, example, hashmap, sign,
+    adapter::Adapter, example, hashmap,
 };
+
+#[LegacySignature]
+struct BasicSignature {
+    #[input]
+    pub problem: String,
+    #[output]
+    pub answer: String,
+}
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter() {
-    let signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let signature = BasicSignature::new();
 
     let lm = DummyLM::default();
     let adapter = ChatAdapter;
@@ -232,9 +240,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_demos() {
-    let mut signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let mut signature = BasicSignature::new();
 
     let adapter = ChatAdapter;
 
@@ -339,9 +345,7 @@ async fn test_chat_adapter_with_demos() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_empty_demos() {
-    let mut signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let mut signature = BasicSignature::new();
 
     let adapter = ChatAdapter;
 

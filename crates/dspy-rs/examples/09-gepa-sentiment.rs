@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 /// Example: Using GEPA to optimize a sentiment analysis module
 ///
 /// This example demonstrates:

@@ -17,6 +17,8 @@ cargo run --example 08-optimize-mipro --features dataloaders
 Note: The `dataloaders` feature is required for loading datasets.
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{

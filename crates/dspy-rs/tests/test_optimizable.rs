@@ -1,5 +1,13 @@
-use dspy_rs::{Optimizable, LegacyPredict, sign};
+use dspy_rs::{Optimizable, LegacyPredict, LegacySignature};
 use rstest::*;
+
+#[LegacySignature]
+struct QASignature {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
 
 #[derive(Optimizable)]
 struct Leaf {
@@ -24,7 +32,7 @@ struct GrandParent {
 }
 
 fn new_predict() -> LegacyPredict {
-    LegacyPredict::new(sign! { (question: String) -> answer: String })
+    LegacyPredict::new(QASignature::new())
 }
 
 #[rstest]

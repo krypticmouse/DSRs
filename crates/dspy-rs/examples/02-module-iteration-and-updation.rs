@@ -7,6 +7,8 @@ cargo run --example 02-module-iteration-and-updation
 ```
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{

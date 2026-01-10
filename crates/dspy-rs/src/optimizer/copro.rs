@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate as dspy_rs;
 use crate::{
     Evaluator, Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,

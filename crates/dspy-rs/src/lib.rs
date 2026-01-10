@@ -29,6 +29,10 @@ pub use baml_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOpt
 pub use baml_bridge::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
 
+#[deprecated(
+    since = "0.2.0",
+    note = "Use typed input structs instead, e.g., QAInput { question: ... }"
+)]
 #[macro_export]
 macro_rules! example {
     // Pattern: { "key": <__dsrs_field_type>: "value", ... }
@@ -96,6 +100,10 @@ macro_rules! example {
     // Wait, I should also support the simpler syntax if user uses it, but looking at lib.rs, `example!` only has one pattern.
 }
 
+#[deprecated(
+    since = "0.2.0",
+    note = "Predict<S>::call() returns typed S output directly"
+)]
 #[macro_export]
 macro_rules! prediction {
     { $($key:literal => $value:expr),* $(,)? } => {{
@@ -209,23 +217,22 @@ macro_rules! sign {
     //
     // Example Output:
     //
-    // #[derive(Signature)]
+    // #[derive(Signature, Clone)]
     // struct InlineSignature {
-    //     question: In<String>,
-    //     random: In<bool>,
-    //     answer: Out<String>,
+    //     #[input]
+    //     question: String,
+    //     #[input]
+    //     random: bool,
+    //     #[output]
+    //     answer: String,
     // }
     //
-    // InlineSignature::new()
+    // Predict::<InlineSignature>::new()
 
     // Pattern: input fields -> output fields
     { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        use dspy_rs::LegacySignature;
-        let mut input_fields = serde_json::Map::new();
-        let mut output_fields = serde_json::Map::new();
-
-        #[LegacySignature]
-        struct InlineSignature {
+        #[derive(::dspy_rs::Signature, Clone)]
+        struct __InlineSignature {
             $(
                 #[input]
                 $input_name: $input_type,
@@ -236,7 +243,7 @@ macro_rules! sign {
             )*
         }
 
-        InlineSignature::new()
+        ::dspy_rs::Predict::<__InlineSignature>::new()
     }};
 }
 

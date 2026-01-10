@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate as dspy_rs;
 /// MIPROv2 Optimizer Implementation
 ///

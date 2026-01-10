@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 /// Example: Using LLM-as-a-Judge with GEPA for Math Word Problems
 ///
 /// This example demonstrates how to use an LLM judge to automatically generate

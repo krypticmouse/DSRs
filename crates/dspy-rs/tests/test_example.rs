@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use dspy_rs::data::example::Example;
 use dspy_rs::data::serialize::{load_jsonl, save_examples_as_jsonl};
 use dspy_rs::{example, hashmap};

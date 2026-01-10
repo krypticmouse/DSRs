@@ -7,16 +7,26 @@ cargo run --example 07-inspect-history
 ```
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, configure, example, get_lm,
-    sign,
+    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature,
+    configure, example, get_lm,
 };
+
+#[LegacySignature]
+struct QASignature {
+    #[input]
+    pub question: String,
+    #[output]
+    pub answer: String,
+}
 
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = LegacyPredict::new(sign! { (question: String) -> answer: String }))]
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
     pub answerer: LegacyPredict,
 }
 
