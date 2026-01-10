@@ -49,9 +49,9 @@ Here's a simple example to get you started:
 
 ```rust
 use anyhow::Result;
-use dspy_rs::*;
+use dspy_rs::{configure, ChatAdapter, LM, Predict, Signature};
 
-#[Signature]
+#[derive(Signature, Clone)]
 struct SentimentAnalyzer {
     /// Predict the sentiment of the given text 'Positive', 'Negative', or 'Neutral'.
 
@@ -75,17 +75,17 @@ async fn main() -> Result<()> {
     );
 
     // Create a predictor
-    let predictor = Predict::new(SentimentAnalyzer::new());
+    let predictor = Predict::<SentimentAnalyzer>::new();
 
-    // Prepare input
-    let example = example! {
-        "text": "input" => "Acme is a great company with excellent customer service.",
+    // Prepare typed input
+    let input = SentimentAnalyzerInput {
+        text: "Acme is a great company with excellent customer service.".to_string(),
     };
 
     // Execute prediction
-    let result = predictor.forward(example).await?;
+    let result = predictor.call(input).await?;
 
-    println!("Answer: {}", result.get("sentiment", None));
+    println!("Answer: {}", result.sentiment);
 
     Ok(())
 }
@@ -114,16 +114,16 @@ dsrs/
 
 #### 1. **Signatures** - Define Input/Output Specifications
 ```rust
-#[Signature(cot)]  // Enable chain-of-thought reasoning
+#[derive(Signature, Clone)]
 struct TranslationSignature {
     /// Translate the text accurately while preserving meaning
-    
+
     #[input]
     pub text: String,
-    
+
     #[input]
     pub target_language: String,
-    
+
     #[output]
     pub translation: String,
 }
@@ -133,7 +133,7 @@ struct TranslationSignature {
 ```rust
 #[derive(Builder)]
 pub struct CustomModule {
-    predictor: Predict,
+    predictor: Predict<TranslationSignature>,
 }
 
 impl Module for CustomModule {
@@ -147,7 +147,7 @@ impl Module for CustomModule {
 #### 3. **Predictors** - Pre-built LM Interaction Patterns
 ```rust
 // Get prediction
-let predict = Predict::new(MySignature::new());
+let predict = Predict::<MySignature>::new();
 ```
 
 #### 4. **Language Models** - Configurable LM Backends
@@ -204,7 +204,7 @@ DSRs provides two powerful optimizers:
 #[derive(Optimizable)]
 pub struct MyModule {
     #[parameter]
-    predictor: Predict,
+    predictor: Predict<MySignature>,
 }
 
 // Create and configure the optimizer
@@ -246,10 +246,10 @@ See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` f
 #[derive(Builder, Optimizable)]
 pub struct ComplexPipeline {
     #[parameter]  // Mark optimizable components
-    analyzer: Predict,
+    analyzer: Predict<AnalyzeSignature>,
     
     // Non-parameter fields won't be optimized
-    summarizer: Predict,
+    summarizer: Predict<SummarizeSignature>,
     
     // Non-parameter fields won't be optimized
     config: Config,

@@ -183,3 +183,71 @@ async fn typed_prediction_assert_failure_raises_error() {
         other => panic!("unexpected error type: {other:?}"),
     }
 }
+
+#[derive(Signature, Clone, Debug, PartialEq)]
+/// Rate an answer on a 1-10 scale.
+struct Rate {
+    #[input]
+    question: String,
+
+    #[input]
+    answer: String,
+
+    #[output]
+    rating: i32,
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn typed_i32_rating_parses_correctly() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let response = response_with_fields(&[("rating", "8")]);
+    let _client = configure_test_lm(vec![response]).await;
+
+    let predict = Predict::<Rate>::new();
+    let input = RateInput {
+        question: "Why is the sky blue?".to_string(),
+        answer: "The sky is blue because of Rayleigh scattering.".to_string(),
+    };
+
+    let result = predict.call_with_meta(input).await.unwrap();
+    assert_eq!(result.output.rating, 8);
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn typed_i32_rating_parses_fraction() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    // LLMs often return ratings like "8/10"
+    let response = response_with_fields(&[("rating", "8/10")]);
+    let _client = configure_test_lm(vec![response]).await;
+
+    let predict = Predict::<Rate>::new();
+    let input = RateInput {
+        question: "Why is the sky blue?".to_string(),
+        answer: "Rayleigh scattering.".to_string(),
+    };
+
+    let result = predict.call_with_meta(input).await.unwrap();
+    // 8/10 = 0.8, rounded to 1 as integer
+    assert_eq!(result.output.rating, 1);
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn typed_i32_rating_parses_with_text() {
+    let _lock = SETTINGS_LOCK.lock().unwrap();
+    // LLMs might add text before or after the number
+    let response = response_with_fields(&[("rating", "I would rate this 8 out of 10")]);
+    let _client = configure_test_lm(vec![response]).await;
+
+    let predict = Predict::<Rate>::new();
+    let input = RateInput {
+        question: "Why is the sky blue?".to_string(),
+        answer: "Rayleigh scattering.".to_string(),
+    };
+
+    // This should fail to parse - demonstrates the limitation
+    let result = predict.call_with_meta(input).await;
+    assert!(result.is_err(), "Expected parse error for rating with surrounding text");
+}
