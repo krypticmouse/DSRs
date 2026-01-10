@@ -17,7 +17,7 @@ use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
     JsonishError, LM, Message, MetaSignature, ParseError, Prediction, RenderOptions, Signature,
 };
-use crate::utils::cache::CallResult as CacheCallResult;
+use crate::utils::cache::CacheEntry;
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -683,7 +683,7 @@ impl Adapter for ChatAdapter {
             });
 
             // Send the result to the cache
-            tx.send(CacheCallResult {
+            tx.send(CacheEntry {
                 prompt: prompt_str,
                 prediction: prediction.clone(),
             })
