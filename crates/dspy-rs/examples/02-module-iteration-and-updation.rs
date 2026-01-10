@@ -12,7 +12,8 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, Module, Optimizable, LegacyPredict, Prediction, Predictor, LegacySignature, hashmap, prediction,
+    Example, LegacyPredict, LegacySignature, Module, Optimizable, Prediction, Predictor, hashmap,
+    prediction,
 };
 
 #[LegacySignature(cot)]

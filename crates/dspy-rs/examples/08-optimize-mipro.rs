@@ -22,8 +22,8 @@ Note: The `dataloaders` feature is required for loading datasets.
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
-    LegacyPredict, Prediction, Predictor, LegacySignature, configure, example,
+    ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature, MIPROv2,
+    Module, Optimizable, Optimizer, Prediction, Predictor, configure, example,
 };
 
 #[LegacySignature]

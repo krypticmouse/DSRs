@@ -9,9 +9,7 @@ cargo run --example 05-heterogenous-examples
 
 #![allow(deprecated)]
 
-use dspy_rs::{
-    ChatAdapter, LM, LegacyPredict, Predictor, LegacySignature, configure, example,
-};
+use dspy_rs::{ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example};
 
 #[LegacySignature]
 struct NumberSignature {

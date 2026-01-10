@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate as dspy_rs;
 use crate::{
-    Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,
+    Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
     evaluate::FeedbackEvaluator, example,
 };
 use dsrs_macros::LegacySignature;

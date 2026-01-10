@@ -12,8 +12,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature, configure,
-    example, prediction,
+    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
+    configure, example, prediction,
 };
 
 #[LegacySignature(cot)]

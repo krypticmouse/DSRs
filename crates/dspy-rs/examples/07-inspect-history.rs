@@ -12,7 +12,7 @@ cargo run --example 07-inspect-history
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature,
+    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
     configure, example, get_lm,
 };
 

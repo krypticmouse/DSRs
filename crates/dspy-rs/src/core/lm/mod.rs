@@ -13,8 +13,8 @@ use bon::Builder;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::{Cache, Example, Prediction, ResponseCache};
 use crate::utils::cache::CacheEntry;
+use crate::{Cache, Example, Prediction, ResponseCache};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {

@@ -3,8 +3,8 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature, configure, example,
-    prediction,
+    ChatAdapter, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor, configure,
+    example, prediction,
     trace::{self, IntoTracked},
 };
 

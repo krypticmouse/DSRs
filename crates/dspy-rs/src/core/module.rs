@@ -3,11 +3,21 @@ use futures::stream::{self, StreamExt};
 use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
 
-use crate::{Example, Prediction, core::MetaSignature};
+use crate::{BamlValue, ConversionError, Example, PredictError, Prediction, core::MetaSignature};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
     async fn forward(&self, inputs: Example) -> Result<Prediction>;
+
+    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError> {
+        Err(PredictError::Conversion {
+            source: ConversionError::TypeMismatch {
+                expected: "typed module",
+                actual: "legacy module".to_string(),
+            },
+            parsed: input,
+        })
+    }
 
     async fn batch(
         &self,

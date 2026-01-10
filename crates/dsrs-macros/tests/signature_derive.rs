@@ -22,7 +22,10 @@ fn test_generates_input_struct() {
 
 #[test]
 fn test_generates_signature_impl() {
-    assert_eq!(<TestSig as SignatureTrait>::instruction(), "Test instruction");
+    assert_eq!(
+        <TestSig as SignatureTrait>::instruction(),
+        "Test instruction"
+    );
 
     let input_fields = <TestSig as SignatureTrait>::input_fields();
     assert_eq!(input_fields.len(), 1);

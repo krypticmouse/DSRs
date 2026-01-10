@@ -133,7 +133,10 @@ impl ParseError {
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
     #[error("expected {expected}, got {actual}")]
-    TypeMismatch { expected: &'static str, actual: String },
+    TypeMismatch {
+        expected: &'static str,
+        actual: String,
+    },
 
     #[error("missing required field `{field}` in class `{class}`")]
     MissingField { class: String, field: String },

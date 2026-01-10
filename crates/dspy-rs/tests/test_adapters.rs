@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use dspy_rs::{
-    Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, LegacySignature,
+    Cache, Chat, ChatAdapter, DummyLM, Example, LegacySignature, Message, MetaSignature,
     adapter::Adapter, example, hashmap,
 };
 

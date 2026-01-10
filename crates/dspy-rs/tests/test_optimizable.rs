@@ -1,4 +1,4 @@
-use dspy_rs::{Optimizable, LegacyPredict, LegacySignature};
+use dspy_rs::{LegacyPredict, LegacySignature, Optimizable};
 use rstest::*;
 
 #[LegacySignature]

@@ -2,7 +2,7 @@
 
 use crate as dspy_rs;
 use crate::{
-    Evaluator, Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,
+    Evaluator, Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
     example, get_lm,
 };
 use anyhow::Result;

@@ -18,7 +18,7 @@ cargo run --example 15-tools
 #![allow(deprecated)]
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, LegacyPredict, Predictor, LegacySignature, configure, example};
+use dspy_rs::{ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};

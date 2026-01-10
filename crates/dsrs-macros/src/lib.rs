@@ -5,8 +5,10 @@ use quote::{format_ident, quote};
 use serde_json::{Value, json};
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitStr, Meta, MetaNameValue,
-    Token, Visibility, parse_macro_input, spanned::Spanned,
+    Token, Visibility,
     parse::{Parse, ParseStream},
+    parse_macro_input,
+    spanned::Spanned,
 };
 
 mod optim;
@@ -32,7 +34,7 @@ fn expand_signature(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
             return Err(syn::Error::new_spanned(
                 input,
                 "#[derive(Signature)] only supports structs with named fields",
-            ))
+            ));
         }
     };
 
@@ -42,7 +44,7 @@ fn expand_signature(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
             return Err(syn::Error::new_spanned(
                 input,
                 "#[derive(Signature)] requires named fields",
-            ))
+            ));
         }
     };
 
@@ -219,11 +221,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
 fn parse_desc_from_attr(attr: &Attribute) -> Option<String> {
     let list = attr.meta.require_list().ok()?;
     let desc = parse_desc_from_tokens(list.tokens.clone());
-    if desc.is_empty() {
-        None
-    } else {
-        Some(desc)
-    }
+    if desc.is_empty() { None } else { Some(desc) }
 }
 
 fn parse_string_attr(attr: &Attribute) -> syn::Result<String> {
@@ -266,8 +264,7 @@ fn collect_doc_comment(attrs: &[Attribute]) -> String {
             && let Meta::NameValue(MetaNameValue {
                 value:
                     Expr::Lit(ExprLit {
-                        lit: Lit::Str(lit),
-                        ..
+                        lit: Lit::Str(lit), ..
                     }),
                 ..
             }) = &attr.meta
@@ -280,7 +277,9 @@ fn collect_doc_comment(attrs: &[Attribute]) -> String {
 
 fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String> {
     match expr {
-        Expr::Lit(ExprLit { lit: Lit::Str(s), .. }) => Ok(s.value()),
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => Ok(s.value()),
         _ => Err(syn::Error::new(
             span,
             "expected string literal; hint: wrap the value in quotes",
@@ -319,21 +318,9 @@ fn generate_helper_structs(
     let output_name = format_ident!("__{}Output", name);
     let all_name = format_ident!("__{}All", name);
 
-    let input_fields: Vec<_> = parsed
-        .input_fields
-        .iter()
-        .map(field_tokens)
-        .collect();
-    let output_fields: Vec<_> = parsed
-        .output_fields
-        .iter()
-        .map(field_tokens)
-        .collect();
-    let all_fields: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(field_tokens)
-        .collect();
+    let input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
+    let output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
+    let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
 
     Ok(quote! {
         #[derive(Debug, Clone, ::dspy_rs::BamlType)]
@@ -370,10 +357,7 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
 
     for constraint in &field.constraints {
         let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
-        let label = constraint
-            .label
-            .as_deref()
-            .unwrap_or("");
+        let label = constraint.label.as_deref().unwrap_or("");
         let label = LitStr::new(label, proc_macro2::Span::call_site());
         match constraint.kind {
             ParsedConstraintKind::Check => {
@@ -397,11 +381,7 @@ fn generate_field_specs(
     kind: &str,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let prefix = name.to_string().to_lowercase();
-    let array_name = format_ident!(
-        "__{}_{}_FIELDS",
-        name.to_string().to_uppercase(),
-        kind
-    );
+    let array_name = format_ident!("__{}_{}_FIELDS", name.to_string().to_uppercase(), kind);
 
     let mut type_ir_fns = Vec::new();
     let mut constraint_arrays = Vec::new();
@@ -431,10 +411,7 @@ fn generate_field_specs(
                 .iter()
                 .map(|constraint| {
                     let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
-                    let label = constraint
-                        .label
-                        .as_deref()
-                        .unwrap_or("");
+                    let label = constraint.label.as_deref().unwrap_or("");
                     let label = LitStr::new(label, proc_macro2::Span::call_site());
                     match constraint.kind {
                         ParsedConstraintKind::Check => {
@@ -472,12 +449,11 @@ fn generate_field_specs(
                 .map(|constraint| {
                     let kind = match constraint.kind {
                         ParsedConstraintKind::Check => quote! { ::dspy_rs::ConstraintKind::Check },
-                        ParsedConstraintKind::Assert => quote! { ::dspy_rs::ConstraintKind::Assert },
+                        ParsedConstraintKind::Assert => {
+                            quote! { ::dspy_rs::ConstraintKind::Assert }
+                        }
                     };
-                    let label = constraint
-                        .label
-                        .as_deref()
-                        .unwrap_or("");
+                    let label = constraint.label.as_deref().unwrap_or("");
                     let label = LitStr::new(label, proc_macro2::Span::call_site());
                     let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
                     quote! {
@@ -518,16 +494,9 @@ fn generate_field_specs(
     })
 }
 
-fn generate_baml_delegation(
-    name: &Ident,
-    parsed: &ParsedSignature,
-) -> proc_macro2::TokenStream {
+fn generate_baml_delegation(name: &Ident, parsed: &ParsedSignature) -> proc_macro2::TokenStream {
     let all_name = format_ident!("__{}All", name);
-    let field_names: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(|field| &field.ident)
-        .collect();
+    let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
 
     let mut to_value_inserts = Vec::new();
     for field in &parsed.all_fields {
@@ -588,10 +557,7 @@ fn generate_baml_delegation(
     }
 }
 
-fn generate_signature_impl(
-    name: &Ident,
-    parsed: &ParsedSignature,
-) -> proc_macro2::TokenStream {
+fn generate_signature_impl(name: &Ident, parsed: &ParsedSignature) -> proc_macro2::TokenStream {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("__{}Output", name);
 
@@ -608,14 +574,8 @@ fn generate_signature_impl(
         .map(|field| &field.ident)
         .collect();
 
-    let input_fields_static = format_ident!(
-        "__{}_INPUT_FIELDS",
-        name.to_string().to_uppercase()
-    );
-    let output_fields_static = format_ident!(
-        "__{}_OUTPUT_FIELDS",
-        name.to_string().to_uppercase()
-    );
+    let input_fields_static = format_ident!("__{}_INPUT_FIELDS", name.to_string().to_uppercase());
+    let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
 
     quote! {
         impl ::dspy_rs::Signature for #name {

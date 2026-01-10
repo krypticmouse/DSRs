@@ -13,11 +13,11 @@ use crate::baml_bridge::jsonish::BamlValueWithFlags;
 use crate::baml_bridge::jsonish::deserializer::coercer::run_user_checks;
 use crate::baml_bridge::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use crate::serde_utils::get_iter_from_value;
+use crate::utils::cache::CacheEntry;
 use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
     JsonishError, LM, Message, MetaSignature, ParseError, Prediction, RenderOptions, Signature,
 };
-use crate::utils::cache::CacheEntry;
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
