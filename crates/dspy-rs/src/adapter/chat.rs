@@ -136,7 +136,14 @@ impl ChatAdapter {
             signature.instruction().clone()
         };
 
-        format!("In adhering to this structure, your objective is:\n\t{instruction}")
+        let mut indented = String::new();
+        for line in instruction.lines() {
+            indented.push('\n');
+            indented.push_str("        ");
+            indented.push_str(line);
+        }
+
+        format!("In adhering to this structure, your objective is: {indented}")
     }
 
     fn format_user_message(&self, signature: &dyn MetaSignature, inputs: &Example) -> String {

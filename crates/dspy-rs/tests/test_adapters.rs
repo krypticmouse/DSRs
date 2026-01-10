@@ -46,7 +46,7 @@ async fn test_chat_adapter() {
 
     assert_eq!(
         json[0]["content"],
-        "Your input fields are:\n1. `problem` (String)\n\nYour output fields are:\n1. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, produce the fields `answer`."
+        "Your input fields are:\n1. `problem` (String)\n\nYour output fields are:\n1. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is: \n        Given the fields `problem`, produce the fields `answer`."
     );
     assert_eq!(
         json[1]["content"],
@@ -114,7 +114,7 @@ async fn test_chat_adapter_with_multiple_fields() {
 
     assert_eq!(
         json[0]["content"],
-        "Your input fields are:\n1. `problem` (String)\n2. `hint` (String): Hint for the query\n\nYour output fields are:\n1. `reasoning` (String): Think step by step\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tYou are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string()
+        "Your input fields are:\n1. `problem` (String)\n2. `hint` (String): Hint for the query\n\nYour output fields are:\n1. `reasoning` (String): Think step by step\n2. `answer` (String)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\n\n[[ ## reasoning ## ]]\nreasoning\n\n[[ ## answer ## ]]\nanswer\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is: \n        You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.".to_string()
     );
     assert_eq!(
         json[1]["content"],
@@ -196,7 +196,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
 
     assert_eq!(
         json[0]["content"],
-        "Your input fields are:\n1. `problem` (String)\n2. `hint` (i8)\n\nYour output fields are:\n1. `output` (TestOutput)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\t# note: the value you produce must be a single i8 value\n\n[[ ## output ## ]]\noutput\t# note: the value you produce must adhere to the JSON schema: {\"reasoning\":{\"type\":\"string\"},\"rating\":{\"type\":\"integer\",\"format\":\"int8\",\"minimum\":-128,\"maximum\":127}}\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is:\n\tGiven the fields `problem`, `hint`, produce the fields `output`.".to_string()
+        "Your input fields are:\n1. `problem` (String)\n2. `hint` (i8)\n\nYour output fields are:\n1. `output` (TestOutput)\n\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## problem ## ]]\nproblem\n\n[[ ## hint ## ]]\nhint\t# note: the value you produce must be a single i8 value\n\n[[ ## output ## ]]\noutput\t# note: the value you produce must adhere to the JSON schema: {\"reasoning\":{\"type\":\"string\"},\"rating\":{\"type\":\"integer\",\"format\":\"int8\",\"minimum\":-128,\"maximum\":127}}\n\n[[ ## completed ## ]]\n\nIn adhering to this structure, your objective is: \n        Given the fields `problem`, `hint`, produce the fields `output`.".to_string()
     );
     assert_eq!(
         json[1]["content"],
