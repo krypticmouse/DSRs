@@ -228,6 +228,13 @@ impl ChatAdapter {
     }
 
     pub fn format_system_message_typed<S: Signature>(&self) -> Result<String> {
+        self.format_system_message_typed_with_instruction::<S>(None)
+    }
+
+    pub fn format_system_message_typed_with_instruction<S: Signature>(
+        &self,
+        instruction_override: Option<&str>,
+    ) -> Result<String> {
         let mut parts = Vec::new();
         parts.push(self.format_field_descriptions_typed::<S>());
         parts.push(self.format_field_structure_typed::<S>());
@@ -239,7 +246,7 @@ impl ChatAdapter {
             parts.push(format!("Answer in this schema:\n{schema}"));
         }
 
-        let instruction = S::instruction();
+        let instruction = instruction_override.unwrap_or(S::instruction());
         if !instruction.is_empty() {
             parts.push(instruction.to_string());
         }

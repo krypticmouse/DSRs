@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use crate as dspy_rs;
 use crate::{
-    Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
+    Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,
     evaluate::FeedbackEvaluator, example,
 };
 use dsrs_macros::LegacySignature;
@@ -317,7 +317,7 @@ impl GEPA {
             .join("\n");
 
         // First, reflect on the traces
-        let reflect_predictor = Predict::new(ReflectOnTrace::new());
+        let reflect_predictor = LegacyPredict::new(ReflectOnTrace::new());
         let reflection_input = example! {
             "current_instruction": "input" => current_instruction,
             "traces": "input" => traces_text.clone(),
@@ -340,7 +340,7 @@ impl GEPA {
             .to_string();
 
         // Then, propose improved instruction
-        let propose_predictor = Predict::new(ProposeImprovedInstruction::new());
+        let propose_predictor = LegacyPredict::new(ProposeImprovedInstruction::new());
         let proposal_input = example! {
             "current_instruction": "input" => current_instruction,
             "reflection": "input" => reflection.clone(),

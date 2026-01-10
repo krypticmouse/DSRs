@@ -11,7 +11,7 @@ cargo run --example 11-custom-client
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Predictor, LegacySignature, configure, example};
+use dspy_rs::{ChatAdapter, LM, LMClient, LegacyPredict, Predictor, LegacySignature, configure, example};
 use rig::providers::*;
 use std::env;
 
@@ -54,7 +54,7 @@ async fn main() -> Result<()> {
         "question": "input" => "What is the capital of France?",
     };
 
-    let qa_predictor = Predict::new(QASignature::new());
+    let qa_predictor = LegacyPredict::new(QASignature::new());
     let prediction = qa_predictor.forward(example).await?;
     println!("{prediction:?}");
 

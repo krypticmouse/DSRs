@@ -13,7 +13,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, LegacySignature, configure,
+    LegacyPredict, Prediction, Predictor, LegacySignature, configure,
 };
 
 #[LegacySignature(cot)]
@@ -30,8 +30,8 @@ struct QASignature {
 #[derive(Builder, Optimizable)]
 pub struct QARater {
     #[parameter]
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
 }
 
 impl Module for QARater {

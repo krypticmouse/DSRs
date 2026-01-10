@@ -10,7 +10,7 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, LegacySignature, configure,
+    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature, configure,
     example, hashmap, prediction,
 };
 
@@ -39,10 +39,10 @@ struct RateSignature {
 
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
-    #[builder(default = Predict::new(RateSignature::new()))]
-    pub rater: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
+    #[builder(default = LegacyPredict::new(RateSignature::new()))]
+    pub rater: LegacyPredict,
 }
 
 impl Module for QARater {

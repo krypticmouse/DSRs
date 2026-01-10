@@ -1,13 +1,11 @@
-use crate::{Example, MetaSignature, Prediction};
+use crate::{Example, Prediction};
 use std::fmt;
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub enum NodeType {
     Root, // Initial input
     Predict {
         signature_name: String,
-        signature: Arc<dyn MetaSignature>,
     },
     Operator {
         name: String,
@@ -24,7 +22,7 @@ impl fmt::Debug for NodeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Root => write!(f, "Root"),
-            Self::Predict { signature_name, .. } => f
+            Self::Predict { signature_name } => f
                 .debug_struct("Predict")
                 .field("signature_name", signature_name)
                 .finish(),

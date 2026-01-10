@@ -13,7 +13,7 @@ use crate as dspy_rs;
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
 use crate::{
-    Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
+    Evaluator, Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,
     example, get_lm,
 };
 use anyhow::{Context, Result};
@@ -285,7 +285,7 @@ impl MIPROv2 {
         signature_desc: &str,
         traces: &[Trace],
     ) -> Result<String> {
-        let description_generator = Predict::new(GenerateProgramDescription::new());
+        let description_generator = LegacyPredict::new(GenerateProgramDescription::new());
 
         // Format traces for the prompt
         let traces_str = traces
@@ -325,7 +325,7 @@ impl MIPROv2 {
         traces: &[Trace],
         num_candidates: usize,
     ) -> Result<Vec<String>> {
-        let instruction_generator = Predict::new(GenerateInstructionFromTips::new());
+        let instruction_generator = LegacyPredict::new(GenerateInstructionFromTips::new());
         let tips = PromptingTips::default_tips();
 
         // Format traces

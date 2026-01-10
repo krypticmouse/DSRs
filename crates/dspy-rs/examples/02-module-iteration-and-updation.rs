@@ -10,7 +10,7 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, Module, Optimizable, Predict, Prediction, Predictor, LegacySignature, hashmap, prediction,
+    Example, Module, Optimizable, LegacyPredict, Prediction, Predictor, LegacySignature, hashmap, prediction,
 };
 
 #[LegacySignature(cot)]
@@ -39,12 +39,12 @@ struct RateSignature {
 #[derive(Builder, Optimizable)]
 pub struct QARater {
     #[parameter]
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
 
     #[parameter]
-    #[builder(default = Predict::new(RateSignature::new()))]
-    pub rater: Predict,
+    #[builder(default = LegacyPredict::new(RateSignature::new()))]
+    pub rater: LegacyPredict,
 }
 
 #[derive(Builder, Optimizable)]
@@ -58,8 +58,8 @@ pub struct NestedModule {
     pub qa_inner: QARater,
 
     #[parameter]
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub extra: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub extra: LegacyPredict,
 }
 
 impl Module for QARater {

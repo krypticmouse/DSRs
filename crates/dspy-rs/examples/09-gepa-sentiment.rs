@@ -31,7 +31,7 @@ struct SentimentSignature {
 #[derive(Builder, Optimizable)]
 struct SentimentAnalyzer {
     #[parameter]
-    predictor: Predict,
+    predictor: LegacyPredict,
 }
 
 impl Module for SentimentAnalyzer {
@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
 
     // Create module
     let mut module = SentimentAnalyzer::builder()
-        .predictor(Predict::new(SentimentSignature::new()))
+        .predictor(LegacyPredict::new(SentimentSignature::new()))
         .build();
 
     // Evaluate baseline performance

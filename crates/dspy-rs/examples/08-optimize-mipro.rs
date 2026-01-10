@@ -21,7 +21,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, LegacySignature, configure, example,
+    LegacyPredict, Prediction, Predictor, LegacySignature, configure, example,
 };
 
 #[LegacySignature]
@@ -38,8 +38,8 @@ struct QuestionAnswering {
 #[derive(Builder, Optimizable)]
 pub struct SimpleQA {
     #[parameter]
-    #[builder(default = Predict::new(QuestionAnswering::new()))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(QuestionAnswering::new()))]
+    pub answerer: LegacyPredict,
 }
 
 impl Module for SimpleQA {

@@ -16,7 +16,7 @@ cargo run --example 15-tools
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Predictor, LegacySignature, configure, example};
+use dspy_rs::{ChatAdapter, LM, LegacyPredict, Predictor, LegacySignature, configure, example};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -146,7 +146,7 @@ async fn main() -> Result<()> {
 
     // Create a predictor with the calculator tool
     let calculator_tool = CalculatorTool;
-    let predictor = Predict::new_with_tools(
+    let predictor = LegacyPredict::new_with_tools(
         MathQuestionSignature::new(),
         vec![Box::new(calculator_tool)],
     );

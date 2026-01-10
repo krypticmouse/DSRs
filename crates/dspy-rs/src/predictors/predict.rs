@@ -1,16 +1,192 @@
 use indexmap::IndexMap;
 use rig::tool::ToolDyn;
+use std::marker::PhantomData;
 use std::sync::Arc;
 
-use crate::core::{MetaSignature, Optimizable};
-use crate::{ChatAdapter, Example, GLOBAL_SETTINGS, LM, Prediction, adapter::Adapter};
+use crate::adapter::Adapter;
+use crate::core::{MetaSignature, Optimizable, Signature};
+use crate::{
+    CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LmError, LM, PredictError, Prediction,
+};
+use crate::baml_bridge::ToBamlValue;
 
-pub struct Predict {
+pub struct Predict<S: Signature> {
+    tools: Vec<Arc<dyn ToolDyn>>,
+    demos: Vec<S>,
+    instruction_override: Option<String>,
+    _marker: PhantomData<S>,
+}
+
+impl<S: Signature> Predict<S> {
+    pub fn new() -> Self {
+        Self {
+            tools: Vec::new(),
+            demos: Vec::new(),
+            instruction_override: None,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn builder() -> PredictBuilder<S> {
+        PredictBuilder::new()
+    }
+
+    pub async fn call(&self, input: S::Input) -> Result<S, PredictError>
+    where
+        S: Clone,
+        S::Input: ToBamlValue,
+        S::Output: ToBamlValue,
+    {
+        Ok(self.call_with_meta(input).await?.output)
+    }
+
+    pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
+    where
+        S: Clone,
+        S::Input: ToBamlValue,
+        S::Output: ToBamlValue,
+    {
+        let lm = {
+            let guard = GLOBAL_SETTINGS.read().unwrap();
+            let settings = guard.as_ref().unwrap();
+            Arc::clone(&settings.lm)
+        };
+
+        let chat_adapter = ChatAdapter;
+        let system = chat_adapter
+            .format_system_message_typed_with_instruction::<S>(
+                self.instruction_override.as_deref(),
+            )
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: "internal".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
+        let user = chat_adapter.format_user_message_typed::<S>(&input);
+
+        let mut chat = Chat::new(vec![]);
+        chat.push("system", &system);
+        for demo in &self.demos {
+            let (demo_user, demo_assistant) = chat_adapter.format_demo_typed::<S>(demo.clone());
+            chat.push("user", &demo_user);
+            chat.push("assistant", &demo_assistant);
+        }
+        chat.push("user", &user);
+
+        let response = lm
+            .call(chat, self.tools.clone())
+            .await
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: lm.model.clone(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
+
+        let raw_response = response.output.content().to_string();
+        let lm_usage = response.usage.clone();
+        let (typed_output, field_metas) =
+            chat_adapter
+                .parse_response_typed::<S>(&response.output)
+                .map_err(|err| PredictError::Parse {
+                    source: err,
+                    raw_response: raw_response.clone(),
+                    lm_usage: lm_usage.clone(),
+                })?;
+
+        let output = S::from_parts(input, typed_output);
+
+        let node_id = if crate::trace::is_tracing() {
+            crate::trace::record_node(
+                crate::trace::NodeType::Predict {
+                    signature_name: std::any::type_name::<S>().to_string(),
+                },
+                vec![],
+                None,
+            )
+        } else {
+            None
+        };
+
+        Ok(CallResult::new(
+            output,
+            raw_response,
+            lm_usage,
+            response.tool_calls,
+            response.tool_executions,
+            node_id,
+            field_metas,
+        ))
+    }
+}
+
+impl<S: Signature> Default for Predict<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct PredictBuilder<S: Signature> {
+    tools: Vec<Arc<dyn ToolDyn>>,
+    demos: Vec<S>,
+    instruction_override: Option<String>,
+    _marker: PhantomData<S>,
+}
+
+impl<S: Signature> PredictBuilder<S> {
+    fn new() -> Self {
+        Self {
+            tools: Vec::new(),
+            demos: Vec::new(),
+            instruction_override: None,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn demo(mut self, demo: S) -> Self {
+        self.demos.push(demo);
+        self
+    }
+
+    pub fn with_demos(mut self, demos: impl IntoIterator<Item = S>) -> Self {
+        self.demos.extend(demos);
+        self
+    }
+
+    pub fn add_tool(mut self, tool: impl ToolDyn + 'static) -> Self {
+        self.tools.push(Arc::new(tool));
+        self
+    }
+
+    pub fn with_tools(mut self, tools: impl IntoIterator<Item = Arc<dyn ToolDyn>>) -> Self {
+        self.tools.extend(tools);
+        self
+    }
+
+    pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.instruction_override = Some(instruction.into());
+        self
+    }
+
+    pub fn build(self) -> Predict<S> {
+        Predict {
+            tools: self.tools,
+            demos: self.demos,
+            instruction_override: self.instruction_override,
+            _marker: PhantomData,
+        }
+    }
+}
+
+pub struct LegacyPredict {
     pub signature: Arc<dyn MetaSignature>,
     pub tools: Vec<Arc<dyn ToolDyn>>,
 }
 
-impl Predict {
+impl LegacyPredict {
     pub fn new(signature: impl MetaSignature + 'static) -> Self {
         Self {
             signature: Arc::new(signature),
@@ -39,7 +215,7 @@ impl Predict {
     }
 }
 
-impl super::Predictor for Predict {
+impl super::Predictor for LegacyPredict {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
         let trace_node_id = if crate::trace::is_tracing() {
             let input_id = if let Some(id) = inputs.node_id {
@@ -55,8 +231,7 @@ impl super::Predictor for Predict {
 
             crate::trace::record_node(
                 crate::trace::NodeType::Predict {
-                    signature_name: "Predict".to_string(),
-                    signature: self.signature.clone(),
+                    signature_name: "LegacyPredict".to_string(),
                 },
                 vec![input_id],
                 None,
@@ -101,8 +276,7 @@ impl super::Predictor for Predict {
 
             crate::trace::record_node(
                 crate::trace::NodeType::Predict {
-                    signature_name: "Predict".to_string(),
-                    signature: self.signature.clone(),
+                    signature_name: "LegacyPredict".to_string(),
                 },
                 vec![input_id],
                 None,
@@ -124,7 +298,7 @@ impl super::Predictor for Predict {
     }
 }
 
-impl Optimizable for Predict {
+impl Optimizable for LegacyPredict {
     fn get_signature(&self) -> &dyn MetaSignature {
         self.signature.as_ref()
     }
@@ -141,7 +315,7 @@ impl Optimizable for Predict {
             // If Arc is shared, we might need to clone it first?
             // But Optimizable usually assumes exclusive access for modification.
             // If we are optimizing, we should have ownership or mutable access.
-            // If tracing is active, `Predict` instances might be shared in Graph, but here we are modifying the instance.
+            // If tracing is active, `LegacyPredict` instances might be shared in Graph, but here we are modifying the instance.
             // If we can't get mut, it means it's shared.
             // We can clone-on-write? But MetaSignature is a trait object, so we can't easily clone it unless we implement Clone for Box<dyn MetaSignature>.
             // However, we changed it to Arc.

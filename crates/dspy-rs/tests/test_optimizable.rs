@@ -1,16 +1,16 @@
-use dspy_rs::{Optimizable, Predict, sign};
+use dspy_rs::{Optimizable, LegacyPredict, sign};
 use rstest::*;
 
 #[derive(Optimizable)]
 struct Leaf {
     #[parameter]
-    predictor: Predict,
+    predictor: LegacyPredict,
 }
 
 #[derive(Optimizable)]
 struct Parent {
     #[parameter]
-    a: Predict,
+    a: LegacyPredict,
     #[parameter]
     b: Leaf,
 }
@@ -20,11 +20,11 @@ struct GrandParent {
     #[parameter]
     p: Parent,
     #[parameter]
-    c: Predict,
+    c: LegacyPredict,
 }
 
-fn new_predict() -> Predict {
-    Predict::new(sign! { (question: String) -> answer: String })
+fn new_predict() -> LegacyPredict {
+    LegacyPredict::new(sign! { (question: String) -> answer: String })
 }
 
 #[rstest]

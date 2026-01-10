@@ -1,7 +1,7 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, LM, Module, Predict, Prediction, Predictor, LegacySignature, configure, example,
+    ChatAdapter, LM, Module, LegacyPredict, Prediction, Predictor, LegacySignature, configure, example,
     prediction,
     trace::{self, IntoTracked},
 };
@@ -26,10 +26,10 @@ struct RateSignature {
 
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
-    #[builder(default = Predict::new(RateSignature::new()))]
-    pub rater: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
+    #[builder(default = LegacyPredict::new(RateSignature::new()))]
+    pub rater: LegacyPredict,
 }
 
 impl Module for QARater {
@@ -95,9 +95,9 @@ async fn main() -> Result<()> {
     // Check if the graph is connected:
     // Expected:
     // Node 0: Root (Initial input)
-    // Node 1: Predict (Answerer) -> Inputs: [0]
+    // Node 1: LegacyPredict (Answerer) -> Inputs: [0]
     // Node 2: Map (Data Transform) -> Inputs: [0, 1]
-    // Node 3: Predict (Rater)    -> Inputs: [2]
+    // Node 3: LegacyPredict (Rater)    -> Inputs: [2]
 
     // Execute the graph with new input
     println!("\nExecuting Graph with new input...");

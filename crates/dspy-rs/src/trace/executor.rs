@@ -1,8 +1,7 @@
 use crate::trace::dag::{Graph, NodeType};
-use crate::{Example, GLOBAL_SETTINGS, Prediction};
+use crate::{Example, Prediction};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub struct Executor {
     pub graph: Graph,
@@ -23,8 +22,6 @@ impl Executor {
 
         // We will return the output of the *last* node(s), or just all predictions?
         // Usually we want the leaf nodes.
-
-        let mut final_predictions = Vec::new();
 
         for node in &self.graph.nodes {
             match &node.node_type {
@@ -62,53 +59,10 @@ impl Executor {
                         }
                     }
                 }
-                NodeType::Predict { signature, .. } => {
-                    // Gather inputs
-                    // Predict node inputs usually come from a Map node (which prepared the Example)
-                    // Or directly if it's just raw data?
-                    // Typically: Node A -> Map -> Node B (Predict).
-                    // Node B's `inputs` list contains the Map node ID.
-                    // But `Predict` takes an `Example`.
-                    // We need to reconstruct the `Example` from the output of the previous node.
-
-                    // IF the previous node was a Map node, its "output" should be the `Example` ready for this predictor.
-                    // Let's see how Map nodes work.
-
-                    // Actually, `Predict` takes `Example`.
-                    // In the trace, we recorded `inputs.node_id`.
-                    // So the parent of this Predict node IS the node that produced the `Example`.
-                    // If that parent is a Map node, we expect the Map node to produce a "Prediction" that acts as the Example?
-                    // Yes, `Map` node output can be treated as the `Example` data.
-
-                    if let Some(parent_id) = node.inputs.first()
-                        && let Some(input_pred) = node_outputs.get(parent_id)
-                    {
-                        // Convert Prediction back to Example
-                        let example = Example::new(
-                            input_pred.data.clone(),
-                            vec![], // input_keys
-                            vec![], // output_keys
-                        );
-
-                        // Execute Predict
-                        let (adapter, lm) = {
-                            let guard = GLOBAL_SETTINGS.read().unwrap();
-                            let settings = guard.as_ref().unwrap();
-                            (settings.adapter.clone(), Arc::clone(&settings.lm))
-                        };
-
-                        // We need to use the stored signature
-                        // Predict struct isn't stored, just signature.
-                        // We reconstruct a temporary "Predict"-like behavior.
-                        // Tools are lost in current trace? Yes, need to fix that if tools are important.
-                        // For now, no tools.
-
-                        let tools = vec![];
-                        let result = adapter.call(lm, signature.as_ref(), example, tools).await?;
-
-                        node_outputs.insert(node.id, result.clone());
-                        final_predictions.push(result);
-                    }
+                NodeType::Predict { signature_name } => {
+                    return Err(anyhow::anyhow!(
+                        "Cannot execute traced Predict node for {signature_name}: signature data is not stored"
+                    ));
                 }
                 NodeType::Map { mapping } => {
                     // Execute the mapping

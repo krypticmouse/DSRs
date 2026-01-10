@@ -7,7 +7,7 @@ cargo run --example 05-heterogenous-examples
 ```
 */
 
-use dspy_rs::{ChatAdapter, LM, Predict, Predictor, configure, example, sign};
+use dspy_rs::{ChatAdapter, LM, LegacyPredict, Predictor, configure, example, sign};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
     let exp = example! {
         "number": "input" => 10,
     };
-    let predict = Predict::new(sign! {
+    let predict = LegacyPredict::new(sign! {
         (number: i32) -> number_squared: i32, number_cubed: i32
     });
 

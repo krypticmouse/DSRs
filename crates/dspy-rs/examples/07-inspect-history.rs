@@ -10,14 +10,14 @@ cargo run --example 07-inspect-history
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, configure, example, get_lm,
+    ChatAdapter, Example, LM, Module, LegacyPredict, Prediction, Predictor, configure, example, get_lm,
     sign,
 };
 
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = Predict::new(sign! { (question: String) -> answer: String }))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(sign! { (question: String) -> answer: String }))]
+    pub answerer: LegacyPredict,
 }
 
 impl Module for QARater {

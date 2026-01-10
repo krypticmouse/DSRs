@@ -1,6 +1,6 @@
 use crate as dspy_rs;
 use crate::{
-    Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
+    Evaluator, Example, LM, Module, Optimizable, Optimizer, LegacyPredict, Prediction, Predictor,
     example, get_lm,
 };
 use anyhow::Result;
@@ -61,10 +61,10 @@ pub struct COPRO {
     pub prompt_model: Option<LM>,
 }
 
-static BASIC_GENERATOR: LazyLock<Predict> =
-    LazyLock::new(|| Predict::new(BasicGenerateInstruction::new()));
-static REFINEMENT_GENERATOR: LazyLock<Predict> =
-    LazyLock::new(|| Predict::new(GenerateInstructionGivenAttempts::new()));
+static BASIC_GENERATOR: LazyLock<LegacyPredict> =
+    LazyLock::new(|| LegacyPredict::new(BasicGenerateInstruction::new()));
+static REFINEMENT_GENERATOR: LazyLock<LegacyPredict> =
+    LazyLock::new(|| LegacyPredict::new(GenerateInstructionGivenAttempts::new()));
 
 impl COPRO {
     fn get_output_field_prefix(&self, predictor: &dyn Optimizable) -> String {
