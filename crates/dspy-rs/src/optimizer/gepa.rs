@@ -18,7 +18,7 @@ use crate::{
     Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
     evaluate::FeedbackEvaluator, example,
 };
-use dsrs_macros::Signature;
+use dsrs_macros::LegacySignature;
 
 use super::pareto::ParetoFrontier;
 
@@ -117,7 +117,7 @@ pub use super::pareto::ParetoStatistics;
 // LLM Signatures for Reflection and Mutation
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct ReflectOnTrace {
     /// You are an expert at analyzing program execution traces and identifying
     /// areas for improvement. Given the module instruction, example traces showing
@@ -137,7 +137,7 @@ struct ReflectOnTrace {
     pub reflection: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct ProposeImprovedInstruction {
     /// You are an expert prompt engineer. Given the current instruction, execution
     /// traces, feedback, and reflection on weaknesses, propose an improved instruction
@@ -157,7 +157,7 @@ struct ProposeImprovedInstruction {
     pub improved_instruction: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct SelectModuleToImprove {
     /// Given multiple modules in a program and their performance feedback, select which
     /// module would benefit most from optimization. Consider which module's errors are

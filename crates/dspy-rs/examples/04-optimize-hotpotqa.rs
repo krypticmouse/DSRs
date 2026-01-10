@@ -13,10 +13,10 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, Signature, configure,
+    Predict, Prediction, Predictor, LegacySignature, configure,
 };
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
 

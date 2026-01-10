@@ -5,12 +5,12 @@ use crate::{
 };
 use anyhow::Result;
 use bon::Builder;
-use dsrs_macros::Signature;
+use dsrs_macros::LegacySignature;
 use futures::future::join_all;
 use std::sync::Arc;
 use std::{collections::HashMap, future::Future, pin::Pin, sync::LazyLock};
 
-#[Signature]
+#[LegacySignature]
 struct BasicGenerateInstruction {
     /// You are an instruction optimizer for large language models. I will give you a ``signature`` of fields (inputs and outputs) in English. Your task is to propose an instruction that will lead a good language model to perform the task well. Don't be afraid to be creative.
 
@@ -20,7 +20,7 @@ struct BasicGenerateInstruction {
     pub proposed_instruction: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct GenerateInstructionGivenAttempts {
     /// You are an instruction optimizer for large language models. I will give some task instructions I've tried, along with their corresponding validation scores. The instructions are arranged in increasing order based on their scores, where higher scores indicate better quality.
     ///

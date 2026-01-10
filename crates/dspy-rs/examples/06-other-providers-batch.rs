@@ -10,11 +10,11 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
+    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, LegacySignature, configure,
     example, hashmap, prediction,
 };
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     #[input]
     pub question: String,
@@ -23,7 +23,7 @@ struct QASignature {
     pub answer: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct RateSignature {
     /// Rate the answer on a scale of 1(very bad) to 10(very good)
 

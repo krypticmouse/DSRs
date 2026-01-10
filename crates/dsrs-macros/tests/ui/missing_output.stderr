@@ -1,0 +1,7 @@
+error: #[derive(Signature)] requires at least one #[output] field
+ --> tests/ui/missing_output.rs:3:10
+  |
+3 | #[derive(Signature)]
+  |          ^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Signature` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use dspy_rs::{
-    Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, Signature,
+    Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, LegacySignature,
     adapter::Adapter, example, hashmap, sign,
 };
 
@@ -67,7 +67,7 @@ async fn test_chat_adapter() {
 }
 
 #[allow(dead_code)]
-#[Signature(cot, hint)]
+#[LegacySignature(cot, hint)]
 struct TestSignature {
     ///You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.
 
@@ -149,7 +149,7 @@ struct TestOutput {
 }
 
 #[allow(dead_code)]
-#[Signature]
+#[LegacySignature]
 struct TestSignature2 {
     #[input]
     pub problem: String,

@@ -220,11 +220,11 @@ macro_rules! sign {
 
     // Pattern: input fields -> output fields
     { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        use dspy_rs::Signature;
+        use dspy_rs::LegacySignature;
         let mut input_fields = serde_json::Map::new();
         let mut output_fields = serde_json::Map::new();
 
-        #[Signature]
+        #[LegacySignature]
         struct InlineSignature {
             $(
                 #[input]

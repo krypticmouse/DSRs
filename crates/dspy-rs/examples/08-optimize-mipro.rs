@@ -21,10 +21,10 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, Signature, configure, example,
+    Predict, Prediction, Predictor, LegacySignature, configure, example,
 };
 
-#[Signature]
+#[LegacySignature]
 struct QuestionAnswering {
     /// Answer the question accurately and concisely.
 

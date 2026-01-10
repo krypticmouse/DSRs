@@ -11,14 +11,14 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Optimizable, Signature};
+use dsrs_macros::{LegacySignature, Optimizable};
 use std::sync::Arc;
 
 // ============================================================================
 // Step 1: Define the task signature with chain-of-thought reasoning
 // ============================================================================
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct MathWordProblem {
     /// Solve the math word problem step by step. Show your work clearly.
 
@@ -36,7 +36,7 @@ struct MathWordProblem {
 // Step 2: Define the LLM judge signature
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct MathJudge {
     /// You are an expert math teacher evaluating student work. Analyze both
     /// the final answer and the reasoning process. Be specific about what

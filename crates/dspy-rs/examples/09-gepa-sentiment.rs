@@ -12,9 +12,9 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Optimizable, Signature};
+use dsrs_macros::{LegacySignature, Optimizable};
 
-#[Signature]
+#[LegacySignature]
 struct SentimentSignature {
     /// Analyze the sentiment of the given text. Classify as 'Positive', 'Negative', or 'Neutral'.
 

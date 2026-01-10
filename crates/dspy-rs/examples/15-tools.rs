@@ -16,7 +16,7 @@ cargo run --example 15-tools
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Predictor, Signature, configure, example};
+use dspy_rs::{ChatAdapter, LM, Predict, Predictor, LegacySignature, configure, example};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ impl Tool for CalculatorTool {
 // 2. Define Signatures
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct MathQuestionSignature {
     /// You MUST use the calculator tool to perform any calculations. Do not calculate manually.
     /// When asked a math question, call the calculator tool with the appropriate operation and numbers.

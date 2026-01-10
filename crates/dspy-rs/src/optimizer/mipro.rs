@@ -18,14 +18,14 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use bon::Builder;
-use dsrs_macros::Signature;
+use dsrs_macros::LegacySignature;
 use std::sync::Arc;
 
 // ============================================================================
 // Signature Definitions for LLM-based Prompt Generation
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct GenerateProgramDescription {
     /// You are an expert at understanding and describing programs. Given a task signature with input and output fields, and some example traces, generate a clear and concise description of what the program does.
 
@@ -39,7 +39,7 @@ struct GenerateProgramDescription {
     pub program_description: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct GenerateInstructionFromTips {
     /// You are an expert prompt engineer. Given a program description, example traces, and a collection of prompting best practices, generate an effective instruction that will help a language model perform this task well.
     ///

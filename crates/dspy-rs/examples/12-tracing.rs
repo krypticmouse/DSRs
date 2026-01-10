@@ -1,12 +1,12 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, LM, Module, Predict, Prediction, Predictor, Signature, configure, example,
+    ChatAdapter, LM, Module, Predict, Prediction, Predictor, LegacySignature, configure, example,
     prediction,
     trace::{self, IntoTracked},
 };
 
-#[Signature]
+#[LegacySignature]
 struct QASignature {
     #[input]
     pub question: String,
@@ -14,7 +14,7 @@ struct QASignature {
     pub answer: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct RateSignature {
     #[input]
     pub question: String,

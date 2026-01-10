@@ -11,11 +11,11 @@ cargo run --example 11-custom-client
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Predictor, Signature, configure, example};
+use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Predictor, LegacySignature, configure, example};
 use rig::providers::*;
 use std::env;
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     #[input]
     pub question: String,

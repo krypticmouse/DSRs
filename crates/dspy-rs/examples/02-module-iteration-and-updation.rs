@@ -10,10 +10,10 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, Module, Optimizable, Predict, Prediction, Predictor, Signature, hashmap, prediction,
+    Example, Module, Optimizable, Predict, Prediction, Predictor, LegacySignature, hashmap, prediction,
 };
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     #[input]
     pub question: String,
@@ -22,7 +22,7 @@ struct QASignature {
     pub answer: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct RateSignature {
     /// Rate the answer on a scale of 1(very bad) to 10(very good)
 

@@ -1,11 +1,11 @@
 use dspy_rs::DummyPredict;
 use dspy_rs::Predictor;
-use dspy_rs::Signature;
+use dspy_rs::LegacySignature;
 use dspy_rs::data::example::Example;
 use dspy_rs::hashmap;
 
 #[allow(dead_code)]
-#[Signature]
+#[LegacySignature]
 struct QASignature {
     /// You are a helpful assistant.
 
