@@ -200,7 +200,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
     );
     assert_eq!(
         json[1]["content"],
-        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `output` (must be formatted as valid Rust TestOutput), and then ending with the marker for `completed`."
+        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `output`, and then ending with the marker for `completed`."
     );
 
     let test_example = example! {

@@ -24,22 +24,8 @@ use crate::{
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
-fn get_type_hint(field: &Value) -> String {
-    let schema = &field["schema"];
-    let type_str = field["type"].as_str().unwrap_or("String");
-
-    // Check if schema exists and is not empty (either as string or object)
-    let has_schema = if let Some(s) = schema.as_str() {
-        !s.is_empty()
-    } else {
-        schema.is_object()
-    };
-
-    if !has_schema && type_str == "String" {
-        String::new()
-    } else {
-        format!(" (must be formatted as valid Rust {type_str})")
-    }
+fn get_type_hint(_field: &Value) -> String {
+    String::new()
 }
 
 impl ChatAdapter {
