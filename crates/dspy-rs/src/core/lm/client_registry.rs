@@ -2,10 +2,10 @@ use anyhow::Result;
 use enum_dispatch::enum_dispatch;
 use reqwest;
 use rig::{
+    OneOrMany,
     client::Nothing,
     completion::{AssistantContent, CompletionError, CompletionRequest, CompletionResponse, Usage},
     providers::*,
-    OneOrMany,
 };
 use std::{
     borrow::Cow,
@@ -51,12 +51,9 @@ impl CompletionProvider for TestCompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         *self.last_request.lock().unwrap() = Some(request);
-        let response = self
-            .responses
-            .lock()
-            .unwrap()
-            .pop_front()
-            .ok_or_else(|| CompletionError::ResponseError("test response queue is empty".to_string()))?;
+        let response = self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+            CompletionError::ResponseError("test response queue is empty".to_string())
+        })?;
         Ok(CompletionResponse {
             choice: OneOrMany::one(response),
             usage: Usage::new(),

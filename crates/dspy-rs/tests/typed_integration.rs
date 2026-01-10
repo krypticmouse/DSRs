@@ -1,10 +1,11 @@
 use dspy_rs::{
-    configure, ChatAdapter, LM, LMClient, ParseError, Predict, PredictError, Signature,
-    TestCompletionModel,
+    ChatAdapter, LM, LMClient, ParseError, Predict, PredictError, Signature, TestCompletionModel,
+    configure,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use tokio::sync::Mutex;
 
 static SETTINGS_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
@@ -26,7 +27,7 @@ async fn configure_test_lm(responses: Vec<String>) -> TestCompletionModel {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
 
-    let client = TestCompletionModel::new(responses.into_iter().map(|text| text_response(text)));
+    let client = TestCompletionModel::new(responses.into_iter().map(text_response));
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
         .build()
@@ -72,7 +73,7 @@ struct StrictQA {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_prediction_happy_path_with_metadata() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris"), ("confidence", "0.9")]);
     let _client = configure_test_lm(vec![response]).await;
 
@@ -89,15 +90,17 @@ async fn typed_prediction_happy_path_with_metadata() {
     assert!(result.field_raw("confidence").is_some());
 
     let checks = result.field_checks("confidence");
-    assert!(checks
-        .iter()
-        .any(|check| check.label == "valid_confidence" && check.passed));
+    assert!(
+        checks
+            .iter()
+            .any(|check| check.label == "valid_confidence" && check.passed)
+    );
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_prediction_check_failure_is_recorded() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris"), ("confidence", "1.5")]);
     let _client = configure_test_lm(vec![response]).await;
 
@@ -120,7 +123,7 @@ async fn typed_prediction_check_failure_is_recorded() {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_prediction_missing_field_surfaces_error() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris")]);
     let _client = configure_test_lm(vec![response]).await;
 
@@ -152,7 +155,7 @@ async fn typed_prediction_missing_field_surfaces_error() {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_prediction_assert_failure_raises_error() {
-    let _lock = SETTINGS_LOCK.lock().unwrap();
+    let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris"), ("confidence", "1.5")]);
     let _client = configure_test_lm(vec![response]).await;
 

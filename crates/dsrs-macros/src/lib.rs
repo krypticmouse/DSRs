@@ -228,7 +228,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 return Err(syn::Error::new_spanned(
                     field,
                     "unsupported #[format] value; use \"json\", \"yaml\", or \"toon\"",
-                ))
+                ));
             }
         }
     }
