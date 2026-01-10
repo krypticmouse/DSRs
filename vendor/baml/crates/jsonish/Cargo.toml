@@ -1,0 +1,72 @@
+[package]
+edition = "2021"
+name = "jsonish"
+version = "0.1.0"
+license = "Apache-2.0"
+publish = false
+description = "Jsonish parser and coercer for BAML"
+autotests = false
+autobenches = false
+
+[lints.rust]
+dead_code = "allow"
+mismatched_lifetime_syntaxes = "deny"
+unused_imports = "allow"
+unused_variables = "allow"
+
+[lints.clippy]
+type_complexity = "allow"
+
+[lib]
+test = false
+
+[dependencies]
+anyhow = "1.0"
+baml-types = { path = "../baml-types" }
+bstd = { path = "../bstd" }
+internal-baml-jinja = { path = "../internal-baml-jinja" }
+log = "0.4.20"
+indexmap = { version = "2.1.0", features = ["serde"] }
+strsim = "0.11.1"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
+test-log = "0.2.16"
+regex = "1.10.4"
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "serde",
+] }
+thiserror = "2.0.17"
+unicode-normalization = "0.1.24"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { version = "1.8.0", features = ["v4", "v7", "serde", "js"] }
+getrandom = { version = "0.2.15", features = ["js"] }
+
+[dev-dependencies]
+assert-json-diff = "2.0.2"
+wasm-bindgen-test = "0.3"
+peak_alloc = "0.2.0"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+criterion = { version = "0.5", default-features = false, features = ["html_reports", "plotters", "cargo_bench_support"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+web-sys = { version = "0.3", features = ["console", "Performance", "Window"] }
+
+[[bench]]
+name = "jsonish_benchmark"
+harness = false
+required-features = []

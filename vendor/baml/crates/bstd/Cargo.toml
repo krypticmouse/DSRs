@@ -1,0 +1,39 @@
+[package]
+edition = "2021"
+name = "bstd"
+version = "0.1.0"
+license = "Apache-2.0"
+publish = false
+description = "BAML standard utilities"
+
+[package.metadata.rustflags]
+RSTEST_TIMEOUT = "10"
+
+[lints.rust]
+dead_code = "deny"
+mismatched_lifetime_syntaxes = "deny"
+unused_imports = "deny"
+unused_variables = "deny"
+
+[dependencies]
+anyhow = "1.0"
+num = "0.4"
+rand = "0.8.5"
+regex = "1.10.4"
+
+[features]
+defaults = []
+internal = []
+skip-integ-tests = []
+
+[dev-dependencies]
+assert_cmd = "2"
+console_log = "1"
+dissimilar = "1.0.4"
+expect-test = "1.1.0"
+indoc = "2.0.5"
+pretty_assertions = "1.4.1"
+either = "1.8.1"
+rstest = "0.22.0"
+wasm-bindgen-test = "0.3.42"
+walkdir = "2.5.0"

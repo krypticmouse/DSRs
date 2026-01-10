@@ -1,0 +1,55 @@
+[package]
+edition = "2021"
+name = "baml-types"
+version = "0.1.0"
+license = "Apache-2.0"
+publish = false
+description = "BAML type system and IR"
+
+[lints.rust]
+dead_code = "deny"
+mismatched_lifetime_syntaxes = "deny"
+unused_imports = "deny"
+unused_variables = "deny"
+
+[lints.clippy]
+type_complexity = "allow"
+
+# Attention:
+#   Please try to keep this crate low-dependency! We want to keep this as minimal as possible.
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.4.6", features = ["cargo", "derive"] }
+internal-baml-diagnostics = { path = "../internal-baml-diagnostics" }
+itertools = "0.14.0"
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "serde",
+] }
+pretty = "0.12.4"
+secrecy = { version = "0.10.3", features = ["serde"] }
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+strum = { version = "0.26.2", features = ["derive"] }
+web-time = "1.1.0"
+baml-ids = { path = "../baml-ids" }
+
+[dependencies.indexmap]
+version = "2.1.0"
+features = ["serde"]
+optional = true
+
+[features]
+default = ["stable_sort"]
+stable_sort = ["indexmap"]

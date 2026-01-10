@@ -1,0 +1,34 @@
+[package]
+name = "internal-baml-jinja"
+edition = "2021"
+version = "0.1.0"
+license = "Apache-2.0"
+publish = false
+description = "Internal BAML Jinja runtime"
+
+[lints.rust]
+dead_code = "allow"
+mismatched_lifetime_syntaxes = "deny"
+unused_imports = "deny"
+unused_variables = "deny"
+
+[dependencies]
+baml-types = { path = "../baml-types" }
+anyhow = "1.0"
+indexmap = { version = "2.1.0", features = ["serde"] }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "serde",
+] }
+strum = { version = "0.26.2", features = ["derive"] }

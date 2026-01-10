@@ -1,0 +1,26 @@
+[package]
+edition = "2021"
+name = "baml-ids"
+version = "0.0.1"
+license = "Apache-2.0"
+publish = false
+description = "Typesafe IDs for BAML backends and runtime"
+
+[package.metadata.rustflags]
+RSTEST_TIMEOUT = "10"
+
+[lints.rust]
+dead_code = "deny"
+mismatched_lifetime_syntaxes = "deny"
+unused_imports = "deny"
+unused_variables = "deny"
+
+[dependencies]
+anyhow = "1.0"
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
+time = { version = "0.3.36", features = ["formatting"] }
+type-safe-id = "=0.3.2"
+uuid = { version = "1.8.0", features = ["v4", "v7", "serde", "js"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

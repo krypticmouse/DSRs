@@ -37,7 +37,7 @@ Example:
 
 ```toml
 [dependencies]
-baml-bridge = { path = "../../baml-bridge/crates/bridge", features = ["derive"] }
+baml-bridge = { path = "../baml-bridge", features = ["derive"] }
 indexmap = "..." # already present
 ```
 
@@ -279,7 +279,7 @@ This is the one spec-implied piece you don’t currently have: you need to forma
 
 ### 2.1 Add `ToBamlValue` to baml-bridge (bridge crate)
 
-**File:** `baml-bridge/crates/bridge/src/lib.rs`
+**File:** `crates/baml-bridge/src/lib.rs`
 
 Add a new trait:
 
@@ -300,7 +300,7 @@ Implement it for:
 
 ### 2.2 Extend `#[derive(BamlType)]` to also implement `ToBamlValue`
 
-**File:** `baml-bridge/crates/baml-bridge-derive/src/lib.rs`
+**File:** `crates/baml-bridge-derive/src/lib.rs`
 
 You will:
 
@@ -713,7 +713,7 @@ let parsed: baml_bridge::jsonish::BamlValueWithFlags =
 
 * Collect flags:
 
-  * Copy the recursion logic from `baml-bridge/crates/bridge/src/lib.rs` (`collect_flags_recursive`) but operate on this one field node.
+  * Copy the recursion logic from `crates/baml-bridge/src/lib.rs` (`collect_flags_recursive`) but operate on this one field node.
   * Store into `Vec<Flag>`.
 
 * Convert parsed value into `BamlValue`:
@@ -1134,11 +1134,11 @@ Here’s the tightest “touch list” to keep you oriented.
 
 ### baml-bridge
 
-* `baml-bridge/crates/bridge/src/lib.rs`
+* `crates/baml-bridge/src/lib.rs`
 
   * add `ToBamlValue` trait and primitive/container impls
 
-* `baml-bridge/crates/baml-bridge-derive/src/lib.rs`
+* `crates/baml-bridge-derive/src/lib.rs`
 
   * extend derive(BamlType) to implement `ToBamlValue` for structs/enums
 
@@ -1160,4 +1160,3 @@ That gets you to the spec’s acceptance criteria fastest, without getting stuck
 ---
 
 If you want, I can take one signature example (like the `QA` in `CURRENT_SPEC.md`) and write out exactly what the macro expansion should look like (generated structs + impl blocks + static arrays) so you can compare it against what your proc-macro emits while debugging.
-
