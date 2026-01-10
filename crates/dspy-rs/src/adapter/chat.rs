@@ -173,13 +173,13 @@ impl ChatAdapter {
         let type_hint = get_type_hint(&first_output_field_value);
 
         let mut user_message = format!(
-            "Respond with the corresponding output fields, starting with the field `{first_output_field}`{type_hint},"
+            "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`{type_hint},"
         );
         for (field_name, field) in get_iter_from_value(&signature.output_fields()).skip(1) {
             user_message
-                .push_str(format!(" then `{field_name}`{},", get_type_hint(&field)).as_str());
+                .push_str(format!(" then `[[ ## {field_name} ## ]]`{},", get_type_hint(&field)).as_str());
         }
-        user_message.push_str(" and then ending with the marker for `completed`.");
+        user_message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
         format!("{input_str}{user_message}")
     }

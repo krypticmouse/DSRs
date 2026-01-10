@@ -50,7 +50,7 @@ async fn test_chat_adapter() {
     );
     assert_eq!(
         json[1]["content"],
-        "[[ ## problem ## ]]\nWhat is the capital of France?\n\nRespond with the corresponding output fields, starting with the field `answer`, and then ending with the marker for `completed`.".to_string()
+        "[[ ## problem ## ]]\nWhat is the capital of France?\n\nRespond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.".to_string()
     );
 
     let test_example = example! {
@@ -118,7 +118,7 @@ async fn test_chat_adapter_with_multiple_fields() {
     );
     assert_eq!(
         json[1]["content"],
-        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `reasoning`, then `answer`, and then ending with the marker for `completed`."
+        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `[[ ## reasoning ## ]]`, then `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`."
     );
 
     let test_example = example! {
@@ -200,7 +200,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
     );
     assert_eq!(
         json[1]["content"],
-        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `output`, and then ending with the marker for `completed`."
+        "[[ ## problem ## ]]\nWhat is the capital of France?\n\n[[ ## hint ## ]]\nThe capital of France is Paris.\n\nRespond with the corresponding output fields, starting with the field `[[ ## output ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`."
     );
 
     let test_example = example! {
