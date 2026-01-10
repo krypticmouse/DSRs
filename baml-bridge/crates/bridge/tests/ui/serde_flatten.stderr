@@ -1,0 +1,5 @@
+error: serde(flatten) is not supported; hint: model fields explicitly
+ --> tests/ui/serde_flatten.rs:6:13
+  |
+6 |     #[serde(flatten)]
+  |             ^^^^^^^

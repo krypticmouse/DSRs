@@ -28,3 +28,6 @@ target/
 /scripts
 .vscode
 .cargo
+
+# Local planning/decision docs
+thoughts/

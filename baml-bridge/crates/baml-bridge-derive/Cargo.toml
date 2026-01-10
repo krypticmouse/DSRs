@@ -1,0 +1,16 @@
+[package]
+name = "baml-bridge-derive"
+edition = "2021"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2.workspace = true
+quote.workspace = true
+syn.workspace = true
+convert_case.workspace = true

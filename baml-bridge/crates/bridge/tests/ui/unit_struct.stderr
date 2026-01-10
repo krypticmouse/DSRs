@@ -1,0 +1,5 @@
+error: Unit structs are not supported for BAML outputs; hint: use a named-field struct or enum
+ --> tests/ui/unit_struct.rs:4:1
+  |
+4 | struct Bad;
+  | ^^^^^^^^^^^

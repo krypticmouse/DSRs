@@ -1,0 +1,95 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/bridge",
+  "crates/baml-bridge-derive",
+  "crates/baml-types",
+  "crates/jinja-runtime",
+  "crates/jsonish",
+  "crates/diagnostics",
+  "crates/baml-ids",
+  "crates/bstd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Boundary <contact@boundaryml.com>"]
+description = "BAML bridge workspace (yoinked subset)"
+license-file = "../../LICENSE"
+
+[workspace.dependencies]
+anyhow = "1.0"
+base64 = "0.22.1"
+bytes = "1.6.0"
+clap = { version = "4.4.6", features = ["cargo", "derive"] }
+colored = { version = "2.1.0" }
+cowstr = { version = "1.3.0", features = ["serde"] }
+convert_case = "0.6.0"
+derive_builder = "0.20.0"
+derive_more = { version = "0.99.18", features = ["constructor"] }
+dissimilar = "1.0.9"
+dunce = "1.0.4"
+either = "1.8.1"
+env_logger = "0.11.3"
+eventsource-stream = "0.2.3"
+expect-test = "1.5.0"
+futures = { version = "0.3.30", features = ["executor"] }
+http = "1.1.0"
+http-body = "1.0.0"
+indexmap = { version = "2.1.0", features = ["serde"] }
+indoc = "2.0.5"
+itertools = "0.14.0"
+log = "0.4.20"
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "serde",
+] }
+once_cell = "1"
+pest = "2.8.1"
+pretty = "0.12.4"
+pretty_assertions = "1.4.1"
+proc-macro2 = "1.0"
+proptest = "1.5.0"
+quote = "1.0"
+rand = "0.8.5"
+regex = "1.10.4"
+rstest = "0.22.0"
+scopeguard = "1.2.0"
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+static_assertions = "1.1.0"
+secrecy = { version = "0.10.3", features = ["serde"] }
+strsim = "0.11.1"
+strum = { version = "0.26.2", features = ["derive"] }
+strum_macros = "0.26.2"
+syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
+test-log = "0.2.16"
+thiserror = "2.0.12"
+time = { version = "0.3.36", features = ["formatting"] }
+tokio = { version = "1", default-features = false, features = ["macros", "time"] }
+tracing-core = { version = "0.1.31" }
+unicode-normalization = "0.1.24"
+sha2 = "0.10.9"
+trybuild = "1.0.96"
+uuid = { version = "1.8.0", features = ["v4", "v7", "serde"] }
+web-time = "1.1.0"
+
+baml-ids = { path = "crates/baml-ids" }
+baml-types = { path = "crates/baml-types" }
+bstd = { path = "crates/bstd" }
+internal-baml-diagnostics = { path = "crates/diagnostics" }
+internal-baml-jinja = { path = "crates/jinja-runtime" }
+jsonish = { path = "crates/jsonish" }
+baml-bridge-derive = { path = "crates/baml-bridge-derive" }

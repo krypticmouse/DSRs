@@ -1,0 +1,5 @@
+error: function types are not supported in BAML outputs; hint: remove the field or use #[baml(with = "...")] to adapt it
+ --> tests/ui/function_type.rs:5:15
+  |
+5 |     callback: fn(i32) -> i32,
+  |               ^^^^^^^^^^^^^^

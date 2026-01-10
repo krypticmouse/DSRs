@@ -16,6 +16,16 @@ pub use predictors::*;
 pub use utils::*;
 
 pub use dsrs_macros::*;
+pub use baml_bridge;
+pub use baml_bridge::BamlConvertError;
+pub use baml_bridge::BamlType;
+pub use baml_bridge::baml_types::{
+    BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
+};
+pub use baml_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
+pub use baml_bridge::jsonish::deserializer::deserialize_flags::Flag;
+pub use dsrs_macros::*;
+pub use dsrs_macros::*;
 
 #[macro_export]
 macro_rules! example {
