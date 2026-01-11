@@ -19,7 +19,7 @@ use crate::utils::cache::CacheEntry;
 use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
     JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature,
+    RenderOptions, Signature, TypeIR,
 };
 
 #[derive(Default, Clone)]
@@ -30,6 +30,25 @@ static FIELD_HEADER_PATTERN: LazyLock<Regex> =
 
 fn get_type_hint(_field: &Value) -> String {
     String::new()
+}
+
+fn render_field_type_schema(
+    parent_format: &OutputFormatContent,
+    type_ir: &TypeIR,
+) -> Result<String> {
+    let field_format = OutputFormatContent {
+        enums: parent_format.enums.clone(),
+        classes: parent_format.classes.clone(),
+        recursive_classes: parent_format.recursive_classes.clone(),
+        structural_recursive_aliases: parent_format.structural_recursive_aliases.clone(),
+        target: type_ir.clone(),
+    };
+
+    let schema = field_format
+        .render(RenderOptions::default().with_prefix(None))?
+        .unwrap_or_else(|| type_ir.diagnostic_repr().to_string());
+
+    Ok(schema)
 }
 
 impl ChatAdapter {
@@ -236,14 +255,7 @@ impl ChatAdapter {
     ) -> Result<String> {
         let mut parts = Vec::new();
         parts.push(self.format_field_descriptions_typed::<S>());
-        parts.push(self.format_field_structure_typed::<S>());
-
-        let schema = S::output_format_content()
-            .render(RenderOptions::default())?
-            .unwrap_or_default();
-        if !schema.is_empty() {
-            parts.push(format!("Answer in this schema:\n{schema}"));
-        }
+        parts.push(self.format_field_structure_typed::<S>()?);
 
         let instruction = instruction_override.unwrap_or(S::instruction());
         if !instruction.is_empty() {
@@ -281,7 +293,7 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_structure_typed<S: Signature>(&self) -> String {
+    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
@@ -293,15 +305,21 @@ impl ChatAdapter {
             lines.push(String::new());
         }
 
+        let parent_format = S::output_format_content();
         for field in S::output_fields() {
+            let type_ir = (field.type_ir)();
+            let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(field.name.to_string());
+            lines.push(format!(
+                "Output field `{}` should be of type: {}",
+                field.name, schema
+            ));
             lines.push(String::new());
         }
 
         lines.push("[[ ## completed ## ]]".to_string());
 
-        lines.join("\n")
+        Ok(lines.join("\n"))
     }
 
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String

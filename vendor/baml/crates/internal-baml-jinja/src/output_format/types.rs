@@ -290,6 +290,14 @@ impl RenderOptions {
         }
     }
 
+    pub fn with_prefix(mut self, prefix: Option<String>) -> Self {
+        self.prefix = match prefix {
+            Some(value) => RenderSetting::Always(value),
+            None => RenderSetting::Never,
+        };
+        self
+    }
+
     // TODO: Might need a builder pattern for this as well.
     pub fn with_hoisted_class_prefix(prefix: &str) -> Self {
         Self {
