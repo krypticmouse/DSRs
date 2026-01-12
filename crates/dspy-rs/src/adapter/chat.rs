@@ -52,6 +52,57 @@ fn render_field_type_schema(
 }
 
 impl ChatAdapter {
+    fn format_task_description_typed<S: Signature>(
+        &self,
+        instruction_override: Option<&str>,
+    ) -> String {
+        let instruction = instruction_override.unwrap_or(S::instruction());
+        let instruction = if instruction.is_empty() {
+            let input_fields = S::input_fields()
+                .iter()
+                .map(|field| format!("`{}`", field.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let output_fields = S::output_fields()
+                .iter()
+                .map(|field| format!("`{}`", field.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Given the fields {input_fields}, produce the fields {output_fields}."
+            )
+        } else {
+            instruction.to_string()
+        };
+
+        let mut indented = String::new();
+        for line in instruction.lines() {
+            indented.push('\n');
+            indented.push_str("        ");
+            indented.push_str(line);
+        }
+
+        format!("In adhering to this structure, your objective is: {indented}")
+    }
+
+    fn format_response_instructions_typed<S: Signature>(&self) -> String {
+        let mut output_fields = S::output_fields().iter();
+        let Some(first_field) = output_fields.next() else {
+            return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
+        };
+
+        let mut message = format!(
+            "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
+            first_field.name
+        );
+        for field in output_fields {
+            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.name));
+        }
+        message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
+
+        message
+    }
+
     fn get_field_attribute_list(
         &self,
         field_iter: impl Iterator<Item = (String, Value)>,
@@ -256,11 +307,8 @@ impl ChatAdapter {
         let mut parts = Vec::new();
         parts.push(self.format_field_descriptions_typed::<S>());
         parts.push(self.format_field_structure_typed::<S>()?);
-
-        let instruction = instruction_override.unwrap_or(S::instruction());
-        if !instruction.is_empty() {
-            parts.push(instruction.to_string());
-        }
+        parts.push(self.format_response_instructions_typed::<S>());
+        parts.push(self.format_task_description_typed::<S>(instruction_override));
 
         Ok(parts.join("\n\n"))
     }
