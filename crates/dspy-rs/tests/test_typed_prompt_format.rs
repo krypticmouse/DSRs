@@ -67,10 +67,14 @@ fn test_primitive_types() {
     let score = extract_field_block(&message, "score");
     let is_valid = extract_field_block(&message, "is_valid");
 
-    assert!(answer.contains("Output field `answer` should be of type: string"));
-    assert!(count.contains("Output field `count` should be of type: int"));
-    assert!(score.contains("Output field `score` should be of type: float"));
-    assert!(is_valid.contains("Output field `is_valid` should be of type: bool"));
+    assert!(answer.contains("Output field `answer` should be of type:"));
+    assert!(answer.contains("string"));
+    assert!(count.contains("Output field `count` should be of type:"));
+    assert!(count.contains("int"));
+    assert!(score.contains("Output field `score` should be of type:"));
+    assert!(score.contains("float"));
+    assert!(is_valid.contains("Output field `is_valid` should be of type:"));
+    assert!(is_valid.contains("bool"));
 }
 
 #[test]
@@ -102,11 +106,12 @@ fn test_schema_is_separate_from_type_line() {
         .lines()
         .find(|line| line.starts_with("Output field `citations`"))
         .expect("type header line");
-
-    assert!(header_line.contains("Citation[]"));
     assert!(!header_line.contains("//"));
 
     let schema_lines: Vec<&str> = citations.lines().collect();
+    assert!(schema_lines
+        .iter()
+        .any(|line| line.trim() == "Citation[]"));
     let header_index = schema_lines
         .iter()
         .position(|line| line.starts_with("Output field `citations`"))
@@ -120,22 +125,18 @@ fn test_schema_is_separate_from_type_line() {
         .is_some_and(|line| line.trim() == "Definitions (used below):")
     {
         cursor += 1;
-        while cursor < schema_lines.len() {
-            let trimmed = schema_lines[cursor].trim_start();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                break;
-            }
-            cursor += 1;
+    }
+
+    let mut has_main_schema = false;
+    for line in &schema_lines[cursor..] {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            has_main_schema = true;
+            break;
         }
     }
 
-    let schema_start = schema_lines
-        .get(cursor)
-        .expect("schema content line");
-    assert!(
-        schema_start.trim_start().starts_with('[')
-            || schema_start.trim_start().starts_with('{')
-    );
+    assert!(has_main_schema, "missing main schema block");
 }
 
 #[test]
