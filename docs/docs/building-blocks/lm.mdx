@@ -24,7 +24,7 @@ It handles three core responsibilities:
 ### Structure
 
 `LM` is built using the builder pattern and holds:
-  - `model` - Model identifier (e.g., "gpt-4o-mini" or "openai:gpt-4o-mini")
+  - `model` - Model identifier (e.g., "gpt-4o-mini", "openai:gpt-4o-mini", or "openai-responses:gpt-4o-mini")
   - `api_key` - Provider API credentials (optional for local servers)
   - `base_url` - API endpoint URL (optional, inferred from model provider)
   - `temperature` - Sampling temperature (default: 0.7)
@@ -163,7 +163,7 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 
 | Parameter    | Type            | Default              | Notes                                                                           |
 |--------------|-----------------|----------------------|---------------------------------------------------------------------------------|
-| `model`      | `String`        | `"openai:gpt-4o-mini"` | Supports "provider:model" format or bare model name (defaults to OpenAI)      |
+| `model`      | `String`        | `"openai:gpt-4o-mini"` | Supports "provider:model" format or bare model name (defaults to OpenAI chat completions). Use `openai-responses:<model>` for the Responses API. |
 | `api_key`    | `Option<String>`| `None`               | Provider API key; omit for local servers                                       |
 | `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
 | `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
@@ -189,6 +189,7 @@ DSRs supports multiple LLM providers through [Rig](https://github.com/0xPlaygrou
 
 **Supported providers:**
 - `openai` - OpenAI models (requires `OPENAI_API_KEY`)
+- `openai-responses` - OpenAI Responses API (requires `OPENAI_API_KEY`)
 - `anthropic` - Anthropic models (requires `ANTHROPIC_API_KEY`)
 - `gemini` - Google Gemini models (requires `GEMINI_API_KEY`)
 - `groq` - Groq models (requires `GROQ_API_KEY`)
@@ -223,6 +224,12 @@ let lm = LM::builder()
 // OpenAI (or just use model name directly) - reads from OPENAI_API_KEY env var
 let lm = LM::builder()
     .model("gpt-4o".to_string())  // defaults to OpenAI
+    .build()
+    .await?;
+
+// OpenAI Responses API
+let lm = LM::builder()
+    .model("openai-responses:gpt-4o".to_string())
     .build()
     .await?;
 
