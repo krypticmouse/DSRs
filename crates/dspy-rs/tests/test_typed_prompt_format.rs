@@ -151,3 +151,44 @@ fn test_completed_marker_present() {
     let message = system_message();
     assert!(message.contains("[[ ## completed ## ]]"));
 }
+
+#[test]
+fn test_objective_line_present() {
+    let message = system_message();
+    assert!(message.contains("In adhering to this structure, your objective is:"));
+    assert!(message.contains("Tests all output field types."));
+}
+
+#[test]
+fn test_response_instruction_line_present() {
+    let message = system_message();
+    let instruction_line = message
+        .lines()
+        .find(|line| line.starts_with("Respond with the corresponding output fields"))
+        .expect("response instruction line");
+
+    let markers = [
+        "answer",
+        "count",
+        "score",
+        "is_valid",
+        "maybe_answer",
+        "keywords",
+        "citations",
+        "sentiment",
+    ];
+
+    let mut last_pos = None;
+    for marker in markers {
+        let token = format!("[[ ## {marker} ## ]]");
+        let pos = instruction_line
+            .find(&token)
+            .unwrap_or_else(|| panic!("missing marker in response instruction: {marker}"));
+        if let Some(prev) = last_pos {
+            assert!(pos > prev, "marker {marker} is out of order");
+        }
+        last_pos = Some(pos);
+    }
+
+    assert!(instruction_line.contains("[[ ## completed ## ]]"));
+}
