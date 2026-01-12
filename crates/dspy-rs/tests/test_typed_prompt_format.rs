@@ -95,6 +95,32 @@ fn test_array_renders_with_brackets() {
 }
 
 #[test]
+fn test_schema_is_separate_from_type_line() {
+    let message = system_message();
+    let citations = extract_field_block(&message, "citations");
+    let header_line = citations
+        .lines()
+        .find(|line| line.starts_with("Output field `citations`"))
+        .expect("type header line");
+
+    assert!(header_line.contains("class `"));
+    assert!(header_line.contains("Citation"));
+    assert!(header_line.contains("[]"));
+    assert!(!header_line.contains("//"));
+
+    let schema_line_index = citations
+        .lines()
+        .position(|line| line.trim() == "Schema:")
+        .expect("schema label line");
+    let schema_start = citations
+        .lines()
+        .nth(schema_line_index + 1)
+        .expect("schema content line");
+
+    assert!(schema_start.trim_start().starts_with('['));
+}
+
+#[test]
 fn test_nested_struct_with_comments() {
     let message = system_message();
     let citations = extract_field_block(&message, "citations");

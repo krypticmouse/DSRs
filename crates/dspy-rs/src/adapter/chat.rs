@@ -356,12 +356,17 @@ impl ChatAdapter {
         let parent_format = S::output_format_content();
         for field in S::output_fields() {
             let type_ir = (field.type_ir)();
+            let type_name = type_ir.diagnostic_repr().to_string();
             let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
             lines.push(format!(
-                "Output field `{}` should be of type: {}",
-                field.name, schema
+                "Output field `{}` should be of type: {type_name}",
+                field.name
             ));
+            if !schema.is_empty() && schema != type_name {
+                lines.push("Schema:".to_string());
+                lines.push(schema);
+            }
             lines.push(String::new());
         }
 
