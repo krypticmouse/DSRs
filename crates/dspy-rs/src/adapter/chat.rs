@@ -172,7 +172,7 @@ fn format_schema_for_prompt(schema: &str) -> String {
         return schema.to_string();
     };
 
-    format!("Definitions (used below):\n{definitions}\n\n{main}")
+    format!("Definitions (used below):\n\n{definitions}\n\n{main}")
 }
 
 impl ChatAdapter {
