@@ -484,10 +484,11 @@ impl ChatAdapter {
             let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
             lines.push(format!(
-                "Output field `{}` should be of type:\n{type_name}",
+                "Output field `{}` should be of type: {type_name}",
                 field.name
             ));
             if !schema.is_empty() && schema != type_name {
+                lines.push(String::new());
                 lines.push(format_schema_for_prompt(&schema));
             }
             lines.push(String::new());
