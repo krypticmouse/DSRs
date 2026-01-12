@@ -103,9 +103,7 @@ fn test_schema_is_separate_from_type_line() {
         .find(|line| line.starts_with("Output field `citations`"))
         .expect("type header line");
 
-    assert!(header_line.contains("class `"));
-    assert!(header_line.contains("Citation"));
-    assert!(header_line.contains("[]"));
+    assert!(header_line.contains("Citation[]"));
     assert!(!header_line.contains("//"));
 
     let schema_line_index = citations

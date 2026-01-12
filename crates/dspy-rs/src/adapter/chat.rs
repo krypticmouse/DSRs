@@ -51,6 +51,38 @@ fn render_field_type_schema(
     Ok(schema)
 }
 
+fn simplify_type_name(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            let mut token = String::new();
+            for next in chars.by_ref() {
+                if next == '`' {
+                    break;
+                }
+                token.push(next);
+            }
+            let simplified = token.rsplit("::").next().unwrap_or(&token);
+            result.push_str(simplified);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn render_type_name_for_prompt(type_ir: &TypeIR) -> String {
+    let raw = type_ir.diagnostic_repr().to_string();
+    let simplified = simplify_type_name(&raw);
+    simplified
+        .replace("class ", "")
+        .replace("enum ", "")
+        .replace(" | ", " or ")
+        .trim()
+        .to_string()
+}
+
 impl ChatAdapter {
     fn format_task_description_typed<S: Signature>(
         &self,
@@ -356,7 +388,7 @@ impl ChatAdapter {
         let parent_format = S::output_format_content();
         for field in S::output_fields() {
             let type_ir = (field.type_ir)();
-            let type_name = type_ir.diagnostic_repr().to_string();
+            let type_name = render_type_name_for_prompt(&type_ir);
             let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
             lines.push(format!(
