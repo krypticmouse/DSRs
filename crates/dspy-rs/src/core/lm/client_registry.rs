@@ -5,8 +5,10 @@ use rig::{
     OneOrMany,
     client::Nothing,
     completion::{AssistantContent, CompletionError, CompletionRequest, CompletionResponse, Usage},
+    http_client::{self, HttpClientExt},
     providers::*,
 };
+use serde::Deserialize;
 use std::{
     borrow::Cow,
     collections::VecDeque,
@@ -62,10 +64,93 @@ impl CompletionProvider for TestCompletionModel {
     }
 }
 
+#[derive(Clone)]
+pub struct OpenAIResponsesClient {
+    client: openai::Client,
+    model: String,
+}
+
+impl OpenAIResponsesClient {
+    pub fn new(client: openai::Client, model: impl Into<String>) -> Self {
+        Self {
+            client,
+            model: model.into(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct OpenAIResponsesCompletionResponse {
+    output: Vec<openai::responses_api::Output>,
+    usage: Option<openai::responses_api::ResponsesUsage>,
+    #[serde(flatten)]
+    _extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl CompletionProvider for OpenAIResponsesClient {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let request = openai::responses_api::CompletionRequest::try_from((
+            self.model.clone(),
+            request,
+        ))?;
+        let body = serde_json::to_vec(&request)?;
+
+        let req = self
+            .client
+            .post("/responses")?
+            .body(body)
+            .map_err(|e| CompletionError::HttpError(e.into()))?;
+
+        let response = self.client.send(req).await?;
+
+        if response.status().is_success() {
+            let text = http_client::text(response).await?;
+            let response = serde_json::from_str::<OpenAIResponsesCompletionResponse>(&text)?;
+            if response.output.is_empty() {
+                return Err(CompletionError::ResponseError(
+                    "Response contained no parts".to_owned(),
+                ));
+            }
+
+            let content: Vec<AssistantContent> = response
+                .output
+                .into_iter()
+                .flat_map(Vec::<AssistantContent>::from)
+                .collect();
+            let choice = OneOrMany::many(content).map_err(|_| {
+                CompletionError::ResponseError(
+                    "Response contained no message or tool call (empty)".to_owned(),
+                )
+            })?;
+            let usage = response
+                .usage
+                .map(|usage| Usage {
+                    input_tokens: usage.input_tokens,
+                    output_tokens: usage.output_tokens,
+                    total_tokens: usage.total_tokens,
+                })
+                .unwrap_or_default();
+
+            Ok(CompletionResponse {
+                choice,
+                usage,
+                raw_response: (),
+            })
+        } else {
+            let text = http_client::text(response).await?;
+            Err(CompletionError::ProviderError(text))
+        }
+    }
+}
+
 #[enum_dispatch(CompletionProvider)]
 #[derive(Clone)]
 pub enum LMClient {
     OpenAI(openai::completion::CompletionModel),
+    OpenAIResponses(OpenAIResponsesClient),
     Gemini(gemini::completion::CompletionModel),
     Anthropic(anthropic::completion::CompletionModel),
     Groq(groq::CompletionModel<reqwest::Client>),
@@ -274,6 +359,25 @@ impl LMClient {
         )))
     }
 
+    /// Build case 1 (Responses API): OpenAI-compatible API from base_url + api_key
+    pub fn from_openai_compatible_responses(
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+    ) -> Result<Self> {
+        println!(
+            "Building OpenAI Responses model from base_url: {} and api_key: {} and model: {}",
+            base_url, api_key, model
+        );
+        let client = openai::Client::builder()
+            .api_key(api_key)
+            .base_url(base_url)
+            .build()?;
+        Ok(LMClient::OpenAIResponses(OpenAIResponsesClient::new(
+            client, model,
+        )))
+    }
+
     /// Build case 2: Local OpenAI-compatible model from base_url (vLLM, etc.)
     /// Uses a dummy API key since local servers don't require authentication
     pub fn from_local(base_url: &str, model: &str) -> Result<Self> {
@@ -290,6 +394,22 @@ impl LMClient {
         )))
     }
 
+    /// Build case 2 (Responses API): Local OpenAI-compatible model from base_url (vLLM, etc.)
+    /// Uses a dummy API key since local servers don't require authentication
+    pub fn from_local_responses(base_url: &str, model: &str) -> Result<Self> {
+        println!(
+            "Building local OpenAI Responses model from base_url: {} and model: {}",
+            base_url, model
+        );
+        let client = openai::Client::builder()
+            .api_key("dummy-key-for-local-server")
+            .base_url(base_url)
+            .build()?;
+        Ok(LMClient::OpenAIResponses(OpenAIResponsesClient::new(
+            client, model,
+        )))
+    }
+
     /// Build case 3: From provider via model name (provider:model format)
     pub fn from_model_string(model_str: &str, api_key: Option<&str>) -> Result<Self> {
         let (provider, model_id) = model_str.split_once(':').ok_or(anyhow::anyhow!(
@@ -297,6 +417,13 @@ impl LMClient {
         ))?;
 
         match provider {
+            "openai-responses" | "openai_responses" | "openai.responses" => {
+                let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
+                let client = openai::Client::builder().api_key(key.as_ref()).build()?;
+                Ok(LMClient::OpenAIResponses(OpenAIResponsesClient::new(
+                    client, model_id,
+                )))
+            }
             "openai" => {
                 let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
                 let client = openai::CompletionsClient::builder()
@@ -344,7 +471,7 @@ impl LMClient {
             }
             _ => {
                 anyhow::bail!(
-                    "Unsupported provider: {}. Supported providers are: openai, anthropic, gemini, groq, openrouter, ollama",
+                    "Unsupported provider: {}. Supported providers are: openai, openai-responses, anthropic, gemini, groq, openrouter, ollama",
                     provider
                 );
             }

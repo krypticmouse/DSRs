@@ -10,6 +10,7 @@ use anyhow::Result;
 use rig::{completion::AssistantContent, message::ToolCall, message::ToolChoice, tool::ToolDyn};
 
 use bon::Builder;
+use serde_json::Value;
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
@@ -45,6 +46,7 @@ pub struct LM {
     pub max_tool_iterations: u32,
     #[builder(default = false)]
     pub cache: bool,
+    pub additional_params: Option<Value>,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
     #[builder(skip)]
     client: Option<Arc<LMClient>>,
@@ -66,6 +68,7 @@ impl Clone for LM {
             max_tokens: self.max_tokens,
             max_tool_iterations: self.max_tool_iterations,
             cache: self.cache,
+            additional_params: self.additional_params.clone(),
             cache_handler: self.cache_handler.clone(),
             client: self.client.clone(),
         }
@@ -84,18 +87,48 @@ impl LM {
     /// 3. Provider via model string: no `base_url`, model in "provider:model" format
     ///    → Uses provider-specific client (openai, anthropic, gemini, etc.)
     async fn initialize_client(mut self) -> Result<Self> {
+        let (use_openai_responses, openai_model) = if let Some(rest) =
+            self.model.strip_prefix("openai-responses:")
+        {
+            (true, rest)
+        } else if let Some(rest) = self.model.strip_prefix("openai_responses:") {
+            (true, rest)
+        } else if let Some(rest) = self.model.strip_prefix("openai.responses:") {
+            (true, rest)
+        } else if let Some(rest) = self.model.strip_prefix("openai:") {
+            (false, rest)
+        } else {
+            (false, self.model.as_str())
+        };
+
         // Determine which build case based on what's provided
         let client = match (&self.base_url, &self.api_key, &self.model) {
             // Case 1: OpenAI-compatible with authentication (base_url + api_key)
             // For custom OpenAI-compatible APIs that require API keys
-            (Some(base_url), Some(api_key), _) => Arc::new(LMClient::from_openai_compatible(
-                base_url,
-                api_key,
-                &self.model,
-            )?),
+            (Some(base_url), Some(api_key), _) => {
+                if use_openai_responses {
+                    Arc::new(LMClient::from_openai_compatible_responses(
+                        base_url,
+                        api_key,
+                        openai_model,
+                    )?)
+                } else {
+                    Arc::new(LMClient::from_openai_compatible(
+                        base_url,
+                        api_key,
+                        openai_model,
+                    )?)
+                }
+            }
             // Case 2: Local OpenAI-compatible server (base_url only, no api_key)
             // For vLLM, text-generation-inference, and other local OpenAI-compatible servers
-            (Some(base_url), None, _) => Arc::new(LMClient::from_local(base_url, &self.model)?),
+            (Some(base_url), None, _) => {
+                if use_openai_responses {
+                    Arc::new(LMClient::from_local_responses(base_url, openai_model)?)
+                } else {
+                    Arc::new(LMClient::from_local(base_url, openai_model)?)
+                }
+            }
             // Case 3: Provider via model string (no base_url, model in "provider:model" format)
             // Uses provider-specific clients
             (None, api_key, model) if model.contains(':') => {
@@ -226,7 +259,7 @@ impl LM {
                 temperature: Some(self.temperature as f64),
                 max_tokens: Some(self.max_tokens as u64),
                 tool_choice: Some(ToolChoice::Auto),
-                additional_params: None,
+                additional_params: self.additional_params.clone(),
             };
 
             let response = self
@@ -336,7 +369,7 @@ impl LM {
             } else {
                 None
             },
-            additional_params: None,
+            additional_params: self.additional_params.clone(),
         };
 
         // Execute the completion using enum dispatch (zero-cost abstraction)
