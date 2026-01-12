@@ -149,6 +149,9 @@ impl<T: ToBamlValue> ToBamlValue for Rc<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::rc::Rc;
+    use std::sync::Arc;
 
     #[test]
     fn test_primitive_to_baml_value() {
@@ -182,7 +185,22 @@ mod tests {
         expected.insert("answer".to_string(), BamlValue::Int(42));
         assert_eq!(map.to_baml_value(), BamlValue::Map(expected));
 
+        let mut tree: BTreeMap<String, i32> = BTreeMap::new();
+        tree.insert("alpha".to_string(), 1);
+        let mut expected_tree: BamlMap<String, BamlValue> = BamlMap::new();
+        expected_tree.insert("alpha".to_string(), BamlValue::Int(1));
+        assert_eq!(tree.to_baml_value(), BamlValue::Map(expected_tree));
+
         let boxed: Box<i32> = Box::new(7);
         assert_eq!(boxed.to_baml_value(), BamlValue::Int(7));
+
+        let shared = Arc::new("shared".to_string());
+        assert_eq!(
+            shared.to_baml_value(),
+            BamlValue::String("shared".into())
+        );
+
+        let rc_value = Rc::new(true);
+        assert_eq!(rc_value.to_baml_value(), BamlValue::Bool(true));
     }
 }
