@@ -106,25 +106,27 @@ fn test_schema_is_separate_from_type_line() {
     assert!(header_line.contains("Citation[]"));
     assert!(!header_line.contains("//"));
 
-    let schema_line_index = citations
-        .lines()
-        .position(|line| line.trim() == "Schema:")
-        .expect("schema label line");
     let schema_lines: Vec<&str> = citations.lines().collect();
-    let mut cursor = schema_line_index + 1;
+    let header_index = schema_lines
+        .iter()
+        .position(|line| line.starts_with("Output field `citations`"))
+        .expect("type header line");
+    let mut cursor = header_index + 1;
+    while cursor < schema_lines.len() && schema_lines[cursor].trim().is_empty() {
+        cursor += 1;
+    }
     if schema_lines
         .get(cursor)
         .is_some_and(|line| line.trim() == "Definitions (used below):")
     {
         cursor += 1;
-        while cursor < schema_lines.len() && schema_lines[cursor].trim() != "Main schema:" {
+        while cursor < schema_lines.len() {
+            let trimmed = schema_lines[cursor].trim_start();
+            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+                break;
+            }
             cursor += 1;
         }
-        assert!(
-            cursor < schema_lines.len(),
-            "missing main schema label"
-        );
-        cursor += 1;
     }
 
     let schema_start = schema_lines

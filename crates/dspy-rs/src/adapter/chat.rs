@@ -172,9 +172,7 @@ fn format_schema_for_prompt(schema: &str) -> String {
         return schema.to_string();
     };
 
-    format!(
-        "Definitions (used below):\n{definitions}\n\nMain schema:\n{main}"
-    )
+    format!("Definitions (used below):\n{definitions}\n\n{main}")
 }
 
 impl ChatAdapter {
@@ -490,7 +488,6 @@ impl ChatAdapter {
                 field.name
             ));
             if !schema.is_empty() && schema != type_name {
-                lines.push("Schema:".to_string());
                 lines.push(format_schema_for_prompt(&schema));
             }
             lines.push(String::new());
