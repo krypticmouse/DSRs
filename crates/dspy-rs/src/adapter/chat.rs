@@ -83,6 +83,100 @@ fn render_type_name_for_prompt(type_ir: &TypeIR) -> String {
         .to_string()
 }
 
+fn split_schema_definitions(schema: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = schema.lines().collect();
+    let mut index = 0;
+    let mut definitions = Vec::new();
+    let mut parsed_any = false;
+
+    while index < lines.len() {
+        let start_index = index;
+
+        while index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+        }
+
+        while index < lines.len() && lines[index].trim_start().starts_with("//") {
+            index += 1;
+        }
+
+        while index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+        }
+
+        if index >= lines.len() {
+            break;
+        }
+
+        let name_line = lines[index].trim();
+        if name_line.is_empty() {
+            break;
+        }
+        index += 1;
+
+        if index >= lines.len() || lines[index].trim() != "----" {
+            index = start_index;
+            break;
+        }
+        index += 1;
+
+        let mut values_found = 0;
+        while index < lines.len() {
+            let trimmed = lines[index].trim_start();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.starts_with('-') {
+                values_found += 1;
+                index += 1;
+                continue;
+            }
+            break;
+        }
+
+        if values_found == 0 {
+            index = start_index;
+            break;
+        }
+
+        let mut block_end = index;
+        if index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+            block_end = index;
+        }
+
+        definitions.extend_from_slice(&lines[start_index..block_end]);
+        parsed_any = true;
+    }
+
+    if !parsed_any {
+        return None;
+    }
+
+    let mut main_lines = Vec::new();
+    if index < lines.len() {
+        main_lines.extend_from_slice(&lines[index..]);
+    }
+
+    let defs = definitions.join("\n").trim_end().to_string();
+    let main = main_lines.join("\n").trim_start().to_string();
+    if defs.is_empty() || main.is_empty() {
+        None
+    } else {
+        Some((defs, main))
+    }
+}
+
+fn format_schema_for_prompt(schema: &str) -> String {
+    let Some((definitions, main)) = split_schema_definitions(schema) else {
+        return schema.to_string();
+    };
+
+    format!(
+        "Definitions (used below):\n{definitions}\n\nMain schema:\n{main}"
+    )
+}
+
 impl ChatAdapter {
     fn format_task_description_typed<S: Signature>(
         &self,
@@ -349,7 +443,7 @@ impl ChatAdapter {
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
         for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let type_name = render_type_name_for_prompt(&(field.type_ir)());
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -361,7 +455,7 @@ impl ChatAdapter {
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
         for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let type_name = render_type_name_for_prompt(&(field.type_ir)());
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -397,7 +491,7 @@ impl ChatAdapter {
             ));
             if !schema.is_empty() && schema != type_name {
                 lines.push("Schema:".to_string());
-                lines.push(schema);
+                lines.push(format_schema_for_prompt(&schema));
             }
             lines.push(String::new());
         }

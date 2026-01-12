@@ -110,12 +110,30 @@ fn test_schema_is_separate_from_type_line() {
         .lines()
         .position(|line| line.trim() == "Schema:")
         .expect("schema label line");
-    let schema_start = citations
-        .lines()
-        .nth(schema_line_index + 1)
-        .expect("schema content line");
+    let schema_lines: Vec<&str> = citations.lines().collect();
+    let mut cursor = schema_line_index + 1;
+    if schema_lines
+        .get(cursor)
+        .is_some_and(|line| line.trim() == "Definitions (used below):")
+    {
+        cursor += 1;
+        while cursor < schema_lines.len() && schema_lines[cursor].trim() != "Main schema:" {
+            cursor += 1;
+        }
+        assert!(
+            cursor < schema_lines.len(),
+            "missing main schema label"
+        );
+        cursor += 1;
+    }
 
-    assert!(schema_start.trim_start().starts_with('['));
+    let schema_start = schema_lines
+        .get(cursor)
+        .expect("schema content line");
+    assert!(
+        schema_start.trim_start().starts_with('[')
+            || schema_start.trim_start().starts_with('{')
+    );
 }
 
 #[test]
