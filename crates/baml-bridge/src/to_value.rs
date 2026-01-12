@@ -195,10 +195,7 @@ mod tests {
         assert_eq!(boxed.to_baml_value(), BamlValue::Int(7));
 
         let shared = Arc::new("shared".to_string());
-        assert_eq!(
-            shared.to_baml_value(),
-            BamlValue::String("shared".into())
-        );
+        assert_eq!(shared.to_baml_value(), BamlValue::String("shared".into()));
 
         let rc_value = Rc::new(true);
         assert_eq!(rc_value.to_baml_value(), BamlValue::Bool(true));

@@ -192,9 +192,7 @@ impl ChatAdapter {
                 .map(|field| format!("`{}`", field.name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!(
-                "Given the fields {input_fields}, produce the fields {output_fields}."
-            )
+            format!("Given the fields {input_fields}, produce the fields {output_fields}.")
         } else {
             instruction.to_string()
         };
@@ -381,8 +379,9 @@ impl ChatAdapter {
             "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`{type_hint},"
         );
         for (field_name, field) in get_iter_from_value(&signature.output_fields()).skip(1) {
-            user_message
-                .push_str(format!(" then `[[ ## {field_name} ## ]]`{},", get_type_hint(&field)).as_str());
+            user_message.push_str(
+                format!(" then `[[ ## {field_name} ## ]]`{},", get_type_hint(&field)).as_str(),
+            );
         }
         user_message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
@@ -428,11 +427,12 @@ impl ChatAdapter {
         &self,
         instruction_override: Option<&str>,
     ) -> Result<String> {
-        let mut parts = Vec::new();
-        parts.push(self.format_field_descriptions_typed::<S>());
-        parts.push(self.format_field_structure_typed::<S>()?);
-        parts.push(self.format_response_instructions_typed::<S>());
-        parts.push(self.format_task_description_typed::<S>(instruction_override));
+        let parts = [
+            self.format_field_descriptions_typed::<S>(),
+            self.format_field_structure_typed::<S>()?,
+            self.format_response_instructions_typed::<S>(),
+            self.format_task_description_typed::<S>(instruction_override),
+        ];
 
         Ok(parts.join("\n\n"))
     }

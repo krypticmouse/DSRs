@@ -15,7 +15,7 @@ cargo run --example 01-simple
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{configure, ChatAdapter, Example, LM, Module, Predict, Prediction};
+use dspy_rs::{ChatAdapter, Example, LM, Module, Predict, Prediction, configure};
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
@@ -83,7 +83,9 @@ impl Module for QARater {
         combined.data.insert("question".into(), question);
         combined.data.insert("reasoning".into(), reasoning);
         combined.data.insert("answer".into(), answer);
-        combined.data.insert("rating".into(), rate_result.rating.into());
+        combined
+            .data
+            .insert("rating".into(), rate_result.rating.into());
 
         Ok(combined)
     }
@@ -104,9 +106,7 @@ async fn main() -> Result<()> {
     // =========================================================================
     println!("=== Example 1: Direct Typed API ===\n");
 
-    let predict = Predict::<QA>::builder()
-        .instruction(QA_INSTRUCTION)
-        .build();
+    let predict = Predict::<QA>::builder().instruction(QA_INSTRUCTION).build();
     let input = QAInput {
         question: "What is the capital of France?".to_string(),
     };
@@ -152,8 +152,7 @@ async fn main() -> Result<()> {
         .instruction(QA_INSTRUCTION)
         .demo(QA {
             question: "What is 2+2?".to_string(),
-            reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4."
-                .to_string(),
+            reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4.".to_string(),
             answer: "4".to_string(),
         })
         .demo(QA {

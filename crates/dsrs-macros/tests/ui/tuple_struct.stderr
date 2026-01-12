@@ -1,0 +1,5 @@
+error: #[derive(Signature)] requires named fields
+ --> tests/ui/tuple_struct.rs:4:1
+  |
+4 | struct TupleSig(String, i32);
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

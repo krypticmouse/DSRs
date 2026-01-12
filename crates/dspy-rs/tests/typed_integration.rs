@@ -249,5 +249,8 @@ async fn typed_i32_rating_parses_with_text() {
 
     // This should fail to parse - demonstrates the limitation
     let result = predict.call_with_meta(input).await;
-    assert!(result.is_err(), "Expected parse error for rating with surrounding text");
+    assert!(
+        result.is_err(),
+        "Expected parse error for rating with surrounding text"
+    );
 }
