@@ -102,20 +102,20 @@ fn test_array_renders_with_brackets() {
 fn test_schema_is_separate_from_type_line() {
     let message = system_message();
     let citations = extract_field_block(&message, "citations");
-    let header_line = citations
-        .lines()
-        .find(|line| line.starts_with("Output field `citations`"))
-        .expect("type header line");
-    assert!(!header_line.contains("//"));
-
     let schema_lines: Vec<&str> = citations.lines().collect();
-    assert!(schema_lines
-        .iter()
-        .any(|line| line.trim() == "Citation[]"));
     let header_index = schema_lines
         .iter()
         .position(|line| line.starts_with("Output field `citations`"))
         .expect("type header line");
+    let header_line = schema_lines[header_index];
+    assert!(header_line.contains("Citation[]"));
+    assert!(!header_line.contains("//"));
+    if let Some(line) = schema_lines.get(header_index + 1) {
+        assert!(
+            line.trim().is_empty(),
+            "expected blank line after type header"
+        );
+    }
     let mut cursor = header_index + 1;
     while cursor < schema_lines.len() && schema_lines[cursor].trim().is_empty() {
         cursor += 1;
