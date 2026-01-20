@@ -1,0 +1,5 @@
+error: map keys must be String for object maps; hint: use HashMap<String, V> or add #[baml(map_key_repr = "string"|"pairs")], or use a custom adapter
+ --> tests/ui/map_key_non_string.rs:6:13
+  |
+6 |     values: HashMap<u32, String>,
+  |             ^^^^^^^^^^^^^^^^^^^^

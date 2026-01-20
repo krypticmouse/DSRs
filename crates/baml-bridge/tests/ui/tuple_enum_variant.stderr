@@ -1,0 +1,5 @@
+error: Tuple enum variants are not supported; hint: use a unit or struct-like variant
+ --> tests/ui/tuple_enum_variant.rs:5:5
+  |
+5 |     One(u32),
+  |     ^^^^^^^^

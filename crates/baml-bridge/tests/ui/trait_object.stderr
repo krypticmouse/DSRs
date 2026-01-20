@@ -1,0 +1,5 @@
+error: trait objects are not supported in BAML outputs; hint: use a concrete type or a custom adapter
+ --> tests/ui/trait_object.rs:5:16
+  |
+5 |     value: Box<dyn std::fmt::Debug>,
+  |                ^^^^^^^^^^^^^^^^^^^
