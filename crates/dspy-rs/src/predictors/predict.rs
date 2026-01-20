@@ -187,15 +187,15 @@ fn field_specs_to_value(fields: &[FieldSpec], field_type: &'static str) -> Value
     let mut result = serde_json::Map::new();
     for field in fields {
         let type_repr = (field.type_ir)().diagnostic_repr().to_string();
-        result.insert(
-            field.rust_name.to_string(),
-            json!({
-                "type": type_repr,
-                "desc": field.description,
-                "schema": "",
-                "__dsrs_field_type": field_type,
-            }),
-        );
+        let mut meta = serde_json::Map::new();
+        meta.insert("type".to_string(), json!(type_repr));
+        meta.insert("desc".to_string(), json!(field.description));
+        meta.insert("schema".to_string(), json!(""));
+        meta.insert("__dsrs_field_type".to_string(), json!(field_type));
+        if let Some(format) = field.format {
+            meta.insert("format".to_string(), json!(format));
+        }
+        result.insert(field.rust_name.to_string(), Value::Object(meta));
     }
     Value::Object(result)
 }

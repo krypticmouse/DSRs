@@ -1,0 +1,7 @@
+error: unsupported #[format] value; use "json", "yaml", or "toon"
+ --> tests/ui/format_invalid.rs:5:5
+  |
+5 | /     #[input]
+6 | |     #[format("xml")]
+7 | |     context: String,
+  | |___________________^

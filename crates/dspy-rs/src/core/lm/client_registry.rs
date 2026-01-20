@@ -2,11 +2,16 @@ use anyhow::Result;
 use enum_dispatch::enum_dispatch;
 use reqwest;
 use rig::{
+    OneOrMany,
     client::Nothing,
-    completion::{CompletionError, CompletionRequest, CompletionResponse},
+    completion::{AssistantContent, CompletionError, CompletionRequest, CompletionResponse, Usage},
     providers::*,
 };
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
@@ -15,6 +20,46 @@ pub trait CompletionProvider {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError>;
+}
+
+#[derive(Clone, Default)]
+pub struct TestCompletionModel {
+    responses: Arc<Mutex<VecDeque<AssistantContent>>>,
+    last_request: Arc<Mutex<Option<CompletionRequest>>>,
+}
+
+impl TestCompletionModel {
+    pub fn new(responses: impl IntoIterator<Item = AssistantContent>) -> Self {
+        Self {
+            responses: Arc::new(Mutex::new(responses.into_iter().collect())),
+            last_request: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn push_response(&self, response: AssistantContent) {
+        self.responses.lock().unwrap().push_back(response);
+    }
+
+    pub fn last_request(&self) -> Option<CompletionRequest> {
+        self.last_request.lock().unwrap().clone()
+    }
+}
+
+impl CompletionProvider for TestCompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        *self.last_request.lock().unwrap() = Some(request);
+        let response = self.responses.lock().unwrap().pop_front().ok_or_else(|| {
+            CompletionError::ResponseError("test response queue is empty".to_string())
+        })?;
+        Ok(CompletionResponse {
+            choice: OneOrMany::one(response),
+            usage: Usage::new(),
+            raw_response: (),
+        })
+    }
 }
 
 #[enum_dispatch(CompletionProvider)]
@@ -32,6 +77,7 @@ pub enum LMClient {
     Mistral(mistral::completion::CompletionModel),
     Together(together::completion::CompletionModel),
     Deepseek(deepseek::CompletionModel<reqwest::Client>),
+    Test(TestCompletionModel),
 }
 
 // Implement the trait for each concrete provider type using the CompletionModel trait from rig
