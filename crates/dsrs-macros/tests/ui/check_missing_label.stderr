@@ -1,0 +1,5 @@
+error: #[check] requires a label: #[check("expr", label = "name")]
+ --> tests/ui/check_missing_label.rs:9:5
+  |
+9 |     #[check("this > 0")]
+  |     ^^^^^^^^^^^^^^^^^^^^

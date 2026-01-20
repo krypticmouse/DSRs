@@ -1,0 +1,5 @@
+error: field must have #[input] or #[output] attribute
+ --> tests/ui/field_missing_attr.rs:5:5
+  |
+5 |     question: String,
+  |     ^^^^^^^^^^^^^^^^

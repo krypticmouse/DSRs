@@ -1,0 +1,7 @@
+error: field cannot be both #[input] and #[output]
+ --> tests/ui/field_both_input_output.rs:5:5
+  |
+5 | /     #[input]
+6 | |     #[output]
+7 | |     value: String,
+  | |_________________^

@@ -1,9 +1,10 @@
 use anyhow::Result;
 use indexmap::IndexMap;
+use regex::Regex;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use super::Adapter;
 use crate::baml_bridge::BamlType;
@@ -18,31 +19,212 @@ use crate::utils::cache::CacheEntry;
 use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
     JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature,
+    RenderOptions, Signature, TypeIR,
 };
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
-fn get_type_hint(field: &Value) -> String {
-    let schema = &field["schema"];
-    let type_str = field["type"].as_str().unwrap_or("String");
+static FIELD_HEADER_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\[\[ ## (\w+) ## \]\]").unwrap());
 
-    // Check if schema exists and is not empty (either as string or object)
-    let has_schema = if let Some(s) = schema.as_str() {
-        !s.is_empty()
-    } else {
-        schema.is_object()
+fn get_type_hint(_field: &Value) -> String {
+    String::new()
+}
+
+fn render_field_type_schema(
+    parent_format: &OutputFormatContent,
+    type_ir: &TypeIR,
+) -> Result<String> {
+    let field_format = OutputFormatContent {
+        enums: parent_format.enums.clone(),
+        classes: parent_format.classes.clone(),
+        recursive_classes: parent_format.recursive_classes.clone(),
+        structural_recursive_aliases: parent_format.structural_recursive_aliases.clone(),
+        target: type_ir.clone(),
     };
 
-    if !has_schema && type_str == "String" {
-        String::new()
+    let schema = field_format
+        .render(RenderOptions::default().with_prefix(None))?
+        .unwrap_or_else(|| type_ir.diagnostic_repr().to_string());
+
+    Ok(schema)
+}
+
+fn simplify_type_name(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            let mut token = String::new();
+            for next in chars.by_ref() {
+                if next == '`' {
+                    break;
+                }
+                token.push(next);
+            }
+            let simplified = token.rsplit("::").next().unwrap_or(&token);
+            result.push_str(simplified);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn render_type_name_for_prompt(type_ir: &TypeIR) -> String {
+    let raw = type_ir.diagnostic_repr().to_string();
+    let simplified = simplify_type_name(&raw);
+    simplified
+        .replace("class ", "")
+        .replace("enum ", "")
+        .replace(" | ", " or ")
+        .trim()
+        .to_string()
+}
+
+fn split_schema_definitions(schema: &str) -> Option<(String, String)> {
+    let lines: Vec<&str> = schema.lines().collect();
+    let mut index = 0;
+    let mut definitions = Vec::new();
+    let mut parsed_any = false;
+
+    while index < lines.len() {
+        let start_index = index;
+
+        while index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+        }
+
+        while index < lines.len() && lines[index].trim_start().starts_with("//") {
+            index += 1;
+        }
+
+        while index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+        }
+
+        if index >= lines.len() {
+            break;
+        }
+
+        let name_line = lines[index].trim();
+        if name_line.is_empty() {
+            break;
+        }
+        index += 1;
+
+        if index >= lines.len() || lines[index].trim() != "----" {
+            index = start_index;
+            break;
+        }
+        index += 1;
+
+        let mut values_found = 0;
+        while index < lines.len() {
+            let trimmed = lines[index].trim_start();
+            if trimmed.is_empty() {
+                break;
+            }
+            if trimmed.starts_with('-') {
+                values_found += 1;
+                index += 1;
+                continue;
+            }
+            break;
+        }
+
+        if values_found == 0 {
+            index = start_index;
+            break;
+        }
+
+        let mut block_end = index;
+        if index < lines.len() && lines[index].trim().is_empty() {
+            index += 1;
+            block_end = index;
+        }
+
+        definitions.extend_from_slice(&lines[start_index..block_end]);
+        parsed_any = true;
+    }
+
+    if !parsed_any {
+        return None;
+    }
+
+    let mut main_lines = Vec::new();
+    if index < lines.len() {
+        main_lines.extend_from_slice(&lines[index..]);
+    }
+
+    let defs = definitions.join("\n").trim_end().to_string();
+    let main = main_lines.join("\n").trim_start().to_string();
+    if defs.is_empty() || main.is_empty() {
+        None
     } else {
-        format!(" (must be formatted as valid Rust {type_str})")
+        Some((defs, main))
     }
 }
 
+fn format_schema_for_prompt(schema: &str) -> String {
+    let Some((definitions, main)) = split_schema_definitions(schema) else {
+        return schema.to_string();
+    };
+
+    format!("Definitions (used below):\n\n{definitions}\n\n{main}")
+}
+
 impl ChatAdapter {
+    fn format_task_description_typed<S: Signature>(
+        &self,
+        instruction_override: Option<&str>,
+    ) -> String {
+        let instruction = instruction_override.unwrap_or(S::instruction());
+        let instruction = if instruction.is_empty() {
+            let input_fields = S::input_fields()
+                .iter()
+                .map(|field| format!("`{}`", field.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let output_fields = S::output_fields()
+                .iter()
+                .map(|field| format!("`{}`", field.name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("Given the fields {input_fields}, produce the fields {output_fields}.")
+        } else {
+            instruction.to_string()
+        };
+
+        let mut indented = String::new();
+        for line in instruction.lines() {
+            indented.push('\n');
+            indented.push_str("        ");
+            indented.push_str(line);
+        }
+
+        format!("In adhering to this structure, your objective is: {indented}")
+    }
+
+    fn format_response_instructions_typed<S: Signature>(&self) -> String {
+        let mut output_fields = S::output_fields().iter();
+        let Some(first_field) = output_fields.next() else {
+            return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
+        };
+
+        let mut message = format!(
+            "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
+            first_field.name
+        );
+        for field in output_fields {
+            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.name));
+        }
+        message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
+
+        message
+    }
+
     fn get_field_attribute_list(
         &self,
         field_iter: impl Iterator<Item = (String, Value)>,
@@ -150,7 +332,14 @@ impl ChatAdapter {
             signature.instruction().clone()
         };
 
-        format!("In adhering to this structure, your objective is:\n\t{instruction}")
+        let mut indented = String::new();
+        for line in instruction.lines() {
+            indented.push('\n');
+            indented.push_str("        ");
+            indented.push_str(line);
+        }
+
+        format!("In adhering to this structure, your objective is: {indented}")
     }
 
     fn format_user_message(&self, signature: &dyn MetaSignature, inputs: &Example) -> String {
@@ -187,19 +376,20 @@ impl ChatAdapter {
         let type_hint = get_type_hint(&first_output_field_value);
 
         let mut user_message = format!(
-            "Respond with the corresponding output fields, starting with the field `{first_output_field}`{type_hint},"
+            "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`{type_hint},"
         );
         for (field_name, field) in get_iter_from_value(&signature.output_fields()).skip(1) {
-            user_message
-                .push_str(format!(" then `{field_name}`{},", get_type_hint(&field)).as_str());
+            user_message.push_str(
+                format!(" then `[[ ## {field_name} ## ]]`{},", get_type_hint(&field)).as_str(),
+            );
         }
-        user_message.push_str(" and then ending with the marker for `completed`.");
+        user_message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
         format!("{input_str}{user_message}")
     }
 
     fn format_assistant_message(&self, signature: &dyn MetaSignature, outputs: &Example) -> String {
-        let mut assistant_message = String::new();
+        let mut sections = Vec::new();
         for (field_name, _) in get_iter_from_value(&signature.output_fields()) {
             let field_value = outputs.get(field_name.as_str(), None);
             // Extract the actual string value if it's a JSON string, otherwise use as is
@@ -209,10 +399,10 @@ impl ChatAdapter {
                 field_value.to_string()
             };
 
-            assistant_message
-                .push_str(format!("[[ ## {field_name} ## ]]\n{field_value_str}\n\n",).as_str());
+            sections.push(format!("[[ ## {field_name} ## ]]\n{field_value_str}"));
         }
-        assistant_message.push_str("[[ ## completed ## ]]\n");
+        let mut assistant_message = sections.join("\n\n");
+        assistant_message.push_str("\n\n[[ ## completed ## ]]\n");
         assistant_message
     }
 
@@ -237,21 +427,12 @@ impl ChatAdapter {
         &self,
         instruction_override: Option<&str>,
     ) -> Result<String> {
-        let mut parts = Vec::new();
-        parts.push(self.format_field_descriptions_typed::<S>());
-        parts.push(self.format_field_structure_typed::<S>());
-
-        let schema = S::output_format_content()
-            .render(RenderOptions::default())?
-            .unwrap_or_default();
-        if !schema.is_empty() {
-            parts.push(format!("Answer in this schema:\n{schema}"));
-        }
-
-        let instruction = instruction_override.unwrap_or(S::instruction());
-        if !instruction.is_empty() {
-            parts.push(instruction.to_string());
-        }
+        let parts = [
+            self.format_field_descriptions_typed::<S>(),
+            self.format_field_structure_typed::<S>()?,
+            self.format_response_instructions_typed::<S>(),
+            self.format_task_description_typed::<S>(instruction_override),
+        ];
 
         Ok(parts.join("\n\n"))
     }
@@ -260,7 +441,7 @@ impl ChatAdapter {
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
         for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let type_name = render_type_name_for_prompt(&(field.type_ir)());
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -272,7 +453,7 @@ impl ChatAdapter {
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
         for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = (field.type_ir)().diagnostic_repr().to_string();
+            let type_name = render_type_name_for_prompt(&(field.type_ir)());
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -284,7 +465,7 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_structure_typed<S: Signature>(&self) -> String {
+    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
@@ -296,15 +477,26 @@ impl ChatAdapter {
             lines.push(String::new());
         }
 
+        let parent_format = S::output_format_content();
         for field in S::output_fields() {
+            let type_ir = (field.type_ir)();
+            let type_name = render_type_name_for_prompt(&type_ir);
+            let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(field.name.to_string());
+            lines.push(format!(
+                "Output field `{}` should be of type: {type_name}",
+                field.name
+            ));
+            if !schema.is_empty() && schema != type_name {
+                lines.push(String::new());
+                lines.push(format_schema_for_prompt(&schema));
+            }
             lines.push(String::new());
         }
 
         lines.push("[[ ## completed ## ]]".to_string());
 
-        lines.join("\n")
+        Ok(lines.join("\n"))
     }
 
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
@@ -342,15 +534,18 @@ impl ChatAdapter {
             return String::new();
         };
 
-        let mut result = String::new();
+        let mut sections = Vec::new();
         for field_spec in S::output_fields() {
             if let Some(value) = fields.get(field_spec.rust_name) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
-                result.push_str(&format_baml_value_for_prompt(value));
-                result.push_str("\n\n");
+                sections.push(format!(
+                    "[[ ## {} ## ]]\n{}",
+                    field_spec.name,
+                    format_baml_value_for_prompt(value)
+                ));
             }
         }
-        result.push_str("[[ ## completed ## ]]\n");
+        let mut result = sections.join("\n\n");
+        result.push_str("\n\n[[ ## completed ## ]]\n");
 
         result
     }
@@ -373,6 +568,7 @@ impl ChatAdapter {
     ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
         let content = response.content();
         let output_format = S::output_format_content();
+        let sections = parse_sections(&content);
 
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
@@ -382,9 +578,9 @@ impl ChatAdapter {
             let rust_name = field.rust_name.to_string();
             let type_ir = (field.type_ir)();
 
-            let raw_text = match extract_field(&content, field.name) {
-                Ok(text) => text,
-                Err(_) => {
+            let raw_text = match sections.get(field.name) {
+                Some(text) => text.clone(),
+                None => {
                     errors.push(ParseError::MissingField {
                         field: rust_name.clone(),
                         raw_response: content.to_string(),
@@ -486,16 +682,38 @@ impl ChatAdapter {
     }
 }
 
-fn extract_field(content: &str, field_name: &str) -> std::result::Result<String, String> {
-    let start_marker = format!("[[ ## {} ## ]]", field_name);
-    let start_pos = content
-        .find(&start_marker)
-        .ok_or_else(|| format!("marker not found: {start_marker}"))?;
-    let after_marker = start_pos + start_marker.len();
-    let remaining = &content[after_marker..];
-    let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
-    let extracted = remaining[..end_pos].trim();
-    Ok(extracted.to_string())
+fn parse_sections(content: &str) -> IndexMap<String, String> {
+    let mut sections: Vec<(Option<String>, Vec<String>)> = vec![(None, Vec::new())];
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(caps) = FIELD_HEADER_PATTERN.captures(trimmed) {
+            let header = caps.get(1).unwrap().as_str().to_string();
+            let marker = caps.get(0).unwrap();
+            let remaining = trimmed[marker.end()..].trim();
+
+            let mut lines = Vec::new();
+            if !remaining.is_empty() {
+                lines.push(remaining.to_string());
+            }
+            sections.push((Some(header), lines));
+        } else if let Some((_, lines)) = sections.last_mut() {
+            lines.push(line.to_string());
+        }
+    }
+
+    let mut parsed = IndexMap::new();
+    for (header, lines) in sections {
+        let Some(name) = header else {
+            continue;
+        };
+        if parsed.contains_key(&name) {
+            continue;
+        }
+        parsed.insert(name, lines.join("\n").trim().to_string());
+    }
+
+    parsed
 }
 
 fn baml_value_fields(
@@ -613,18 +831,13 @@ impl Adapter for ChatAdapter {
         let mut output = HashMap::new();
 
         let response_content = response.content();
+        let sections = parse_sections(&response_content);
 
         for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
-            let field_value = response_content
-                .split(format!("[[ ## {field_name} ## ]]\n").as_str())
-                .nth(1);
-
-            if field_value.is_none() {
+            let Some(field_value) = sections.get(&field_name) else {
                 continue; // Skip field if not found in response
-            }
-            let field_value = field_value.unwrap();
-
-            let extracted_field = field_value.split("[[ ## ").nth(0).unwrap().trim();
+            };
+            let extracted_field = field_value.as_str();
             let data_type = field["type"].as_str().unwrap();
             let schema = &field["schema"];
 

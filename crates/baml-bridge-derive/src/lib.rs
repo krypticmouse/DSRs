@@ -5,7 +5,7 @@ use syn::{
     ExprLit, Fields, Lit, Meta, Path, Type,
 };
 
-#[proc_macro_derive(BamlType, attributes(baml, serde, doc))]
+#[proc_macro_derive(BamlType, attributes(baml, serde))]
 pub fn derive_baml_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_derive(&input) {
