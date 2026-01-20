@@ -1,8 +1,8 @@
-use dspy_rs::Signature;
+use dspy_rs::LegacySignature;
 use rstest::*;
 use schemars::JsonSchema;
 
-#[Signature(cot, hint)]
+#[LegacySignature(cot, hint)]
 struct TestSignature {
     /// This is a test instruction
     /// What is the meaning of life?
@@ -27,7 +27,7 @@ struct TestOutput {
     output3: bool,
 }
 
-#[Signature]
+#[LegacySignature]
 struct TestSignature2 {
     /// This is a test input
     ///

@@ -15,8 +15,10 @@ Run with:
 cargo run --example 15-tools
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Predictor, Signature, configure, example};
+use dspy_rs::{ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -118,7 +120,7 @@ impl Tool for CalculatorTool {
 // 2. Define Signatures
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct MathQuestionSignature {
     /// You MUST use the calculator tool to perform any calculations. Do not calculate manually.
     /// When asked a math question, call the calculator tool with the appropriate operation and numbers.
@@ -146,7 +148,7 @@ async fn main() -> Result<()> {
 
     // Create a predictor with the calculator tool
     let calculator_tool = CalculatorTool;
-    let predictor = Predict::new_with_tools(
+    let predictor = LegacyPredict::new_with_tools(
         MathQuestionSignature::new(),
         vec![Box::new(calculator_tool)],
     );

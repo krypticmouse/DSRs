@@ -1,18 +1,26 @@
+#![allow(deprecated)]
+
 use schemars::JsonSchema;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use dspy_rs::{
-    Cache, Chat, ChatAdapter, DummyLM, Example, Message, MetaSignature, Signature,
-    adapter::Adapter, example, hashmap, sign,
+    Cache, Chat, ChatAdapter, DummyLM, Example, LegacySignature, Message, MetaSignature,
+    adapter::Adapter, example, hashmap,
 };
+
+#[LegacySignature]
+struct BasicSignature {
+    #[input]
+    pub problem: String,
+    #[output]
+    pub answer: String,
+}
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter() {
-    let signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let signature = BasicSignature::new();
 
     let lm = DummyLM::default();
     let adapter = ChatAdapter;
@@ -67,7 +75,7 @@ async fn test_chat_adapter() {
 }
 
 #[allow(dead_code)]
-#[Signature(cot, hint)]
+#[LegacySignature(cot, hint)]
 struct TestSignature {
     ///You are a helpful assistant that can answer questions. You will be given a problem and a hint. You will need to use the hint to answer the problem. You will then need to provide the reasoning and the answer.
 
@@ -149,7 +157,7 @@ struct TestOutput {
 }
 
 #[allow(dead_code)]
-#[Signature]
+#[LegacySignature]
 struct TestSignature2 {
     #[input]
     pub problem: String,
@@ -232,9 +240,7 @@ async fn test_chat_adapter_with_multiple_fields_and_output_schema() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_demos() {
-    let mut signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let mut signature = BasicSignature::new();
 
     let adapter = ChatAdapter;
 
@@ -339,9 +345,7 @@ async fn test_chat_adapter_with_demos() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter_with_empty_demos() {
-    let mut signature = sign! {
-        (problem: String) -> answer: String
-    };
+    let mut signature = BasicSignature::new();
 
     let adapter = ChatAdapter;
 

@@ -11,7 +11,7 @@ use crate::{Example, Prediction};
 type CacheKey = Vec<(String, Value)>;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CallResult {
+pub struct CacheEntry {
     pub prompt: String,
     pub prediction: Prediction,
 }
@@ -20,15 +20,15 @@ pub struct CallResult {
 pub trait Cache: Send + Sync {
     async fn new() -> Self;
     async fn get(&self, key: Example) -> Result<Option<Prediction>>;
-    async fn insert(&mut self, key: Example, rx: mpsc::Receiver<CallResult>) -> Result<()>;
-    async fn get_history(&self, n: usize) -> Result<Vec<CallResult>>;
+    async fn insert(&mut self, key: Example, rx: mpsc::Receiver<CacheEntry>) -> Result<()>;
+    async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>>;
 }
 
 #[derive(Clone)]
 pub struct ResponseCache {
-    handler: HybridCache<CacheKey, CallResult>,
+    handler: HybridCache<CacheKey, CacheEntry>,
     window_size: usize,
-    history_window: Vec<CallResult>,
+    history_window: Vec<CacheEntry>,
 }
 
 #[async_trait]
@@ -41,7 +41,7 @@ impl Cache for ResponseCache {
             .build()
             .unwrap();
 
-        let hybrid: HybridCache<CacheKey, CallResult> = HybridCacheBuilder::new()
+        let hybrid: HybridCache<CacheKey, CacheEntry> = HybridCacheBuilder::new()
             .memory(256 * 1024 * 1024)
             .storage()
             .with_engine_config(BlockEngineBuilder::new(device))
@@ -63,7 +63,7 @@ impl Cache for ResponseCache {
         Ok(value.map(|entry| entry.prediction))
     }
 
-    async fn insert(&mut self, key: Example, mut rx: mpsc::Receiver<CallResult>) -> Result<()> {
+    async fn insert(&mut self, key: Example, mut rx: mpsc::Receiver<CacheEntry>) -> Result<()> {
         let key = key.into_iter().collect::<CacheKey>();
         let value = rx.recv().await.unwrap();
 
@@ -76,7 +76,7 @@ impl Cache for ResponseCache {
         Ok(())
     }
 
-    async fn get_history(&self, n: usize) -> Result<Vec<CallResult>> {
+    async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>> {
         let actual_n = n.min(self.history_window.len());
         Ok(self.history_window[..actual_n].to_vec())
     }

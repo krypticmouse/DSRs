@@ -12,11 +12,11 @@ Note: The `dataloaders` feature is required for loading datasets.
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, Signature, configure,
+    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature, Module,
+    Optimizable, Optimizer, Prediction, Predictor, configure,
 };
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
 
@@ -30,8 +30,8 @@ struct QASignature {
 #[derive(Builder, Optimizable)]
 pub struct QARater {
     #[parameter]
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
 }
 
 impl Module for QARater {

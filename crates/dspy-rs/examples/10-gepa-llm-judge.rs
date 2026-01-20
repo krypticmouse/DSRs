@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 /// Example: Using LLM-as-a-Judge with GEPA for Math Word Problems
 ///
 /// This example demonstrates how to use an LLM judge to automatically generate
@@ -11,14 +13,14 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Optimizable, Signature};
+use dsrs_macros::{LegacySignature, Optimizable};
 use std::sync::Arc;
 
 // ============================================================================
 // Step 1: Define the task signature with chain-of-thought reasoning
 // ============================================================================
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct MathWordProblem {
     /// Solve the math word problem step by step. Show your work clearly.
 
@@ -36,7 +38,7 @@ struct MathWordProblem {
 // Step 2: Define the LLM judge signature
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct MathJudge {
     /// You are an expert math teacher evaluating student work. Analyze both
     /// the final answer and the reasoning process. Be specific about what
@@ -66,10 +68,10 @@ struct MathJudge {
 struct MathSolver {
     // The main predictor we want to optimize
     #[parameter]
-    solver: Predict,
+    solver: LegacyPredict,
 
     // The judge predictor (not optimized, just used for evaluation)
-    judge: Predict,
+    judge: LegacyPredict,
 
     // LM for the judge (could be different/cheaper model)
     judge_lm: Arc<LM>,
@@ -256,8 +258,8 @@ async fn main() -> Result<()> {
 
     // Create the module
     let mut module = MathSolver::builder()
-        .solver(Predict::new(MathWordProblem::new()))
-        .judge(Predict::new(MathJudge::new()))
+        .solver(LegacyPredict::new(MathWordProblem::new()))
+        .judge(LegacyPredict::new(MathJudge::new()))
         .judge_lm(Arc::new(judge_lm))
         .build();
 

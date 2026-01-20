@@ -177,8 +177,8 @@ async fn test_lm_cache_direct_operations() {
 
     // Create a channel to send the result
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    use dspy_rs::CallResult;
-    tx.send(CallResult {
+    use dspy_rs::utils::cache::CacheEntry;
+    tx.send(CacheEntry {
         prompt: "test prompt".to_string(),
         prediction: value.clone(),
     })
@@ -295,8 +295,8 @@ async fn test_cache_with_complex_inputs() {
 
     // Insert and retrieve
     let (tx, rx) = tokio::sync::mpsc::channel(1);
-    use dspy_rs::CallResult;
-    tx.send(CallResult {
+    use dspy_rs::utils::cache::CacheEntry;
+    tx.send(CacheEntry {
         prompt: "complex test prompt".to_string(),
         prediction: value.clone(),
     })

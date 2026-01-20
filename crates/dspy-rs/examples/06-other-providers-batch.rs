@@ -7,14 +7,16 @@ cargo run --example 01-simple
 ```
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, Module, Predict, Prediction, Predictor, Signature, configure,
-    example, hashmap, prediction,
+    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
+    configure, example, hashmap, prediction,
 };
 
-#[Signature(cot)]
+#[LegacySignature(cot)]
 struct QASignature {
     #[input]
     pub question: String,
@@ -23,7 +25,7 @@ struct QASignature {
     pub answer: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct RateSignature {
     /// Rate the answer on a scale of 1(very bad) to 10(very good)
 
@@ -39,10 +41,10 @@ struct RateSignature {
 
 #[derive(Builder)]
 pub struct QARater {
-    #[builder(default = Predict::new(QASignature::new()))]
-    pub answerer: Predict,
-    #[builder(default = Predict::new(RateSignature::new()))]
-    pub rater: Predict,
+    #[builder(default = LegacyPredict::new(QASignature::new()))]
+    pub answerer: LegacyPredict,
+    #[builder(default = LegacyPredict::new(RateSignature::new()))]
+    pub rater: LegacyPredict,
 }
 
 impl Module for QARater {

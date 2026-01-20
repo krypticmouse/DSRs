@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 /// Example: Using GEPA to optimize a sentiment analysis module
 ///
 /// This example demonstrates:
@@ -12,9 +14,9 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
-use dsrs_macros::{Optimizable, Signature};
+use dsrs_macros::{LegacySignature, Optimizable};
 
-#[Signature]
+#[LegacySignature]
 struct SentimentSignature {
     /// Analyze the sentiment of the given text. Classify as 'Positive', 'Negative', or 'Neutral'.
 
@@ -31,7 +33,7 @@ struct SentimentSignature {
 #[derive(Builder, Optimizable)]
 struct SentimentAnalyzer {
     #[parameter]
-    predictor: Predict,
+    predictor: LegacyPredict,
 }
 
 impl Module for SentimentAnalyzer {
@@ -167,7 +169,7 @@ async fn main() -> Result<()> {
 
     // Create module
     let mut module = SentimentAnalyzer::builder()
-        .predictor(Predict::new(SentimentSignature::new()))
+        .predictor(LegacyPredict::new(SentimentSignature::new()))
         .build();
 
     // Evaluate baseline performance

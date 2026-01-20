@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use crate as dspy_rs;
 /// MIPROv2 Optimizer Implementation
 ///
@@ -13,19 +15,19 @@ use crate as dspy_rs;
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
 use crate::{
-    Evaluator, Example, LM, Module, Optimizable, Optimizer, Predict, Prediction, Predictor,
+    Evaluator, Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
     example, get_lm,
 };
 use anyhow::{Context, Result};
 use bon::Builder;
-use dsrs_macros::Signature;
+use dsrs_macros::LegacySignature;
 use std::sync::Arc;
 
 // ============================================================================
 // Signature Definitions for LLM-based Prompt Generation
 // ============================================================================
 
-#[Signature]
+#[LegacySignature]
 struct GenerateProgramDescription {
     /// You are an expert at understanding and describing programs. Given a task signature with input and output fields, and some example traces, generate a clear and concise description of what the program does.
 
@@ -39,7 +41,7 @@ struct GenerateProgramDescription {
     pub program_description: String,
 }
 
-#[Signature]
+#[LegacySignature]
 struct GenerateInstructionFromTips {
     /// You are an expert prompt engineer. Given a program description, example traces, and a collection of prompting best practices, generate an effective instruction that will help a language model perform this task well.
     ///
@@ -285,7 +287,7 @@ impl MIPROv2 {
         signature_desc: &str,
         traces: &[Trace],
     ) -> Result<String> {
-        let description_generator = Predict::new(GenerateProgramDescription::new());
+        let description_generator = LegacyPredict::new(GenerateProgramDescription::new());
 
         // Format traces for the prompt
         let traces_str = traces
@@ -325,7 +327,7 @@ impl MIPROv2 {
         traces: &[Trace],
         num_candidates: usize,
     ) -> Result<Vec<String>> {
-        let instruction_generator = Predict::new(GenerateInstructionFromTips::new());
+        let instruction_generator = LegacyPredict::new(GenerateInstructionFromTips::new());
         let tips = PromptingTips::default_tips();
 
         // Format traces

@@ -17,14 +17,16 @@ cargo run --example 08-optimize-mipro --features dataloaders
 Note: The `dataloaders` feature is required for loading datasets.
 */
 
+#![allow(deprecated)]
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, MIPROv2, Module, Optimizable, Optimizer,
-    Predict, Prediction, Predictor, Signature, configure, example,
+    ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature, MIPROv2,
+    Module, Optimizable, Optimizer, Prediction, Predictor, configure, example,
 };
 
-#[Signature]
+#[LegacySignature]
 struct QuestionAnswering {
     /// Answer the question accurately and concisely.
 
@@ -38,8 +40,8 @@ struct QuestionAnswering {
 #[derive(Builder, Optimizable)]
 pub struct SimpleQA {
     #[parameter]
-    #[builder(default = Predict::new(QuestionAnswering::new()))]
-    pub answerer: Predict,
+    #[builder(default = LegacyPredict::new(QuestionAnswering::new()))]
+    pub answerer: LegacyPredict,
 }
 
 impl Module for SimpleQA {

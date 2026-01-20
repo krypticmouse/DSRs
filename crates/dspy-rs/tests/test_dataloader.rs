@@ -2,9 +2,16 @@ use anyhow::Result;
 use dspy_rs::data::dataloader::DataLoader;
 use rstest::rstest;
 
+fn should_run_network_tests() -> bool {
+    std::env::var("DSPY_RS_NETWORK_TESTS").is_ok()
+}
+
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_hf_awesome_chatgpt_prompts() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     // Load the HuggingFace dataset
     let input_keys = vec!["events".to_string(), "inputs".to_string()];
     let output_keys = vec!["output".to_string()];
@@ -70,6 +77,9 @@ fn test_load_hf_awesome_chatgpt_prompts() -> Result<()> {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_csv_from_url() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     let url = "https://people.sc.fsu.edu/~jburkardt/data/csv/snakes_count_10.csv";
     let input_keys = vec!["Game Number".to_string()];
     let output_keys = vec!["Game Length".to_string()];
@@ -113,6 +123,9 @@ fn test_load_csv_from_url() -> Result<()> {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_json_from_url() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     let url = "https://huggingface.co/xai-org/grok-2/raw/main/config.json";
     let input_keys = vec!["vocab_size".to_string(), "hidden_size".to_string()];
     let output_keys = vec![]; // No output keys for this config file
@@ -156,6 +169,9 @@ fn test_load_json_from_url() -> Result<()> {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_json_grok2_with_multiple_fields() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     let url = "https://huggingface.co/xai-org/grok-2/raw/main/config.json";
 
     // Test loading with more comprehensive input keys
@@ -190,6 +206,9 @@ fn test_load_json_grok2_with_multiple_fields() -> Result<()> {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_csv_verify_columns() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     // First, let's load without specifying input/output keys to see all columns
     let url = "https://people.sc.fsu.edu/~jburkardt/data/csv/snakes_count_10.csv";
     let examples = DataLoader::load_csv(
@@ -225,6 +244,9 @@ fn test_load_csv_verify_columns() -> Result<()> {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_invalid_url_handling() {
+    if !should_run_network_tests() {
+        return;
+    }
     let invalid_url = "https://invalid-url-that-does-not-exist.com/data.csv";
 
     let result = DataLoader::load_csv(
@@ -242,6 +264,9 @@ fn test_load_invalid_url_handling() {
 #[rstest]
 #[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
 fn test_load_hf_with_verbose() -> Result<()> {
+    if !should_run_network_tests() {
+        return Ok(());
+    }
     let input_keys = vec!["events".to_string(), "inputs".to_string()];
     let output_keys = vec!["output".to_string()];
 
