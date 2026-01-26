@@ -8,10 +8,10 @@ OPENAI_API_KEY=your_key cargo run --example 17-insurance-claims-extract -- \
 */
 
 use anyhow::{bail, Context, Result};
-use dspy_rs::{configure, ChatAdapter, DataLoader, LM, Predict, Signature};
+use dspy_rs::{configure, ChatAdapter, DataLoader, LM, Predict, PredictError, Signature};
 use dspy_rs::BamlType;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::io::{BufWriter, Write};
@@ -236,6 +236,55 @@ fn is_openai_responses_model(model: &str) -> bool {
         || model.starts_with("openai.responses:")
 }
 
+fn parse_error_to_json(error: &dspy_rs::ParseError) -> Value {
+    match error {
+        dspy_rs::ParseError::MissingField { field, .. } => {
+            json!({"type": "missing_field", "field": field})
+        }
+        dspy_rs::ParseError::ExtractionFailed { field, reason, .. } => {
+            json!({"type": "extraction_failed", "field": field, "reason": reason})
+        }
+        dspy_rs::ParseError::CoercionFailed {
+            field,
+            expected_type,
+            raw_text,
+            source,
+        } => json!({
+            "type": "coercion_failed",
+            "field": field,
+            "expected_type": expected_type,
+            "raw_text": raw_text,
+            "reason": source.to_string(),
+        }),
+        dspy_rs::ParseError::AssertFailed {
+            field,
+            label,
+            expression,
+            value,
+        } => json!({
+            "type": "assert_failed",
+            "field": field,
+            "label": label,
+            "expression": expression,
+            "value": value,
+        }),
+        dspy_rs::ParseError::Multiple { errors, partial } => {
+            let mut value = json!({
+                "type": "multiple",
+                "errors": errors.iter().map(parse_error_to_json).collect::<Vec<_>>(),
+            });
+            if let Some(partial) = partial {
+                if let Value::Object(map) = &mut value {
+                    if let Ok(partial_value) = serde_json::to_value(partial) {
+                        map.insert("partial".to_string(), partial_value);
+                    }
+                }
+            }
+            value
+        }
+    }
+}
+
 fn parse_args() -> Result<Args> {
     let mut start = 1usize;
     let mut end: Option<usize> = None;
@@ -445,28 +494,49 @@ async fn main() -> Result<()> {
         }
 
         match predictor
-            .call(InsuranceClaimInfoInput { claim_text })
+            .call_with_meta(InsuranceClaimInfoInput { claim_text })
             .await
         {
             Ok(result) => {
-                let mut value = serde_json::to_value(&result.claim)
+                let mut value = serde_json::to_value(&result.output.claim)
                     .context("serialize claim output")?;
                 if let serde_json::Value::Object(ref mut map) = value {
                     map.insert("record_id".to_string(), json!(record_id));
+                    map.insert("raw_response".to_string(), json!(result.raw_response));
                 }
                 writeln!(writer, "{}", serde_json::to_string(&value)?)?;
                 println!("Record {record_id} completed");
             }
             Err(err) => {
                 let error_detail = match &err {
-                    dspy_rs::PredictError::Lm { source } => source.to_string(),
-                    dspy_rs::PredictError::Parse { source, .. } => source.to_string(),
-                    dspy_rs::PredictError::Conversion { source, .. } => source.to_string(),
+                    PredictError::Lm { source } => source.to_string(),
+                    PredictError::Parse { source, .. } => source.to_string(),
+                    PredictError::Conversion { source, .. } => source.to_string(),
                 };
-                let value = json!({
+                let mut value = json!({
                     "record_id": record_id,
                     "error": err.to_string(),
+                    "raw_response": Value::Null,
                 });
+                if let Value::Object(ref mut map) = value {
+                    map.insert("error_detail".to_string(), json!(error_detail));
+                    match &err {
+                        PredictError::Parse {
+                            source,
+                            raw_response,
+                            ..
+                        } => {
+                            map.insert("raw_response".to_string(), json!(raw_response));
+                            map.insert("parse_error".to_string(), parse_error_to_json(source));
+                        }
+                        PredictError::Conversion { parsed, .. } => {
+                            if let Ok(parsed_value) = serde_json::to_value(parsed) {
+                                map.insert("parsed".to_string(), parsed_value);
+                            }
+                        }
+                        PredictError::Lm { .. } => {}
+                    }
+                }
                 writeln!(writer, "{}", serde_json::to_string(&value)?)?;
                 eprintln!("Record {record_id} failed: {error_detail}");
             }
