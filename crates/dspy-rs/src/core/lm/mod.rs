@@ -17,6 +17,39 @@ use tokio::sync::Mutex;
 use crate::utils::cache::CacheEntry;
 use crate::{Cache, Example, Prediction, ResponseCache};
 
+struct ChoiceSummary {
+    text: Option<String>,
+    reasoning: Option<String>,
+    tool_call: Option<ToolCall>,
+}
+
+fn summarize_choice(choice: &rig::OneOrMany<AssistantContent>) -> ChoiceSummary {
+    let mut text_parts = Vec::new();
+    let mut reasoning_parts = Vec::new();
+    let mut tool_call = None;
+
+    for content in choice.iter() {
+        match content {
+            AssistantContent::Text(text) => text_parts.push(text.text.clone()),
+            AssistantContent::Reasoning(reasoning) => {
+                reasoning_parts.extend(reasoning.reasoning.clone())
+            }
+            AssistantContent::ToolCall(call) => {
+                if tool_call.is_none() {
+                    tool_call = Some(call.clone());
+                }
+            }
+            AssistantContent::Image(_image) => {}
+        }
+    }
+
+    ChoiceSummary {
+        text: (!text_parts.is_empty()).then(|| text_parts.join("\n")),
+        reasoning: (!reasoning_parts.is_empty()).then(|| reasoning_parts.join("\n")),
+        tool_call,
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LMResponse {
     /// Assistant message chosen by the provider.
@@ -273,65 +306,63 @@ impl LM {
             accumulated_usage.completion_tokens += response.usage.output_tokens;
             accumulated_usage.total_tokens += response.usage.total_tokens;
 
-            match response.choice.first() {
-                AssistantContent::Text(text) => {
-                    return Ok(ToolLoopResult {
-                        message: Message::assistant(&text.text),
-                        chat_history,
-                        tool_calls,
-                        tool_executions,
-                    });
-                }
-                AssistantContent::Reasoning(reasoning) => {
-                    return Ok(ToolLoopResult {
-                        message: Message::assistant(reasoning.reasoning.join("\n")),
-                        chat_history,
-                        tool_calls,
-                        tool_executions,
-                    });
-                }
-                AssistantContent::ToolCall(tool_call) => {
-                    // Execute tool and continue
-                    let tool_name = &tool_call.function.name;
-                    let args_str = tool_call.function.arguments.to_string();
+            let summary = summarize_choice(&response.choice);
+            if let Some(text) = summary.text {
+                return Ok(ToolLoopResult {
+                    message: Message::assistant(text),
+                    chat_history,
+                    tool_calls,
+                    tool_executions,
+                });
+            }
+            if let Some(reasoning) = summary.reasoning {
+                return Ok(ToolLoopResult {
+                    message: Message::assistant(reasoning),
+                    chat_history,
+                    tool_calls,
+                    tool_executions,
+                });
+            }
+            if let Some(tool_call) = summary.tool_call {
+                // Execute tool and continue
+                let tool_name = &tool_call.function.name;
+                let args_str = tool_call.function.arguments.to_string();
 
-                    let mut tool_result = format!("Tool '{}' not found", tool_name);
-                    for tool in &mut tools {
-                        let def = tool.definition("".to_string()).await;
-                        if def.name == *tool_name {
-                            // Actually execute the tool
-                            tool_result = tool.call(args_str.clone()).await.unwrap();
-                            tool_calls.push(tool_call.clone());
-                            tool_executions.push(tool_result.clone());
-                            break;
-                        }
+                let mut tool_result = format!("Tool '{}' not found", tool_name);
+                for tool in &mut tools {
+                    let def = tool.definition("".to_string()).await;
+                    if def.name == *tool_name {
+                        // Actually execute the tool
+                        tool_result = tool.call(args_str.clone()).await.unwrap();
+                        tool_calls.push(tool_call.clone());
+                        tool_executions.push(tool_result.clone());
+                        break;
                     }
-
-                    chat_history.push(rig::message::Message::Assistant {
-                        id: None,
-                        content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
-                            tool_call.clone(),
-                        )),
-                    });
-
-                    let tool_result_content = if let Some(call_id) = &tool_call.call_id {
-                        UserContent::tool_result_with_call_id(
-                            tool_call.id.clone(),
-                            call_id.clone(),
-                            OneOrMany::one(tool_result.into()),
-                        )
-                    } else {
-                        UserContent::tool_result(
-                            tool_call.id.clone(),
-                            OneOrMany::one(tool_result.into()),
-                        )
-                    };
-
-                    chat_history.push(rig::message::Message::User {
-                        content: OneOrMany::one(tool_result_content),
-                    });
                 }
-                AssistantContent::Image(_image) => todo!(),
+
+                chat_history.push(rig::message::Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
+                        tool_call.clone(),
+                    )),
+                });
+
+                let tool_result_content = if let Some(call_id) = &tool_call.call_id {
+                    UserContent::tool_result_with_call_id(
+                        tool_call.id.clone(),
+                        call_id.clone(),
+                        OneOrMany::one(tool_result.into()),
+                    )
+                } else {
+                    UserContent::tool_result(
+                        tool_call.id.clone(),
+                        OneOrMany::one(tool_result.into()),
+                    )
+                };
+
+                chat_history.push(rig::message::Message::User {
+                    content: OneOrMany::one(tool_result_content),
+                });
             }
         }
 
@@ -386,12 +417,11 @@ impl LM {
 
         // Handle the response
         let mut tool_loop_result = None;
-        let first_choice = match response.choice.first() {
-            AssistantContent::Text(text) => Message::assistant(&text.text),
-            AssistantContent::Reasoning(reasoning) => {
-                Message::assistant(reasoning.reasoning.join("\n"))
-            }
-            AssistantContent::ToolCall(tool_call) if !tools.is_empty() => {
+        let summary = summarize_choice(&response.choice);
+        let first_choice = if let Some(text) = summary.text {
+            Message::assistant(text)
+        } else if let Some(tool_call) = summary.tool_call.clone() {
+            if !tools.is_empty() {
                 // Only execute tool loop if we have tools available
                 let result = self
                     .execute_tool_loop(
@@ -407,8 +437,7 @@ impl LM {
                 let message = result.message.clone();
                 tool_loop_result = Some(result);
                 message
-            }
-            AssistantContent::ToolCall(tool_call) => {
+            } else {
                 // No tools available, just return a message indicating this
                 let msg = format!(
                     "Tool call requested: {} with args: {}, but no tools available",
@@ -416,7 +445,10 @@ impl LM {
                 );
                 Message::assistant(&msg)
             }
-            AssistantContent::Image(_image) => todo!(),
+        } else if let Some(reasoning) = summary.reasoning {
+            Message::assistant(reasoning)
+        } else {
+            Message::assistant("")
         };
 
         let mut full_chat = messages.clone();
