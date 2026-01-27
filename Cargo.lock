@@ -3354,6 +3354,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rlm-core"
+version = "0.1.0"
+
+[[package]]
 name = "rlm-derive"
 version = "0.1.0"
 dependencies = [
