@@ -8,7 +8,9 @@
 //! Auto-generates repr for types without explicit template.
 
 use proc_macro2::TokenStream;
-use quote::{quote, ToTokens};
+use quote::quote;
+
+use crate::attrs::RlmTypeAttrs;
 
 /// Parsed template segment for `__repr__` generation.
 #[derive(Debug, Clone, PartialEq)]
@@ -269,6 +271,79 @@ pub fn generate_repr_from_template(template: &str) -> Result<TokenStream, ParseE
     Ok(generate_repr_from_segments(&segments))
 }
 
+/// Default truncation length for auto-generated repr.
+pub const AUTO_REPR_TRUNCATE_LEN: usize = 40;
+
+/// Generate auto-repr for a struct without an explicit template.
+///
+/// Strategy:
+/// 1. Find the first String field and use it as a preview
+/// 2. If no String field, show struct name with field count
+/// 3. Truncate the preview to 40 characters
+///
+/// # Example output
+///
+/// - `Trajectory("session_abc123... (truncated)")` - first string field preview
+/// - `Trajectory(3 fields)` - fallback when no string fields
+pub fn generate_auto_repr(attrs: &RlmTypeAttrs) -> TokenStream {
+    let struct_name = &attrs.ident;
+    let struct_name_str = struct_name.to_string();
+
+    // Find first String field for preview
+    let string_field = attrs
+        .fields()
+        .find(|f| is_string_type(&f.ty));
+
+    if let Some(field) = string_field {
+        let field_name = field.ident.as_ref().expect("named field required");
+        let max_len = AUTO_REPR_TRUNCATE_LEN;
+
+        quote! {
+            fn __repr__(&self) -> String {
+                let preview = &self.#field_name;
+                let chars: Vec<char> = preview.chars().collect();
+                if chars.len() > #max_len {
+                    let truncated: String = chars[..#max_len].iter().collect();
+                    format!("{}(\"{}...\")", #struct_name_str, truncated)
+                } else {
+                    format!("{}(\"{}\")", #struct_name_str, preview)
+                }
+            }
+        }
+    } else {
+        // Fallback: show field count
+        let field_count = attrs.fields().count();
+
+        quote! {
+            fn __repr__(&self) -> String {
+                format!("{}({} fields)", #struct_name_str, #field_count)
+            }
+        }
+    }
+}
+
+/// Generate the `__repr__` method for a struct.
+///
+/// Uses the explicit template if provided via `#[rlm(repr = "...")]`,
+/// otherwise generates an auto-repr.
+pub fn generate_repr(attrs: &RlmTypeAttrs) -> Result<TokenStream, ParseError> {
+    if let Some(ref template) = attrs.repr {
+        generate_repr_from_template(template)
+    } else {
+        Ok(generate_auto_repr(attrs))
+    }
+}
+
+/// Check if a type is `String`.
+fn is_string_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(type_path) = ty {
+        if let Some(segment) = type_path.path.segments.last() {
+            return segment.ident == "String";
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +438,17 @@ mod tests {
     fn test_invalid_truncation() {
         let result = parse_template("{self.name:abc}");
         assert!(matches!(result, Err(ParseError::InvalidTruncation { .. })));
+    }
+
+    #[test]
+    fn test_is_string_type() {
+        let string_ty: syn::Type = syn::parse_quote!(String);
+        assert!(is_string_type(&string_ty));
+
+        let i32_ty: syn::Type = syn::parse_quote!(i32);
+        assert!(!is_string_type(&i32_ty));
+
+        let vec_ty: syn::Type = syn::parse_quote!(Vec<String>);
+        assert!(!is_string_type(&vec_ty));
     }
 }
