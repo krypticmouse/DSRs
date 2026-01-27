@@ -96,8 +96,14 @@ fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::
         ));
     }
 
+    // Generate __repr__ method (can fail if template is invalid)
+    let repr_method = generators::generate_repr(&attrs)
+        .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
+
     // Generate the #[pymethods] impl block
-    let pymethods = generators::generate_pymethods(&attrs);
+    // TODO (Task 1.5): Add __iter__, __len__, __getitem__ generation
+    // TODO (Task 1.7): Add __rlm_schema__ generation
+    let pymethods = generators::generate_pymethods_with_repr(&attrs, repr_method);
 
     Ok(pymethods)
 }

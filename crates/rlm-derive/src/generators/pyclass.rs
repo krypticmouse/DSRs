@@ -5,7 +5,7 @@
 //! - `__baml__()` method for SUBMIT normalization
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 use syn::Type;
 
 use crate::attrs::{RlmFieldAttrs, RlmTypeAttrs};
@@ -31,6 +31,39 @@ pub fn generate_pymethods(attrs: &RlmTypeAttrs) -> TokenStream {
         #[pyo3::pymethods]
         impl #impl_generics #struct_name #ty_generics #where_clause {
             #(#getters)*
+
+            #baml_method
+        }
+    }
+}
+
+/// Generate the `#[pymethods]` impl block with a custom repr method.
+///
+/// This generates:
+/// - Field getters for all fields not marked `skip_python`
+/// - `__repr__()` method (from the provided TokenStream)
+/// - `__baml__()` method that converts to a JSON-like Python object
+///
+/// NOTE: This function will be used in Task 1.4. Currently unused.
+#[allow(dead_code)]
+pub fn generate_pymethods_with_repr(attrs: &RlmTypeAttrs, repr_method: TokenStream) -> TokenStream {
+    let struct_name = &attrs.ident;
+    let (impl_generics, ty_generics, where_clause) = attrs.generics.split_for_impl();
+
+    let getters: Vec<TokenStream> = attrs
+        .fields()
+        .filter(|f| f.should_generate_getter())
+        .map(generate_getter)
+        .collect();
+
+    let baml_method = generate_baml_method();
+
+    quote! {
+        #[pyo3::pymethods]
+        impl #impl_generics #struct_name #ty_generics #where_clause {
+            #(#getters)*
+
+            #repr_method
 
             #baml_method
         }
