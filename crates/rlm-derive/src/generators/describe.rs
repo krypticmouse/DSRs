@@ -225,6 +225,7 @@ fn extract_innermost_vec_type(ty: &Type) -> Option<Type> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use darling::FromDeriveInput;
 
     #[test]
     fn test_is_optional_type() {
@@ -258,5 +259,33 @@ mod tests {
         let ty: Type = syn::parse_quote!(Option<Vec<Bar>>);
         let inner = extract_innermost_vec_type(&ty).expect("expected inner type");
         assert_eq!(quote!(#inner).to_string(), "Bar");
+    }
+
+    #[test]
+    fn test_generate_describe_rejects_filter_on_non_vec() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            pub struct Example {
+                #[rlm(filter_property = "user_steps", filter_value = "user")]
+                pub steps: String,
+            }
+        };
+
+        let attrs = RlmTypeAttrs::from_derive_input(&input).expect("attrs parse");
+        let result = generate_describe(&attrs);
+        assert!(result.is_err(), "expected error for non-Vec filter field");
+    }
+
+    #[test]
+    fn test_generate_describe_rejects_flatten_on_non_vec() {
+        let input: syn::DeriveInput = syn::parse_quote! {
+            pub struct Example {
+                #[rlm(flatten_property = "all_steps")]
+                pub steps: Option<String>,
+            }
+        };
+
+        let attrs = RlmTypeAttrs::from_derive_input(&input).expect("attrs parse");
+        let result = generate_describe(&attrs);
+        assert!(result.is_err(), "expected error for non-Vec flatten field");
     }
 }
