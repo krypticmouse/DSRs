@@ -34,7 +34,9 @@ IMPORTANT: This is ITERATIVE. Each code block you write will execute, you'll see
 You have max {max_llm_calls} sub-LLM calls. When done, call SUBMIT() with your output.
 "#;
 
-use crate::{ConstraintKind, Signature, TypeIR};
+use std::collections::HashSet;
+
+use crate::{ConstraintKind, OutputFormatContent, Signature, StreamingMode, TypeIR};
 
 /// Generate the typed RLM preamble with variable descriptions and output schema.
 pub fn generate_typed_preamble<S: Signature>(variable_descriptions: &str) -> String {
@@ -100,7 +102,7 @@ SUBMIT(summary=results[0], count=len(results))
     )
 }
 
-fn generate_output_schema_description<S: Signature>() -> String {
+pub fn generate_output_schema_description<S: Signature>() -> String {
     let mut desc = String::new();
     desc.push_str("SUBMIT(\n");
 
@@ -132,4 +134,160 @@ fn generate_output_schema_description<S: Signature>() -> String {
 
 fn format_type_for_prompt(type_ir: &TypeIR) -> String {
     type_ir.diagnostic_repr().to_string()
+}
+
+const SHAPE_MAX_DEPTH: usize = 3;
+const SHAPE_MAX_FIELDS: usize = 20;
+
+/// Render a BAML-style shape description for a type.
+pub fn format_baml_shape(output_format: &OutputFormatContent, type_ir: &TypeIR) -> String {
+    let mut visited = HashSet::new();
+    format_shape_inner(output_format, type_ir, SHAPE_MAX_DEPTH, &mut visited)
+}
+
+fn format_shape_inner(
+    output_format: &OutputFormatContent,
+    type_ir: &TypeIR,
+    depth: usize,
+    visited: &mut HashSet<String>,
+) -> String {
+    match type_ir {
+        TypeIR::Class { name, mode, .. } => {
+            format_class_shape(output_format, name, mode, depth, visited)
+        }
+        TypeIR::RecursiveTypeAlias { name, .. } => {
+            if let Some(next) = output_format.structural_recursive_aliases.get(name) {
+                if visited.contains(name) {
+                    return format!("{name} {{ ... }}");
+                }
+                format_shape_inner(output_format, next, depth, visited)
+            } else {
+                name.clone()
+            }
+        }
+        _ => format_type_name(output_format, type_ir),
+    }
+}
+
+fn format_class_shape(
+    output_format: &OutputFormatContent,
+    name: &str,
+    mode: &StreamingMode,
+    depth: usize,
+    visited: &mut HashSet<String>,
+) -> String {
+    if depth == 0 || visited.contains(name) {
+        return format!("{name} {{ ... }}");
+    }
+
+    let class = output_format
+        .classes
+        .get(&(name.to_string(), *mode))
+        .or_else(|| output_format.classes.get(&(name.to_string(), StreamingMode::NonStreaming)))
+        .or_else(|| output_format.classes.get(&(name.to_string(), StreamingMode::Streaming)));
+
+    let Some(class) = class else {
+        return name.to_string();
+    };
+
+    visited.insert(name.to_string());
+
+    let mut lines = Vec::new();
+    lines.push(format!("{name} {{"));
+
+    let mut field_iter = class.fields.iter();
+    for (idx, (field_name, field_type, field_desc, _)) in field_iter
+        .by_ref()
+        .take(SHAPE_MAX_FIELDS)
+        .enumerate()
+    {
+        let field_type_string = format_field_type(output_format, field_type, depth - 1, visited);
+        let mut field_lines = field_type_string.lines();
+        let first = field_lines.next().unwrap_or_default();
+        let mut line = format!("  {}: {}", field_name.rendered_name(), first);
+        if let Some(desc) = field_desc {
+            if !desc.is_empty() {
+                line.push_str(&format!(" // {desc}"));
+            }
+        }
+        lines.push(line);
+
+        for continuation in field_lines {
+            lines.push(format!("    {continuation}"));
+        }
+
+        if idx + 1 == SHAPE_MAX_FIELDS {
+            break;
+        }
+    }
+
+    let remaining = class.fields.len().saturating_sub(SHAPE_MAX_FIELDS);
+    if remaining > 0 {
+        lines.push(format!("  ... (+{remaining} more)"));
+    }
+
+    lines.push("}".to_string());
+    visited.remove(name);
+    lines.join("\n")
+}
+
+fn format_field_type(
+    output_format: &OutputFormatContent,
+    type_ir: &TypeIR,
+    depth: usize,
+    visited: &mut HashSet<String>,
+) -> String {
+    match type_ir {
+        TypeIR::Class { .. } | TypeIR::RecursiveTypeAlias { .. } => {
+            format_shape_inner(output_format, type_ir, depth, visited)
+        }
+        _ => format_type_name(output_format, type_ir),
+    }
+}
+
+fn format_type_name(output_format: &OutputFormatContent, type_ir: &TypeIR) -> String {
+    match type_ir {
+        TypeIR::Primitive(type_value, _) => type_value.basename().to_string(),
+        TypeIR::Enum { name, .. } => output_format
+            .enums
+            .get(name)
+            .map(|enm| {
+                let values: Vec<String> = enm
+                    .values
+                    .iter()
+                    .map(|(value, _)| format!("\"{}\"", value.rendered_name()))
+                    .collect();
+                values.join(" | ")
+            })
+            .unwrap_or_else(|| name.clone()),
+        TypeIR::Literal(literal, _) => match literal {
+            crate::baml_bridge::baml_types::LiteralValue::String(_) => "string".to_string(),
+            crate::baml_bridge::baml_types::LiteralValue::Int(_) => "int".to_string(),
+            crate::baml_bridge::baml_types::LiteralValue::Bool(_) => "bool".to_string(),
+        },
+        TypeIR::Class { name, .. } => name.clone(),
+        TypeIR::List(inner, _) => format!("list[{}]", format_type_name(output_format, inner)),
+        TypeIR::Map(key, value, _) => format!(
+            "map<{}, {}>",
+            format_type_name(output_format, key),
+            format_type_name(output_format, value)
+        ),
+        TypeIR::Tuple(items, _) => {
+            let parts: Vec<String> = items
+                .iter()
+                .map(|item| format_type_name(output_format, item))
+                .collect();
+            format!("({})", parts.join(", "))
+        }
+        TypeIR::Union(union, _) => {
+            let parts: Vec<String> = union
+                .iter_include_null()
+                .into_iter()
+                .map(|item| format_type_name(output_format, item))
+                .collect();
+            parts.join(" | ")
+        }
+        TypeIR::RecursiveTypeAlias { name, .. } => name.clone(),
+        _ => type_ir.diagnostic_repr().to_string(),
+    }
 }
