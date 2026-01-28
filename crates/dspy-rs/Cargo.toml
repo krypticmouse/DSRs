@@ -56,3 +56,11 @@ rlm = [
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
+
+[[example]]
+name = "rlm_trajectory"
+required-features = ["rlm"]
+
+[[example]]
+name = "python_types"
+required-features = ["rlm"]

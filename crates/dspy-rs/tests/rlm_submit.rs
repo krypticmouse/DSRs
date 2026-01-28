@@ -79,7 +79,7 @@ struct SubmitCoercion {
 
 #[test]
 fn submit_returns_typed_output() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitBasic>();
         let kwargs = PyDict::new(py);
         kwargs.set_item("answer", "ok")?;
@@ -100,7 +100,7 @@ fn submit_returns_typed_output() -> PyResult<()> {
 
 #[test]
 fn submit_missing_fields_error() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitBasic>();
         let kwargs = PyDict::new(py);
         kwargs.set_item("answer", "ok")?;
@@ -126,7 +126,7 @@ fn submit_missing_fields_error() -> PyResult<()> {
 
 #[test]
 fn submit_type_error_for_wrong_shape() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitBasic>();
         let locals = PyDict::new(py);
         let code = CString::new(concat!(
@@ -166,7 +166,7 @@ fn submit_type_error_for_wrong_shape() -> PyResult<()> {
 
 #[test]
 fn submit_records_soft_checks() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitChecks>();
         let kwargs = PyDict::new(py);
         kwargs.set_item("verdict", "")?;
@@ -185,7 +185,7 @@ fn submit_records_soft_checks() -> PyResult<()> {
 
 #[test]
 fn submit_blocks_assert_failures() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitChecks>();
         let kwargs = PyDict::new(py);
         kwargs.set_item("verdict", "fine")?;
@@ -212,7 +212,7 @@ fn submit_blocks_assert_failures() -> PyResult<()> {
 
 #[test]
 fn submit_uses_baml_normalization() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitPayload>();
         let kwargs = PyDict::new(py);
         let payload = Py::new(
@@ -238,7 +238,7 @@ fn submit_uses_baml_normalization() -> PyResult<()> {
 
 #[test]
 fn submit_normalizes_dataclasses_and_optional_extras() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitPayload>();
         let locals = PyDict::new(py);
         let code = CString::new(concat!(
@@ -307,7 +307,7 @@ fn submit_normalizes_dataclasses_and_optional_extras() -> PyResult<()> {
 
 #[test]
 fn submit_allows_string_coercion() -> PyResult<()> {
-    Python::with_gil(|py| {
+    Python::attach(|py| {
         let (handler, result_tx) = SubmitHandler::new::<SubmitCoercion>();
         let kwargs = PyDict::new(py);
         kwargs.set_item("count", "42")?;
