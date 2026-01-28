@@ -7,13 +7,13 @@
 //! - `#[derive(RlmType)]` - Derive macro that generates `#[pymethods]` impls
 //!   with getters, `__repr__`, `__len__`, `__iter__`, `__getitem__`, and `__baml__`
 
-use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use syn::parse_macro_input;
 
 mod attrs;
 mod generators;
 mod rlm_attr;
+mod rlm_type;
 
 /// Attribute macro for ergonomic RLM type definitions.
 ///
@@ -76,47 +76,8 @@ pub fn rlm_type(attr: TokenStream, item: TokenStream) -> TokenStream {
 pub fn derive_rlm_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);
 
-    match expand_derive_rlm_type(&input) {
+    match rlm_type::derive(input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
-}
-
-fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
-    // Parse attributes using darling
-    let attrs = attrs::RlmTypeAttrs::from_derive_input(input)
-        .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
-
-    // Validate the parsed attributes
-    let validation_errors = attrs.validate();
-    if !validation_errors.is_empty() {
-        return Err(syn::Error::new_spanned(
-            input,
-            validation_errors.join("; "),
-        ));
-    }
-
-    // Generate __repr__ method (can fail if template is invalid)
-    let repr_method = generators::generate_repr(&attrs)
-        .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
-
-    let iter_support = generators::generate_iter_support(&attrs)?;
-    let describe_impl = generators::generate_describe(&attrs)?;
-    let property_methods = generators::generate_properties(&attrs)?;
-
-    // Generate the #[pymethods] impl block
-    // TODO (Task 1.7): Add __rlm_schema__ generation
-    let mut extra_methods = Vec::new();
-    extra_methods.extend(iter_support.methods);
-    extra_methods.extend(property_methods);
-
-    let pymethods =
-        generators::generate_pymethods_with_repr(&attrs, repr_method, &extra_methods);
-
-    let mut output = proc_macro2::TokenStream::new();
-    output.extend(iter_support.extra_items);
-    output.extend(pymethods);
-    output.extend(describe_impl);
-
-    Ok(output)
 }
