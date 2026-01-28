@@ -100,10 +100,16 @@ fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::
     let repr_method = generators::generate_repr(&attrs)
         .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
 
-    // Generate the #[pymethods] impl block
-    // TODO (Task 1.5): Add __iter__, __len__, __getitem__ generation
-    // TODO (Task 1.7): Add __rlm_schema__ generation
-    let pymethods = generators::generate_pymethods_with_repr(&attrs, repr_method);
+    let iter_support = generators::generate_iter_support(&attrs)?;
 
-    Ok(pymethods)
+    // Generate the #[pymethods] impl block
+    // TODO (Task 1.7): Add __rlm_schema__ generation
+    let pymethods =
+        generators::generate_pymethods_with_repr(&attrs, repr_method, &iter_support.methods);
+
+    let mut output = proc_macro2::TokenStream::new();
+    output.extend(iter_support.extra_items);
+    output.extend(pymethods);
+
+    Ok(output)
 }

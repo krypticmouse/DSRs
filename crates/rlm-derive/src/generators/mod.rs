@@ -9,6 +9,6 @@ mod iter;
 mod pyclass;
 pub mod repr;
 
-pub use iter::{generate_iter_support, IterSupport};
-pub use pyclass::{generate_pymethods, generate_pymethods_with_repr};
+pub use iter::generate_iter_support;
+pub use pyclass::generate_pymethods_with_repr;
 pub use repr::generate_repr;
