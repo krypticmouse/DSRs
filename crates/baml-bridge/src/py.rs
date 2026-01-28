@@ -6,19 +6,20 @@ use baml_types::{
 use internal_baml_jinja::types::{Class, OutputFormatContent};
 use pyo3::types::{
     PyAnyMethods, PyBool, PyDict, PyDictMethods, PyList, PyListMethods, PyModule, PyString,
-    PyTuple, PyTypeMethods,
+    PyStringMethods, PyTuple, PyTupleMethods, PyTypeMethods,
 };
-use pyo3::{Bound, PyAny, PyObject, PyResult, Python, IntoPy};
+use pyo3::{Bound, Py, PyAny, PyResult, Python};
+use pyo3::IntoPyObjectExt;
 use serde_json::Value as JsonValue;
 
 use crate::{BamlConvertError, BamlParseError};
 
-pub fn baml_value_to_py(py: Python<'_>, value: &BamlValue) -> PyObject {
+pub fn baml_value_to_py(py: Python<'_>, value: &BamlValue) -> Py<PyAny> {
     match value {
-        BamlValue::String(value) => value.clone().into_py(py),
-        BamlValue::Int(value) => (*value).into_py(py),
-        BamlValue::Float(value) => (*value).into_py(py),
-        BamlValue::Bool(value) => (*value).into_py(py),
+        BamlValue::String(value) => into_py_object(py, value.clone()),
+        BamlValue::Int(value) => into_py_object(py, *value),
+        BamlValue::Float(value) => into_py_object(py, *value),
+        BamlValue::Bool(value) => into_py_object(py, *value),
         BamlValue::Null => py.None(),
         BamlValue::Media(media) => json_value_to_py(py, &media_to_json_value(media)),
         BamlValue::List(items) => {
@@ -35,7 +36,7 @@ pub fn baml_value_to_py(py: Python<'_>, value: &BamlValue) -> PyObject {
             }
             dict.into_any().unbind()
         }
-        BamlValue::Enum(_, variant) => variant.clone().into_py(py),
+        BamlValue::Enum(_, variant) => into_py_object(py, variant.clone()),
         BamlValue::Class(_, fields) => {
             let dict = PyDict::new(py);
             for (key, value) in fields.iter() {
@@ -52,12 +53,8 @@ pub fn py_to_baml_value(
     r#type: &TypeIR,
     output_format: &OutputFormatContent,
 ) -> Result<BamlValue, BamlParseError> {
-    let obj = if obj
-        .hasattr("__baml__")
-        .map_err(py_err_to_parse)?
-    {
-        obj.call_method1("__baml__", (py,))
-            .map_err(py_err_to_parse)?
+    let obj = if obj.hasattr("__baml__").map_err(py_err_to_parse)? {
+        obj.call_method0("__baml__").map_err(py_err_to_parse)?
     } else {
         obj.clone()
     };
@@ -70,7 +67,7 @@ pub fn normalize_python_object<'py>(
     py: Python<'py>,
     obj: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyAny>> {
-    if obj.is_instance_of::<PyDict>()? || obj.is_instance_of::<PyList>()? {
+    if obj.is_instance_of::<PyDict>() || obj.is_instance_of::<PyList>() {
         return Ok(obj.clone());
     }
 
@@ -122,11 +119,7 @@ fn py_to_baml_value_inner(
 ) -> Result<BamlValue, BamlParseError> {
     let resolved = resolve_recursive_type(r#type, output_format);
 
-    if !is_string_target(&resolved)
-        && obj
-            .is_instance_of::<PyString>()
-            .map_err(py_err_to_parse)?
-    {
+    if !is_string_target(&resolved) && obj.is_instance_of::<PyString>() {
         let raw = obj.extract::<String>().map_err(py_err_to_parse)?;
         let parsed = jsonish::from_str(output_format, &resolved, &raw, true)
             .map_err(BamlParseError::from)?;
@@ -169,10 +162,7 @@ fn py_to_baml_value_inner(
             Ok(BamlValue::String(value))
         }
         TypeIR::Primitive(TypeValue::Int, _) => {
-            if obj
-                .is_instance_of::<PyBool>()
-                .map_err(py_err_to_parse)?
-            {
+            if obj.is_instance_of::<PyBool>() {
                 return Err(conversion_error(path, &resolved, obj));
             }
             let value = obj.extract::<i64>().map_err(py_err_to_parse)?;
@@ -220,21 +210,18 @@ fn py_to_baml_value_inner(
         }
         TypeIR::Literal(LiteralValue::String(literal), _) => {
             let raw = obj.extract::<String>().map_err(py_err_to_parse)?;
-            if raw == literal {
+            if raw == *literal {
                 Ok(BamlValue::String(raw))
             } else {
                 Err(conversion_error(path, &resolved, obj))
             }
         }
         TypeIR::Literal(LiteralValue::Int(literal), _) => {
-            if obj
-                .is_instance_of::<PyBool>()
-                .map_err(py_err_to_parse)?
-            {
+            if obj.is_instance_of::<PyBool>() {
                 return Err(conversion_error(path, &resolved, obj));
             }
             let raw = obj.extract::<i64>().map_err(py_err_to_parse)?;
-            if raw == literal {
+            if raw == *literal {
                 Ok(BamlValue::Int(raw))
             } else {
                 Err(conversion_error(path, &resolved, obj))
@@ -242,7 +229,7 @@ fn py_to_baml_value_inner(
         }
         TypeIR::Literal(LiteralValue::Bool(literal), _) => {
             let raw = obj.extract::<bool>().map_err(py_err_to_parse)?;
-            if raw == literal {
+            if raw == *literal {
                 Ok(BamlValue::Bool(raw))
             } else {
                 Err(conversion_error(path, &resolved, obj))
@@ -278,7 +265,7 @@ fn py_to_class_value(
     output_format: &OutputFormatContent,
     path: &mut Vec<String>,
 ) -> Result<BamlValue, BamlParseError> {
-    let dict = match obj.downcast::<PyDict>() {
+    let dict = match obj.cast::<PyDict>() {
         Ok(dict) => dict,
         Err(_) => {
             if let Some(value) = orjson_fallback_to_baml(py, obj, &TypeIR::class(class_name), output_format)
@@ -342,7 +329,7 @@ fn py_to_map_value(
         )));
     }
 
-    let dict = match obj.downcast::<PyDict>() {
+    let dict = match obj.cast::<PyDict>() {
         Ok(dict) => dict,
         Err(_) => {
             if let Some(value) = orjson_fallback_to_baml(py, obj, &TypeIR::map(key_type.clone(), value_type.clone()), output_format)
@@ -374,9 +361,9 @@ fn py_to_list_value(
     output_format: &OutputFormatContent,
     path: &mut Vec<String>,
 ) -> Result<BamlValue, BamlParseError> {
-    let list = if let Ok(list) = obj.downcast::<PyList>() {
+    let list = if let Ok(list) = obj.cast::<PyList>() {
         list
-    } else if let Ok(tuple) = obj.downcast::<PyTuple>() {
+    } else if let Ok(tuple) = obj.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(tuple.len());
         for (idx, item) in tuple.iter().enumerate() {
             path.push(idx.to_string());
@@ -411,7 +398,7 @@ fn py_to_tuple_value(
     output_format: &OutputFormatContent,
     path: &mut Vec<String>,
 ) -> Result<BamlValue, BamlParseError> {
-    if let Ok(tuple) = obj.downcast::<PyTuple>() {
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
         if tuple.len() != items.len() {
             return Err(conversion_error(path, &TypeIR::tuple(items.to_vec()), obj));
         }
@@ -425,7 +412,7 @@ fn py_to_tuple_value(
         return Ok(BamlValue::List(values));
     }
 
-    if let Ok(list) = obj.downcast::<PyList>() {
+    if let Ok(list) = obj.cast::<PyList>() {
         if list.len() != items.len() {
             return Err(conversion_error(path, &TypeIR::tuple(items.to_vec()), obj));
         }
@@ -450,10 +437,7 @@ fn py_any_to_baml_value_untyped(
         return Ok(BamlValue::Null);
     }
 
-    if obj
-        .is_instance_of::<PyBool>()
-        .map_err(py_err_to_parse)?
-    {
+    if obj.is_instance_of::<PyBool>() {
         let value = obj.extract::<bool>().map_err(py_err_to_parse)?;
         return Ok(BamlValue::Bool(value));
     }
@@ -470,14 +454,14 @@ fn py_any_to_baml_value_untyped(
         return Ok(BamlValue::String(value));
     }
 
-    if let Ok(dict) = obj.downcast::<PyDict>() {
+    if let Ok(dict) = obj.cast::<PyDict>() {
         let mut map = BamlMap::new();
         for (key, value) in dict.iter() {
             let key = key
                 .str()
                 .map_err(py_err_to_parse)?
                 .to_str()
-                .map_err(|err| BamlParseError::Jsonish(anyhow!(err)))?
+                .map_err(py_err_to_parse)?
                 .to_string();
             let value = py_any_to_baml_value_untyped(py, &value)?;
             map.insert(key, value);
@@ -485,7 +469,7 @@ fn py_any_to_baml_value_untyped(
         return Ok(BamlValue::Map(map));
     }
 
-    if let Ok(list) = obj.downcast::<PyList>() {
+    if let Ok(list) = obj.cast::<PyList>() {
         let mut items = Vec::with_capacity(list.len());
         for item in list.iter() {
             items.push(py_any_to_baml_value_untyped(py, &item)?);
@@ -493,7 +477,7 @@ fn py_any_to_baml_value_untyped(
         return Ok(BamlValue::List(items));
     }
 
-    if let Ok(tuple) = obj.downcast::<PyTuple>() {
+    if let Ok(tuple) = obj.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(tuple.len());
         for item in tuple.iter() {
             items.push(py_any_to_baml_value_untyped(py, &item)?);
@@ -537,16 +521,23 @@ fn python_object_to_json_string(
         .map_err(py_err_to_parse)
 }
 
-fn json_value_to_py(py: Python<'_>, value: &JsonValue) -> PyObject {
+fn into_py_object<T>(py: Python<'_>, value: T) -> Py<PyAny>
+where
+    for<'a> T: IntoPyObjectExt<'a>,
+{
+    value.into_py_any(py).unwrap_or_else(|_| py.None())
+}
+
+fn json_value_to_py(py: Python<'_>, value: &JsonValue) -> Py<PyAny> {
     match value {
         JsonValue::Null => py.None(),
-        JsonValue::Bool(value) => value.into_py(py),
+        JsonValue::Bool(value) => into_py_object(py, *value),
         JsonValue::Number(value) => value
             .as_i64()
-            .map(|value| value.into_py(py))
-            .or_else(|| value.as_f64().map(|value| value.into_py(py)))
+            .map(|value| into_py_object(py, value))
+            .or_else(|| value.as_f64().map(|value| into_py_object(py, value)))
             .unwrap_or_else(|| py.None()),
-        JsonValue::String(value) => value.clone().into_py(py),
+        JsonValue::String(value) => into_py_object(py, value.clone()),
         JsonValue::Array(values) => {
             let list = PyList::empty(py);
             for item in values {
@@ -597,16 +588,16 @@ fn media_to_json_value(media: &BamlMedia) -> JsonValue {
 fn resolve_recursive_type(r#type: &TypeIR, output_format: &OutputFormatContent) -> TypeIR {
     let mut current = r#type.clone();
     loop {
-        match current {
+        let next = match &current {
             TypeIR::RecursiveTypeAlias { name, .. } => {
-                if let Some(next) = output_format.structural_recursive_aliases.get(&name) {
-                    current = next.clone();
-                    continue;
-                }
+                output_format.structural_recursive_aliases.get(name).cloned()
             }
-            _ => {}
+            _ => None,
+        };
+        match next {
+            Some(next) => current = next,
+            None => return current,
         }
-        return current;
     }
 }
 
