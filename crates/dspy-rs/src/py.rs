@@ -33,7 +33,9 @@ pub fn kwargs_to_baml_value<S: Signature>(
             .map_err(py_err_to_parse)?
             .ok_or_else(|| missing_field_error(field.name))?;
         let field_type = (field.type_ir)();
-        let baml_value = baml_bridge::py::py_to_baml_value(py, &value, &field_type, output_format)?;
+        let baml_value =
+            baml_bridge::py::py_to_baml_value(py, &value, &field_type, output_format)
+                .map_err(|err| add_field_context(err, field.name))?;
         fields.insert(field.rust_name.to_string(), baml_value);
     }
 
@@ -116,6 +118,23 @@ fn missing_field_error(field: &str) -> BamlParseError {
         "missing",
         format!("missing required field {field}"),
     ))
+}
+
+fn add_field_context(err: BamlParseError, field: &str) -> BamlParseError {
+    match err {
+        BamlParseError::Convert(err) => {
+            let mut path = Vec::with_capacity(err.path.len() + 1);
+            path.push(field.to_string());
+            path.extend(err.path);
+            BamlParseError::Convert(BamlConvertError::new(
+                path,
+                err.expected,
+                err.got,
+                err.message,
+            ))
+        }
+        other => other,
+    }
 }
 
 fn py_err_to_parse(err: pyo3::PyErr) -> BamlParseError {
