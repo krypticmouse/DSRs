@@ -1,7 +1,9 @@
 #![cfg(feature = "rlm")]
 
+use dspy_rs::baml_bridge::{py as baml_py, ToBamlValue};
 use dspy_rs::rlm::{RlmConfig, TypedRlm};
-use dspy_rs::{rlm_type, RlmType, Signature};
+use dspy_rs::{rlm_type, BamlType, RlmType, Signature};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyIterator};
 use rig::prelude::*;
@@ -20,6 +22,15 @@ struct Item {
 #[rlm(repr = "Bag({len(self.items)} items)", iter = "items", index = "items")]
 struct Bag {
     items: Vec<Item>,
+}
+
+#[rlm_type]
+#[derive(Clone, Debug, PartialEq)]
+struct Pantry {
+    #[rlm(desc = "Owner of the pantry")]
+    owner: String,
+    items: Vec<Item>,
+    featured: Option<Item>,
 }
 
 #[derive(Signature, Clone, Debug, PartialEq)]
@@ -106,6 +117,58 @@ fn rlm_type_len_iter_getitem() -> PyResult<()> {
             names.push(name);
         }
         assert_eq!(names, vec!["apples".to_string(), "bananas".to_string()]);
+
+        Ok(())
+    })
+}
+
+#[test]
+fn rlm_type_baml_roundtrip_and_schema() -> PyResult<()> {
+    Python::attach(|py| {
+        let pantry = Pantry {
+            owner: "Darin".to_string(),
+            items: vec![
+                Item {
+                    name: "apples".to_string(),
+                    value: 5,
+                },
+                Item {
+                    name: "bananas".to_string(),
+                    value: 7,
+                },
+            ],
+            featured: None,
+        };
+        let py_pantry = Py::new(py, pantry.clone())?;
+        let bound = py_pantry.bind(py);
+        let any = bound.as_any();
+
+        let baml = any.call_method0("__baml__")?;
+        let type_ir = <Pantry as BamlType>::baml_type_ir();
+        let output_format = <Pantry as BamlType>::baml_output_format();
+        let parsed = baml_py::py_to_baml_value(py, &baml, &type_ir, output_format)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        let expected = pantry.to_baml_value();
+        assert_eq!(parsed, expected);
+
+        let roundtrip = <Pantry as BamlType>::try_from_baml_value(parsed)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        assert_eq!(roundtrip, pantry);
+
+        let schema_obj = any.call_method0("__rlm_schema__")?;
+        let schema = schema_obj.cast::<PyDict>()?;
+        let owner_meta = schema.get_item("owner")?.expect("owner field");
+        let (owner_type, owner_desc): (String, String) = owner_meta.extract()?;
+        assert_eq!(owner_type, "String");
+        assert_eq!(owner_desc, "Owner of the pantry");
+
+        let items_meta = schema.get_item("items")?.expect("items field");
+        let (items_type, _items_desc): (String, String) = items_meta.extract()?;
+        assert!(items_type.contains("Vec"));
+
+        let featured_meta = schema.get_item("featured")?.expect("featured field");
+        let (featured_type, _featured_desc): (String, String) = featured_meta.extract()?;
+        assert!(featured_type.contains("Option"));
 
         Ok(())
     })
