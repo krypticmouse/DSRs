@@ -227,7 +227,7 @@ fn build_field_metas(
 
 fn format_parse_errors(err: &BamlParseError) -> Vec<String> {
     match err {
-        BamlParseError::Convert(err) => vec![format_type_error(err)],
+        BamlParseError::Convert(err) => vec![format_convert_error(err)],
         BamlParseError::Jsonish(err) => vec![format!("[Error] {}", err)],
         BamlParseError::ConstraintAssertsFailed { failed } => failed
             .iter()
@@ -236,6 +236,16 @@ fn format_parse_errors(err: &BamlParseError) -> Vec<String> {
             })
             .collect(),
     }
+}
+
+fn format_convert_error(err: &baml_bridge::BamlConvertError) -> String {
+    if err.expected == "field" && err.got == "missing" {
+        return format!(
+            "[Error] Missing required field: {}",
+            err.path_string()
+        );
+    }
+    format_type_error(err)
 }
 
 fn format_type_error(err: &baml_bridge::BamlConvertError) -> String {
