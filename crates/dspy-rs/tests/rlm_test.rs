@@ -1,14 +1,12 @@
 #![cfg(feature = "rlm")]
 
 use dspy_rs::baml_bridge::{py as baml_py, ToBamlValue};
-use dspy_rs::rlm::{RlmConfig, TypedRlm};
+use dspy_rs::rlm::{Rlm, RlmConfig};
 use dspy_rs::rlm_core::RlmInputFields;
 use dspy_rs::{rlm_type, BamlType, RlmType, Signature};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyIterator, PyList};
-use rig::prelude::*;
-use rig::providers::openai;
 
 #[rlm_type]
 #[derive(Clone, Debug, PartialEq)]
@@ -93,11 +91,13 @@ struct DescribeInputs {
     summary: String,
 }
 
-#[tokio::test]
-async fn typed_rlm_construction_compiles() {
-    let client = openai::CompletionsClient::new("test-key").expect("client builds");
-    let agent = client.agent(openai::GPT_4O_MINI).build();
-    let _rlm = TypedRlm::<SumItems>::new(agent, RlmConfig::default());
+#[test]
+fn rlm_construction_compiles() {
+    // Test default constructor (uses global settings)
+    let _rlm = Rlm::<SumItems>::new();
+
+    // Test with_config
+    let _rlm2 = Rlm::<SumItems>::with_config(RlmConfig::default());
 }
 
 #[test]

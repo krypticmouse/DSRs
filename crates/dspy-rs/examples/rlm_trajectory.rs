@@ -1,5 +1,5 @@
 /*
-Example demonstrating trajectory analysis with TypedRlm and #[rlm_type] data shapes.
+Example demonstrating trajectory analysis with Rlm and #[rlm_type] data shapes.
 
 Run with:
 ```
@@ -10,10 +10,8 @@ Requires OPENAI_API_KEY in the environment.
 */
 
 use anyhow::Result;
-use dspy_rs::rlm::{RlmResult, TypedRlm};
-use dspy_rs::{rlm_type, RlmType, Signature};
-use rig::prelude::*;
-use rig::providers::openai;
+use dspy_rs::rlm::{Rlm, RlmResult};
+use dspy_rs::{configure, rlm_type, ChatAdapter, RlmType, Signature, LM};
 
 /// A trajectory step (simplified; real datasets may include more fields).
 #[rlm_type]
@@ -99,14 +97,16 @@ async fn main() -> Result<()> {
         existing_patterns,
     };
 
-    let openai = openai::CompletionsClient::from_env();
-    let agent = openai
-        .agent(openai::GPT_4O_MINI)
-        .preamble("You analyze agent trajectories and suggest documentation patterns that reduce tool calls.")
+    // Configure DSRs with global LM settings
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
         .temperature(0.2)
-        .build();
+        .build()
+        .await?;
 
-    let rlm = TypedRlm::<AnalyzeTrajectories>::with_agent(agent);
+    configure(lm, ChatAdapter);
+
+    let rlm = Rlm::<AnalyzeTrajectories>::new();
     let result = rlm.call(input).await?;
 
     print_patterns(&result);

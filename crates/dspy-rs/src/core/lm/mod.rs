@@ -468,6 +468,17 @@ impl LM {
         })
     }
 
+    /// Simple prompt-response interface for basic LLM queries.
+    /// Creates a minimal Chat and returns just the response text.
+    pub async fn prompt(&self, prompt: &str) -> Result<String> {
+        let chat = Chat::new(vec![
+            Message::system("You are a helpful assistant.".to_string()),
+            Message::user(prompt.to_string()),
+        ]);
+        let response = self.call(chat, vec![]).await?;
+        Ok(response.output.content().to_string())
+    }
+
     /// Returns the `n` most recent cached calls.
     ///
     /// Panics if caching is disabled for this `LM`.

@@ -9,7 +9,7 @@ mod history;
 pub mod prompt;
 pub mod submit;
 pub mod tools;
-pub mod typed_rlm;
+mod rlm;
 
 pub use adapter::RlmAdapter;
 pub use config::{ConstraintSummary, RlmConfig, RlmResult};
@@ -21,4 +21,8 @@ pub use prompt::{
     generate_typed_preamble,
 };
 pub use tools::LlmTools;
-pub use typed_rlm::TypedRlm;
+pub use rlm::{Rlm, RlmBuilder};
+
+/// Backwards-compatible alias for `Rlm`.
+#[deprecated(since = "0.8.0", note = "Use Rlm instead")]
+pub type TypedRlm<S> = Rlm<S>;

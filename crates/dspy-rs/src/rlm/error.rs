@@ -39,6 +39,9 @@ pub enum RlmError {
 
     #[error("tokio runtime unavailable: {message}")]
     RuntimeUnavailable { message: String },
+
+    #[error("configuration error: {message}")]
+    ConfigurationError { message: String },
 }
 
 impl From<PyErr> for RlmError {

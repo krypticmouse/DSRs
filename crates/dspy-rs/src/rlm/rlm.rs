@@ -5,27 +5,25 @@ use std::sync::{Arc, Mutex};
 
 use pyo3::types::{PyDict, PyDictMethods};
 use pyo3::{Py, PyResult, Python};
-use rig::agent::Agent;
-use rig::completion::Prompt;
-use rig::providers::openai::CompletionModel;
 use tokio::runtime::Handle;
 
 use crate::baml_bridge::BamlValueConvert;
+use crate::core::settings::GLOBAL_SETTINGS;
 use crate::rlm_core::RlmInputFields;
-use crate::{ChatAdapter, LmError, Message, Signature};
+use crate::{ChatAdapter, LmError, Message, Signature, LM};
 
 use super::adapter::RlmAdapter;
 use super::history::ReplHistoryEntry;
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
 use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
 
-/// Typed Recursive Language Model.
+/// Recursive Language Model module.
 ///
 /// Uses a DSRs Signature to run RLM with typed inputs/outputs.
-#[allow(dead_code)]
-pub struct TypedRlm<S: Signature> {
-    agent: Agent<CompletionModel>,
+/// Follows DSRs patterns: uses global LM settings by default.
+pub struct Rlm<S: Signature> {
     config: RlmConfig,
+    lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
 
@@ -38,19 +36,45 @@ struct ExtractionFallbackContext<'a> {
     llm_calls: usize,
 }
 
-impl<S: Signature> TypedRlm<S> {
-    /// Create a new TypedRlm with the given agent and config.
-    pub fn new(agent: Agent<CompletionModel>, config: RlmConfig) -> Self {
+impl<S: Signature> Rlm<S> {
+    /// Create with default config, using global LM settings.
+    pub fn new() -> Self {
         Self {
-            agent,
-            config,
+            config: RlmConfig::default(),
+            lm_override: None,
             _marker: PhantomData,
         }
     }
 
-    /// Create with default config.
-    pub fn with_agent(agent: Agent<CompletionModel>) -> Self {
-        Self::new(agent, RlmConfig::default())
+    /// Create with custom config.
+    pub fn with_config(config: RlmConfig) -> Self {
+        Self {
+            config,
+            lm_override: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Create with explicit LM (overrides global settings).
+    pub fn with_lm(lm: Arc<LM>) -> Self {
+        Self {
+            config: RlmConfig::default(),
+            lm_override: Some(lm),
+            _marker: PhantomData,
+        }
+    }
+
+    fn get_lm(&self) -> Result<Arc<LM>, RlmError> {
+        if let Some(lm) = &self.lm_override {
+            return Ok(Arc::clone(lm));
+        }
+        let guard = GLOBAL_SETTINGS.read().map_err(|_| RlmError::ConfigurationError {
+            message: "Settings lock poisoned".to_string(),
+        })?;
+        let settings = guard.as_ref().ok_or_else(|| RlmError::ConfigurationError {
+            message: "DSRs not configured. Call dspy_rs::configure() first.".to_string(),
+        })?;
+        Ok(Arc::clone(&settings.lm))
     }
 
     pub async fn call(&self, input: S::Input) -> Result<RlmResult<S>, RlmError>
@@ -64,7 +88,8 @@ impl<S: Signature> TypedRlm<S> {
         let runtime = Handle::try_current().map_err(|err| RlmError::RuntimeUnavailable {
             message: err.to_string(),
         })?;
-        let tools = LlmTools::new(self.agent.clone(), self.config.max_llm_calls, runtime);
+        let lm = self.get_lm()?;
+        let tools = LlmTools::new(Arc::clone(&lm), self.config.max_llm_calls, runtime);
         let globals = setup_globals::<S>(&input, &tools, &submit_handler)?;
         let mut history = Vec::new();
         let mut iterations = 0usize;
@@ -78,17 +103,13 @@ impl<S: Signature> TypedRlm<S> {
                 &history,
                 iterations,
             );
-            let response = self
-                .agent
-                .prompt(&prompt)
-                .await
-                .map_err(|err| RlmError::LlmError {
-                    source: LmError::Provider {
-                        provider: "rig".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                })?;
+            let response = lm.prompt(&prompt).await.map_err(|err| RlmError::LlmError {
+                source: LmError::Provider {
+                    provider: "dspy-rs".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
             main_calls += 1;
 
             let Some(command) = Command::parse(&response) else {
@@ -173,17 +194,14 @@ impl<S: Signature> TypedRlm<S> {
             context.schema,
             context.history,
         );
-        let response = self
-            .agent
-            .prompt(&prompt)
-            .await
-            .map_err(|err| RlmError::LlmError {
-                source: LmError::Provider {
-                    provider: "rig".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            })?;
+        let lm = self.get_lm()?;
+        let response = lm.prompt(&prompt).await.map_err(|err| RlmError::LlmError {
+            source: LmError::Provider {
+                provider: "dspy-rs".to_string(),
+                message: err.to_string(),
+                source: None,
+            },
+        })?;
 
         let raw_response = response.clone();
         let message = Message::assistant(response);
@@ -203,6 +221,88 @@ impl<S: Signature> TypedRlm<S> {
             context.llm_calls + 1,
             true,
         ))
+    }
+}
+
+impl<S: Signature> Default for Rlm<S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: Signature> Rlm<S> {
+    /// Start building an Rlm with fluent configuration.
+    pub fn builder() -> RlmBuilder<S> {
+        RlmBuilder::new()
+    }
+}
+
+/// Builder for fluent Rlm configuration.
+pub struct RlmBuilder<S: Signature> {
+    config: RlmConfig,
+    lm_override: Option<Arc<LM>>,
+    _marker: PhantomData<S>,
+}
+
+impl<S: Signature> RlmBuilder<S> {
+    /// Create a new builder with default settings.
+    pub fn new() -> Self {
+        Self {
+            config: RlmConfig::default(),
+            lm_override: None,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Set maximum iterations before giving up.
+    pub fn max_iterations(mut self, max: usize) -> Self {
+        self.config.max_iterations = max;
+        self
+    }
+
+    /// Set maximum LLM calls allowed within Python code.
+    pub fn max_llm_calls(mut self, max: usize) -> Self {
+        self.config.max_llm_calls = max;
+        self
+    }
+
+    /// Enable or disable extraction fallback on max iterations.
+    pub fn enable_extraction_fallback(mut self, enable: bool) -> Self {
+        self.config.enable_extraction_fallback = enable;
+        self
+    }
+
+    /// Enable or disable strict assertion mode.
+    pub fn strict_assertions(mut self, strict: bool) -> Self {
+        self.config.strict_assertions = strict;
+        self
+    }
+
+    /// Set maximum output characters for Python execution.
+    pub fn max_output_chars(mut self, max: usize) -> Self {
+        self.config.max_output_chars = max;
+        self
+    }
+
+    /// Use an explicit LM instead of global settings.
+    pub fn with_lm(mut self, lm: Arc<LM>) -> Self {
+        self.lm_override = Some(lm);
+        self
+    }
+
+    /// Build the Rlm instance.
+    pub fn build(self) -> Rlm<S> {
+        Rlm {
+            config: self.config,
+            lm_override: self.lm_override,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<S: Signature> Default for RlmBuilder<S> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

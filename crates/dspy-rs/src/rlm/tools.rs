@@ -1,29 +1,26 @@
 #![cfg(feature = "rlm")]
 
 use std::sync::{Arc, Mutex};
-use std::future::IntoFuture;
 
-use futures::future::join_all;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use rig::agent::Agent;
-use rig::completion::Prompt;
-use rig::providers::openai::CompletionModel;
 use tokio::runtime::Handle;
+
+use crate::LM;
 
 #[pyclass]
 #[derive(Clone)]
 pub struct LlmTools {
-    agent: Agent<CompletionModel>,
+    lm: Arc<LM>,
     max_llm_calls: usize,
     call_count: Arc<Mutex<usize>>,
     runtime: Handle,
 }
 
 impl LlmTools {
-    pub fn new(agent: Agent<CompletionModel>, max_llm_calls: usize, runtime: Handle) -> Self {
+    pub fn new(lm: Arc<LM>, max_llm_calls: usize, runtime: Handle) -> Self {
         Self {
-            agent,
+            lm,
             max_llm_calls,
             call_count: Arc::new(Mutex::new(0)),
             runtime,
@@ -61,7 +58,7 @@ impl LlmTools {
         self.reserve_calls(1)?;
         let response = self
             .runtime
-            .block_on(async { self.agent.prompt(&prompt).await })
+            .block_on(async { self.lm.prompt(&prompt).await })
             .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
         Ok(response)
     }
@@ -74,16 +71,21 @@ impl LlmTools {
             Self::ensure_prompt(prompt)?;
         }
         self.reserve_calls(prompts.len())?;
+
         let responses: Vec<_> = self.runtime.block_on(async {
-            let futures = prompts
+            let futures: Vec<_> = prompts
                 .iter()
-                .map(|prompt| self.agent.prompt(prompt).into_future());
-            join_all(futures).await
+                .map(|prompt| self.lm.prompt(prompt))
+                .collect();
+            futures::future::join_all(futures).await
         });
+
         let mut results = Vec::with_capacity(responses.len());
         for response in responses {
-            let response = response.map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
-            results.push(response);
+            match response {
+                Ok(text) => results.push(text),
+                Err(err) => return Err(PyRuntimeError::new_err(err.to_string())),
+            }
         }
         Ok(results)
     }
