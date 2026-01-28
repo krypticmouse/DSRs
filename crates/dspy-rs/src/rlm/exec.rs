@@ -77,10 +77,10 @@ fn format_output(stdout: String, repr: Option<String>, max_chars: usize) -> Stri
         output = NO_OUTPUT_MESSAGE.to_string();
     }
 
-    truncate_text(&output, max_chars)
+    truncate_capture_output(&output, max_chars)
 }
 
-fn truncate_text(text: &str, max_chars: usize) -> String {
+fn truncate_capture_output(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
     }
@@ -88,14 +88,9 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     if total <= max_chars {
         return text.to_string();
     }
-    if max_chars <= 3 {
-        return text.chars().take(max_chars).collect();
-    }
 
-    let keep = max_chars - 3;
-    let mut truncated: String = text.chars().take(keep).collect();
-    truncated.push_str("...");
-    truncated
+    let truncated: String = text.chars().take(max_chars).collect();
+    format!("{truncated}\n... (truncated)")
 }
 
 #[cfg(test)]
@@ -143,5 +138,16 @@ mod tests {
         });
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn truncates_with_dspy_marker() {
+        let output = Python::attach(|py| {
+            let globals = PyDict::new(py).unbind();
+            execute_repl_code(&globals, "print('abcdef')", 3)
+        })
+        .expect("exec");
+
+        assert_eq!(output, "abc\n... (truncated)");
     }
 }

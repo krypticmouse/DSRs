@@ -4,7 +4,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 static DSPY_CODE_BLOCK_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?s)```(?P<lang>(?i:repl|python))?[ \t]*\r?\n(?P<code>.*?)```")
+    Regex::new(r"(?s)```(?P<lang>(?i:repl|python|py))?[ \t]*\r?\n(?P<code>.*?)```")
         .expect("valid DSPy code block regex")
 });
 
@@ -128,6 +128,15 @@ mod tests {
     #[test]
     fn parse_python_fence_as_run() {
         let response = "```python\nprint('hello')\n```";
+        let command = Command::parse(response).expect("command");
+
+        assert!(!command.is_submit());
+        assert_eq!(command.code(), "print('hello')");
+    }
+
+    #[test]
+    fn parse_py_fence_as_run() {
+        let response = "```py\nprint('hello')\n```";
         let command = Command::parse(response).expect("command");
 
         assert!(!command.is_submit());
