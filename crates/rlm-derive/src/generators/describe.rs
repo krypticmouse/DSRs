@@ -175,12 +175,11 @@ fn is_collection_type(ty: &Type) -> bool {
         if segment.ident == "Vec" || segment.ident == "HashMap" || segment.ident == "BTreeMap" {
             return true;
         }
-        if segment.ident == "Option" {
-            if let PathArguments::AngleBracketed(args) = &segment.arguments
-                && let Some(GenericArgument::Type(inner)) = args.args.first()
-            {
-                return is_collection_type(inner);
-            }
+        if segment.ident == "Option"
+            && let PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(GenericArgument::Type(inner)) = args.args.first()
+        {
+            return is_collection_type(inner);
         }
     }
     false
