@@ -75,6 +75,7 @@ fn format_count(value: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rlm::Command;
 
     #[test]
     fn render_history_truncates_with_marker() {
@@ -84,5 +85,24 @@ mod tests {
         assert!(rendered.contains("=== Step 1 ==="));
         assert!(rendered.contains("Output (10 chars):"));
         assert!(rendered.contains("aaaa\n... (truncated to 4/10 chars)"));
+    }
+
+    #[test]
+    fn render_history_readds_code_fence() {
+        let response = "Thoughts...\n```python\nprint('hi')\n```\n";
+        let command = Command::parse(response).expect("command");
+        let entry = ReplHistoryEntry::new(command.code().to_string(), "ok".to_string());
+        let rendered = render_history(&[entry], 100);
+
+        assert!(rendered.contains("Code:\n```python\nprint('hi')\n```"));
+    }
+
+    #[test]
+    fn render_history_formats_counts_with_commas() {
+        let entry = ReplHistoryEntry::new("x = 1".to_string(), "a".repeat(10_000));
+        let rendered = render_history(&[entry], 4);
+
+        assert!(rendered.contains("Output (10,000 chars):"));
+        assert!(rendered.contains("aaaa\n... (truncated to 4/10,000 chars)"));
     }
 }
