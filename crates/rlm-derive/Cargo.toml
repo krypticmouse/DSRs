@@ -14,3 +14,6 @@ proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full", "parsing", "extra-traits"] }
 darling = "0.20"
+
+[dev-dependencies]
+trybuild = "1.0.103"
