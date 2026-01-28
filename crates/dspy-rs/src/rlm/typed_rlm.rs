@@ -14,7 +14,8 @@ use crate::baml_bridge::BamlValueConvert;
 use crate::rlm_core::RlmInputFields;
 use crate::{ChatAdapter, LmError, Message, Signature};
 
-use super::history::{render_history, ReplHistoryEntry};
+use super::adapter::RlmAdapter;
+use super::history::ReplHistoryEntry;
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
 use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
 
@@ -47,7 +48,8 @@ impl<S: Signature> TypedRlm<S> {
     where
         S::Input: RlmInputFields,
     {
-        let preamble = input.rlm_variable_descriptions();
+        let adapter = RlmAdapter::new(self.config.clone());
+        let variable_descriptions = adapter.variable_previews::<S>(&input);
         let (submit_handler, submit_rx) = SubmitHandler::new::<S>();
         let schema = submit_handler.schema();
         let runtime = Handle::try_current().map_err(|err| RlmError::RuntimeUnavailable {
@@ -61,12 +63,7 @@ impl<S: Signature> TypedRlm<S> {
 
         while iterations < self.config.max_iterations {
             iterations += 1;
-            let prompt = build_prompt(
-                &preamble,
-                &schema,
-                &history,
-                self.config.max_history_output_chars,
-            );
+            let prompt = adapter.build_prompt::<S>(&variable_descriptions, &schema, &history);
             let response = self
                 .agent
                 .prompt(&prompt)
@@ -139,7 +136,8 @@ impl<S: Signature> TypedRlm<S> {
             return self
                 .extraction_fallback(
                     input,
-                    &preamble,
+                    &adapter,
+                    &variable_descriptions,
                     &schema,
                     &history,
                     iterations,
@@ -156,18 +154,14 @@ impl<S: Signature> TypedRlm<S> {
     async fn extraction_fallback(
         &self,
         input: S::Input,
-        preamble: &str,
+        adapter: &RlmAdapter,
+        variable_descriptions: &str,
         schema: &str,
         history: &[ReplHistoryEntry],
         iterations: usize,
         llm_calls: usize,
     ) -> Result<RlmResult<S>, RlmError> {
-        let prompt = build_extraction_prompt::<S>(
-            preamble,
-            schema,
-            history,
-            self.config.max_history_output_chars,
-        );
+        let prompt = adapter.build_extraction_prompt::<S>(variable_descriptions, schema, history);
         let response = self
             .agent
             .prompt(&prompt)
@@ -223,84 +217,6 @@ where
 
 fn take_submit_result(rx: &Arc<Mutex<Option<SubmitResultDyn>>>) -> Option<SubmitResultDyn> {
     rx.lock().ok().and_then(|mut guard| guard.take())
-}
-
-fn build_prompt(
-    preamble: &str,
-    schema: &str,
-    history: &[ReplHistoryEntry],
-    max_history_output_chars: usize,
-) -> String {
-    let mut prompt = String::new();
-    prompt.push_str("You are running inside a Python REPL for a typed signature.\n");
-    prompt.push_str("Use the provided variables, and call SUBMIT(...) when you have the final output.\n");
-    prompt.push_str("You can call tools.llm_query or tools.llm_query_batched if needed.\n");
-
-    if !preamble.trim().is_empty() {
-        prompt.push_str("\nInputs:\n");
-        prompt.push_str(preamble);
-    }
-
-    if !schema.trim().is_empty() {
-        prompt.push_str("\n\nOutput schema:\n");
-        prompt.push_str(schema);
-    }
-
-    if !history.is_empty() {
-        prompt.push_str("\n\nHistory:\n");
-        prompt.push_str(&render_history(history, max_history_output_chars));
-    }
-
-    prompt.push_str("\n\nReturn the next step as a ```repl``` or ```python``` code block. If you are done, call SUBMIT(field=value, ...).\n");
-    prompt
-}
-
-fn build_extraction_prompt<S: Signature>(
-    preamble: &str,
-    schema: &str,
-    history: &[ReplHistoryEntry],
-    max_history_output_chars: usize,
-) -> String {
-    let mut prompt = String::new();
-    prompt.push_str("You are performing fallback extraction for a typed signature.\n");
-    prompt.push_str("Use the inputs, schema, and REPL history to extract the final output.\n");
-
-    if !preamble.trim().is_empty() {
-        prompt.push_str("\nInputs:\n");
-        prompt.push_str(preamble);
-    }
-
-    if !schema.trim().is_empty() {
-        prompt.push_str("\n\nOutput schema:\n");
-        prompt.push_str(schema);
-    }
-
-    if !history.is_empty() {
-        prompt.push_str("\n\nREPL history:\n");
-        prompt.push_str(&render_history(history, max_history_output_chars));
-    }
-
-    prompt.push_str("\n\n");
-    prompt.push_str(&format_output_instructions::<S>());
-    prompt.push_str("\nRespond with only the structured output and no extra commentary.\n");
-    prompt
-}
-
-fn format_output_instructions<S: Signature>() -> String {
-    let mut fields = S::output_fields().iter();
-    let Some(first) = fields.next() else {
-        return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
-    };
-
-    let mut message = format!(
-        "Respond with the output fields, starting with `[[ ## {} ## ]]`",
-        first.name
-    );
-    for field in fields {
-        message.push_str(&format!(", then `[[ ## {} ## ]]`", field.name));
-    }
-    message.push_str(", and then ending with the marker for `[[ ## completed ## ]]`.");
-    message
 }
 
 fn format_submit_validation(message: &str, errors: &[String], schema: &str) -> String {
