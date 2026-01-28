@@ -6,6 +6,9 @@ pub use jsonish;
 #[cfg(feature = "derive")]
 pub use baml_bridge_derive::BamlType;
 
+#[cfg(feature = "pyo3")]
+pub mod py;
+
 mod convert;
 mod registry;
 mod to_value;
