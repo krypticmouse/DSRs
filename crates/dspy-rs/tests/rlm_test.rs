@@ -27,6 +27,7 @@ struct Bag {
 
 #[rlm_type]
 #[derive(Clone, Debug, PartialEq)]
+#[rlm(property(name = "item_count", desc = "Number of items in the pantry"))]
 struct Pantry {
     #[rlm(desc = "Owner of the pantry")]
     owner: String,
@@ -218,6 +219,13 @@ fn rlm_type_baml_roundtrip_and_schema() -> PyResult<()> {
         let featured_meta = schema.get_item("featured")?.expect("featured field");
         let (featured_type, _featured_desc): (String, String) = featured_meta.extract()?;
         assert!(featured_type.contains("Option"));
+
+        let property_meta = schema
+            .get_item("item_count")?
+            .expect("item_count property");
+        let (property_type, property_desc): (String, String) = property_meta.extract()?;
+        assert_eq!(property_type, "property");
+        assert_eq!(property_desc, "Number of items in the pantry");
 
         Ok(())
     })
