@@ -198,7 +198,7 @@ impl SubmitHandler {
         }
     }
 
-    fn schema(&self) -> String {
+    pub fn schema(&self) -> String {
         self.schema_description.clone()
     }
 }

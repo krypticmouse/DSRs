@@ -23,6 +23,9 @@ pub enum RlmError {
     #[error("max iterations ({max}) reached without SUBMIT")]
     MaxIterations { max: usize },
 
+    #[error("tokio runtime unavailable: {message}")]
+    RuntimeUnavailable { message: String },
+
     #[error("python setup failed: {message}")]
     PythonSetup { message: String },
 }
