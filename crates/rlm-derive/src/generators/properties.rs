@@ -158,10 +158,10 @@ fn extract_vec_inner_type(ty: &Type) -> Option<Type> {
         if segment.ident != "Vec" {
             return None;
         }
-        if let PathArguments::AngleBracketed(args) = &segment.arguments {
-            if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                return Some(inner.clone());
-            }
+        if let PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(GenericArgument::Type(inner)) = args.args.first()
+        {
+            return Some(inner.clone());
         }
     }
     None
@@ -170,20 +170,20 @@ fn extract_vec_inner_type(ty: &Type) -> Option<Type> {
 fn extract_innermost_vec_type(ty: &Type) -> Option<Type> {
     if let Type::Path(type_path) = ty {
         let segment = type_path.path.segments.last()?;
+        if segment.ident == "Option"
+            && let PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(GenericArgument::Type(inner)) = args.args.first()
+        {
+            return extract_innermost_vec_type(inner);
+        }
         if segment.ident == "Option" {
-            if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                    return extract_innermost_vec_type(inner);
-                }
-            }
             return None;
         }
-        if segment.ident == "Vec" {
-            if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                if let Some(GenericArgument::Type(inner)) = args.args.first() {
-                    return Some(inner.clone());
-                }
-            }
+        if segment.ident == "Vec"
+            && let PathArguments::AngleBracketed(args) = &segment.arguments
+            && let Some(GenericArgument::Type(inner)) = args.args.first()
+        {
+            return Some(inner.clone());
         }
     }
     None
