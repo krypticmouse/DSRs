@@ -4,3 +4,6 @@ members = [
     "crates/*",
     "vendor/baml/crates/*",
 ]
+
+[workspace.dependencies]
+pyo3 = "0.27"
