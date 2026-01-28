@@ -143,10 +143,20 @@ fn submit_type_error_for_wrong_shape() -> PyResult<()> {
         kwargs.set_item("numbers", weird)?;
 
         let message = call_submit(py, &handler, &kwargs)?;
-        assert!(
-            message.contains("[Type Error]"),
-            "unexpected message: {message}"
+        let type_ir = (<SubmitBasic as dspy_rs::Signature>::output_fields()
+            .iter()
+            .find(|field| field.name == "numbers")
+            .expect("numbers field")
+            .type_ir)();
+        let expected_type = type_ir.diagnostic_repr().to_string();
+        let expected_line = format!(
+            "[Type Error] numbers: expected {expected_type}, got Weird: expected {expected_type}"
         );
+        let (first_line, schema) = message
+            .split_once("\n\nExpected schema:\n")
+            .expect("schema appended");
+        assert_eq!(first_line, expected_line);
+        assert!(schema.contains("SUBMIT("));
 
         let result = result_tx.lock().unwrap().clone().expect("result set");
         assert!(matches!(result, Err(SubmitError::ValidationError { .. })));
@@ -182,7 +192,10 @@ fn submit_blocks_assert_failures() -> PyResult<()> {
         kwargs.set_item("status", "nope")?;
 
         let message = call_submit(py, &handler, &kwargs)?;
-        assert!(message.starts_with("[Error] Assertion 'not_nope' failed"));
+        assert_eq!(
+            message,
+            "[Error] Assertion 'not_nope' failed: this != 'nope'\nPlease fix and try again."
+        );
 
         let result = result_tx.lock().unwrap().clone().expect("result set");
         match result {
