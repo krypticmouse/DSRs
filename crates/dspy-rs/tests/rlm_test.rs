@@ -2,6 +2,7 @@
 
 use dspy_rs::baml_bridge::{py as baml_py, ToBamlValue};
 use dspy_rs::rlm::{RlmConfig, TypedRlm};
+use dspy_rs::rlm_core::RlmInputFields;
 use dspy_rs::{rlm_type, BamlType, RlmType, Signature};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -69,6 +70,26 @@ struct SumItems {
 
     #[output]
     total: i32,
+}
+
+#[derive(Signature, Clone, Debug, PartialEq)]
+#[allow(dead_code)]
+struct DescribeInputs {
+    #[input(desc = "User-provided title")]
+    title: String,
+
+    #[input(desc = "Tags for grouping")]
+    tags: Vec<String>,
+
+    #[input]
+    #[check("this > 0", label = "positive")]
+    count: i32,
+
+    #[input]
+    maybe: Option<String>,
+
+    #[output]
+    summary: String,
 }
 
 #[tokio::test]
@@ -277,4 +298,82 @@ fn rlm_describe_is_stable_and_includes_properties() {
     assert!(first.contains("properties:"));
     assert!(first.contains("user_steps"));
     assert!(first.contains("all_tool_calls"));
+}
+
+#[test]
+fn rlm_input_fields_inject_and_describe() -> PyResult<()> {
+    Python::attach(|py| {
+        let input = DescribeInputsInput {
+            title: "Alpha".to_string(),
+            tags: vec!["one".to_string(), "two".to_string()],
+            count: 3,
+            maybe: None,
+        };
+
+        let variables = input.rlm_variables();
+        let title_var = variables.iter().find(|v| v.name == "title").unwrap();
+        let tags_var = variables.iter().find(|v| v.name == "tags").unwrap();
+        let count_var = variables.iter().find(|v| v.name == "count").unwrap();
+        let maybe_var = variables.iter().find(|v| v.name == "maybe").unwrap();
+
+        assert_eq!(title_var.description, "User-provided title");
+        assert!(title_var.constraints.is_empty());
+        assert!(title_var.format().contains("Description: User-provided title"));
+        assert!(!title_var.format().contains("Constraints:"));
+
+        assert!(
+            tags_var
+                .type_desc
+                .contains("Vec<String> - a collection of String items")
+        );
+        assert!(tags_var.format().contains("Type: Vec<String> - a collection of String items"));
+
+        assert!(
+            count_var
+                .constraints
+                .iter()
+                .any(|c| c == "check(positive): this > 0")
+        );
+        assert!(count_var.format().contains("Constraints: check(positive): this > 0"));
+
+        assert_eq!(maybe_var.description, "");
+        assert!(maybe_var.constraints.is_empty());
+        assert!(!maybe_var.format().contains("Description:"));
+        assert!(!maybe_var.format().contains("Constraints:"));
+        assert!(
+            maybe_var
+                .type_desc
+                .contains("Option<String> - an optional String value")
+        );
+
+        let descriptions = input.rlm_variable_descriptions();
+        assert!(descriptions.contains("Description: User-provided title"));
+        assert!(descriptions.contains("check(positive): this > 0"));
+
+        let globals = PyDict::new(py);
+        input.inject_into_python(py, &globals)?;
+
+        let title: String = globals
+            .get_item("title")?
+            .expect("title")
+            .extract()?;
+        assert_eq!(title, "Alpha");
+
+        let count: i32 = globals
+            .get_item("count")?
+            .expect("count")
+            .extract()?;
+        assert_eq!(count, 3);
+
+        let tags = globals
+            .get_item("tags")?
+            .expect("tags")
+            .extract::<Vec<String>>()?;
+        assert_eq!(tags, vec!["one".to_string(), "two".to_string()]);
+
+        let maybe = globals.get_item("maybe")?.expect("maybe");
+        assert!(maybe.is_none());
+
+        Ok(())
+    })
 }
