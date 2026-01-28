@@ -1,6 +1,6 @@
 #![cfg(feature = "rlm")]
 
-use crate::{BamlConvertError, BamlValue, LmError};
+use crate::{BamlConvertError, BamlValue, LmError, ParseError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RlmError {
@@ -18,6 +18,13 @@ pub enum RlmError {
         #[source]
         source: BamlConvertError,
         value: BamlValue,
+    },
+
+    #[error("failed to parse extraction fallback response")]
+    ExtractionParse {
+        #[source]
+        source: ParseError,
+        raw_response: String,
     },
 
     #[error("max iterations ({max}) reached without SUBMIT")]

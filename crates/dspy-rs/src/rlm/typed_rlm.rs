@@ -12,7 +12,7 @@ use tokio::runtime::Handle;
 
 use crate::baml_bridge::BamlValueConvert;
 use crate::rlm_core::RlmInputFields;
-use crate::{LmError, Signature};
+use crate::{ChatAdapter, LmError, Message, Signature};
 
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
 use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
@@ -147,14 +147,68 @@ impl<S: Signature> TypedRlm<S> {
         }
 
         if self.config.enable_extraction_fallback {
-            return Err(RlmError::MaxIterations {
-                max: self.config.max_iterations,
-            });
+            return self
+                .extraction_fallback(
+                    input,
+                    &preamble,
+                    &schema,
+                    &history,
+                    iterations,
+                    main_calls + tools.call_count(),
+                )
+                .await;
         }
 
         Err(RlmError::MaxIterations {
             max: self.config.max_iterations,
         })
+    }
+
+    async fn extraction_fallback(
+        &self,
+        input: S::Input,
+        preamble: &str,
+        schema: &str,
+        history: &[ReplHistoryEntry],
+        iterations: usize,
+        llm_calls: usize,
+    ) -> Result<RlmResult<S>, RlmError> {
+        let prompt = build_extraction_prompt::<S>(
+            preamble,
+            schema,
+            history,
+            self.config.max_history_output_chars,
+        );
+        let response = self
+            .agent
+            .prompt(&prompt)
+            .await
+            .map_err(|err| RlmError::Lm {
+                source: LmError::Provider {
+                    provider: "rig".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
+
+        let raw_response = response.clone();
+        let message = Message::assistant(response);
+        let chat_adapter = ChatAdapter::default();
+        let (typed_output, field_metas) = chat_adapter
+            .parse_response_typed::<S>(&message)
+            .map_err(|err| RlmError::ExtractionParse {
+                source: err,
+                raw_response: raw_response.clone(),
+            })?;
+
+        Ok(RlmResult::new(
+            input,
+            typed_output,
+            field_metas,
+            iterations,
+            llm_calls + 1,
+            true,
+        ))
     }
 }
 
@@ -210,6 +264,54 @@ fn build_prompt(
 
     prompt.push_str("\n\nReturn the next step as a ```repl``` or ```python``` code block. If you are done, call SUBMIT(field=value, ...).\n");
     prompt
+}
+
+fn build_extraction_prompt<S: Signature>(
+    preamble: &str,
+    schema: &str,
+    history: &[ReplHistoryEntry],
+    max_history_output_chars: usize,
+) -> String {
+    let mut prompt = String::new();
+    prompt.push_str("You are performing fallback extraction for a typed signature.\n");
+    prompt.push_str("Use the inputs, schema, and REPL history to extract the final output.\n");
+
+    if !preamble.trim().is_empty() {
+        prompt.push_str("\nInputs:\n");
+        prompt.push_str(preamble);
+    }
+
+    if !schema.trim().is_empty() {
+        prompt.push_str("\n\nOutput schema:\n");
+        prompt.push_str(schema);
+    }
+
+    if !history.is_empty() {
+        prompt.push_str("\n\nREPL history:\n");
+        prompt.push_str(&render_history(history, max_history_output_chars));
+    }
+
+    prompt.push_str("\n\n");
+    prompt.push_str(&format_output_instructions::<S>());
+    prompt.push_str("\nRespond with only the structured output and no extra commentary.\n");
+    prompt
+}
+
+fn format_output_instructions<S: Signature>() -> String {
+    let mut fields = S::output_fields().iter();
+    let Some(first) = fields.next() else {
+        return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
+    };
+
+    let mut message = format!(
+        "Respond with the output fields, starting with `[[ ## {} ## ]]`",
+        first.name
+    );
+    for field in fields {
+        message.push_str(&format!(", then `[[ ## {} ## ]]`", field.name));
+    }
+    message.push_str(", and then ending with the marker for `[[ ## completed ## ]]`.");
+    message
 }
 
 fn render_history(entries: &[ReplHistoryEntry], max_output_chars: usize) -> String {
