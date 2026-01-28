@@ -30,7 +30,7 @@ fn extract_pyclass_name(attrs: &[Attribute]) -> Option<String> {
 /// Expand the `#[rlm_type]` attribute macro.
 ///
 /// This:
-/// 1. Adds `#[pyo3::pyclass]` (with optional name override)
+/// 1. Adds `#[::dspy_rs::pyo3::pyclass]` (with optional name override)
 /// 2. Merges `BamlType` and `RlmType` into existing `#[derive(...)]` or creates new one
 /// 3. Preserves all other attributes
 pub fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -41,9 +41,9 @@ pub fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let pyclass_name = extract_pyclass_name(&attrs);
     if let Some(name) = pyclass_name {
         let lit = syn::LitStr::new(&name, proc_macro2::Span::call_site());
-        attrs.push(syn::parse_quote!(#[pyo3::pyclass(name = #lit)]));
+        attrs.push(syn::parse_quote!(#[::dspy_rs::pyo3::pyclass(name = #lit)]));
     } else {
-        attrs.push(syn::parse_quote!(#[pyo3::pyclass]));
+        attrs.push(syn::parse_quote!(#[::dspy_rs::pyo3::pyclass]));
     }
 
     // Inject BamlType + RlmType derives (merge with existing derive list)
@@ -55,7 +55,7 @@ pub fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
                 .unwrap_or_default();
 
             let to_add: [syn::Path; 2] = [
-                syn::parse_quote!(baml_bridge::BamlType),
+                syn::parse_quote!(::dspy_rs::baml_bridge::BamlType),
                 syn::parse_quote!(RlmType),
             ];
 
@@ -86,7 +86,7 @@ pub fn expand(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     if !merged {
-        attrs.push(syn::parse_quote!(#[derive(baml_bridge::BamlType, RlmType)]));
+        attrs.push(syn::parse_quote!(#[derive(::dspy_rs::baml_bridge::BamlType, RlmType)]));
     }
 
     let ident = &input.ident;

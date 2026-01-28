@@ -287,6 +287,7 @@ fn parse_constraint_attr(
     })
 }
 
+#[cfg(feature = "rlm")]
 fn format_constraint_prompt(constraint: &ParsedConstraint) -> String {
     let kind = match constraint.kind {
         ParsedConstraintKind::Check => "check",
@@ -384,6 +385,7 @@ fn generate_helper_structs(
     })
 }
 
+#[cfg(feature = "rlm")]
 fn generate_rlm_input_impl(
     input_name: &Ident,
     parsed: &ParsedSignature,
@@ -425,27 +427,26 @@ fn generate_rlm_input_impl(
         .collect();
 
     quote! {
-        #[cfg(feature = "rlm")]
-        impl ::rlm_core::RlmInputFields for #input_name {
+        impl ::dspy_rs::rlm_core::RlmInputFields for #input_name {
             fn rlm_py_fields(
                 &self,
-                py: ::pyo3::Python<'_>,
-            ) -> Vec<(String, ::pyo3::Py<::pyo3::PyAny>)> {
+                py: ::dspy_rs::pyo3::Python<'_>,
+            ) -> Vec<(String, ::dspy_rs::pyo3::Py<::dspy_rs::pyo3::PyAny>)> {
                 vec![
                     #(
                         (
                             #input_field_names.to_string(),
-                            ::pyo3::IntoPyObjectExt::into_py_any(self.#input_field_idents.clone(), py)
+                            ::dspy_rs::pyo3::IntoPyObjectExt::into_py_any(self.#input_field_idents.clone(), py)
                                 .expect("IntoPyObject failed for input field"),
                         )
                     ),*
                 ]
             }
 
-            fn rlm_variables(&self) -> Vec<::rlm_core::RlmVariable> {
+            fn rlm_variables(&self) -> Vec<::dspy_rs::rlm_core::RlmVariable> {
                 vec![
                     #(
-                        ::rlm_core::RlmVariable::from_rust(#input_field_names, &self.#input_field_idents)
+                        ::dspy_rs::rlm_core::RlmVariable::from_rust(#input_field_names, &self.#input_field_idents)
                             .with_description(#input_field_descs)
                             .with_constraints(#input_field_constraints)
                     ),*
@@ -453,6 +454,14 @@ fn generate_rlm_input_impl(
             }
         }
     }
+}
+
+#[cfg(not(feature = "rlm"))]
+fn generate_rlm_input_impl(
+    _input_name: &Ident,
+    _parsed: &ParsedSignature,
+) -> proc_macro2::TokenStream {
+    proc_macro2::TokenStream::new()
 }
 
 fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {

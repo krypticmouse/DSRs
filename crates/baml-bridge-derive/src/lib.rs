@@ -182,15 +182,15 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
 
     let type_constraints = constraints_tokens(&container_attrs.constraints);
     let type_ir = quote! {{
-        let mut r#type = ::baml_bridge::baml_types::TypeIR::class(
-            <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name(),
+        let mut r#type = ::dspy_rs::baml_bridge::baml_types::TypeIR::class(
+            <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name(),
         );
         r#type.meta_mut().constraints.extend(#type_constraints);
         r#type
     }};
 
     let class_name_expr = name_tokens_expr(
-        quote! { <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string() },
+        quote! { <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string() },
         Some(&rendered_name),
     );
     let class_desc = container_description(&container_attrs, &input.attrs);
@@ -200,28 +200,28 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
     };
 
     let class_def = quote! {
-        ::baml_bridge::internal_baml_jinja::types::Class {
+        ::dspy_rs::baml_bridge::internal_baml_jinja::types::Class {
             name: #class_name_expr,
             description: #class_desc_expr,
-            namespace: ::baml_bridge::baml_types::StreamingMode::NonStreaming,
+            namespace: ::dspy_rs::baml_bridge::baml_types::StreamingMode::NonStreaming,
             fields: vec![#(#field_defs),*],
             constraints: #type_constraints,
-            streaming_behavior: ::baml_bridge::default_streaming_behavior(),
+            streaming_behavior: ::dspy_rs::baml_bridge::default_streaming_behavior(),
         }
     };
 
     let register_impl = quote! {
-        impl ::baml_bridge::BamlTypeInternal for #name {
+        impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
                 #internal_name_expr
             }
 
-            fn baml_type_ir() -> ::baml_bridge::baml_types::TypeIR {
+            fn baml_type_ir() -> ::dspy_rs::baml_bridge::baml_types::TypeIR {
                 #type_ir
             }
 
-            fn register(reg: &mut ::baml_bridge::Registry) {
-                if !reg.mark_type(<Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
+            fn register(reg: &mut ::dspy_rs::baml_bridge::Registry) {
+                if !reg.mark_type(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
                     return;
                 }
                 reg.register_class(#class_def);
@@ -231,16 +231,16 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
     };
 
     let value_convert_impl = quote! {
-        impl ::baml_bridge::BamlValueConvert for #name {
+        impl ::dspy_rs::baml_bridge::BamlValueConvert for #name {
             fn try_from_baml_value(
-                value: ::baml_bridge::baml_types::BamlValue,
+                value: ::dspy_rs::baml_bridge::baml_types::BamlValue,
                 path: Vec<String>,
-            ) -> Result<Self, ::baml_bridge::BamlConvertError> {
+            ) -> Result<Self, ::dspy_rs::baml_bridge::BamlConvertError> {
                 let map = match value {
-                    ::baml_bridge::baml_types::BamlValue::Class(_, map)
-                    | ::baml_bridge::baml_types::BamlValue::Map(map) => map,
+                    ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(_, map)
+                    | ::dspy_rs::baml_bridge::baml_types::BamlValue::Map(map) => map,
                     other => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "object",
                             format!("{other:?}"),
@@ -257,12 +257,12 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
     };
 
     let to_value_impl = quote! {
-        impl ::baml_bridge::ToBamlValue for #name {
-            fn to_baml_value(&self) -> ::baml_bridge::baml_types::BamlValue {
-                let mut fields = ::baml_bridge::baml_types::BamlMap::new();
+        impl ::dspy_rs::baml_bridge::ToBamlValue for #name {
+            fn to_baml_value(&self) -> ::dspy_rs::baml_bridge::baml_types::BamlValue {
+                let mut fields = ::dspy_rs::baml_bridge::baml_types::BamlMap::new();
                 #(#to_value_inserts)*
-                ::baml_bridge::baml_types::BamlValue::Class(
-                    <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
                     fields,
                 )
             }
@@ -270,13 +270,13 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
     };
 
     let output_format_impl = quote! {
-        impl ::baml_bridge::BamlType for #name {
-            fn baml_output_format() -> &'static ::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
-                static OUTPUT_FORMAT: ::std::sync::OnceLock<::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
+        impl ::dspy_rs::baml_bridge::BamlType for #name {
+            fn baml_output_format() -> &'static ::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
+                static OUTPUT_FORMAT: ::std::sync::OnceLock<::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
                 OUTPUT_FORMAT.get_or_init(|| {
-                    let mut reg = ::baml_bridge::Registry::new();
-                    <Self as ::baml_bridge::BamlTypeInternal>::register(&mut reg);
-                    reg.build(<Self as ::baml_bridge::BamlTypeInternal>::baml_type_ir())
+                    let mut reg = ::dspy_rs::baml_bridge::Registry::new();
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(&mut reg);
+                    reg.build(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir())
                 })
             }
         }
@@ -397,8 +397,8 @@ fn derive_unit_enum(
             .clone()
             .unwrap_or_else(|| variant_name.clone());
         to_value_match_arms.push(quote! {
-            Self::#variant_ident => ::baml_bridge::baml_types::BamlValue::Enum(
-                <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
+            Self::#variant_ident => ::dspy_rs::baml_bridge::baml_types::BamlValue::Enum(
+                <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
                 #rendered_variant_value.to_string(),
             )
         });
@@ -415,28 +415,28 @@ fn derive_unit_enum(
     };
 
     let type_ir = quote! {{
-        let mut r#type = ::baml_bridge::baml_types::TypeIR::r#enum(
-            <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name(),
+        let mut r#type = ::dspy_rs::baml_bridge::baml_types::TypeIR::r#enum(
+            <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name(),
         );
         r#type.meta_mut().constraints.extend(#type_constraints);
         r#type
     }};
 
     let register_impl = quote! {
-        impl ::baml_bridge::BamlTypeInternal for #name {
+        impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
                 #internal_name_expr
             }
 
-            fn baml_type_ir() -> ::baml_bridge::baml_types::TypeIR {
+            fn baml_type_ir() -> ::dspy_rs::baml_bridge::baml_types::TypeIR {
                 #type_ir
             }
 
-            fn register(reg: &mut ::baml_bridge::Registry) {
-                if !reg.mark_type(<Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
+            fn register(reg: &mut ::dspy_rs::baml_bridge::Registry) {
+                if !reg.mark_type(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
                     return;
                 }
-                reg.register_enum(::baml_bridge::internal_baml_jinja::types::Enum {
+                reg.register_enum(::dspy_rs::baml_bridge::internal_baml_jinja::types::Enum {
                     name: #enum_name_expr,
                     description: #enum_desc_expr,
                     values: vec![#(#values),*],
@@ -447,16 +447,16 @@ fn derive_unit_enum(
     };
 
     let value_convert_impl = quote! {
-        impl ::baml_bridge::BamlValueConvert for #name {
+        impl ::dspy_rs::baml_bridge::BamlValueConvert for #name {
             fn try_from_baml_value(
-                value: ::baml_bridge::baml_types::BamlValue,
+                value: ::dspy_rs::baml_bridge::baml_types::BamlValue,
                 path: Vec<String>,
-            ) -> Result<Self, ::baml_bridge::BamlConvertError> {
+            ) -> Result<Self, ::dspy_rs::baml_bridge::BamlConvertError> {
                 let value = match value {
-                    ::baml_bridge::baml_types::BamlValue::Enum(_, value)
-                    | ::baml_bridge::baml_types::BamlValue::String(value) => value,
+                    ::dspy_rs::baml_bridge::baml_types::BamlValue::Enum(_, value)
+                    | ::dspy_rs::baml_bridge::baml_types::BamlValue::String(value) => value,
                     other => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "enum",
                             format!("{other:?}"),
@@ -467,7 +467,7 @@ fn derive_unit_enum(
 
                 match value.as_str() {
                     #(#match_arms),*,
-                    _ => Err(::baml_bridge::BamlConvertError::new(
+                    _ => Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         path,
                         "enum",
                         value,
@@ -479,8 +479,8 @@ fn derive_unit_enum(
     };
 
     let to_value_impl = quote! {
-        impl ::baml_bridge::ToBamlValue for #name {
-            fn to_baml_value(&self) -> ::baml_bridge::baml_types::BamlValue {
+        impl ::dspy_rs::baml_bridge::ToBamlValue for #name {
+            fn to_baml_value(&self) -> ::dspy_rs::baml_bridge::baml_types::BamlValue {
                 match self {
                     #(#to_value_match_arms),*
                 }
@@ -489,13 +489,13 @@ fn derive_unit_enum(
     };
 
     let output_format_impl = quote! {
-        impl ::baml_bridge::BamlType for #name {
-            fn baml_output_format() -> &'static ::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
-                static OUTPUT_FORMAT: ::std::sync::OnceLock<::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
+        impl ::dspy_rs::baml_bridge::BamlType for #name {
+            fn baml_output_format() -> &'static ::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
+                static OUTPUT_FORMAT: ::std::sync::OnceLock<::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
                 OUTPUT_FORMAT.get_or_init(|| {
-                    let mut reg = ::baml_bridge::Registry::new();
-                    <Self as ::baml_bridge::BamlTypeInternal>::register(&mut reg);
-                    reg.build(<Self as ::baml_bridge::BamlTypeInternal>::baml_type_ir())
+                    let mut reg = ::dspy_rs::baml_bridge::Registry::new();
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(&mut reg);
+                    reg.build(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir())
                 })
             }
         }
@@ -531,52 +531,52 @@ fn derive_unit_enum_as_union(
             .unwrap_or_else(|| variant_name.clone());
 
         literals.push(
-            quote! { ::baml_bridge::baml_types::TypeIR::literal_string(#literal.to_string()) },
+            quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::literal_string(#literal.to_string()) },
         );
         let match_values = match_strings_for_variant(&variant_name, rendered_variant.as_deref());
         match_arms.push(quote! { #(#match_values)|* => Ok(Self::#variant_ident) });
         to_value_match_arms.push(quote! {
-            Self::#variant_ident => ::baml_bridge::baml_types::BamlValue::Enum(
-                <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
+            Self::#variant_ident => ::dspy_rs::baml_bridge::baml_types::BamlValue::Enum(
+                <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
                 #literal.to_string(),
             )
         });
     }
 
     let type_ir = quote! {{
-        let mut r#type = ::baml_bridge::baml_types::TypeIR::union_with_meta(
+        let mut r#type = ::dspy_rs::baml_bridge::baml_types::TypeIR::union_with_meta(
             vec![#(#literals),*],
-            ::baml_bridge::baml_types::type_meta::IR::default(),
+            ::dspy_rs::baml_bridge::baml_types::type_meta::IR::default(),
         );
         r#type.meta_mut().constraints.extend(#type_constraints);
         r#type
     }};
 
     let register_impl = quote! {
-        impl ::baml_bridge::BamlTypeInternal for #name {
+        impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
                 #internal_name_expr
             }
 
-            fn baml_type_ir() -> ::baml_bridge::baml_types::TypeIR {
+            fn baml_type_ir() -> ::dspy_rs::baml_bridge::baml_types::TypeIR {
                 #type_ir
             }
 
-            fn register(_reg: &mut ::baml_bridge::Registry) {}
+            fn register(_reg: &mut ::dspy_rs::baml_bridge::Registry) {}
         }
     };
 
     let value_convert_impl = quote! {
-        impl ::baml_bridge::BamlValueConvert for #name {
+        impl ::dspy_rs::baml_bridge::BamlValueConvert for #name {
             fn try_from_baml_value(
-                value: ::baml_bridge::baml_types::BamlValue,
+                value: ::dspy_rs::baml_bridge::baml_types::BamlValue,
                 path: Vec<String>,
-            ) -> Result<Self, ::baml_bridge::BamlConvertError> {
+            ) -> Result<Self, ::dspy_rs::baml_bridge::BamlConvertError> {
                 let value = match value {
-                    ::baml_bridge::baml_types::BamlValue::Enum(_, value)
-                    | ::baml_bridge::baml_types::BamlValue::String(value) => value,
+                    ::dspy_rs::baml_bridge::baml_types::BamlValue::Enum(_, value)
+                    | ::dspy_rs::baml_bridge::baml_types::BamlValue::String(value) => value,
                     other => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "enum",
                             format!("{other:?}"),
@@ -587,7 +587,7 @@ fn derive_unit_enum_as_union(
 
                 match value.as_str() {
                     #(#match_arms),*,
-                    _ => Err(::baml_bridge::BamlConvertError::new(
+                    _ => Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         path,
                         "enum",
                         value,
@@ -599,8 +599,8 @@ fn derive_unit_enum_as_union(
     };
 
     let to_value_impl = quote! {
-        impl ::baml_bridge::ToBamlValue for #name {
-            fn to_baml_value(&self) -> ::baml_bridge::baml_types::BamlValue {
+        impl ::dspy_rs::baml_bridge::ToBamlValue for #name {
+            fn to_baml_value(&self) -> ::dspy_rs::baml_bridge::baml_types::BamlValue {
                 match self {
                     #(#to_value_match_arms),*
                 }
@@ -609,13 +609,13 @@ fn derive_unit_enum_as_union(
     };
 
     let output_format_impl = quote! {
-        impl ::baml_bridge::BamlType for #name {
-            fn baml_output_format() -> &'static ::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
-                static OUTPUT_FORMAT: ::std::sync::OnceLock<::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
+        impl ::dspy_rs::baml_bridge::BamlType for #name {
+            fn baml_output_format() -> &'static ::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
+                static OUTPUT_FORMAT: ::std::sync::OnceLock<::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
                 OUTPUT_FORMAT.get_or_init(|| {
-                    let mut reg = ::baml_bridge::Registry::new();
-                    <Self as ::baml_bridge::BamlTypeInternal>::register(&mut reg);
-                    reg.build(<Self as ::baml_bridge::BamlTypeInternal>::baml_type_ir())
+                    let mut reg = ::dspy_rs::baml_bridge::Registry::new();
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(&mut reg);
+                    reg.build(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir())
                 })
             }
         }
@@ -668,7 +668,7 @@ fn derive_data_enum(
         let mut to_value_inserts = Vec::new();
         let mut to_value_bindings = Vec::new();
         let tag_field_name = name_tokens(&tag, None);
-        let tag_field_type = quote! { ::baml_bridge::baml_types::TypeIR::literal_string(#rendered_variant.to_string()) };
+        let tag_field_type = quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::literal_string(#rendered_variant.to_string()) };
         fields.push(quote! { (#tag_field_name, #tag_field_type, None, false) });
 
         match &variant.fields {
@@ -729,28 +729,28 @@ fn derive_data_enum(
             quote! {
                 format!(
                     "{}__{}",
-                    <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name(),
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name(),
                     #variant_name
                 )
             },
             Some(&variant_rendered_name),
         );
         let class_def = quote! {
-            ::baml_bridge::internal_baml_jinja::types::Class {
+            ::dspy_rs::baml_bridge::internal_baml_jinja::types::Class {
                 name: #class_name_expr,
                 description: #variant_desc_expr,
-                namespace: ::baml_bridge::baml_types::StreamingMode::NonStreaming,
+                namespace: ::dspy_rs::baml_bridge::baml_types::StreamingMode::NonStreaming,
                 fields: vec![#(#fields),*],
                 constraints: Vec::new(),
-                streaming_behavior: ::baml_bridge::default_streaming_behavior(),
+                streaming_behavior: ::dspy_rs::baml_bridge::default_streaming_behavior(),
             }
         };
 
         variant_classes.push(class_def);
         union_variants.push(quote! {
-            ::baml_bridge::baml_types::TypeIR::class(format!(
+            ::dspy_rs::baml_bridge::baml_types::TypeIR::class(format!(
                 "{}__{}",
-                <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name(),
+                <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name(),
                 #variant_name
             ))
         });
@@ -775,14 +775,14 @@ fn derive_data_enum(
 
         to_value_match_arms.push(quote! {
             #pattern => {
-                let mut fields = ::baml_bridge::baml_types::BamlMap::new();
+                let mut fields = ::dspy_rs::baml_bridge::baml_types::BamlMap::new();
                 fields.insert(
                     #tag.to_string(),
-                    ::baml_bridge::baml_types::BamlValue::String(#tag_literal.to_string()),
+                    ::dspy_rs::baml_bridge::baml_types::BamlValue::String(#tag_literal.to_string()),
                 );
                 #(#to_value_inserts)*
-                ::baml_bridge::baml_types::BamlValue::Class(
-                    <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
                     fields,
                 )
             }
@@ -790,26 +790,26 @@ fn derive_data_enum(
     }
 
     let type_ir = quote! {{
-        let mut r#type = ::baml_bridge::baml_types::TypeIR::union_with_meta(
+        let mut r#type = ::dspy_rs::baml_bridge::baml_types::TypeIR::union_with_meta(
             vec![#(#union_variants),*],
-            ::baml_bridge::baml_types::type_meta::IR::default(),
+            ::dspy_rs::baml_bridge::baml_types::type_meta::IR::default(),
         );
         r#type.meta_mut().constraints.extend(#type_constraints);
         r#type
     }};
 
     let register_impl = quote! {
-        impl ::baml_bridge::BamlTypeInternal for #name {
+        impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
                 #internal_name_expr
             }
 
-            fn baml_type_ir() -> ::baml_bridge::baml_types::TypeIR {
+            fn baml_type_ir() -> ::dspy_rs::baml_bridge::baml_types::TypeIR {
                 #type_ir
             }
 
-            fn register(reg: &mut ::baml_bridge::Registry) {
-                if !reg.mark_type(<Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
+            fn register(reg: &mut ::dspy_rs::baml_bridge::Registry) {
+                if !reg.mark_type(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
                     return;
                 }
                 #(reg.register_class(#variant_classes);)*
@@ -819,16 +819,16 @@ fn derive_data_enum(
     };
 
     let value_convert_impl = quote! {
-        impl ::baml_bridge::BamlValueConvert for #name {
+        impl ::dspy_rs::baml_bridge::BamlValueConvert for #name {
             fn try_from_baml_value(
-                value: ::baml_bridge::baml_types::BamlValue,
+                value: ::dspy_rs::baml_bridge::baml_types::BamlValue,
                 path: Vec<String>,
-            ) -> Result<Self, ::baml_bridge::BamlConvertError> {
+            ) -> Result<Self, ::dspy_rs::baml_bridge::BamlConvertError> {
                 let map = match value {
-                    ::baml_bridge::baml_types::BamlValue::Class(_, map)
-                    | ::baml_bridge::baml_types::BamlValue::Map(map) => map,
+                    ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(_, map)
+                    | ::dspy_rs::baml_bridge::baml_types::BamlValue::Map(map) => map,
                     other => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "object",
                             format!("{other:?}"),
@@ -838,10 +838,10 @@ fn derive_data_enum(
                 };
 
                 let tag_value = match map.get(#tag) {
-                    Some(::baml_bridge::baml_types::BamlValue::String(v)) => v.clone(),
-                    Some(::baml_bridge::baml_types::BamlValue::Enum(_, v)) => v.clone(),
+                    Some(::dspy_rs::baml_bridge::baml_types::BamlValue::String(v)) => v.clone(),
+                    Some(::dspy_rs::baml_bridge::baml_types::BamlValue::Enum(_, v)) => v.clone(),
                     Some(other) => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "string",
                             format!("{other:?}"),
@@ -849,7 +849,7 @@ fn derive_data_enum(
                         ))
                     }
                     None => {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             path,
                             "string",
                             "<missing>",
@@ -860,7 +860,7 @@ fn derive_data_enum(
 
                 match tag_value.as_str() {
                     #(#match_arms),*,
-                    _ => Err(::baml_bridge::BamlConvertError::new(
+                    _ => Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         path,
                         "enum",
                         tag_value,
@@ -872,8 +872,8 @@ fn derive_data_enum(
     };
 
     let to_value_impl = quote! {
-        impl ::baml_bridge::ToBamlValue for #name {
-            fn to_baml_value(&self) -> ::baml_bridge::baml_types::BamlValue {
+        impl ::dspy_rs::baml_bridge::ToBamlValue for #name {
+            fn to_baml_value(&self) -> ::dspy_rs::baml_bridge::baml_types::BamlValue {
                 match self {
                     #(#to_value_match_arms),*
                 }
@@ -882,13 +882,13 @@ fn derive_data_enum(
     };
 
     let output_format_impl = quote! {
-        impl ::baml_bridge::BamlType for #name {
-            fn baml_output_format() -> &'static ::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
-                static OUTPUT_FORMAT: ::std::sync::OnceLock<::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
+        impl ::dspy_rs::baml_bridge::BamlType for #name {
+            fn baml_output_format() -> &'static ::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent {
+                static OUTPUT_FORMAT: ::std::sync::OnceLock<::dspy_rs::baml_bridge::internal_baml_jinja::types::OutputFormatContent> = ::std::sync::OnceLock::new();
                 OUTPUT_FORMAT.get_or_init(|| {
-                    let mut reg = ::baml_bridge::Registry::new();
-                    <Self as ::baml_bridge::BamlTypeInternal>::register(&mut reg);
-                    reg.build(<Self as ::baml_bridge::BamlTypeInternal>::baml_type_ir())
+                    let mut reg = ::dspy_rs::baml_bridge::Registry::new();
+                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(&mut reg);
+                    reg.build(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir())
                 })
             }
         }
@@ -954,7 +954,7 @@ fn field_conversion_tokens(
         quote! { None }
     } else {
         quote! {
-            return Err(::baml_bridge::BamlConvertError::new(
+            return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                 path,
                 "value",
                 "<missing>",
@@ -973,12 +973,12 @@ fn field_conversion_tokens(
     };
 
     let get_value = quote! {
-        ::baml_bridge::get_field(&map, #field_name, #alias_token)
+        ::dspy_rs::baml_bridge::get_field(&map, #field_name, #alias_token)
     };
 
     let conversion = if let Some(adapter) = &attrs.with {
         quote! {
-            <#adapter as ::baml_bridge::BamlAdapter<#ty>>::try_from_baml(value.clone(), field_path)?
+            <#adapter as ::dspy_rs::baml_bridge::BamlAdapter<#ty>>::try_from_baml(value.clone(), field_path)?
         }
     } else if let Some(int_repr) = attrs.int_repr {
         let conv = int_repr_conversion_tokens(ty, int_repr)?;
@@ -994,7 +994,7 @@ fn field_conversion_tokens(
         }}
     } else {
         quote! {
-            <#ty as ::baml_bridge::BamlValueConvert>::try_from_baml_value(value.clone(), field_path)?
+            <#ty as ::dspy_rs::baml_bridge::BamlValueConvert>::try_from_baml_value(value.clone(), field_path)?
         }
     };
 
@@ -1032,7 +1032,7 @@ fn field_to_value_tokens(
     }
 
     Ok(quote! {
-        ::baml_bridge::ToBamlValue::to_baml_value(#value_expr)
+        ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(#value_expr)
     })
 }
 
@@ -1045,14 +1045,14 @@ fn int_repr_to_value_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macro2
                     let value = inner;
                     #inner_conv
                 }
-                None => ::baml_bridge::baml_types::BamlValue::Null,
+                None => ::dspy_rs::baml_bridge::baml_types::BamlValue::Null,
             }
         });
     }
     if let Some(inner) = is_vec_type(ty) {
         let inner_conv = int_repr_to_value_tokens(inner, repr)?;
         return Ok(quote! {
-            ::baml_bridge::baml_types::BamlValue::List(
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::List(
                 value
                     .iter()
                     .map(|item| {
@@ -1094,7 +1094,7 @@ fn int_repr_to_value_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macro2
 
     match repr {
         IntRepr::String => Ok(quote! {
-            ::baml_bridge::baml_types::BamlValue::String(value.to_string())
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::String(value.to_string())
         }),
         IntRepr::I64 => Ok(quote! {{
             let value = *value as i128;
@@ -1103,7 +1103,7 @@ fn int_repr_to_value_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macro2
             if value < min || value > max {
                 panic!("integer out of range for i64 representation");
             }
-            ::baml_bridge::baml_types::BamlValue::Int(value as i64)
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::Int(value as i64)
         }}),
     }
 }
@@ -1120,14 +1120,14 @@ fn map_key_repr_to_value_tokens(
                     let value = inner;
                     #inner_conv
                 }
-                None => ::baml_bridge::baml_types::BamlValue::Null,
+                None => ::dspy_rs::baml_bridge::baml_types::BamlValue::Null,
             }
         });
     }
     if let Some(inner) = is_vec_type(ty) {
         let inner_conv = map_key_repr_to_value_tokens(inner, repr)?;
         return Ok(quote! {
-            ::baml_bridge::baml_types::BamlValue::List(
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::List(
                 value
                     .iter()
                     .map(|item| {
@@ -1169,30 +1169,30 @@ fn map_key_repr_to_value_tokens(
 
     match repr {
         MapKeyRepr::String => Ok(quote! {{
-            let mut map = ::baml_bridge::baml_types::BamlMap::new();
+            let mut map = ::dspy_rs::baml_bridge::baml_types::BamlMap::new();
             for (key, value) in value.iter() {
                 map.insert(
                     key.to_string(),
-                    ::baml_bridge::ToBamlValue::to_baml_value(value),
+                    ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(value),
                 );
             }
-            ::baml_bridge::baml_types::BamlValue::Map(map)
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::Map(map)
         }}),
         MapKeyRepr::Pairs => Ok(quote! {{
             let mut entries = Vec::with_capacity(value.len());
             for (key, value) in value.iter() {
-                let mut entry = ::baml_bridge::baml_types::BamlMap::new();
+                let mut entry = ::dspy_rs::baml_bridge::baml_types::BamlMap::new();
                 entry.insert(
                     "key".to_string(),
-                    ::baml_bridge::ToBamlValue::to_baml_value(key),
+                    ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(key),
                 );
                 entry.insert(
                     "value".to_string(),
-                    ::baml_bridge::ToBamlValue::to_baml_value(value),
+                    ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(value),
                 );
-                entries.push(::baml_bridge::baml_types::BamlValue::Map(entry));
+                entries.push(::dspy_rs::baml_bridge::baml_types::BamlValue::Map(entry));
             }
-            ::baml_bridge::baml_types::BamlValue::List(entries)
+            ::dspy_rs::baml_bridge::baml_types::BamlValue::List(entries)
         }}),
     }
 }
@@ -1202,7 +1202,7 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
         let inner_conv = int_repr_conversion_tokens(inner, repr)?;
         return Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::Null => None,
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Null => None,
                 other => {
                     let value = other;
                     let field_path = field_path.clone();
@@ -1215,7 +1215,7 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
         let inner_conv = int_repr_conversion_tokens(inner, repr)?;
         return Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::List(items) => {
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::List(items) => {
                     let mut out = Vec::with_capacity(items.len());
                     for (idx, item) in items.into_iter().enumerate() {
                         let mut item_path = field_path.clone();
@@ -1227,7 +1227,7 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
                     out
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "list",
                         format!("{other:?}"),
@@ -1260,8 +1260,8 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
     match repr {
         IntRepr::String => Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::String(s) => {
-                    s.parse::<#ty>().map_err(|_| ::baml_bridge::BamlConvertError::new(
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::String(s) => {
+                    s.parse::<#ty>().map_err(|_| ::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         stringify!(#ty),
                         s,
@@ -1269,7 +1269,7 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
                     ))?
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "string",
                         format!("{other:?}"),
@@ -1280,12 +1280,12 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
         }),
         IntRepr::I64 => Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::Int(v) => {
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Int(v) => {
                     let min = <#ty>::MIN as i128;
                     let max = <#ty>::MAX as i128;
                     let v = v as i128;
                     if v < min || v > max {
-                        return Err(::baml_bridge::BamlConvertError::new(
+                        return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                             field_path,
                             stringify!(#ty),
                             v.to_string(),
@@ -1295,7 +1295,7 @@ fn int_repr_conversion_tokens(ty: &Type, repr: IntRepr) -> syn::Result<proc_macr
                     v as #ty
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "int",
                         format!("{other:?}"),
@@ -1315,7 +1315,7 @@ fn map_key_repr_conversion_tokens(
         let inner_conv = map_key_repr_conversion_tokens(inner, repr)?;
         return Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::Null => None,
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Null => None,
                 other => {
                     let value = other;
                     let field_path = field_path.clone();
@@ -1328,7 +1328,7 @@ fn map_key_repr_conversion_tokens(
         let inner_conv = map_key_repr_conversion_tokens(inner, repr)?;
         return Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::List(items) => {
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::List(items) => {
                     let mut out = Vec::with_capacity(items.len());
                     for (idx, item) in items.into_iter().enumerate() {
                         let mut item_path = field_path.clone();
@@ -1340,7 +1340,7 @@ fn map_key_repr_conversion_tokens(
                     out
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "list",
                         format!("{other:?}"),
@@ -1373,11 +1373,11 @@ fn map_key_repr_conversion_tokens(
     match repr {
         MapKeyRepr::String => Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::Map(map) => {
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::Map(map) => {
                     let mut out: #ty = ::std::default::Default::default();
                     for (key, value) in map.into_iter() {
                         let parsed_key = key.parse::<#key_ty>().map_err(|_| {
-                            ::baml_bridge::BamlConvertError::new(
+                            ::dspy_rs::baml_bridge::BamlConvertError::new(
                                 field_path.clone(),
                                 stringify!(#key_ty),
                                 key.clone(),
@@ -1386,13 +1386,13 @@ fn map_key_repr_conversion_tokens(
                         })?;
                         let mut item_path = field_path.clone();
                         item_path.push(key);
-                        let parsed_value = <#value_ty as ::baml_bridge::BamlValueConvert>::try_from_baml_value(value, item_path)?;
+                        let parsed_value = <#value_ty as ::dspy_rs::baml_bridge::BamlValueConvert>::try_from_baml_value(value, item_path)?;
                         out.insert(parsed_key, parsed_value);
                     }
                     out
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "map",
                         format!("{other:?}"),
@@ -1403,14 +1403,14 @@ fn map_key_repr_conversion_tokens(
         }),
         MapKeyRepr::Pairs => Ok(quote! {
             match value {
-                ::baml_bridge::baml_types::BamlValue::List(items) => {
+                ::dspy_rs::baml_bridge::baml_types::BamlValue::List(items) => {
                     let mut out: #ty = ::std::default::Default::default();
                     for (idx, item) in items.into_iter().enumerate() {
                         let entry_map = match item {
-                            ::baml_bridge::baml_types::BamlValue::Class(_, map)
-                            | ::baml_bridge::baml_types::BamlValue::Map(map) => map,
+                            ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(_, map)
+                            | ::dspy_rs::baml_bridge::baml_types::BamlValue::Map(map) => map,
                             other => {
-                                return Err(::baml_bridge::BamlConvertError::new(
+                                return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                                     field_path.clone(),
                                     "object",
                                     format!("{other:?}"),
@@ -1419,20 +1419,20 @@ fn map_key_repr_conversion_tokens(
                             }
                         };
 
-                        let key_value = ::baml_bridge::get_field(&entry_map, "key", None)
+                        let key_value = ::dspy_rs::baml_bridge::get_field(&entry_map, "key", None)
                             .cloned()
                             .ok_or_else(|| {
-                                ::baml_bridge::BamlConvertError::new(
+                                ::dspy_rs::baml_bridge::BamlConvertError::new(
                                     field_path.clone(),
                                     "key",
                                     "<missing>",
                                     "missing map entry key",
                                 )
                             })?;
-                        let value_value = ::baml_bridge::get_field(&entry_map, "value", None)
+                        let value_value = ::dspy_rs::baml_bridge::get_field(&entry_map, "value", None)
                             .cloned()
                             .ok_or_else(|| {
-                                ::baml_bridge::BamlConvertError::new(
+                                ::dspy_rs::baml_bridge::BamlConvertError::new(
                                     field_path.clone(),
                                     "value",
                                     "<missing>",
@@ -1444,7 +1444,7 @@ fn map_key_repr_conversion_tokens(
                         key_path.push(idx.to_string());
                         key_path.push("key".to_string());
                         let parsed_key =
-                            <#key_ty as ::baml_bridge::BamlValueConvert>::try_from_baml_value(
+                            <#key_ty as ::dspy_rs::baml_bridge::BamlValueConvert>::try_from_baml_value(
                                 key_value,
                                 key_path,
                             )?;
@@ -1453,7 +1453,7 @@ fn map_key_repr_conversion_tokens(
                         value_path.push(idx.to_string());
                         value_path.push("value".to_string());
                         let parsed_value =
-                            <#value_ty as ::baml_bridge::BamlValueConvert>::try_from_baml_value(
+                            <#value_ty as ::dspy_rs::baml_bridge::BamlValueConvert>::try_from_baml_value(
                                 value_value,
                                 value_path,
                             )?;
@@ -1463,7 +1463,7 @@ fn map_key_repr_conversion_tokens(
                     out
                 }
                 other => {
-                    return Err(::baml_bridge::BamlConvertError::new(
+                    return Err(::dspy_rs::baml_bridge::BamlConvertError::new(
                         field_path,
                         "list",
                         format!("{other:?}"),
@@ -1481,7 +1481,7 @@ fn register_call_tokens(
     map_entry: Option<&MapEntryInfo>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if let Some(adapter) = &attrs.with {
-        return Ok(quote! { <#adapter as ::baml_bridge::BamlAdapter<#ty>>::register(reg) });
+        return Ok(quote! { <#adapter as ::dspy_rs::baml_bridge::BamlAdapter<#ty>>::register(reg) });
     }
 
     if attrs.int_repr.is_some() {
@@ -1500,16 +1500,16 @@ fn register_call_tokens(
                 let entry_class = map_entry_class_tokens(entry_info, key_ty, value_ty)?;
                 return Ok(quote! {{
                     #entry_class
-                    <#key_ty as ::baml_bridge::BamlTypeInternal>::register(reg);
-                    <#value_ty as ::baml_bridge::BamlTypeInternal>::register(reg);
+                    <#key_ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(reg);
+                    <#value_ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(reg);
                 }});
             }
 
-            return Ok(quote! { <#value_ty as ::baml_bridge::BamlTypeInternal>::register(reg) });
+            return Ok(quote! { <#value_ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(reg) });
         }
     }
 
-    Ok(quote! { <#ty as ::baml_bridge::BamlTypeInternal>::register(reg) })
+    Ok(quote! { <#ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(reg) })
 }
 
 fn type_ir_for_field(
@@ -1518,7 +1518,7 @@ fn type_ir_for_field(
     map_entry: Option<&MapEntryInfo>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     if let Some(adapter) = attrs.with.as_ref() {
-        return Ok(quote! { <#adapter as ::baml_bridge::BamlAdapter<#ty>>::type_ir() });
+        return Ok(quote! { <#adapter as ::dspy_rs::baml_bridge::BamlAdapter<#ty>>::type_ir() });
     }
 
     if let Some(int_repr) = attrs.int_repr {
@@ -1535,11 +1535,11 @@ fn type_ir_for_field(
 fn int_repr_type_ir(ty: &Type, repr: IntRepr) -> syn::Result<proc_macro2::TokenStream> {
     if let Some(inner) = is_option_type(ty) {
         let inner_ir = int_repr_type_ir(inner, repr)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
     }
     if let Some(inner) = is_vec_type(ty) {
         let inner_ir = int_repr_type_ir(inner, repr)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
     }
     if let Some(inner) = is_box_type(ty) {
         return int_repr_type_ir(inner, repr);
@@ -1558,8 +1558,8 @@ fn int_repr_type_ir(ty: &Type, repr: IntRepr) -> syn::Result<proc_macro2::TokenS
     }
 
     match repr {
-        IntRepr::String => Ok(quote! { ::baml_bridge::baml_types::TypeIR::string() }),
-        IntRepr::I64 => Ok(quote! { ::baml_bridge::baml_types::TypeIR::int() }),
+        IntRepr::String => Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::string() }),
+        IntRepr::I64 => Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::int() }),
     }
 }
 
@@ -1570,11 +1570,11 @@ fn map_key_repr_type_ir(
 ) -> syn::Result<proc_macro2::TokenStream> {
     if let Some(inner) = is_option_type(ty) {
         let inner_ir = map_key_repr_type_ir(inner, repr, map_entry)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
     }
     if let Some(inner) = is_vec_type(ty) {
         let inner_ir = map_key_repr_type_ir(inner, repr, map_entry)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
     }
     if let Some(inner) = is_box_type(ty) {
         return map_key_repr_type_ir(inner, repr, map_entry);
@@ -1595,9 +1595,9 @@ fn map_key_repr_type_ir(
 
     match repr {
         MapKeyRepr::String => Ok(quote! {
-            ::baml_bridge::baml_types::TypeIR::map(
-                ::baml_bridge::baml_types::TypeIR::string(),
-                <#value_ty as ::baml_bridge::BamlTypeInternal>::baml_type_ir(),
+            ::dspy_rs::baml_bridge::baml_types::TypeIR::map(
+                ::dspy_rs::baml_bridge::baml_types::TypeIR::string(),
+                <#value_ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir(),
             )
         }),
         MapKeyRepr::Pairs => {
@@ -1609,8 +1609,8 @@ fn map_key_repr_type_ir(
             })?;
             let entry_name_expr = entry.internal_name_expr.clone();
             Ok(quote! {
-                ::baml_bridge::baml_types::TypeIR::list(
-                    ::baml_bridge::baml_types::TypeIR::class(#entry_name_expr)
+                ::dspy_rs::baml_bridge::baml_types::TypeIR::list(
+                    ::dspy_rs::baml_bridge::baml_types::TypeIR::class(#entry_name_expr)
                 )
             })
         }
@@ -1642,11 +1642,11 @@ fn match_type_ir(ty: &Type) -> syn::Result<proc_macro2::TokenStream> {
 
     if let Some(inner) = is_option_type(ty) {
         let inner_ir = match_type_ir(inner)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::optional(#inner_ir) });
     }
     if let Some(inner) = is_vec_type(ty) {
         let inner_ir = match_type_ir(inner)?;
-        return Ok(quote! { ::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
+        return Ok(quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::list(#inner_ir) });
     }
     if let Some(inner) = is_box_type(ty) {
         return match_type_ir(inner);
@@ -1660,7 +1660,7 @@ fn match_type_ir(ty: &Type) -> syn::Result<proc_macro2::TokenStream> {
     if let Some((_key, value)) = is_string_map_type(ty) {
         let value_ir = match_type_ir(value)?;
         return Ok(
-            quote! { ::baml_bridge::baml_types::TypeIR::map(::baml_bridge::baml_types::TypeIR::string(), #value_ir) },
+            quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::map(::dspy_rs::baml_bridge::baml_types::TypeIR::string(), #value_ir) },
         );
     }
     if let Some((key, _)) = map_types(ty) {
@@ -1688,18 +1688,18 @@ fn match_type_ir(ty: &Type) -> syn::Result<proc_macro2::TokenStream> {
 
     let ident_str = ident.to_string();
     let ir = match ident_str.as_str() {
-        "String" => quote! { ::baml_bridge::baml_types::TypeIR::string() },
-        "bool" => quote! { ::baml_bridge::baml_types::TypeIR::bool() },
-        "f32" | "f64" => quote! { ::baml_bridge::baml_types::TypeIR::float() },
-        "i8" | "i16" | "i32" | "i64" | "isize" => quote! { ::baml_bridge::baml_types::TypeIR::int() },
-        "u8" | "u16" | "u32" => quote! { ::baml_bridge::baml_types::TypeIR::int() },
+        "String" => quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::string() },
+        "bool" => quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::bool() },
+        "f32" | "f64" => quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::float() },
+        "i8" | "i16" | "i32" | "i64" | "isize" => quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::int() },
+        "u8" | "u16" | "u32" => quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::int() },
         "u64" | "usize" | "i128" | "u128" => {
             return Err(syn::Error::new_spanned(
                 ty,
                 "unsupported integer width for BAML outputs; hint: use #[baml(int_repr = \"string\"|\"i64\")] or a smaller integer type",
             ))
         }
-        _ => quote! { <#ty as ::baml_bridge::BamlTypeInternal>::baml_type_ir() },
+        _ => quote! { <#ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir() },
     };
 
     Ok(ir)
@@ -1713,7 +1713,7 @@ fn with_constraints_tokens(
         return r#type;
     }
     let constraint_tokens = constraints_tokens(constraints);
-    quote! { ::baml_bridge::with_constraints(#r#type, #constraint_tokens) }
+    quote! { ::dspy_rs::baml_bridge::with_constraints(#r#type, #constraint_tokens) }
 }
 
 fn constraints_tokens(constraints: &[ConstraintSpec]) -> proc_macro2::TokenStream {
@@ -1722,10 +1722,10 @@ fn constraints_tokens(constraints: &[ConstraintSpec]) -> proc_macro2::TokenStrea
         let expr = &spec.expr;
         match spec.level {
             ConstraintLevelSpec::Check => {
-                quote! { ::baml_bridge::baml_types::Constraint::new_check(#label, #expr) }
+                quote! { ::dspy_rs::baml_bridge::baml_types::Constraint::new_check(#label, #expr) }
             }
             ConstraintLevelSpec::Assert => {
-                quote! { ::baml_bridge::baml_types::Constraint::new_assert(#label, #expr) }
+                quote! { ::dspy_rs::baml_bridge::baml_types::Constraint::new_assert(#label, #expr) }
             }
         }
     });
@@ -1742,10 +1742,10 @@ fn name_tokens_expr(
 ) -> proc_macro2::TokenStream {
     match alias {
         Some(alias) => quote! {
-            ::baml_bridge::internal_baml_jinja::types::Name::new_with_alias(#real_expr, Some(#alias.to_string()))
+            ::dspy_rs::baml_bridge::internal_baml_jinja::types::Name::new_with_alias(#real_expr, Some(#alias.to_string()))
         },
         None => quote! {
-            ::baml_bridge::internal_baml_jinja::types::Name::new(#real_expr)
+            ::dspy_rs::baml_bridge::internal_baml_jinja::types::Name::new(#real_expr)
         },
     }
 }
@@ -1780,7 +1780,7 @@ fn map_entry_info(
     let internal_name_expr = quote! {
         format!(
             "{}::{}",
-            <Self as ::baml_bridge::BamlTypeInternal>::baml_internal_name(),
+            <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name(),
             #suffix
         )
     };
@@ -1811,16 +1811,16 @@ fn map_entry_class_tokens(
     let value_name = name_tokens("value", None);
 
     Ok(quote! {
-        reg.register_class(::baml_bridge::internal_baml_jinja::types::Class {
+        reg.register_class(::dspy_rs::baml_bridge::internal_baml_jinja::types::Class {
             name: #name_expr,
             description: None,
-            namespace: ::baml_bridge::baml_types::StreamingMode::NonStreaming,
+            namespace: ::dspy_rs::baml_bridge::baml_types::StreamingMode::NonStreaming,
             fields: vec![
                 (#key_name, #key_ir, None, false),
                 (#value_name, #value_ir, None, false),
             ],
             constraints: Vec::new(),
-            streaming_behavior: ::baml_bridge::default_streaming_behavior(),
+            streaming_behavior: ::dspy_rs::baml_bridge::default_streaming_behavior(),
         });
     })
 }

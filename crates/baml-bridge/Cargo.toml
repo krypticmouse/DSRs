@@ -40,6 +40,7 @@ derive = ["dep:baml-bridge-derive"]
 pyo3 = ["dep:pyo3"]
 
 [dev-dependencies]
+dspy-rs = { path = "../dspy-rs" }
 expect-test = "1.5.0"
 proptest = "1.5.0"
 serde = { version = "1", features = ["alloc", "derive", "rc"] }

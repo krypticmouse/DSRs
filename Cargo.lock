@@ -489,6 +489,7 @@ dependencies = [
  "anyhow",
  "baml-bridge-derive",
  "baml-types",
+ "dspy-rs",
  "expect-test",
  "indexmap",
  "internal-baml-jinja",

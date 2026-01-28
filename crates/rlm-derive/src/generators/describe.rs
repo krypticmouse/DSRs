@@ -24,18 +24,18 @@ pub fn generate_describe(attrs: &RlmTypeAttrs) -> syn::Result<TokenStream> {
     let is_indexable = attrs.index_field.is_some();
 
     Ok(quote! {
-        impl #impl_generics ::rlm_core::describe::RlmDescribe for #struct_name #ty_generics #where_clause {
+        impl #impl_generics ::dspy_rs::rlm_core::describe::RlmDescribe for #struct_name #ty_generics #where_clause {
             fn type_name() -> &'static str {
                 #type_name_lit
             }
 
-            fn fields() -> Vec<::rlm_core::describe::RlmFieldDesc> {
+            fn fields() -> Vec<::dspy_rs::rlm_core::describe::RlmFieldDesc> {
                 vec![
                     #(#field_descs),*
                 ]
             }
 
-            fn properties() -> Vec<::rlm_core::describe::RlmPropertyDesc> {
+            fn properties() -> Vec<::dspy_rs::rlm_core::describe::RlmPropertyDesc> {
                 vec![
                     #(#property_descs),*
                 ]
@@ -71,7 +71,7 @@ fn generate_field_desc(field: &RlmFieldAttrs) -> TokenStream {
     let field_ty = &field.ty;
 
     let mut expr = quote! {
-        ::rlm_core::describe::RlmFieldDesc::new(#field_name_lit, stringify!(#field_ty))
+        ::dspy_rs::rlm_core::describe::RlmFieldDesc::new(#field_name_lit, stringify!(#field_ty))
     };
 
     if let Some(desc) = &field.desc {
@@ -112,7 +112,7 @@ fn generate_property_descs(attrs: &RlmTypeAttrs) -> syn::Result<Vec<TokenStream>
 fn property_desc_from_attr(prop: &RlmPropertyAttrs) -> TokenStream {
     let name_lit = syn::LitStr::new(&prop.name, proc_macro2::Span::call_site());
     let mut expr = quote! {
-        ::rlm_core::describe::RlmPropertyDesc::new(#name_lit, "Unknown")
+        ::dspy_rs::rlm_core::describe::RlmPropertyDesc::new(#name_lit, "Unknown")
     };
 
     if let Some(desc) = &prop.desc {
@@ -139,7 +139,7 @@ fn generate_filter_property_desc(
     })?;
 
     Ok(quote! {
-        ::rlm_core::describe::RlmPropertyDesc::new(#name_lit, stringify!(Vec<#inner_ty>))
+        ::dspy_rs::rlm_core::describe::RlmPropertyDesc::new(#name_lit, stringify!(Vec<#inner_ty>))
     })
 }
 
@@ -159,7 +159,7 @@ fn generate_flatten_property_desc(
     })?;
 
     Ok(quote! {
-        ::rlm_core::describe::RlmPropertyDesc::new(#name_lit, stringify!(Vec<#inner_ty>))
+        ::dspy_rs::rlm_core::describe::RlmPropertyDesc::new(#name_lit, stringify!(Vec<#inner_ty>))
     })
 }
 

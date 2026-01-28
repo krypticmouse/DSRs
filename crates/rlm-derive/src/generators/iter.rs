@@ -103,11 +103,11 @@ fn generate_iter_method(
 
 fn generate_getitem_method(field_ident: &syn::Ident, item_ty: &Type) -> TokenStream {
     quote! {
-        fn __getitem__(&self, index: isize) -> ::pyo3::PyResult<#item_ty> {
+        fn __getitem__(&self, index: isize) -> ::dspy_rs::pyo3::PyResult<#item_ty> {
             let len = self.#field_ident.len() as isize;
             let index = if index < 0 { len + index } else { index };
             if index < 0 || index >= len {
-                return Err(::pyo3::exceptions::PyIndexError::new_err("index out of range"));
+                return Err(::dspy_rs::pyo3::exceptions::PyIndexError::new_err("index out of range"));
             }
             Ok(self.#field_ident[index as usize].clone())
         }
@@ -116,19 +116,19 @@ fn generate_getitem_method(field_ident: &syn::Ident, item_ty: &Type) -> TokenStr
 
 fn generate_iterator_struct(iter_struct: &syn::Ident, item_ty: &Type) -> TokenStream {
     quote! {
-        #[pyo3::pyclass]
+        #[::dspy_rs::pyo3::pyclass]
         struct #iter_struct {
             items: Vec<#item_ty>,
             index: usize,
         }
 
-        #[pyo3::pymethods]
+        #[::dspy_rs::pyo3::pymethods]
         impl #iter_struct {
-            fn __iter__(slf: ::pyo3::PyRef<'_, Self>) -> ::pyo3::PyRef<'_, Self> {
+            fn __iter__(slf: ::dspy_rs::pyo3::PyRef<'_, Self>) -> ::dspy_rs::pyo3::PyRef<'_, Self> {
                 slf
             }
 
-            fn __next__(mut slf: ::pyo3::PyRefMut<'_, Self>) -> Option<#item_ty> {
+            fn __next__(mut slf: ::dspy_rs::pyo3::PyRefMut<'_, Self>) -> Option<#item_ty> {
                 if slf.index >= slf.items.len() {
                     return None;
                 }

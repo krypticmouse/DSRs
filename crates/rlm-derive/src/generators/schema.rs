@@ -25,7 +25,7 @@ pub fn generate_schema_method(attrs: &RlmTypeAttrs) -> TokenStream {
             let desc = field.desc.clone().unwrap_or_default();
             let field_ty = &field.ty;
             quote! {
-                ::pyo3::types::PyDictMethods::set_item(
+                ::dspy_rs::pyo3::types::PyDictMethods::set_item(
                     &schema,
                     #name,
                     (stringify!(#field_ty), #desc),
@@ -42,7 +42,7 @@ pub fn generate_schema_method(attrs: &RlmTypeAttrs) -> TokenStream {
             let name = &prop.name;
             let desc = prop.desc.clone().unwrap_or_default();
             quote! {
-                ::pyo3::types::PyDictMethods::set_item(
+                ::dspy_rs::pyo3::types::PyDictMethods::set_item(
                     &schema,
                     #name,
                     ("property", #desc),
@@ -53,8 +53,8 @@ pub fn generate_schema_method(attrs: &RlmTypeAttrs) -> TokenStream {
 
     quote! {
         /// Machine-readable field schema for REPL discovery.
-        fn __rlm_schema__(&self, py: ::pyo3::Python<'_>) -> ::pyo3::PyResult<::pyo3::PyObject> {
-            let schema = ::pyo3::types::PyDict::new(py);
+        fn __rlm_schema__(&self, py: ::dspy_rs::pyo3::Python<'_>) -> ::dspy_rs::pyo3::PyResult<::dspy_rs::pyo3::PyObject> {
+            let schema = ::dspy_rs::pyo3::types::PyDict::new(py);
             #(#field_entries)*
             #(#property_entries)*
             Ok(schema.into_any().unbind())

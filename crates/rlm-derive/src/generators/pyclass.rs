@@ -31,7 +31,7 @@ pub fn generate_pymethods(attrs: &RlmTypeAttrs) -> TokenStream {
     let baml_method = generate_baml_method();
 
     quote! {
-        #[pyo3::pymethods]
+        #[::dspy_rs::pyo3::pymethods]
         impl #impl_generics #struct_name #ty_generics #where_clause {
             #(#getters)*
 
@@ -67,7 +67,7 @@ pub fn generate_pymethods_with_repr(
     let baml_method = generate_baml_method();
 
     quote! {
-        #[pyo3::pymethods]
+        #[::dspy_rs::pyo3::pymethods]
         impl #impl_generics #struct_name #ty_generics #where_clause {
             #(#getters)*
 
@@ -175,9 +175,9 @@ fn generate_baml_method() -> TokenStream {
         /// Convert this value to a JSON-like Python object for SUBMIT normalization.
         ///
         /// Returns a Python dict/list/primitive that can be used with BAML's SUBMIT.
-        fn __baml__(&self, py: ::pyo3::Python<'_>) -> ::pyo3::PyResult<::pyo3::PyObject> {
-            let value = ::baml_bridge::ToBamlValue::to_baml_value(self);
-            Ok(::baml_bridge::py::baml_value_to_py(py, &value))
+        fn __baml__(&self, py: ::dspy_rs::pyo3::Python<'_>) -> ::dspy_rs::pyo3::PyResult<::dspy_rs::pyo3::PyObject> {
+            let value = ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(self);
+            Ok(::dspy_rs::baml_bridge::py::baml_value_to_py(py, &value))
         }
     }
 }
