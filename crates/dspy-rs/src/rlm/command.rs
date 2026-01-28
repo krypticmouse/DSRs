@@ -110,3 +110,62 @@ fn extract_submit_call(response: &str) -> Option<String> {
         .and_then(|captures| captures.get(0))
         .map(|m| m.as_str().trim().to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_repl_fence_as_run() {
+        let response = "Thoughts...\n```repl\nx = 1\n```\n";
+        let command = Command::parse(response).expect("command");
+
+        assert!(!command.is_submit());
+        assert_eq!(command.code(), "x = 1");
+        assert_eq!(command.raw(), "```repl\nx = 1\n```");
+    }
+
+    #[test]
+    fn parse_python_fence_as_run() {
+        let response = "```python\nprint('hello')\n```";
+        let command = Command::parse(response).expect("command");
+
+        assert!(!command.is_submit());
+        assert_eq!(command.code(), "print('hello')");
+    }
+
+    #[test]
+    fn parse_submit_in_fence() {
+        let response = "```repl\nSUBMIT(answer=42)\n```";
+        let command = Command::parse(response).expect("command");
+
+        assert!(command.is_submit());
+        assert_eq!(command.code(), "SUBMIT(answer=42)");
+    }
+
+    #[test]
+    fn parse_submit_without_fence() {
+        let response = "Final answer:\nSUBMIT(answer=42)";
+        let command = Command::parse(response).expect("command");
+
+        assert!(command.is_submit());
+        assert_eq!(command.code(), "SUBMIT(answer=42)");
+        assert_eq!(command.raw(), "SUBMIT(answer=42)");
+    }
+
+    #[test]
+    fn uses_last_matching_block() {
+        let response = "```repl\nfirst = 1\n```\ntext\n```python\nsecond = 2\n```";
+        let command = Command::parse(response).expect("command");
+
+        assert_eq!(command.code(), "second = 2");
+    }
+
+    #[test]
+    fn ignores_non_repl_fences() {
+        let response = "```json\n{\"a\": 1}\n```";
+        let command = Command::parse(response);
+
+        assert!(command.is_none());
+    }
+}
