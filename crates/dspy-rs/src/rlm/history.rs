@@ -1,7 +1,7 @@
 #![cfg(feature = "rlm")]
 
 #[derive(Debug, Clone)]
-pub(crate) struct ReplHistoryEntry {
+pub struct ReplHistoryEntry {
     code: String,
     output: String,
     reasoning: Option<String>,
@@ -14,11 +14,6 @@ impl ReplHistoryEntry {
             output,
             reasoning: None,
         }
-    }
-
-    pub(crate) fn with_reasoning(mut self, reasoning: String) -> Self {
-        self.reasoning = Some(reasoning);
-        self
     }
 }
 

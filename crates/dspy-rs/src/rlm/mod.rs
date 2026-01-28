@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod command;
+pub mod adapter;
 pub mod exec;
 pub mod error;
 mod history;
@@ -10,6 +11,7 @@ pub mod submit;
 pub mod tools;
 pub mod typed_rlm;
 
+pub use adapter::RlmAdapter;
 pub use config::{ConstraintSummary, RlmConfig, RlmResult};
 pub use command::Command;
 pub use exec::execute_repl_code;
