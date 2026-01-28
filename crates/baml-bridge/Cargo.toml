@@ -29,12 +29,14 @@ minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "mai
 thiserror = "2.0.17"
 sha2 = "0.10.9"
 indexmap = { version = "2.1.0", features = ["serde"] }
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 baml-bridge-derive = { path = "../baml-bridge-derive", optional = true }
 
 [features]
 default = ["derive"]
 derive = ["dep:baml-bridge-derive"]
+pyo3 = ["dep:pyo3"]
 
 [dev-dependencies]
 expect-test = "1.5.0"
