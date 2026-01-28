@@ -5,7 +5,7 @@ use dspy_rs::rlm::{RlmConfig, TypedRlm};
 use dspy_rs::{rlm_type, BamlType, RlmType, Signature};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyAnyMethods, PyDict, PyIterator};
+use pyo3::types::{PyAnyMethods, PyDict, PyIterator, PyList};
 use rig::prelude::*;
 use rig::providers::openai;
 
@@ -31,6 +31,34 @@ struct Pantry {
     owner: String,
     items: Vec<Item>,
     featured: Option<Item>,
+}
+
+#[rlm_type]
+#[derive(Clone, Debug, PartialEq)]
+struct ToolCall {
+    name: String,
+}
+
+#[rlm_type]
+#[derive(Clone, Debug, PartialEq)]
+struct Step {
+    source: String,
+    tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[rlm_type]
+#[derive(Clone, Debug, PartialEq)]
+struct Trace {
+    #[rlm(
+        desc = "All steps in the trace",
+        filter_property = "user_steps",
+        filter_value = "user",
+        filter_field = "source"
+    )]
+    steps: Vec<Step>,
+
+    #[rlm(flatten_property = "all_tool_calls", flatten_parent = "steps")]
+    tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Signature, Clone, Debug, PartialEq)]
@@ -172,4 +200,81 @@ fn rlm_type_baml_roundtrip_and_schema() -> PyResult<()> {
 
         Ok(())
     })
+}
+
+#[test]
+fn rlm_type_filter_and_flatten_properties() -> PyResult<()> {
+    Python::attach(|py| {
+        let trace = Trace {
+            steps: vec![
+                Step {
+                    source: "user".to_string(),
+                    tool_calls: Some(vec![ToolCall {
+                        name: "search".to_string(),
+                    }]),
+                },
+                Step {
+                    source: "agent".to_string(),
+                    tool_calls: Some(vec![
+                        ToolCall {
+                            name: "summarize".to_string(),
+                        },
+                        ToolCall {
+                            name: "finalize".to_string(),
+                        },
+                    ]),
+                },
+                Step {
+                    source: "user".to_string(),
+                    tool_calls: None,
+                },
+            ],
+            tool_calls: Some(vec![ToolCall {
+                name: "ignored".to_string(),
+            }]),
+        };
+        let py_trace = Py::new(py, trace)?;
+        let bound = py_trace.bind(py);
+        let any = bound.as_any();
+
+        let user_steps_any = any.getattr("user_steps")?;
+        let user_steps = user_steps_any.cast::<PyList>()?;
+        assert_eq!(user_steps.len(), 2);
+        for item in user_steps.iter() {
+            let source: String = item.getattr("source")?.extract()?;
+            assert_eq!(source, "user");
+        }
+
+        let all_tool_calls_any = any.getattr("all_tool_calls")?;
+        let all_tool_calls = all_tool_calls_any.cast::<PyList>()?;
+        let mut names = Vec::new();
+        for item in all_tool_calls.iter() {
+            let name: String = item.getattr("name")?.extract()?;
+            names.push(name);
+        }
+        assert_eq!(
+            names,
+            vec![
+                "search".to_string(),
+                "summarize".to_string(),
+                "finalize".to_string()
+            ]
+        );
+
+        Ok(())
+    })
+}
+
+#[test]
+fn rlm_describe_is_stable_and_includes_properties() {
+    use dspy_rs::rlm_core::describe::RlmDescribe;
+
+    let first = <Trace as RlmDescribe>::describe_type();
+    let second = <Trace as RlmDescribe>::describe_type();
+
+    assert_eq!(first, second);
+    assert!(first.starts_with("type Trace"));
+    assert!(first.contains("properties:"));
+    assert!(first.contains("user_steps"));
+    assert!(first.contains("all_tool_calls"));
 }
