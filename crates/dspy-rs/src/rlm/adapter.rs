@@ -52,7 +52,7 @@ impl RlmAdapter {
                     .get(&variable.name)
                     .map(|value| value.bind(py));
 
-                blocks.push(format_variable_preview(&variable, spec, py_obj.as_deref(), &shape));
+                blocks.push(format_variable_preview(&variable, spec, py_obj, &shape));
             }
 
             blocks.join("\n\n")
@@ -308,10 +308,8 @@ fn format_variable_preview(
     output.push_str(&format!("Type: {}\n", type_summary));
 
     let count = collection_len(py_obj);
-    if let Some(count) = count {
-        if is_collection(py_obj, &variable.type_desc) {
-            output.push_str(&format!("Count: {}\n", format_count(count)));
-        }
+    if let Some(count) = count && is_collection(py_obj, &variable.type_desc) {
+        output.push_str(&format!("Count: {}\n", format_count(count)));
     }
 
     if let Some(spec) = spec {
@@ -376,10 +374,8 @@ fn format_usage_hints(
     if count.is_some() {
         hints.push(format!("len({})", variable.name));
     }
-    if let Some(obj) = py_obj {
-        if obj.hasattr("__getitem__").unwrap_or(false) {
-            hints.push(format!("{}[i]", variable.name));
-        }
+    if let Some(obj) = py_obj && obj.hasattr("__getitem__").unwrap_or(false) {
+        hints.push(format!("{}[i]", variable.name));
     }
     for (name, _) in &variable.properties {
         hints.push(format!("{}.{}", variable.name, name));
@@ -394,10 +390,10 @@ fn preview_samples(
 ) -> Vec<String> {
     if let Some(obj) = py_obj {
         if let Ok(sequence) = obj.cast::<PySequence>() {
-            return preview_sequence(&sequence, count.unwrap_or(0));
+            return preview_sequence(sequence, count.unwrap_or(0));
         }
         if let Ok(dict) = obj.cast::<PyDict>() {
-            return preview_dict(&dict, count.unwrap_or(0));
+            return preview_dict(dict, count.unwrap_or(0));
         }
         if let Some(repr) = repr_string(obj) {
             return vec![truncate_preview_sample(&repr)];
@@ -415,10 +411,8 @@ fn preview_sequence(sequence: &Bound<'_, PySequence>, count: usize) -> Vec<Strin
     let mut samples = Vec::new();
     let sample_count = count.min(2);
     for idx in 0..sample_count {
-        if let Ok(item) = sequence.get_item(idx) {
-            if let Some(repr) = repr_string(&item) {
-                samples.push(truncate_preview_sample(&repr));
-            }
+        if let Ok(item) = sequence.get_item(idx) && let Some(repr) = repr_string(&item) {
+            samples.push(truncate_preview_sample(&repr));
         }
     }
     if count > sample_count {
@@ -452,10 +446,10 @@ fn collection_len(py_obj: Option<&Bound<'_, PyAny>>) -> Option<usize> {
 }
 
 fn is_collection(py_obj: Option<&Bound<'_, PyAny>>, type_desc: &str) -> bool {
-    if let Some(obj) = py_obj {
-        if obj.cast::<PySequence>().is_ok() || obj.cast::<PyDict>().is_ok() {
-            return true;
-        }
+    if let Some(obj) = py_obj
+        && (obj.cast::<PySequence>().is_ok() || obj.cast::<PyDict>().is_ok())
+    {
+        return true;
     }
     let lowered = type_desc.to_ascii_lowercase();
     lowered.contains("list")

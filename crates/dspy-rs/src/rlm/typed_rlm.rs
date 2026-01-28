@@ -29,6 +29,15 @@ pub struct TypedRlm<S: Signature> {
     _marker: PhantomData<S>,
 }
 
+struct ExtractionFallbackContext<'a> {
+    adapter: &'a RlmAdapter,
+    variable_descriptions: &'a str,
+    schema: &'a str,
+    history: &'a [ReplHistoryEntry],
+    iterations: usize,
+    llm_calls: usize,
+}
+
 impl<S: Signature> TypedRlm<S> {
     /// Create a new TypedRlm with the given agent and config.
     pub fn new(agent: Agent<CompletionModel>, config: RlmConfig) -> Self {
@@ -138,17 +147,15 @@ impl<S: Signature> TypedRlm<S> {
         }
 
         if self.config.enable_extraction_fallback {
-            return self
-                .extraction_fallback(
-                    input,
-                    &adapter,
-                    &variable_descriptions,
-                    &schema,
-                    &history,
-                    iterations,
-                    main_calls + tools.call_count(),
-                )
-                .await;
+            let context = ExtractionFallbackContext {
+                adapter: &adapter,
+                variable_descriptions: &variable_descriptions,
+                schema: &schema,
+                history: &history,
+                iterations,
+                llm_calls: main_calls + tools.call_count(),
+            };
+            return self.extraction_fallback(input, context).await;
         }
 
         Err(RlmError::MaxIterationsReached {
@@ -159,14 +166,13 @@ impl<S: Signature> TypedRlm<S> {
     async fn extraction_fallback(
         &self,
         input: S::Input,
-        adapter: &RlmAdapter,
-        variable_descriptions: &str,
-        schema: &str,
-        history: &[ReplHistoryEntry],
-        iterations: usize,
-        llm_calls: usize,
+        context: ExtractionFallbackContext<'_>,
     ) -> Result<RlmResult<S>, RlmError> {
-        let prompt = adapter.build_extraction_prompt::<S>(variable_descriptions, schema, history);
+        let prompt = context.adapter.build_extraction_prompt::<S>(
+            context.variable_descriptions,
+            context.schema,
+            context.history,
+        );
         let response = self
             .agent
             .prompt(&prompt)
@@ -181,7 +187,7 @@ impl<S: Signature> TypedRlm<S> {
 
         let raw_response = response.clone();
         let message = Message::assistant(response);
-        let chat_adapter = ChatAdapter::default();
+        let chat_adapter = ChatAdapter;
         let (typed_output, field_metas) = chat_adapter
             .parse_response_typed::<S>(&message)
             .map_err(|err| RlmError::ExtractionFailed {
@@ -193,13 +199,14 @@ impl<S: Signature> TypedRlm<S> {
             input,
             typed_output,
             field_metas,
-            iterations,
-            llm_calls + 1,
+            context.iterations,
+            context.llm_calls + 1,
             true,
         ))
     }
 }
 
+#[allow(clippy::result_large_err)]
 fn setup_globals<S: Signature>(
     input: &S::Input,
     tools: &LlmTools,

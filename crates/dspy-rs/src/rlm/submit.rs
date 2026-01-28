@@ -49,15 +49,15 @@ pub struct ParsedDyn {
     pub checks: Vec<ResponseCheck>,
 }
 
+type ParseFn = dyn for<'py> Fn(Python<'py>, &Bound<'py, PyDict>) -> Result<ParsedDyn, BamlParseError>
+    + Send
+    + Sync;
+
 /// PyO3-compatible SUBMIT handler.
 #[pyclass]
 #[derive(Clone)]
 pub struct SubmitHandler {
-    parse_fn: Arc<
-        dyn for<'py> Fn(Python<'py>, &Bound<'py, PyDict>) -> Result<ParsedDyn, BamlParseError>
-            + Send
-            + Sync,
-    >,
+    parse_fn: Arc<ParseFn>,
     result_tx: Arc<Mutex<Option<SubmitResultDyn>>>,
     schema_description: String,
     output_fields: Vec<String>,
@@ -72,11 +72,7 @@ impl SubmitHandler {
             .map(|field| field.name.to_string())
             .collect::<Vec<_>>();
 
-        let parse_fn: Arc<
-            dyn for<'py> Fn(Python<'py>, &Bound<'py, PyDict>) -> Result<ParsedDyn, BamlParseError>
-                + Send
-                + Sync,
-        > = Arc::new(|py, kwargs| {
+        let parse_fn: Arc<ParseFn> = Arc::new(|py, kwargs| {
             let baml_value = crate::py::kwargs_to_baml_value::<S>(py, kwargs)?;
             let checks = crate::py::collect_checks_for_output::<S>(&baml_value)?;
             Ok(ParsedDyn {

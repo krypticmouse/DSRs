@@ -205,10 +205,8 @@ fn format_class_shape(
         let mut field_lines = field_type_string.lines();
         let first = field_lines.next().unwrap_or_default();
         let mut line = format!("  {}: {}", field_name.rendered_name(), first);
-        if let Some(desc) = field_desc {
-            if !desc.is_empty() {
-                line.push_str(&format!(" // {desc}"));
-            }
+        if let Some(desc) = field_desc && !desc.is_empty() {
+            line.push_str(&format!(" // {desc}"));
         }
         lines.push(line);
 
