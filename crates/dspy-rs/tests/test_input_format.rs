@@ -1,7 +1,11 @@
 use dspy_rs::baml_bridge::ToBamlValue;
 use dspy_rs::{BamlType, BamlValue, ChatAdapter, Signature};
+#[cfg(feature = "rlm")]
+use dspy_rs::RlmType;
 
-#[derive(BamlType, Clone, Debug)]
+#[cfg_attr(feature = "rlm", dspy_rs::rlm_type)]
+#[cfg_attr(not(feature = "rlm"), derive(BamlType))]
+#[derive(Clone, Debug)]
 struct Document {
     #[baml(alias = "docText")]
     text: String,
