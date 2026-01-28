@@ -13,6 +13,9 @@ license = "Apache-2.0"
 [lib]
 proc-macro = true
 
+[features]
+rlm = ["dep:rlm-core", "dep:pyo3", "rlm-core/pyo3"]
+
 [dependencies]
 syn   = { version = "2", features = ["full"] }
 quote = "1"
@@ -22,6 +25,8 @@ serde_json = { version = "1.0.143", features = ["preserve_order"] }
 anyhow = "1.0.99"
 schemars = "1.0.4"
 indexmap = "2.11.0"
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
+rlm-core = { path = "../rlm-core", optional = true }
 
 [dev-dependencies]
 dspy-rs = { path = "../dspy-rs" }

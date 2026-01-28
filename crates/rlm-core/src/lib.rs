@@ -41,7 +41,11 @@
 
 pub mod describe;
 pub mod variable;
+#[cfg(feature = "pyo3")]
+pub mod input;
 
 // Re-export main types at crate root for convenience
 pub use describe::{RlmDescribe, RlmFieldDesc, RlmPropertyDesc, RlmTypeInfo};
 pub use variable::RlmVariable;
+#[cfg(feature = "pyo3")]
+pub use input::RlmInputFields;

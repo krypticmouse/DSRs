@@ -287,6 +287,17 @@ fn parse_constraint_attr(
     })
 }
 
+fn format_constraint_prompt(constraint: &ParsedConstraint) -> String {
+    let kind = match constraint.kind {
+        ParsedConstraintKind::Check => "check",
+        ParsedConstraintKind::Assert => "assert",
+    };
+    match constraint.label.as_deref().filter(|label| !label.is_empty()) {
+        Some(label) => format!("{kind}({label}): {}", constraint.expression),
+        None => format!("{kind}: {}", constraint.expression),
+    }
+}
+
 fn collect_doc_comment(attrs: &[Attribute]) -> String {
     let mut docs = Vec::new();
     for attr in attrs {
@@ -351,6 +362,7 @@ fn generate_helper_structs(
     let input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
     let output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
     let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
+    let rlm_input_impl = generate_rlm_input_impl(&input_name, parsed);
 
     Ok(quote! {
         #[derive(Debug, Clone, ::dspy_rs::BamlType)]
@@ -367,7 +379,80 @@ fn generate_helper_structs(
         pub struct #all_name {
             #(#all_fields),*
         }
+
+        #rlm_input_impl
     })
+}
+
+fn generate_rlm_input_impl(
+    input_name: &Ident,
+    parsed: &ParsedSignature,
+) -> proc_macro2::TokenStream {
+    let input_field_names: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| LitStr::new(&field.ident.to_string(), proc_macro2::Span::call_site()))
+        .collect();
+    let input_field_idents: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| &field.ident)
+        .collect();
+    let input_field_descs: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| LitStr::new(&field.description, proc_macro2::Span::call_site()))
+        .collect();
+
+    let input_field_constraints: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| {
+            if field.constraints.is_empty() {
+                quote! { Vec::new() }
+            } else {
+                let constraint_literals: Vec<_> = field
+                    .constraints
+                    .iter()
+                    .map(|constraint| {
+                        let text = format_constraint_prompt(constraint);
+                        LitStr::new(&text, proc_macro2::Span::call_site())
+                    })
+                    .collect();
+                quote! { vec![#(String::from(#constraint_literals)),*] }
+            }
+        })
+        .collect();
+
+    quote! {
+        #[cfg(feature = "rlm")]
+        impl ::rlm_core::RlmInputFields for #input_name {
+            fn rlm_py_fields(
+                &self,
+                py: ::pyo3::Python<'_>,
+            ) -> Vec<(String, ::pyo3::Py<::pyo3::PyAny>)> {
+                vec![
+                    #(
+                        (
+                            #input_field_names.to_string(),
+                            ::pyo3::IntoPyObjectExt::into_py_any(self.#input_field_idents.clone(), py)
+                                .expect("IntoPyObject failed for input field"),
+                        )
+                    ),*
+                ]
+            }
+
+            fn rlm_variables(&self) -> Vec<::rlm_core::RlmVariable> {
+                vec![
+                    #(
+                        ::rlm_core::RlmVariable::from_rust(#input_field_names, &self.#input_field_idents)
+                            .with_description(#input_field_descs)
+                            .with_constraints(#input_field_constraints)
+                    ),*
+                ]
+            }
+        }
+    }
 }
 
 fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {

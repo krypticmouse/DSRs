@@ -28,6 +28,9 @@ bon = "3.7.0"
 baml-bridge = { path = "../baml-bridge", features = ["derive"] }
 thiserror = "2.0.17"
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
+rlm-core = { path = "../rlm-core", optional = true }
+rlm-derive = { path = "../rlm-derive", optional = true }
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 csv = { version = "1.3.1" }
 hf-hub = { version = "0.4.3", features = ["tokio"] }
 parquet = { version = "56.1.0" }
@@ -40,6 +43,9 @@ foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
 rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
 enum_dispatch = "0.3.13"
+
+[features]
+rlm = ["dep:rlm-core", "dep:rlm-derive", "dep:pyo3", "dsrs_macros/rlm", "rlm-core/pyo3"]
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]

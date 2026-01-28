@@ -28,6 +28,10 @@ pub use baml_bridge::baml_types::{
 pub use baml_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use baml_bridge::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
+#[cfg(feature = "rlm")]
+pub use rlm_core;
+#[cfg(feature = "rlm")]
+pub use rlm_derive::*;
 
 #[deprecated(
     since = "0.2.0",

@@ -7,9 +7,10 @@ publish = false
 description = "Core traits for RLM type description and introspection"
 
 [dependencies]
-# No required dependencies - traits are pure Rust
+pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 
 [features]
 default = []
+pyo3 = ["dep:pyo3"]
 
 [dev-dependencies]
