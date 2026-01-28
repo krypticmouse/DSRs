@@ -36,6 +36,8 @@ pub use rlm_derive::*;
 pub mod py;
 #[cfg(feature = "rlm")]
 pub mod rlm;
+#[cfg(feature = "rlm")]
+pub use rlm::{RlmAdapter, RlmConfig, RlmError, RlmResult, TypedRlm};
 
 #[deprecated(
     since = "0.2.0",
