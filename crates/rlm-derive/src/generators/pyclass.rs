@@ -26,12 +26,15 @@ pub fn generate_pymethods(attrs: &RlmTypeAttrs) -> TokenStream {
         .map(generate_getter)
         .collect();
 
+    let schema_method = generate_schema_method(attrs);
     let baml_method = generate_baml_method();
 
     quote! {
         #[pyo3::pymethods]
         impl #impl_generics #struct_name #ty_generics #where_clause {
             #(#getters)*
+
+            #schema_method
 
             #baml_method
         }
@@ -59,6 +62,7 @@ pub fn generate_pymethods_with_repr(
         .map(generate_getter)
         .collect();
 
+    let schema_method = generate_schema_method(attrs);
     let baml_method = generate_baml_method();
 
     quote! {
@@ -69,6 +73,8 @@ pub fn generate_pymethods_with_repr(
             #repr_method
 
             #(#extra_methods)*
+
+            #schema_method
 
             #baml_method
         }
@@ -171,6 +177,37 @@ fn generate_baml_method() -> TokenStream {
         fn __baml__(&self, py: ::pyo3::Python<'_>) -> ::pyo3::PyResult<::pyo3::PyObject> {
             let value = ::baml_bridge::ToBamlValue::to_baml_value(self);
             Ok(::baml_bridge::py::baml_value_to_py(py, &value))
+        }
+    }
+}
+
+/// Generate the `__rlm_schema__()` method.
+///
+/// Returns a dict mapping field name -> (type, desc) for REPL discovery.
+fn generate_schema_method(attrs: &RlmTypeAttrs) -> TokenStream {
+    let field_entries: Vec<TokenStream> = attrs
+        .fields()
+        .filter(|field| field.should_include_in_schema())
+        .map(|field| {
+            let name = field.name();
+            let desc = field.desc.clone().unwrap_or_default();
+            let field_ty = &field.ty;
+            quote! {
+                ::pyo3::types::PyDictMethods::set_item(
+                    &schema,
+                    #name,
+                    (stringify!(#field_ty), #desc),
+                )?;
+            }
+        })
+        .collect();
+
+    quote! {
+        /// Machine-readable field schema for REPL discovery.
+        fn __rlm_schema__(&self, py: ::pyo3::Python<'_>) -> ::pyo3::PyResult<::pyo3::PyObject> {
+            let schema = ::pyo3::types::PyDict::new(py);
+            #(#field_entries)*
+            Ok(schema.into_any().unbind())
         }
     }
 }
