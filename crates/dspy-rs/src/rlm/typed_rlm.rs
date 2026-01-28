@@ -14,20 +14,9 @@ use crate::baml_bridge::BamlValueConvert;
 use crate::rlm_core::RlmInputFields;
 use crate::{ChatAdapter, LmError, Message, Signature};
 
+use super::history::{render_history, ReplHistoryEntry};
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
 use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
-
-#[derive(Debug, Clone)]
-struct ReplHistoryEntry {
-    code: String,
-    output: String,
-}
-
-impl ReplHistoryEntry {
-    fn new(code: String, output: String) -> Self {
-        Self { code, output }
-    }
-}
 
 /// Typed Recursive Language Model.
 ///
@@ -314,25 +303,6 @@ fn format_output_instructions<S: Signature>() -> String {
     message
 }
 
-fn render_history(entries: &[ReplHistoryEntry], max_output_chars: usize) -> String {
-    let mut output = String::new();
-    for (idx, entry) in entries.iter().enumerate() {
-        let output_len = entry.output.chars().count();
-        let truncated_output = truncate_history_output(&entry.output, max_output_chars);
-        output.push_str(&format!("=== Step {} ===\n", idx + 1));
-        output.push_str("Code:\n```python\n");
-        output.push_str(&entry.code);
-        output.push_str("\n```\n");
-        output.push_str(&format!(
-            "Output ({} chars):\n",
-            format_count(output_len)
-        ));
-        output.push_str(&truncated_output);
-        output.push_str("\n\n");
-    }
-    output.trim_end().to_string()
-}
-
 fn format_submit_validation(message: &str, errors: &[String], schema: &str) -> String {
     let joined = errors.join("\n");
     if schema.trim().is_empty() {
@@ -357,48 +327,5 @@ fn format_submit_validation(message: &str, errors: &[String], schema: &str) -> S
         format!("Expected schema:\n{schema}")
     } else {
         format!("{base}\n\nExpected schema:\n{schema}")
-    }
-}
-
-fn truncate_history_output(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let total = text.chars().count();
-    if total <= max_chars {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max_chars).collect();
-    format!(
-        "{truncated}\n... (truncated to {}/{} chars)",
-        format_count(max_chars),
-        format_count(total)
-    )
-}
-
-fn format_count(value: usize) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (idx, ch) in digits.chars().rev().enumerate() {
-        if idx > 0 && idx % 3 == 0 {
-            formatted.push(',');
-        }
-        formatted.push(ch);
-    }
-    formatted.chars().rev().collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn render_history_truncates_with_marker() {
-        let entry = ReplHistoryEntry::new("x = 1".to_string(), "a".repeat(10));
-        let rendered = render_history(&[entry], 4);
-
-        assert!(rendered.contains("=== Step 1 ==="));
-        assert!(rendered.contains("Output (10 chars):"));
-        assert!(rendered.contains("aaaa\n... (truncated to 4/10 chars)"));
     }
 }

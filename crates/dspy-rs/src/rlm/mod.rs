@@ -4,6 +4,7 @@ pub mod config;
 pub mod command;
 pub mod exec;
 pub mod error;
+mod history;
 pub mod prompt;
 pub mod submit;
 pub mod tools;
