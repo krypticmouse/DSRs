@@ -1,38 +1,50 @@
 #![cfg(feature = "rlm")]
 
 use crate::{BamlConvertError, BamlValue, LmError, ParseError};
+use pyo3::PyErr;
 
 #[derive(Debug, thiserror::Error)]
 pub enum RlmError {
     #[error("LLM call failed")]
-    Lm {
+    LlmError {
         #[source]
         source: LmError,
     },
 
-    #[error("submission assertion failed: {label} ({expression})")]
-    SubmitAssertion { label: String, expression: String },
+    #[error("assertion '{label}' failed: {expression}")]
+    AssertionFailed { label: String, expression: String },
 
     #[error("failed to convert SUBMIT output")]
-    Conversion {
+    ConversionError {
         #[source]
         source: BamlConvertError,
         value: BamlValue,
     },
 
     #[error("failed to parse extraction fallback response")]
-    ExtractionParse {
+    ExtractionFailed {
         #[source]
         source: ParseError,
         raw_response: String,
     },
 
     #[error("max iterations ({max}) reached without SUBMIT")]
-    MaxIterations { max: usize },
+    MaxIterationsReached { max: usize },
+
+    #[error("max LLM calls ({max}) exceeded")]
+    MaxLlmCallsExceeded { max: usize },
+
+    #[error("python error: {message}")]
+    PythonError { message: String },
 
     #[error("tokio runtime unavailable: {message}")]
     RuntimeUnavailable { message: String },
+}
 
-    #[error("python setup failed: {message}")]
-    PythonSetup { message: String },
+impl From<PyErr> for RlmError {
+    fn from(err: PyErr) -> Self {
+        RlmError::PythonError {
+            message: err.to_string(),
+        }
+    }
 }

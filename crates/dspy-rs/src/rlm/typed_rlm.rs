@@ -73,7 +73,7 @@ impl<S: Signature> TypedRlm<S> {
                 .agent
                 .prompt(&prompt)
                 .await
-                .map_err(|err| RlmError::Lm {
+                .map_err(|err| RlmError::LlmError {
                     source: LmError::Provider {
                         provider: "rig".to_string(),
                         message: err.to_string(),
@@ -105,7 +105,7 @@ impl<S: Signature> TypedRlm<S> {
                                 baml_value.clone(),
                                 Vec::new(),
                             )
-                            .map_err(|err| RlmError::Conversion {
+                            .map_err(|err| RlmError::ConversionError {
                                 source: err,
                                 value: baml_value,
                             })?;
@@ -121,7 +121,7 @@ impl<S: Signature> TypedRlm<S> {
                     }
                     Err(SubmitError::AssertionFailed { label, expression }) => {
                         if self.config.strict_assertions {
-                            return Err(RlmError::SubmitAssertion { label, expression });
+                            return Err(RlmError::AssertionFailed { label, expression });
                         }
                         output = format!(
                             "[Error] Assertion '{}' failed: {}",
@@ -151,7 +151,7 @@ impl<S: Signature> TypedRlm<S> {
                 .await;
         }
 
-        Err(RlmError::MaxIterations {
+        Err(RlmError::MaxIterationsReached {
             max: self.config.max_iterations,
         })
     }
@@ -171,7 +171,7 @@ impl<S: Signature> TypedRlm<S> {
             .agent
             .prompt(&prompt)
             .await
-            .map_err(|err| RlmError::Lm {
+            .map_err(|err| RlmError::LlmError {
                 source: LmError::Provider {
                     provider: "rig".to_string(),
                     message: err.to_string(),
@@ -184,7 +184,7 @@ impl<S: Signature> TypedRlm<S> {
         let chat_adapter = ChatAdapter::default();
         let (typed_output, field_metas) = chat_adapter
             .parse_response_typed::<S>(&message)
-            .map_err(|err| RlmError::ExtractionParse {
+            .map_err(|err| RlmError::ExtractionFailed {
                 source: err,
                 raw_response: raw_response.clone(),
             })?;
@@ -215,9 +215,7 @@ where
         globals.set_item("SUBMIT", Py::new(py, submit_handler.clone())?)?;
         Ok(globals.unbind())
     })
-    .map_err(|err| RlmError::PythonSetup {
-        message: err.to_string(),
-    })
+    .map_err(RlmError::from)
 }
 
 fn take_submit_result(rx: &Arc<Mutex<Option<SubmitResultDyn>>>) -> Option<SubmitResultDyn> {
