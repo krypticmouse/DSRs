@@ -11,7 +11,7 @@ Requires OPENAI_API_KEY in the environment.
 
 use anyhow::Result;
 use dspy_rs::rlm::{RlmResult, TypedRlm};
-use dspy_rs::{rlm_type, RlmType, Signature};
+use dspy_rs::{rlm_type, Signature};
 use rig::prelude::*;
 use rig::providers::openai;
 
