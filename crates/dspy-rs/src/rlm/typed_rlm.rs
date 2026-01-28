@@ -63,7 +63,12 @@ impl<S: Signature> TypedRlm<S> {
 
         while iterations < self.config.max_iterations {
             iterations += 1;
-            let prompt = adapter.build_prompt::<S>(&variable_descriptions, &schema, &history);
+            let prompt = adapter.build_prompt::<S>(
+                &variable_descriptions,
+                &schema,
+                &history,
+                iterations,
+            );
             let response = self
                 .agent
                 .prompt(&prompt)
