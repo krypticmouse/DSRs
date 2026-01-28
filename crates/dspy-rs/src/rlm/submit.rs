@@ -8,7 +8,10 @@ use pyo3::types::{PyDict, PyDictMethods};
 
 use baml_bridge::BamlParseError;
 
-use crate::{BamlValue, ConstraintResult, FieldMeta, Flag, ResponseCheck, Signature};
+use crate::{
+    BamlValue, ConstraintKind, ConstraintResult, FieldMeta, Flag, ResponseCheck, Signature,
+    TypeIR,
+};
 
 /// Result of a SUBMIT call.
 #[derive(Debug, Clone)]
@@ -263,18 +266,76 @@ fn format_type_error(err: &baml_bridge::BamlConvertError) -> String {
 }
 
 fn generate_schema_description<S: Signature>() -> String {
-    let fields: Vec<String> = S::output_fields()
-        .iter()
-        .map(|field| field.name.to_string())
-        .collect();
-
+    let fields = S::output_fields();
     if fields.is_empty() {
         return String::new();
     }
 
-    format!("SUBMIT({})", fields.join(", "))
+    let mut desc = String::new();
+    desc.push_str("SUBMIT(");
+    desc.push_str(&fields.iter().map(|field| field.name).collect::<Vec<_>>().join(", "));
+    desc.push_str(") where:\n");
+
+    for field in fields {
+        let type_ir = (field.type_ir)();
+        let type_name = format_type_name(&type_ir);
+        desc.push_str(&format!("  {}: {}", field.name, type_name));
+
+        if !field.description.is_empty() {
+            desc.push_str(&format!("  # {}", field.description));
+        }
+        desc.push('\n');
+
+        for constraint in field.constraints {
+            let kind = match constraint.kind {
+                ConstraintKind::Check => "check",
+                ConstraintKind::Assert => "ASSERT",
+            };
+            if constraint.label.is_empty() {
+                desc.push_str(&format!("    [{kind}] {}\n", constraint.expression));
+            } else {
+                desc.push_str(&format!(
+                    "    [{kind}] {}: {}\n",
+                    constraint.label, constraint.expression
+                ));
+            }
+        }
+    }
+
+    desc.trim_end().to_string()
 }
 
 fn py_err_to_value(err: pyo3::PyErr) -> pyo3::PyErr {
     pyo3::exceptions::PyValueError::new_err(err.to_string())
+}
+
+fn format_type_name(type_ir: &TypeIR) -> String {
+    let raw = type_ir.diagnostic_repr().to_string();
+    simplify_type_name(&raw)
+        .replace("class ", "")
+        .replace("enum ", "")
+        .replace(" | ", " or ")
+        .trim()
+        .to_string()
+}
+
+fn simplify_type_name(raw: &str) -> String {
+    let mut result = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            let mut token = String::new();
+            for next in chars.by_ref() {
+                if next == '`' {
+                    break;
+                }
+                token.push(next);
+            }
+            let simplified = token.rsplit("::").next().unwrap_or(&token);
+            result.push_str(simplified);
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }
