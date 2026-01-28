@@ -45,7 +45,14 @@ rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
 enum_dispatch = "0.3.13"
 
 [features]
-rlm = ["dep:rlm-core", "dep:rlm-derive", "dep:pyo3", "dsrs_macros/rlm", "rlm-core/pyo3"]
+rlm = [
+  "dep:rlm-core",
+  "dep:rlm-derive",
+  "dep:pyo3",
+  "dsrs_macros/rlm",
+  "rlm-core/pyo3",
+  "baml-bridge/pyo3",
+]
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]

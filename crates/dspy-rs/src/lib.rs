@@ -32,6 +32,8 @@ pub use dsrs_macros::*;
 pub use rlm_core;
 #[cfg(feature = "rlm")]
 pub use rlm_derive::*;
+#[cfg(feature = "rlm")]
+pub mod py;
 
 #[deprecated(
     since = "0.2.0",
