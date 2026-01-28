@@ -101,6 +101,7 @@ fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::
         .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
 
     let iter_support = generators::generate_iter_support(&attrs)?;
+    let describe_impl = generators::generate_describe(&attrs)?;
     let property_methods = generators::generate_properties(&attrs)?;
 
     // Generate the #[pymethods] impl block
@@ -115,6 +116,7 @@ fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::
     let mut output = proc_macro2::TokenStream::new();
     output.extend(iter_support.extra_items);
     output.extend(pymethods);
+    output.extend(describe_impl);
 
     Ok(output)
 }
