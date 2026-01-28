@@ -101,11 +101,16 @@ fn expand_derive_rlm_type(input: &syn::DeriveInput) -> syn::Result<proc_macro2::
         .map_err(|e| syn::Error::new_spanned(input, e.to_string()))?;
 
     let iter_support = generators::generate_iter_support(&attrs)?;
+    let property_methods = generators::generate_properties(&attrs)?;
 
     // Generate the #[pymethods] impl block
     // TODO (Task 1.7): Add __rlm_schema__ generation
+    let mut extra_methods = Vec::new();
+    extra_methods.extend(iter_support.methods);
+    extra_methods.extend(property_methods);
+
     let pymethods =
-        generators::generate_pymethods_with_repr(&attrs, repr_method, &iter_support.methods);
+        generators::generate_pymethods_with_repr(&attrs, repr_method, &extra_methods);
 
     let mut output = proc_macro2::TokenStream::new();
     output.extend(iter_support.extra_items);
