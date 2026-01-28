@@ -8,7 +8,7 @@ use pyo3::types::{PyDict, PyDictMethods};
 
 use baml_bridge::BamlParseError;
 
-use crate::{BamlValue, ConstraintResult, FieldMeta, ResponseCheck, Signature};
+use crate::{BamlValue, ConstraintResult, FieldMeta, Flag, ResponseCheck, Signature};
 
 /// Result of a SUBMIT call.
 #[derive(Debug, Clone)]
@@ -42,6 +42,7 @@ pub enum SubmitError {
 
 pub struct ParsedDyn {
     pub baml_value: BamlValue,
+    pub flags: Vec<Flag>,
     pub checks: Vec<ResponseCheck>,
 }
 
@@ -75,7 +76,11 @@ impl SubmitHandler {
         > = Arc::new(|py, kwargs| {
             let baml_value = crate::py::kwargs_to_baml_value::<S>(py, kwargs)?;
             let checks = crate::py::collect_checks_for_output::<S>(&baml_value)?;
-            Ok(ParsedDyn { baml_value, checks })
+            Ok(ParsedDyn {
+                baml_value,
+                flags: Vec::new(),
+                checks,
+            })
         });
 
         let handler = Self {
@@ -205,6 +210,8 @@ fn build_field_metas(
         flags: Vec::new(),
         checks: Vec::new(),
     };
+
+    meta.flags.extend(parsed.flags.iter().cloned());
 
     for check in &parsed.checks {
         meta.checks.push(ConstraintResult {
