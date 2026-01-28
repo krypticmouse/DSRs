@@ -15,6 +15,7 @@ use crate::attrs::{RlmFieldAttrs, RlmTypeAttrs};
 /// This generates:
 /// - Field getters for all fields not marked `skip_python`
 /// - `__baml__()` method that converts to a JSON-like Python object
+#[allow(dead_code)]
 pub fn generate_pymethods(attrs: &RlmTypeAttrs) -> TokenStream {
     let struct_name = &attrs.ident;
     let (impl_generics, ty_generics, where_clause) = attrs.generics.split_for_impl();
@@ -122,10 +123,8 @@ fn getter_strategy(ty: &Type, field_name: &syn::Ident) -> (TokenStream, TokenStr
 
 /// Check if a type is `String`.
 fn is_string_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            return segment.ident == "String";
-        }
+    if let Type::Path(type_path) = ty && let Some(segment) = type_path.path.segments.last() {
+        return segment.ident == "String";
     }
     false
 }
@@ -135,29 +134,27 @@ fn is_string_type(ty: &Type) -> bool {
 /// This is a heuristic - we check for common primitive types.
 /// For complex types, we default to cloning.
 fn is_copy_type(ty: &Type) -> bool {
-    if let Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.last() {
-            let ident = segment.ident.to_string();
-            return matches!(
-                ident.as_str(),
-                "bool"
-                    | "i8"
-                    | "i16"
-                    | "i32"
-                    | "i64"
-                    | "i128"
-                    | "isize"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "u128"
-                    | "usize"
-                    | "f32"
-                    | "f64"
-                    | "char"
-            );
-        }
+    if let Type::Path(type_path) = ty && let Some(segment) = type_path.path.segments.last() {
+        let ident = segment.ident.to_string();
+        return matches!(
+            ident.as_str(),
+            "bool"
+                | "i8"
+                | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "isize"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "char"
+        );
     }
     false
 }

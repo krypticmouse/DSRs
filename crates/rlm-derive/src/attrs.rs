@@ -21,6 +21,7 @@ use syn::{Ident, Type};
 /// }
 /// ```
 #[derive(Debug, Clone, FromMeta)]
+#[allow(dead_code)]
 pub struct RlmPropertyAttrs {
     /// Property name as exposed in Python.
     pub name: String,
@@ -59,10 +60,12 @@ pub struct RlmTypeAttrs {
 
     /// Override the Python class name (defaults to Rust struct name).
     #[darling(default)]
+    #[allow(dead_code)]
     pub pyclass_name: Option<String>,
 
     /// Computed properties to document in schema.
     #[darling(default, multiple)]
+    #[allow(dead_code)]
     pub property: Vec<RlmPropertyAttrs>,
 }
 
@@ -102,6 +105,7 @@ pub struct RlmFieldAttrs {
     /// The field on the enum/struct to check for filtering.
     /// If not specified, assumes discriminant/variant matching.
     #[darling(default)]
+    #[allow(dead_code)]
     pub filter_field: Option<String>,
 
     /// Flatten a nested collection into a computed property.
@@ -116,10 +120,12 @@ pub struct RlmFieldAttrs {
     ///
     /// Generates `all_steps` that chains all trajectory.steps together.
     #[darling(default)]
+    #[allow(dead_code)]
     pub flatten_property: Option<String>,
 
     /// The parent collection to flatten from.
     #[darling(default)]
+    #[allow(dead_code)]
     pub flatten_parent: Option<String>,
 
     /// Skip generating a Python getter for this field.
@@ -128,11 +134,13 @@ pub struct RlmFieldAttrs {
 
     /// Skip including this field in the schema output.
     #[darling(default)]
+    #[allow(dead_code)]
     pub skip_schema: bool,
 }
 
 impl RlmTypeAttrs {
     /// Returns the Python class name (either explicit or derived from ident).
+    #[allow(dead_code)]
     pub fn python_class_name(&self) -> String {
         self.pyclass_name
             .clone()
@@ -180,11 +188,13 @@ impl RlmFieldAttrs {
     }
 
     /// Check if this field has filter configuration.
+    #[allow(dead_code)]
     pub fn has_filter(&self) -> bool {
         self.filter_property.is_some() && self.filter_value.is_some()
     }
 
     /// Check if this field has flatten configuration.
+    #[allow(dead_code)]
     pub fn has_flatten(&self) -> bool {
         self.flatten_property.is_some()
     }
@@ -195,6 +205,7 @@ impl RlmFieldAttrs {
     }
 
     /// Returns true if this field should be included in schema.
+    #[allow(dead_code)]
     pub fn should_include_in_schema(&self) -> bool {
         !self.skip_schema
     }
@@ -226,25 +237,21 @@ impl RlmTypeAttrs {
         let mut errors = Vec::new();
 
         // Validate iter_field exists if specified
-        if let Some(ref iter_name) = self.iter_field {
-            if self.iter_field_attrs().is_none() {
-                errors.push(format!(
-                    "iter field `{}` not found in struct `{}`",
-                    iter_name,
-                    self.ident
-                ));
-            }
+        if let Some(ref iter_name) = self.iter_field && self.iter_field_attrs().is_none() {
+            errors.push(format!(
+                "iter field `{}` not found in struct `{}`",
+                iter_name,
+                self.ident
+            ));
         }
 
         // Validate index_field exists if specified
-        if let Some(ref index_name) = self.index_field {
-            if self.index_field_attrs().is_none() {
-                errors.push(format!(
-                    "index field `{}` not found in struct `{}`",
-                    index_name,
-                    self.ident
-                ));
-            }
+        if let Some(ref index_name) = self.index_field && self.index_field_attrs().is_none() {
+            errors.push(format!(
+                "index field `{}` not found in struct `{}`",
+                index_name,
+                self.ident
+            ));
         }
 
         // Validate each field
