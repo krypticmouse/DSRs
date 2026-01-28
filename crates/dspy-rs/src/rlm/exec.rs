@@ -131,6 +131,17 @@ mod tests {
     }
 
     #[test]
+    fn returns_no_output_message_when_no_stdout_or_repr() {
+        let output = Python::attach(|py| {
+            let globals = PyDict::new(py).unbind();
+            execute_repl_code(&globals, "x = 1", 100)
+        })
+        .expect("exec");
+
+        assert_eq!(output, NO_OUTPUT_MESSAGE);
+    }
+
+    #[test]
     fn returns_error_for_invalid_code() {
         let result = Python::attach(|py| {
             let globals = PyDict::new(py).unbind();
