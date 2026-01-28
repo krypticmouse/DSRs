@@ -40,6 +40,8 @@
 //! ```
 
 pub mod describe;
+pub mod variable;
 
 // Re-export main types at crate root for convenience
 pub use describe::{RlmDescribe, RlmFieldDesc, RlmPropertyDesc, RlmTypeInfo};
+pub use variable::RlmVariable;
