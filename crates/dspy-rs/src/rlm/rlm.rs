@@ -5,17 +5,20 @@ use std::sync::{Arc, Mutex};
 
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use pyo3::{Py, PyResult, Python};
+use regex::Regex;
 use tokio::runtime::Handle;
+use std::sync::LazyLock;
 
-use crate::baml_bridge::BamlValueConvert;
+use crate::baml_bridge::{BamlValueConvert, ToBamlValue};
 use crate::core::settings::GLOBAL_SETTINGS;
 use crate::rlm_core::RlmInputFields;
-use crate::{ChatAdapter, LmError, Message, Signature, LM};
+use crate::{Predict, Signature, LM};
 
 use super::adapter::RlmAdapter;
 use super::history::REPLHistory;
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
-use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
+use super::signatures::{RlmActionSig, RlmActionSigInput, RlmExtractInput, RlmExtractSig};
+use super::{execute_repl_code, LlmTools, RlmConfig, RlmError, RlmResult};
 
 /// Recursive Language Model module.
 ///
@@ -24,13 +27,13 @@ use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult
 pub struct Rlm<S: Signature> {
     config: RlmConfig,
     lm_override: Option<Arc<LM>>,
+    generate_action: Predict<RlmActionSig>,
+    extract: Predict<RlmExtractSig<S>>,
     _marker: PhantomData<S>,
 }
 
 struct ExtractionFallbackContext<'a> {
-    adapter: &'a RlmAdapter,
-    variable_descriptions: &'a str,
-    schema: &'a str,
+    variables_info: &'a str,
     history: &'a REPLHistory,
     iterations: usize,
     llm_calls: usize,
@@ -39,29 +42,63 @@ struct ExtractionFallbackContext<'a> {
 impl<S: Signature> Rlm<S> {
     /// Create with default config, using global LM settings.
     pub fn new() -> Self {
+        let config = RlmConfig::default();
+        let (generate_action, extract) = Self::build_predictors(&config, None);
         Self {
-            config: RlmConfig::default(),
+            config,
             lm_override: None,
+            generate_action,
+            extract,
             _marker: PhantomData,
         }
     }
 
     /// Create with custom config.
     pub fn with_config(config: RlmConfig) -> Self {
+        let (generate_action, extract) = Self::build_predictors(&config, None);
         Self {
             config,
             lm_override: None,
+            generate_action,
+            extract,
             _marker: PhantomData,
         }
     }
 
     /// Create with explicit LM (overrides global settings).
     pub fn with_lm(lm: Arc<LM>) -> Self {
+        let config = RlmConfig::default();
+        let (generate_action, extract) = Self::build_predictors(&config, Some(Arc::clone(&lm)));
         Self {
-            config: RlmConfig::default(),
+            config,
             lm_override: Some(lm),
+            generate_action,
+            extract,
             _marker: PhantomData,
         }
+    }
+
+    fn build_predictors(
+        config: &RlmConfig,
+        lm_override: Option<Arc<LM>>,
+    ) -> (Predict<RlmActionSig>, Predict<RlmExtractSig<S>>) {
+        let adapter = RlmAdapter::new(config.clone());
+        let action_instruction = adapter.build_action_instruction::<S>();
+        let extract_instruction = adapter.build_extract_instruction::<S>();
+
+        let mut generate_action = Predict::<RlmActionSig>::builder()
+            .instruction(action_instruction);
+        let mut extract = Predict::<RlmExtractSig<S>>::builder()
+            .instruction(extract_instruction);
+
+        if let Some(lm) = lm_override {
+            generate_action = generate_action.with_lm(Arc::clone(&lm));
+            extract = extract.with_lm(lm);
+        }
+
+        let generate_action = generate_action.build();
+        let extract = extract.build();
+        (generate_action, extract)
     }
 
     fn get_lm(&self) -> Result<Arc<LM>, RlmError> {
@@ -80,11 +117,13 @@ impl<S: Signature> Rlm<S> {
     pub async fn call(&self, input: S::Input) -> Result<RlmResult<S>, RlmError>
     where
         S::Input: RlmInputFields,
+        S::Output: Clone + ToBamlValue,
     {
         let adapter = RlmAdapter::new(self.config.clone());
         let variable_descriptions = adapter.variable_previews::<S>(&input);
         let (submit_handler, submit_rx) = SubmitHandler::new::<S>();
         let schema = submit_handler.schema();
+        let variables_info = adapter.build_variables_info::<S>(&variable_descriptions, &schema);
         let runtime = Handle::try_current().map_err(|err| RlmError::RuntimeUnavailable {
             message: err.to_string(),
         })?;
@@ -97,31 +136,29 @@ impl<S: Signature> Rlm<S> {
 
         while iterations < self.config.max_iterations {
             iterations += 1;
-            let prompt = adapter.build_prompt::<S>(
-                &variable_descriptions,
-                &schema,
-                &history,
-                iterations,
-            );
-            let response = lm.prompt(&prompt).await.map_err(|err| RlmError::LlmError {
-                source: LmError::Provider {
-                    provider: "dspy-rs".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            })?;
-            main_calls += 1;
-
-            let Some(command) = Command::parse(&response) else {
-                let output = "No executable command found. Wrap Python in ```repl``` or ```python``` fences, or call SUBMIT(...).".to_string();
-                history = history.append(response, output);
-                continue;
+            let action_input = RlmActionSigInput {
+                variables_info: variables_info.clone(),
+                repl_history: history.render(),
+                iteration: format!("{}/{}", iterations, self.config.max_iterations),
             };
 
-            let mut output = if command.code().trim().is_empty() {
+            let action = self
+                .generate_action
+                .call(action_input)
+                .await
+                .map_err(|err| RlmError::PredictError {
+                    stage: "action",
+                    source: err,
+                })?;
+            main_calls += 1;
+
+            let (_, action_output) = action.output.into_parts();
+            let code = strip_code_fences(&action_output.code);
+
+            let mut output = if code.trim().is_empty() {
                 "No code provided.".to_string()
             } else {
-                match execute_repl_code(&globals, command.code(), self.config.max_output_chars) {
+                match execute_repl_code(&globals, &code, self.config.max_output_chars) {
                     Ok(result) => result,
                     Err(err) => format!("Python error: {err}"),
                 }
@@ -164,14 +201,12 @@ impl<S: Signature> Rlm<S> {
                 }
             }
 
-            history = history.append(command.code().to_string(), output);
+            history = history.append_with_reasoning(action_output.reasoning, code, output);
         }
 
         if self.config.enable_extraction_fallback {
             let context = ExtractionFallbackContext {
-                adapter: &adapter,
-                variable_descriptions: &variable_descriptions,
-                schema: &schema,
+                variables_info: &variables_info,
                 history: &history,
                 iterations,
                 llm_calls: main_calls + tools.call_count(),
@@ -188,30 +223,23 @@ impl<S: Signature> Rlm<S> {
         &self,
         input: S::Input,
         context: ExtractionFallbackContext<'_>,
-    ) -> Result<RlmResult<S>, RlmError> {
-        let prompt = context.adapter.build_extraction_prompt::<S>(
-            context.variable_descriptions,
-            context.schema,
-            context.history,
-        );
-        let lm = self.get_lm()?;
-        let response = lm.prompt(&prompt).await.map_err(|err| RlmError::LlmError {
-            source: LmError::Provider {
-                provider: "dspy-rs".to_string(),
-                message: err.to_string(),
-                source: None,
-            },
-        })?;
+    ) -> Result<RlmResult<S>, RlmError>
+    where
+        S::Output: Clone + ToBamlValue,
+    {
+        let extract_input = RlmExtractInput {
+            variables_info: context.variables_info.to_string(),
+            repl_history: context.history.render(),
+        };
 
-        let raw_response = response.clone();
-        let message = Message::assistant(response);
-        let chat_adapter = ChatAdapter;
-        let (typed_output, field_metas) = chat_adapter
-            .parse_response_typed::<S>(&message)
-            .map_err(|err| RlmError::ExtractionFailed {
+        let extract_result = self.extract.call(extract_input).await.map_err(|err| {
+            RlmError::PredictError {
+                stage: "extract",
                 source: err,
-                raw_response: raw_response.clone(),
-            })?;
+            }
+        })?;
+        let field_metas = extract_result.field_metas().clone();
+        let (_, typed_output) = extract_result.output.into_parts();
 
         Ok(RlmResult::new(
             input,
@@ -228,6 +256,21 @@ impl<S: Signature> Default for Rlm<S> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+static CODE_FENCE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)^```(?:repl|python|py)?\s*\r?\n(?P<code>.*)\n```\s*$")
+        .expect("valid code fence regex")
+});
+
+fn strip_code_fences(code: &str) -> String {
+    let trimmed = code.trim();
+    if let Some(caps) = CODE_FENCE_PATTERN.captures(trimmed) {
+        if let Some(capture) = caps.name("code") {
+            return capture.as_str().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 impl<S: Signature> Rlm<S> {
@@ -292,9 +335,13 @@ impl<S: Signature> RlmBuilder<S> {
 
     /// Build the Rlm instance.
     pub fn build(self) -> Rlm<S> {
+        let (generate_action, extract) =
+            Rlm::build_predictors(&self.config, self.lm_override.as_ref().map(Arc::clone));
         Rlm {
             config: self.config,
             lm_override: self.lm_override,
+            generate_action,
+            extract,
             _marker: PhantomData,
         }
     }

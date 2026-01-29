@@ -19,6 +19,7 @@ pub struct Predict<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<S>,
     instruction_override: Option<String>,
+    lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
 
@@ -28,6 +29,7 @@ impl<S: Signature> Predict<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            lm_override: None,
             _marker: PhantomData,
         }
     }
@@ -36,27 +38,25 @@ impl<S: Signature> Predict<S> {
         PredictBuilder::new()
     }
 
-    pub async fn call(&self, input: S::Input) -> Result<S, PredictError>
-    where
-        S: Clone,
-        S::Input: ToBamlValue,
-        S::Output: ToBamlValue,
-    {
-        Ok(self.call_with_meta(input).await?.output)
+    pub fn with_lm(mut self, lm: Arc<LM>) -> Self {
+        self.lm_override = Some(lm);
+        self
     }
 
-    pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
+    pub async fn call(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
     where
         S: Clone,
         S::Input: ToBamlValue,
         S::Output: ToBamlValue,
     {
-        let lm = {
-            let guard = GLOBAL_SETTINGS.read().unwrap();
-            let settings = guard.as_ref().unwrap();
-            Arc::clone(&settings.lm)
+        let lm = match &self.lm_override {
+            Some(lm) => Arc::clone(lm),
+            None => {
+                let guard = GLOBAL_SETTINGS.read().unwrap();
+                let settings = guard.as_ref().unwrap();
+                Arc::clone(&settings.lm)
+            }
         };
-
         let chat_adapter = ChatAdapter;
         let system = chat_adapter
             .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
@@ -135,6 +135,7 @@ pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<S>,
     instruction_override: Option<String>,
+    lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
 
@@ -144,6 +145,7 @@ impl<S: Signature> PredictBuilder<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            lm_override: None,
             _marker: PhantomData,
         }
     }
@@ -173,11 +175,17 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
+    pub fn with_lm(mut self, lm: Arc<LM>) -> Self {
+        self.lm_override = Some(lm);
+        self
+    }
+
     pub fn build(self) -> Predict<S> {
         Predict {
             tools: self.tools,
             demos: self.demos,
             instruction_override: self.instruction_override,
+            lm_override: self.lm_override,
             _marker: PhantomData,
         }
     }
@@ -326,7 +334,7 @@ where
     async fn forward(&self, inputs: Example) -> Result<Prediction> {
         let typed_input = input_from_example::<S>(&inputs)?;
         let call_result = self
-            .call_with_meta(typed_input)
+            .call(typed_input)
             .await
             .map_err(|err| anyhow::anyhow!(err))?;
         let (_, output) = call_result.output.into_parts();
@@ -344,8 +352,8 @@ where
                     parsed: input,
                 }
             })?;
-        let output = self.call(typed_input).await?;
-        Ok(output.to_baml_value())
+        let result = self.call(typed_input).await?;
+        Ok(result.output.to_baml_value())
     }
 }
 

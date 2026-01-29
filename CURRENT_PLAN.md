@@ -783,7 +783,7 @@ pub struct Predict<S: Signature> {
 * `.demo(...)`, `.with_demos(...)`
 * `.add_tool(...)`, `.with_tools(...)`
 
-### 5.2 Implement `call` and `call_with_meta`
+### 5.2 Implement `call` (returns `CallResult`)
 
 **File:** same
 
@@ -791,11 +791,7 @@ Add:
 
 ```rust
 impl<S: Signature> Predict<S> {
-    pub async fn call(&self, input: S::Input) -> Result<S, PredictError> {
-        Ok(self.call_with_meta(input).await?.output)
-    }
-
-    pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError> {
+    pub async fn call(&self, input: S::Input) -> Result<CallResult<S>, PredictError> {
         // 1) build Chat via ChatAdapter typed formatting
         // 2) call LM
         // 3) parse response via jsonish
@@ -805,7 +801,7 @@ impl<S: Signature> Predict<S> {
 }
 ```
 
-Implementation walkthrough inside `call_with_meta`:
+Implementation walkthrough inside `call`:
 
 1. Determine adapter + LM:
 
@@ -886,7 +882,7 @@ Plan:
    * `schema_fingerprint: Option<String>` (optional)
    * maybe `instruction: String` (optional)
 
-2. In `Predict::<S>::call_with_meta`, when tracing:
+2. In `Predict::<S>::call`, when tracing:
 
    * record Predict node with signature name `std::any::type_name::<S>()` or `S::...` static name if you add one.
    * store node_id into `CallResult`.
@@ -1111,7 +1107,7 @@ Here’s the tightest “touch list” to keep you oriented.
 
 * `crates/dspy-rs/src/predictors/predict.rs`
 
-  * implement `Predict<S: Signature>` with `call` and `call_with_meta`
+  * implement `Predict<S: Signature>` with `call` returning `CallResult`
   * integrate tools and trace
   * map errors into `PredictError`
 

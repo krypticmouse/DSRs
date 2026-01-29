@@ -82,7 +82,7 @@ async fn typed_prediction_happy_path_with_metadata() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let result = predict.call(input).await.unwrap();
 
     assert_eq!(result.output.answer, "Paris");
     assert!((result.output.confidence - 0.9).abs() < 1e-6);
@@ -109,7 +109,7 @@ async fn typed_prediction_check_failure_is_recorded() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let result = predict.call(input).await.unwrap();
 
     let checks = result.field_checks("confidence");
     let check = checks
@@ -132,7 +132,7 @@ async fn typed_prediction_missing_field_surfaces_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call_with_meta(input).await {
+    let err = match predict.call(input).await {
         Ok(_) => panic!("expected missing field error"),
         Err(err) => err,
     };
@@ -164,7 +164,7 @@ async fn typed_prediction_assert_failure_raises_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call_with_meta(input).await {
+    let err = match predict.call(input).await {
         Ok(_) => panic!("expected assert failure error"),
         Err(err) => err,
     };
@@ -210,7 +210,7 @@ async fn typed_i32_rating_parses_correctly() {
         answer: "The sky is blue because of Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let result = predict.call(input).await.unwrap();
     assert_eq!(result.output.rating, 8);
 }
 
@@ -228,7 +228,7 @@ async fn typed_i32_rating_parses_fraction() {
         answer: "Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let result = predict.call(input).await.unwrap();
     // 8/10 = 0.8, rounded to 1 as integer
     assert_eq!(result.output.rating, 1);
 }
@@ -248,7 +248,7 @@ async fn typed_i32_rating_parses_with_text() {
     };
 
     // This should fail to parse - demonstrates the limitation
-    let result = predict.call_with_meta(input).await;
+    let result = predict.call(input).await;
     assert!(
         result.is_err(),
         "Expected parse error for rating with surrounding text"

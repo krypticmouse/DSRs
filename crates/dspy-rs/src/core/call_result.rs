@@ -70,6 +70,10 @@ impl<O> CallResult<O> {
         self.fields.keys().map(|name| name.as_str())
     }
 
+    pub fn field_metas(&self) -> &IndexMap<String, FieldMeta> {
+        &self.fields
+    }
+
     pub fn has_failed_checks(&self) -> bool {
         self.fields
             .values()

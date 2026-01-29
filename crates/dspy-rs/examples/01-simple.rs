@@ -25,7 +25,7 @@ pub struct QA {
     #[input]
     pub question: String,
 
-    #[output(desc = "Think step by step before answering")]
+    /// Think step by step before answering.
     pub reasoning: String,
 
     #[output]
@@ -73,7 +73,7 @@ impl Module for QARater {
         };
 
         // Use call() for typed access to the result
-        let rate_result = self.rater.call(rate_input).await?;
+        let rate_result = self.rater.call(rate_input).await?.output;
 
         // Step 3: Compose the final prediction with all fields
         let mut combined = Prediction {
@@ -111,14 +111,14 @@ async fn main() -> Result<()> {
         question: "What is the capital of France?".to_string(),
     };
 
-    // call() returns the typed output struct
-    let output: QA = predict.call(input.clone()).await?;
+    // call() returns CallResult with typed output and metadata
+    let output = predict.call(input.clone()).await?.output;
     println!("Question: {}", output.question);
     println!("Reasoning: {}", output.reasoning);
     println!("Answer: {}", output.answer);
 
-    // call_with_meta() returns CallResult with metadata
-    let result = predict.call_with_meta(input).await?;
+    // call() also provides access to metadata
+    let result = predict.call(input).await?;
     println!("\nWith metadata:");
     println!("  Raw 'answer' field: {:?}", result.field_raw("answer"));
     println!("  Token usage: {:?}", result.lm_usage);
@@ -166,7 +166,8 @@ async fn main() -> Result<()> {
         .call(QAInput {
             question: "What is the largest planet in our solar system?".to_string(),
         })
-        .await?;
+        .await?
+        .output;
 
     println!("With few-shot demos:");
     println!("  Question: {}", output.question);

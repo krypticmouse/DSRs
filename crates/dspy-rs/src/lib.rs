@@ -118,7 +118,7 @@ macro_rules! example {
 
 #[deprecated(
     since = "0.2.0",
-    note = "Predict<S>::call() returns typed S output directly"
+    note = "Predict<S>::call() returns CallResult with typed output and metadata"
 )]
 #[macro_export]
 macro_rules! prediction {

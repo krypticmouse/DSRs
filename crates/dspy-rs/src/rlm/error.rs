@@ -1,6 +1,6 @@
 #![cfg(feature = "rlm")]
 
-use crate::{BamlConvertError, BamlValue, LmError, ParseError};
+use crate::{BamlConvertError, BamlValue, LmError, ParseError, PredictError};
 use pyo3::PyErr;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +26,13 @@ pub enum RlmError {
         #[source]
         source: ParseError,
         raw_response: String,
+    },
+
+    #[error("predictor failed during {stage}")]
+    PredictError {
+        stage: &'static str,
+        #[source]
+        source: PredictError,
     },
 
     #[error("max iterations ({max}) reached without SUBMIT")]

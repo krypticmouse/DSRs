@@ -473,27 +473,18 @@ let predict = Predict::<QA>::builder()
 ### 6.2 Basic Call
 
 ```rust
-let output: QA = predict.call(QAInput {
-    question: "Why is the sky blue?".into(),
-    context: None,
-}).await?;
-
-// Access typed fields
-println!("{}", output.question);  // input preserved
-println!("{}", output.answer);    // from LLM
-println!("{}", output.confidence);
-```
-
-### 6.3 Call with Metadata
-
-```rust
-let result: CallResult<QA> = predict.call_with_meta(QAInput {
+let result: CallResult<QA> = predict.call(QAInput {
     question: "Why is the sky blue?".into(),
     context: None,
 }).await?;
 
 // Typed output
 let output: &QA = &result.output;
+
+// Access typed fields
+println!("{}", output.question);  // input preserved
+println!("{}", output.answer);    // from LLM
+println!("{}", output.confidence);
 
 // Metadata access
 let raw: &str = &result.raw_response;
@@ -504,7 +495,7 @@ let confidence_flags: &[Flag] = result.field_flags("confidence");
 let confidence_checks: &[ConstraintResult] = result.field_checks("confidence");
 ```
 
-### 6.4 `CallResult<O>` Definition
+### 6.3 `CallResult<O>` Definition
 
 ```rust
 pub struct CallResult<O> {
@@ -967,7 +958,7 @@ pub enum JsonFix {
 ### 8.3 Accessing Flags
 
 ```rust
-let result = predict.call_with_meta(input).await?;
+let result = predict.call(input).await?;
 
 // Per-field flags
 for flag in result.field_flags("confidence") {
@@ -1586,7 +1577,7 @@ Context:
 10. Add `CallResult<O>` and metadata access
 
 ### Phase 4: Polish
-11. Add `call_with_meta()`
+11. Ensure `call()` returns `CallResult`
 12. Implement demo builder
 13. Documentation and examples
 14. Deprecation warnings for old API
@@ -1615,10 +1606,11 @@ pub struct QA {
 }
 
 let predict = Predict::<QA>::new();
-let output: QA = predict.call(QAInput { 
+let result = predict.call(QAInput { 
     question: "Why is the sky blue?".into() 
 }).await?;
 
+let output = result.output;
 assert!(!output.question.is_empty());  // input preserved
 assert!(!output.answer.text.is_empty());  // output populated
 ```
@@ -1643,7 +1635,7 @@ if let Err(e) = result {
 ### 15.3 Metadata Accessible
 
 ```rust
-let result = predict.call_with_meta(input).await?;
+let result = predict.call(input).await?;
 let flags = result.field_flags("confidence");
 let checks = result.field_checks("confidence");
 let raw = result.field_raw("confidence");

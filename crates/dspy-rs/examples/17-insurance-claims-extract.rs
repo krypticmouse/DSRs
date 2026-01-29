@@ -493,10 +493,7 @@ async fn main() -> Result<()> {
             continue;
         }
 
-        match predictor
-            .call_with_meta(InsuranceClaimInfoInput { claim_text })
-            .await
-        {
+        match predictor.call(InsuranceClaimInfoInput { claim_text }).await {
             Ok(result) => {
                 let mut value = serde_json::to_value(&result.output.claim)
                     .context("serialize claim output")?;
