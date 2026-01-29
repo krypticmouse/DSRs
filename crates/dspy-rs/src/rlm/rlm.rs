@@ -13,7 +13,7 @@ use crate::rlm_core::RlmInputFields;
 use crate::{ChatAdapter, LmError, Message, Signature, LM};
 
 use super::adapter::RlmAdapter;
-use super::history::ReplHistoryEntry;
+use super::history::REPLHistory;
 use super::submit::{SubmitError, SubmitHandler, SubmitResultDyn};
 use super::{execute_repl_code, Command, LlmTools, RlmConfig, RlmError, RlmResult};
 
@@ -31,7 +31,7 @@ struct ExtractionFallbackContext<'a> {
     adapter: &'a RlmAdapter,
     variable_descriptions: &'a str,
     schema: &'a str,
-    history: &'a [ReplHistoryEntry],
+    history: &'a REPLHistory,
     iterations: usize,
     llm_calls: usize,
 }
@@ -91,7 +91,7 @@ impl<S: Signature> Rlm<S> {
         let lm = self.get_lm()?;
         let tools = LlmTools::new(Arc::clone(&lm), self.config.max_llm_calls, runtime);
         let globals = setup_globals::<S>(&input, &tools, &submit_handler)?;
-        let mut history = Vec::new();
+        let mut history = REPLHistory::with_max_output_chars(self.config.max_history_output_chars);
         let mut iterations = 0usize;
         let mut main_calls = 0usize;
 
@@ -114,7 +114,7 @@ impl<S: Signature> Rlm<S> {
 
             let Some(command) = Command::parse(&response) else {
                 let output = "No executable command found. Wrap Python in ```repl``` or ```python``` fences, or call SUBMIT(...).".to_string();
-                history.push(ReplHistoryEntry::new(response, output));
+                history = history.append(response, output);
                 continue;
             };
 
@@ -164,7 +164,7 @@ impl<S: Signature> Rlm<S> {
                 }
             }
 
-            history.push(ReplHistoryEntry::new(command.code().to_string(), output));
+            history = history.append(command.code().to_string(), output);
         }
 
         if self.config.enable_extraction_fallback {

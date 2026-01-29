@@ -2,7 +2,7 @@ use anyhow::Result;
 use indexmap::IndexMap;
 pub mod deserializer;
 use std::collections::HashMap;
-mod jinja_helpers;
+pub mod jinja_helpers;
 pub mod jsonish;
 
 use baml_types::TypeValue;

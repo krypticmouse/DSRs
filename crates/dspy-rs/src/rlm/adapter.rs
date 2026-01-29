@@ -7,7 +7,7 @@ use pyo3::{Bound, Py, PyAny, Python};
 use std::collections::HashMap;
 
 use super::config::RlmConfig;
-use super::history::{render_history, ReplHistoryEntry};
+use super::history::REPLHistory;
 use super::prompt::{format_baml_shape, generate_output_schema_description, ACTION_INSTRUCTIONS_TEMPLATE};
 
 #[derive(Debug, Clone)]
@@ -63,7 +63,7 @@ impl RlmAdapter {
         &self,
         variable_descriptions: &str,
         schema: &str,
-        history: &[ReplHistoryEntry],
+        history: &REPLHistory,
         iteration: usize,
     ) -> String
     where
@@ -89,7 +89,7 @@ impl RlmAdapter {
 
         if !history.is_empty() {
             prompt.push_str("\n\nrepl_history:\n");
-            prompt.push_str(&render_history(history, self.config.max_history_output_chars));
+            prompt.push_str(&history.render());
         }
 
         prompt.push_str(&format!(
@@ -105,7 +105,7 @@ impl RlmAdapter {
         &self,
         variable_descriptions: &str,
         schema: &str,
-        history: &[ReplHistoryEntry],
+        history: &REPLHistory,
     ) -> String
     where
         S: Signature,
@@ -132,7 +132,7 @@ impl RlmAdapter {
 
         if !history.is_empty() {
             prompt.push_str("\n\nrepl_history:\n");
-            prompt.push_str(&render_history(history, self.config.max_history_output_chars));
+            prompt.push_str(&history.render());
         }
 
         prompt.push_str("\n\n");

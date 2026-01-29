@@ -5,7 +5,7 @@ pub mod command;
 pub mod adapter;
 pub mod exec;
 pub mod error;
-mod history;
+pub mod history;
 pub mod prompt;
 pub mod submit;
 pub mod tools;
@@ -20,6 +20,7 @@ pub use prompt::{
     ACTION_INSTRUCTIONS_TEMPLATE, format_baml_shape, generate_output_schema_description,
     generate_typed_preamble,
 };
+pub use history::{REPLEntry, REPLHistory};
 pub use tools::LlmTools;
 pub use rlm::{Rlm, RlmBuilder};
 
