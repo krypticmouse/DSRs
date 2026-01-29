@@ -82,6 +82,7 @@ struct ParsedSignature {
     output_fields: Vec<ParsedField>,
     all_fields: Vec<ParsedField>,
     instruction: String,
+    generate_rlm_input: bool,
 }
 
 struct ConstraintArgs {
@@ -128,6 +129,53 @@ fn parse_signature_fields(
     let mut input_fields = Vec::new();
     let mut output_fields = Vec::new();
     let mut all_fields = Vec::new();
+    let mut generate_rlm_input = true;
+    let mut rlm_setting_seen = false;
+
+    // Parse struct-level #[signature(rlm = true|false, rlm_input = "all|none")] attribute
+    for attr in attrs {
+        if attr.path().is_ident("signature") {
+            let nested = attr.parse_args_with(
+                syn::punctuated::Punctuated::<MetaNameValue, Token![,]>::parse_terminated,
+            )?;
+            for nv in nested {
+                if nv.path.is_ident("rlm_input") {
+                    if rlm_setting_seen {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "#[signature(rlm_input = ...)] can only be specified once",
+                        ));
+                    }
+                    rlm_setting_seen = true;
+                    let value = parse_string_expr(&nv.value, nv.span())?;
+                    match value.as_str() {
+                        "all" => generate_rlm_input = true,
+                        "none" | "skip" => generate_rlm_input = false,
+                        _ => {
+                            return Err(syn::Error::new_spanned(
+                                nv,
+                                "unsupported #[signature(rlm_input = ...)] value; use \"all\" or \"none\"",
+                            ));
+                        }
+                    }
+                } else if nv.path.is_ident("rlm") {
+                    if rlm_setting_seen {
+                        return Err(syn::Error::new_spanned(
+                            attr,
+                            "#[signature(rlm = ...)] can only be specified once",
+                        ));
+                    }
+                    rlm_setting_seen = true;
+                    generate_rlm_input = parse_bool_expr(&nv.value, nv.span())?;
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        nv,
+                        "unsupported #[signature(...)] attribute; expected rlm = true|false or rlm_input = \"all|none\"",
+                    ));
+                }
+            }
+        }
+    }
 
     for field in fields {
         let parsed = parse_single_field(field)?;
@@ -171,6 +219,7 @@ fn parse_signature_fields(
         output_fields,
         all_fields,
         instruction: collect_doc_comment(attrs),
+        generate_rlm_input,
     })
 }
 
@@ -329,6 +378,19 @@ fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String
     }
 }
 
+fn parse_bool_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<bool> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(value),
+            ..
+        }) => Ok(value.value()),
+        _ => Err(syn::Error::new(
+            span,
+            "expected boolean literal; use true or false",
+        )),
+    }
+}
+
 fn generate_signature_code(
     input: &DeriveInput,
     parsed: &ParsedSignature,
@@ -363,7 +425,11 @@ fn generate_helper_structs(
     let input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
     let output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
     let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
-    let rlm_input_impl = generate_rlm_input_impl(&input_name, parsed);
+    let rlm_input_impl = if parsed.generate_rlm_input {
+        generate_rlm_input_impl(&input_name, parsed)
+    } else {
+        proc_macro2::TokenStream::new()
+    };
 
     Ok(quote! {
         #[derive(Debug, Clone, ::dspy_rs::BamlType)]

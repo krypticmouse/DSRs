@@ -7,6 +7,7 @@ pub mod exec;
 pub mod error;
 pub mod history;
 pub mod prompt;
+pub mod signatures;
 pub mod submit;
 pub mod tools;
 mod rlm;
@@ -21,6 +22,7 @@ pub use prompt::{
     generate_typed_preamble,
 };
 pub use history::{REPLEntry, REPLHistory};
+pub use signatures::{RlmActionSig, RlmActionSigInput, RlmExtractInput, RlmExtractSig};
 pub use tools::LlmTools;
 pub use rlm::{Rlm, RlmBuilder};
 

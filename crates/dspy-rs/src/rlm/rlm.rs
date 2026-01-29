@@ -3,7 +3,7 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use pyo3::{Py, PyResult, Python};
 use tokio::runtime::Handle;
 
@@ -318,7 +318,13 @@ where
     Python::attach(|py| -> PyResult<Py<PyDict>> {
         let globals = PyDict::new(py);
         input.inject_into_python(py, &globals)?;
-        globals.set_item("tools", Py::new(py, tools.clone())?)?;
+        let tools_py = Py::new(py, tools.clone())?;
+        let tools_bound = tools_py.bind(py);
+        let llm_query = tools_bound.getattr("llm_query")?;
+        let llm_query_batched = tools_bound.getattr("llm_query_batched")?;
+        globals.set_item("tools", tools_py.clone_ref(py))?;
+        globals.set_item("llm_query", llm_query)?;
+        globals.set_item("llm_query_batched", llm_query_batched)?;
         globals.set_item("SUBMIT", Py::new(py, submit_handler.clone())?)?;
         Ok(globals.unbind())
     })

@@ -1,3 +1,6 @@
+// Needed for derive macros (BamlType, Signature) which generate `::dspy_rs::` paths
+extern crate self as dspy_rs;
+
 pub mod adapter;
 pub mod core;
 pub mod data;

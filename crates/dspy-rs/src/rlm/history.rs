@@ -1,10 +1,9 @@
 #![cfg(feature = "rlm")]
 
-use baml_bridge::baml_types::{BamlMap, BamlValue};
-use baml_bridge::{DefaultJinjaRender, ToBamlValue};
+use baml_bridge::{BamlType, DefaultJinjaRender, ToBamlValue};
 
 /// A single entry in the REPL history.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, BamlType)]
 pub struct REPLEntry {
     pub reasoning: String,
     pub code: String,
@@ -31,28 +30,16 @@ impl REPLEntry {
     }
 }
 
-impl ToBamlValue for REPLEntry {
-    fn to_baml_value(&self) -> BamlValue {
-        let mut fields: BamlMap<String, BamlValue> = BamlMap::new();
-        fields.insert("reasoning".to_string(), BamlValue::String(self.reasoning.clone()));
-        fields.insert("code".to_string(), BamlValue::String(self.code.clone()));
-        fields.insert("output".to_string(), BamlValue::String(self.output.clone()));
-        fields.insert(
-            "output_len".to_string(),
-            BamlValue::Int(self.output.chars().count() as i64),
-        );
-        BamlValue::Class("REPLEntry".to_string(), fields)
-    }
-}
 
 /// Immutable REPL history container.
 ///
 /// This type follows an immutable pattern where `append` returns a new
 /// history instance, preserving the original. This aligns with Python
 /// DSPy's frozen model pattern.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, BamlType)]
 pub struct REPLHistory {
-    entries: Vec<REPLEntry>,
+    pub entries: Vec<REPLEntry>,
+    #[baml(skip)]
     max_output_chars: usize,
 }
 
@@ -119,34 +106,51 @@ impl REPLHistory {
     /// Render the history to a string using the default template.
     pub fn render(&self) -> String {
         let ctx = minijinja::Value::from_serialize(RenderContext {
-            max_output_chars: self.max_output_chars,
+            max_output_chars: self.max_output_chars as i64,
         });
-        self.render_default(&ctx).unwrap_or_else(|err| {
-            format!("[Error rendering history: {}]", err)
-        })
+        let baml_value = self.to_baml_value();
+        let template_ctx = minijinja::Value::from_serialize(TemplateContext {
+            value: &baml_value,
+            ctx: &ctx,
+        });
+
+        let mut env = crate::baml_bridge::jsonish::jinja_helpers::get_env();
+        env.add_filter("format_count", format_count_filter);
+        env.add_filter("slice_chars", slice_chars_filter);
+        env.render_str(Self::DEFAULT_TEMPLATE, template_ctx)
+            .unwrap_or_else(|err| format!("[Error rendering history: {}]", err))
     }
 }
 
 #[derive(serde::Serialize)]
 struct RenderContext {
-    max_output_chars: usize,
+    max_output_chars: i64,
 }
 
-impl ToBamlValue for REPLHistory {
-    fn to_baml_value(&self) -> BamlValue {
-        let entries: Vec<BamlValue> = self.entries.iter().map(|e| e.to_baml_value()).collect();
+#[derive(serde::Serialize)]
+struct TemplateContext<'a> {
+    value: &'a baml_bridge::baml_types::BamlValue,
+    ctx: &'a minijinja::Value,
+}
 
-        let mut fields: BamlMap<String, BamlValue> = BamlMap::new();
-        fields.insert("entries".to_string(), BamlValue::List(entries));
-        fields.insert("is_empty".to_string(), BamlValue::Bool(self.is_empty()));
-        fields.insert("len".to_string(), BamlValue::Int(self.len() as i64));
-        BamlValue::Class("REPLHistory".to_string(), fields)
+fn format_count_filter(value: i64) -> String {
+    if value <= 0 {
+        return "0".to_string();
     }
+    format_count(value as usize)
 }
+
+fn slice_chars_filter(value: String, length: i64) -> String {
+    if length <= 0 {
+        return String::new();
+    }
+    value.chars().take(length as usize).collect()
+}
+
 
 impl DefaultJinjaRender for REPLHistory {
     const DEFAULT_TEMPLATE: &'static str = r#"
-{%- if value.is_empty -%}
+{%- if value.entries | length == 0 -%}
 You have not interacted with the REPL environment yet.
 {%- else -%}
 {%- for entry in value.entries %}
@@ -158,8 +162,14 @@ Code:
 ```python
 {{ entry.code }}
 ```
-Output ({{ entry.output_len }} chars):
-{{ entry.output | truncate(ctx.max_output_chars) }}
+{%- set output_len = entry.output | length -%}
+Output ({{ output_len | format_count }} chars):
+{%- if output_len > ctx.max_output_chars -%}
+{{ entry.output | slice_chars(ctx.max_output_chars) }}
+... (truncated to {{ ctx.max_output_chars | format_count }}/{{ output_len | format_count }} chars)
+{%- else -%}
+{{ entry.output }}
+{%- endif %}
 
 {% endfor -%}
 {%- endif -%}
@@ -184,7 +194,6 @@ fn truncate_output(text: &str, max_chars: usize) -> String {
     )
 }
 
-#[cfg(test)]
 fn format_count(value: usize) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
@@ -200,6 +209,7 @@ fn format_count(value: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use baml_bridge::baml_types::BamlValue;
     use baml_bridge::ToBamlValue;
 
     // ==================== REPLEntry Tests ====================
@@ -235,26 +245,12 @@ mod tests {
 
         match value {
             BamlValue::Class(name, fields) => {
-                assert_eq!(name, "REPLEntry");
+                assert!(name.ends_with("REPLEntry"));
                 assert_eq!(fields.get("reasoning"), Some(&BamlValue::String("reason".into())));
                 assert_eq!(fields.get("code"), Some(&BamlValue::String("x = 42".into())));
                 assert_eq!(fields.get("output"), Some(&BamlValue::String("done".into())));
-                assert_eq!(fields.get("output_len"), Some(&BamlValue::Int(4))); // "done" = 4 chars
             }
             _ => panic!("Expected BamlValue::Class, got {:?}", value),
-        }
-    }
-
-    #[test]
-    fn repl_entry_output_len_counts_unicode_chars_not_bytes() {
-        // "héllo" = 5 chars but 6 bytes (é is 2 bytes in UTF-8)
-        let entry = REPLEntry::new("".into(), "héllo".into());
-        let value = entry.to_baml_value();
-
-        if let BamlValue::Class(_, fields) = value {
-            assert_eq!(fields.get("output_len"), Some(&BamlValue::Int(5)));
-        } else {
-            panic!("Expected Class");
         }
     }
 
@@ -323,9 +319,7 @@ mod tests {
 
         match value {
             BamlValue::Class(name, fields) => {
-                assert_eq!(name, "REPLHistory");
-                assert_eq!(fields.get("is_empty"), Some(&BamlValue::Bool(true)));
-                assert_eq!(fields.get("len"), Some(&BamlValue::Int(0)));
+                assert!(name.ends_with("REPLHistory"));
                 match fields.get("entries") {
                     Some(BamlValue::List(entries)) => assert!(entries.is_empty()),
                     _ => panic!("Expected empty list for entries"),
@@ -345,9 +339,7 @@ mod tests {
 
         match value {
             BamlValue::Class(name, fields) => {
-                assert_eq!(name, "REPLHistory");
-                assert_eq!(fields.get("is_empty"), Some(&BamlValue::Bool(false)));
-                assert_eq!(fields.get("len"), Some(&BamlValue::Int(2)));
+                assert!(name.ends_with("REPLHistory"));
 
                 let entries = match fields.get("entries") {
                     Some(BamlValue::List(e)) => e,
@@ -475,9 +467,11 @@ mod tests {
         );
         // Should contain truncated portion
         assert!(
-            rendered.contains(&"x".repeat(17)), // truncate filter adds "..."
+            rendered.contains(&"x".repeat(20)),
             "Should contain truncated content"
         );
+        // Should include truncation marker with counts
+        assert!(rendered.contains("... (truncated to 20/100 chars)"));
     }
 
     #[test]
@@ -632,5 +626,45 @@ mod tests {
         let result = truncate_output("héllo", 3);
         assert!(result.starts_with("hél"));
         assert!(result.contains("truncated to 3/5 chars"));
+    }
+
+    // ==================== Template Format Tests ====================
+
+    #[test]
+    fn template_has_no_leading_whitespace_on_first_content_line() {
+        // The template should start with `{%-` not `  {%-`
+        // This ensures the raw string literal doesn't have unintended indentation
+        let template = <REPLHistory as DefaultJinjaRender>::DEFAULT_TEMPLATE;
+        let first_content_line = template
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .expect("Template should have at least one non-empty line");
+
+        let first_char = first_content_line.chars().next().unwrap();
+        assert!(
+            !first_char.is_whitespace(),
+            "First non-empty line should not start with whitespace. Got: {:?}",
+            first_content_line
+        );
+    }
+
+    #[test]
+    fn render_output_has_no_leading_whitespace() {
+        // Verify rendered output doesn't start with unintended spaces
+        let history = REPLHistory::new();
+        let rendered = history.render();
+
+        // The very first non-empty line should start without leading whitespace
+        let first_content_line = rendered
+            .lines()
+            .find(|line| !line.trim().is_empty())
+            .expect("Rendered output should have content");
+
+        let first_char = first_content_line.chars().next().unwrap();
+        assert!(
+            !first_char.is_whitespace(),
+            "Rendered output should not start with whitespace. Got: {:?}",
+            first_content_line
+        );
     }
 }

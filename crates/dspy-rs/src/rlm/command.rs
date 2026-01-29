@@ -1,5 +1,5 @@
 #![cfg(feature = "rlm")]
-
+// TODO: move this to the RLM module prolly ? or bring in RLM here .
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -103,7 +103,7 @@ fn contains_submit_call(text: &str) -> bool {
     SUBMIT_CALL_PATTERN.is_match(text)
 }
 
-fn extract_submit_call(response: &str) -> Option<String> {
+fn extract_submit_call(response: &str) -> Option<String> { // TODO: santiy check if we can just.. actually run the SUBMIT() function from pyo3 instead .
     SUBMIT_CALL_PATTERN
         .captures_iter(response)
         .next()
