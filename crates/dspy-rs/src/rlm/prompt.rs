@@ -6,6 +6,7 @@
 /// - `{inputs}`: comma-separated backticked variable names, e.g. `` `issues`, `query` ``.
 /// - `{output_fields}`: bullet list of output fields, one per line, formatted as:
 ///   `- name: type` with optional inline description/constraints (e.g. `- summary: string  # short summary`).
+/// - `{final_output_names}`: comma-separated output assignments, e.g. `summary=summary, count=count`.
 /// - `{max_llm_calls}`: integer from `RlmConfig.max_llm_calls`.
 ///
 /// The line beginning with `5. MINIMIZE RETYPING (INPUTS & OUTPUTS)` must be kept verbatim.
@@ -19,7 +20,7 @@ Available:
 - `llm_query(prompt)` - query a sub-LLM (~500K char capacity) for semantic analysis
 - `llm_query_batched(prompts)` - query multiple prompts concurrently (much faster for multiple queries)
 - `print()` - ALWAYS print to see results
-- `SUBMIT(...)` - submit final output when done
+- `SUBMIT({final_output_names})` - submit final output when done
 - Standard libraries: re, json, collections, math, etc.
 
 IMPORTANT: This is ITERATIVE. Each code block you write will execute, you'll see the output, then you decide what to do next. Do NOT try to solve everything in one step.

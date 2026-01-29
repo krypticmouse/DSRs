@@ -13,62 +13,30 @@
 /// Note: `rlm = false` disables RLM input auto-injection so we can use
 /// BAML-native types like `REPLHistory` without requiring PyO3 conversions.
 #[derive(Clone, Debug, crate::Signature)]
-#[signature(
-    rlm = false,
-    system_template = r#"
-You are an expert Python programmer operating in a REPL environment.
-Your goal is to use the provided variables to produce the required outputs.
-
-Available tools:
-- llm_query(prompt: str) -> str: Make an LLM call
-- llm_query_batched(prompts: list[str]) -> list[str]: Batch LLM calls
-- SUBMIT(**kwargs): Submit final outputs when complete
-
-Rules:
-1. Examine variables before processing
-2. Use Python to explore and transform data
-3. Call SUBMIT(field=value, ...) when ready
-4. Each iteration should make progress
-
-Your input fields are:
-{% for field in input_fields -%}
-{{ loop.index }}. `{{ field.name }}` ({{ field.type_name }}){% if field.description %}: {{ field.description }}{% endif %}
-{% endfor %}
-Your output fields are:
-{% for field in output_fields -%}
-{{ loop.index }}. `{{ field.name }}` ({{ field.type_name }}){% if field.description %}: {{ field.description }}{% endif %}
-{% endfor %}
-Respond with `[[ ## reasoning ## ]]` followed by your step-by-step thinking, then `[[ ## code ## ]]` followed by Python code in a ```python block, then `[[ ## completed ## ]]`.
-
-{{ instruction }}
-"#
-)]
+#[signature(rlm = false)]
 pub struct RlmActionSig {
-    /// Metadata about variables available in REPL
+    /// Metadata about the variables available in the REPL.
     #[input]
     pub variables_info: String,
 
-    /// Current iteration (e.g., '3/20')
-    #[input]
-    pub iteration: String,
-
-    /// Previous REPL interactions
+    /// Previous REPL code executions and their outputs.
     #[input]
     pub repl_history: REPLHistory,
 
-    /// Step-by-step reasoning about what to do next
+    /// Current iteration number (1-indexed) out of max_iterations.
+    #[input]
+    pub iteration: String,
+
+    /// Think step-by-step: what do you know? What remains? Plan your next action.
     #[output]
     pub reasoning: String,
 
-    /// Python code to execute in the REPL
+    /// Python code to execute. Use markdown code block format: ```python\n<code>\n```.
     #[output]
     pub code: String,
 }
 
-use std::marker::PhantomData;
-
 use crate::{FieldSpec, OutputFormatContent, Signature, TypeIR};
-use super::history::REPLHistory;
 
 // ============================================================================
 // RlmExtractSig<S> - Extraction fallback signature
@@ -125,14 +93,25 @@ static EXTRACT_INPUT_FIELDS: &[FieldSpec] = &[
 /// ```ignore
 /// let extract_result = self.extract.call(RlmExtractInput {
 ///     variables_info,
-///     repl_history: history.render(),
+///     repl_history: history.clone(),
 /// }).await?;
-/// // extract_result is S::Output directly!
+/// let (_, output) = extract_result.output.into_parts();
 /// ```
-// FIXME(rlm-signatures): Consider whether this should use a custom user_template
-// to guide the LLM on extraction format.
 pub struct RlmExtractSig<S: Signature> {
-    _marker: PhantomData<S>,
+    input: RlmExtractInput,
+    output: S::Output,
+}
+
+impl<S: Signature> Clone for RlmExtractSig<S>
+where
+    S::Output: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            input: self.input.clone(),
+            output: self.output.clone(),
+        }
+    }
 }
 
 impl<S: Signature> Signature for RlmExtractSig<S> {
@@ -157,16 +136,11 @@ impl<S: Signature> Signature for RlmExtractSig<S> {
     }
 
     fn from_parts(input: Self::Input, output: Self::Output) -> Self {
-        // We don't actually construct instances of this type - it's just a signature marker
-        let _ = (input, output);
-        Self {
-            _marker: PhantomData,
-        }
+        Self { input, output }
     }
 
     fn into_parts(self) -> (Self::Input, Self::Output) {
-        // This signature type is only used as a type parameter, never constructed
-        unreachable!("RlmExtractSig is a marker type and should not be instantiated")
+        (self.input, self.output)
     }
 }
 
@@ -185,7 +159,7 @@ mod tests {
             .iter()
             .map(|f| f.name)
             .collect();
-        assert_eq!(input_names, vec!["variables_info", "iteration", "repl_history"]);
+        assert_eq!(input_names, vec!["variables_info", "repl_history", "iteration"]);
     }
 
     #[test]
@@ -212,9 +186,11 @@ mod tests {
     // A simple test signature to use with RlmExtractSig
     #[derive(Clone, Debug, crate::Signature)]
     struct TestSig {
-        #[input(desc = "The question")]
+        /// The question.
+        #[input]
         pub question: String,
-        #[output(desc = "The answer")]
+        /// The answer.
+        #[output]
         pub answer: String,
     }
 

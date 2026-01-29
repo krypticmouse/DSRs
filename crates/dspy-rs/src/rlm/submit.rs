@@ -128,7 +128,11 @@ impl SubmitHandler {
             return Ok(format!(
                 "[Error] Missing output fields: {:?}. Use SUBMIT({})",
                 missing,
-                self.output_fields.join(", ")
+                self.output_fields
+                    .iter()
+                    .map(|field| format!("{field}={field}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
 

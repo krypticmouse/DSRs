@@ -1,7 +1,6 @@
 #![cfg(feature = "rlm")]
 
 pub mod config;
-pub mod command;
 pub mod adapter;
 pub mod exec;
 pub mod error;
@@ -14,7 +13,6 @@ mod rlm;
 
 pub use adapter::RlmAdapter;
 pub use config::{ConstraintSummary, RlmConfig, RlmResult};
-pub use command::Command;
 pub use exec::execute_repl_code;
 pub use error::RlmError;
 pub use prompt::{

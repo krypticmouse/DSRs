@@ -3,6 +3,7 @@
 use indexmap::IndexMap;
 
 use crate::{ConstraintKind, ConstraintResult, FieldMeta, Signature};
+use super::history::REPLHistory;
 
 /// Configuration for TypedRlm execution.
 #[derive(Debug, Clone)]
@@ -65,6 +66,8 @@ pub struct RlmResult<S: Signature> {
     pub input: S::Input,
     /// The typed output.
     pub output: S::Output,
+    /// Full REPL trajectory, including reasoning, code, and outputs.
+    pub trajectory: REPLHistory,
     /// Per-field metadata (flags, constraint checks).
     pub field_metas: IndexMap<String, FieldMeta>,
     /// Number of REPL iterations used.
@@ -85,12 +88,14 @@ impl<S: Signature> RlmResult<S> {
         iterations: usize,
         llm_calls: usize,
         extraction_fallback: bool,
+        trajectory: REPLHistory,
     ) -> Self {
         let mut summary = ConstraintSummary::from_field_metas(&field_metas);
         summary.assertions_passed = count_assertions::<S>();
         Self {
             input,
             output,
+            trajectory,
             field_metas,
             iterations,
             llm_calls,

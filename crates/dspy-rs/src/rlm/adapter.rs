@@ -7,7 +7,6 @@ use pyo3::{Bound, Py, PyAny, Python};
 use std::collections::HashMap;
 
 use super::config::RlmConfig;
-use super::history::REPLHistory;
 use super::prompt::{format_baml_shape, generate_output_schema_description, ACTION_INSTRUCTIONS_TEMPLATE};
 
 #[derive(Debug, Clone)]
@@ -59,95 +58,87 @@ impl RlmAdapter {
         })
     }
 
-    pub fn build_prompt<S>(
+    pub fn build_action_instruction<S: Signature>(&self) -> String
+    where
+        S: Signature,
+    {
+        let mut instruction = String::new();
+        let task = S::instruction().trim();
+        if !task.is_empty() {
+            instruction.push_str(task);
+            instruction.push_str("\n\n");
+        }
+        instruction.push_str(&self.action_instructions::<S>());
+        instruction
+    }
+
+    pub fn build_extract_instruction<S: Signature>(&self) -> String
+    where
+        S: Signature,
+    {
+        let mut instruction = String::new();
+        let task = S::instruction().trim();
+        if !task.is_empty() {
+            instruction.push_str("The trajectory was generated with the following objective:\n");
+            instruction.push_str(task);
+            instruction.push_str("\n\n");
+        }
+        instruction.push_str(
+            "Based on the REPL trajectory, extract the final outputs now.\n\n\
+Review your trajectory to see what information you gathered and what values you computed, \
+then provide the final outputs.",
+        );
+        instruction
+    }
+
+    pub fn build_variables_info<S: Signature>(
         &self,
         variable_descriptions: &str,
         schema: &str,
-        history: &REPLHistory,
-        iteration: usize,
     ) -> String
     where
         S: Signature,
     {
-        let mut prompt = self.action_instructions::<S>();
+        let mut info = String::new();
 
         if !variable_descriptions.trim().is_empty() {
-            prompt.push_str("\n\nvariables_info:\n");
-            prompt.push_str(variable_descriptions);
+            info.push_str(variable_descriptions.trim());
         }
 
-        if !schema.trim().is_empty() {
-            prompt.push_str("\n\nOutput schema:\n");
-            prompt.push_str(schema.trim());
+        let schema_block = if schema.trim().is_empty() {
+            generate_output_schema_description::<S>()
+        } else {
+            schema.trim().to_string()
+        };
+        if !schema_block.trim().is_empty() {
+            if !info.is_empty() {
+                info.push_str("\n\n");
+            }
+            info.push_str("Output schema:\n");
+            info.push_str(schema_block.trim());
         }
 
         let shapes = self.format_output_shapes::<S>();
         if !shapes.is_empty() {
-            prompt.push_str("\n\nOutput shapes:\n");
-            prompt.push_str(&shapes);
-        }
-
-        if !history.is_empty() {
-            prompt.push_str("\n\nrepl_history:\n");
-            prompt.push_str(&history.render());
-        }
-
-        prompt.push_str(&format!(
-            "\n\niteration: {}/{}",
-            iteration, self.config.max_iterations
-        ));
-
-        prompt.push_str("\n\nReturn the next step as a ```repl``` or ```python``` code block. If you are done, call SUBMIT(field=value, ...).\n");
-        prompt
-    }
-
-    pub fn build_extraction_prompt<S>(
-        &self,
-        variable_descriptions: &str,
-        schema: &str,
-        history: &REPLHistory,
-    ) -> String
-    where
-        S: Signature,
-    {
-        let mut prompt = self.action_instructions::<S>();
-        prompt.push_str("\n\nYou are performing fallback extraction for a typed signature.\n");
-        prompt.push_str("Use the inputs, schema, and REPL history to extract the final output.\n");
-
-        if !variable_descriptions.trim().is_empty() {
-            prompt.push_str("\nvariables_info:\n");
-            prompt.push_str(variable_descriptions);
-        }
-
-        if !schema.trim().is_empty() {
-            prompt.push_str("\n\nOutput schema:\n");
-            prompt.push_str(schema.trim());
-        } else {
-            let schema = generate_output_schema_description::<S>();
-            if !schema.trim().is_empty() {
-                prompt.push_str("\n\nOutput schema:\n");
-                prompt.push_str(schema.trim());
+            if !info.is_empty() {
+                info.push_str("\n\n");
             }
+            info.push_str("Output shapes:\n");
+            info.push_str(&shapes);
         }
 
-        if !history.is_empty() {
-            prompt.push_str("\n\nrepl_history:\n");
-            prompt.push_str(&history.render());
-        }
-
-        prompt.push_str("\n\n");
-        prompt.push_str(&format_output_instructions::<S>());
-        prompt.push_str("\nRespond with only the structured output and no extra commentary.\n");
-        prompt
+        info
     }
 
     fn action_instructions<S: Signature>(&self) -> String {
         let inputs = format_input_names::<S>();
         let output_fields = format_output_fields::<S>();
+        let final_output_names = format_output_assignments::<S>();
 
         ACTION_INSTRUCTIONS_TEMPLATE
             .replace("{inputs}", &inputs)
             .replace("{output_fields}", &output_fields)
+            .replace("{final_output_names}", &final_output_names)
             .replace("{max_llm_calls}", &self.config.max_llm_calls.to_string())
     }
 
@@ -174,13 +165,10 @@ impl RlmAdapter {
 }
 
 fn format_input_names<S: Signature>() -> String {
-    let mut names = S::input_fields()
+    let names = S::input_fields()
         .iter()
         .map(|field| format!("`{}`", field.name))
         .collect::<Vec<_>>();
-    names.push("`variables_info`".to_string());
-    names.push("`repl_history`".to_string());
-    names.push("`iteration`".to_string());
     names.join(", ")
 }
 
@@ -231,6 +219,14 @@ fn format_output_fields<S: Signature>() -> String {
     }
 }
 
+fn format_output_assignments<S: Signature>() -> String {
+    S::output_fields()
+        .iter()
+        .map(|field| format!("{}={}", field.name, field.name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn format_type_name(type_ir: &TypeIR) -> String {
     let raw = type_ir.diagnostic_repr().to_string();
     simplify_type_name(&raw)
@@ -260,23 +256,6 @@ fn simplify_type_name(raw: &str) -> String {
         }
     }
     result
-}
-
-fn format_output_instructions<S: Signature>() -> String {
-    let mut fields = S::output_fields().iter();
-    let Some(first) = fields.next() else {
-        return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
-    };
-
-    let mut message = format!(
-        "Respond with the output fields, starting with `[[ ## {} ## ]]`",
-        first.name
-    );
-    for field in fields {
-        message.push_str(&format!(", then `[[ ## {} ## ]]`", field.name));
-    }
-    message.push_str(", and then ending with the marker for `[[ ## completed ## ]]`.");
-    message
 }
 
 fn indent_block(text: &str, prefix: &str) -> String {

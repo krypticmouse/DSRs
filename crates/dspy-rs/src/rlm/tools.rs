@@ -35,7 +35,7 @@ impl LlmTools {
         let mut current = self.call_count.lock().unwrap();
         if *current + count > self.max_llm_calls {
             return Err(PyRuntimeError::new_err(format!(
-                "LLM call limit exceeded: {} + {} > {}. Use Python code for aggregation instead of making more LLM calls.",
+                "[Error] RuntimeError: LLM call limit exceeded: {} + {} > {}. Use Python code for aggregation instead of making more LLM calls.",
                 *current, count, self.max_llm_calls
             )));
         }
@@ -45,7 +45,9 @@ impl LlmTools {
 
     fn ensure_prompt(prompt: &str) -> PyResult<()> {
         if prompt.trim().is_empty() {
-            return Err(PyValueError::new_err("prompt cannot be empty"));
+            return Err(PyValueError::new_err(
+                "[Error] ValueError: prompt cannot be empty",
+            ));
         }
         Ok(())
     }
@@ -59,7 +61,9 @@ impl LlmTools {
         let response = self
             .runtime
             .block_on(async { self.lm.prompt(&prompt).await })
-            .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
+            .map_err(|err| {
+                PyRuntimeError::new_err(format!("[Error] RuntimeError: {err}"))
+            })?;
         Ok(response)
     }
 
@@ -84,7 +88,11 @@ impl LlmTools {
         for response in responses {
             match response {
                 Ok(text) => results.push(text),
-                Err(err) => return Err(PyRuntimeError::new_err(err.to_string())),
+                Err(err) => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "[Error] RuntimeError: {err}"
+                    )))
+                }
             }
         }
         Ok(results)

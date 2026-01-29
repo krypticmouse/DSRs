@@ -138,7 +138,7 @@ impl<S: Signature> Rlm<S> {
             iterations += 1;
             let action_input = RlmActionSigInput {
                 variables_info: variables_info.clone(),
-                repl_history: history.render(),
+                repl_history: history.clone(),
                 iteration: format!("{}/{}", iterations, self.config.max_iterations),
             };
 
@@ -155,12 +155,13 @@ impl<S: Signature> Rlm<S> {
             let (_, action_output) = action.output.into_parts();
             let code = strip_code_fences(&action_output.code);
 
+            let reasoning = action_output.reasoning;
             let mut output = if code.trim().is_empty() {
                 "No code provided.".to_string()
             } else {
                 match execute_repl_code(&globals, &code, self.config.max_output_chars) {
                     Ok(result) => result,
-                    Err(err) => format!("Python error: {err}"),
+                    Err(err) => format!("[Error] {err}"),
                 }
             };
 
@@ -177,6 +178,8 @@ impl<S: Signature> Rlm<S> {
                                 value: baml_value,
                             })?;
                         let llm_calls = main_calls + tools.call_count();
+                        let trajectory =
+                            history.append_with_reasoning(reasoning, code.clone(), output);
                         return Ok(RlmResult::new(
                             input,
                             typed_output,
@@ -184,6 +187,7 @@ impl<S: Signature> Rlm<S> {
                             iterations,
                             llm_calls,
                             false,
+                            trajectory,
                         ));
                     }
                     Err(SubmitError::AssertionFailed { label, expression }) => {
@@ -201,7 +205,7 @@ impl<S: Signature> Rlm<S> {
                 }
             }
 
-            history = history.append_with_reasoning(action_output.reasoning, code, output);
+            history = history.append_with_reasoning(reasoning, code, output);
         }
 
         if self.config.enable_extraction_fallback {
@@ -229,7 +233,7 @@ impl<S: Signature> Rlm<S> {
     {
         let extract_input = RlmExtractInput {
             variables_info: context.variables_info.to_string(),
-            repl_history: context.history.render(),
+            repl_history: context.history.clone(),
         };
 
         let extract_result = self.extract.call(extract_input).await.map_err(|err| {
@@ -248,6 +252,7 @@ impl<S: Signature> Rlm<S> {
             context.iterations,
             context.llm_calls + 1,
             true,
+            context.history.clone(),
         ))
     }
 }

@@ -39,7 +39,6 @@ impl REPLEntry {
 #[derive(Debug, Clone, Default, BamlType)]
 pub struct REPLHistory {
     pub entries: Vec<REPLEntry>,
-    #[baml(skip)]
     max_output_chars: usize,
 }
 
@@ -152,25 +151,24 @@ impl DefaultJinjaRender for REPLHistory {
     const DEFAULT_TEMPLATE: &'static str = r#"
 {%- if value.entries | length == 0 -%}
 You have not interacted with the REPL environment yet.
-{%- else -%}
+{%- else %}
 {%- for entry in value.entries %}
 === Step {{ loop.index }} ===
-{%- if entry.reasoning %}
+{% if entry.reasoning %}
 Reasoning: {{ entry.reasoning }}
-{%- endif %}
+{% endif %}
 Code:
 ```python
 {{ entry.code }}
 ```
-{%- set output_len = entry.output | length -%}
+{% set output_len = entry.output | length %}
 Output ({{ output_len | format_count }} chars):
-{%- if output_len > ctx.max_output_chars -%}
+{% if output_len > ctx.max_output_chars %}
 {{ entry.output | slice_chars(ctx.max_output_chars) }}
 ... (truncated to {{ ctx.max_output_chars | format_count }}/{{ output_len | format_count }} chars)
-{%- else -%}
+{% else %}
 {{ entry.output }}
-{%- endif %}
-
+{% endif %}
 {% endfor -%}
 {%- endif -%}
 "#;
