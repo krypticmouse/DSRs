@@ -66,3 +66,27 @@ impl fmt::Display for PromptPath {
 
 #[derive(Debug, Clone)]
 pub struct PromptValue;
+
+#[cfg(test)]
+mod tests {
+    use super::PromptPath;
+
+    #[test]
+    fn formats_field_and_index_path() {
+        let path = PromptPath::new()
+            .push_field("inputs")
+            .push_field("history")
+            .push_field("entries")
+            .push_index(3)
+            .push_field("output");
+
+        assert_eq!(path.to_string(), "inputs.history.entries[3].output");
+    }
+
+    #[test]
+    fn formats_map_key_path() {
+        let path = PromptPath::new().push_field("meta").push_map_key("key");
+
+        assert_eq!(path.to_string(), "meta[\"key\"]");
+    }
+}
