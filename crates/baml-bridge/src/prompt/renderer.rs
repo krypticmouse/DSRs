@@ -3,8 +3,11 @@
 use std::{error::Error, fmt};
 
 use baml_types::StreamingMode;
+use indexmap::IndexMap;
 use minijinja::Value;
 use serde::Serialize;
+
+use super::PromptValue;
 
 #[derive(Debug, Clone)]
 pub struct PromptRenderer;
@@ -124,6 +127,34 @@ pub struct RenderError {
 
 /// Result type for render operations.
 pub type RenderResult = Result<String, RenderError>;
+
+/// Specification for a renderer (pre-compilation).
+pub enum RendererSpec {
+    /// Jinja template source.
+    Jinja { source: &'static str },
+    /// Function-based renderer.
+    Func {
+        f: fn(&PromptValue, &RenderSession) -> RenderResult,
+    },
+}
+
+/// Container for collected renderer specs from registry.
+#[derive(Debug, Default)]
+pub struct RendererDbSeed {
+    pub specs: IndexMap<RendererKey, RendererSpec>,
+}
+
+impl RendererDbSeed {
+    pub fn new() -> Self {
+        Self {
+            specs: IndexMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, key: RendererKey, spec: RendererSpec) {
+        self.specs.insert(key, spec);
+    }
+}
 
 impl RenderError {
     pub fn new(
