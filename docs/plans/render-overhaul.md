@@ -1,10 +1,10 @@
-Below is a concrete implementation plan that maps your spec onto *this* repo’s structure (baml-bridge + dspy-rs + macros), with exact files, key new types/functions, and the critical decisions you’ll have to lock in.
+Below is a concrete implementation plan that maps your spec onto *this* repo's structure (baml-bridge + dspy-rs + macros), with exact files, key new types/functions, and the critical decisions you'll have to lock in.
 
-I’m going to assume the target outcome is:
+I'm going to assume the target outcome is:
 
-* `Signature`-typed prompt formatting in `ChatAdapter` becomes “boring templates” + typed values.
+* `Signature`-typed prompt formatting in `ChatAdapter` becomes "boring templates" + typed values.
 * Type-level rendering and field-level overrides are first-class.
-* Rendering can be strict/permissive and returns diagnostics.
+* Rendering is strict-only and returns `Result` (no permissive fallbacks).
 * The `"json"|"yaml"|"toon"` pathways become *styles* and always use `PromptValue.ty` as the schema target.
 
 ---
@@ -18,8 +18,8 @@ You have two viable homes for the new machinery:
 Why:
 
 * `baml-bridge` already owns `BamlValue`, `TypeIR`, `Registry`, `internal_baml_jinja`, `minijinja` env setup.
-* It’s the natural layer to “carry type info and render it”.
-* `dspy-rs` then only needs “signature compilation + message templates”.
+* It's the natural layer to "carry type info and render it".
+* `dspy-rs` then only needs "signature compilation + message templates".
 
 **Consequence:**
 `dspy-rs` becomes a consumer of a stable `baml_bridge::prompt::*` API.
@@ -28,14 +28,14 @@ Why:
 
 Why:
 
-* Short-term convenience (you’re already editing adapters there).
-* But it’s conceptually less clean: prompt rendering becomes tied to DSPy concerns.
+* Short-term convenience (you're already editing adapters there).
+* But it's conceptually less clean: prompt rendering becomes tied to DSPy concerns.
 
-**I’ll plan assuming Option 1**, and call out the deltas if you choose Option 2.
+**I'll plan assuming Option 1**, and call out the deltas if you choose Option 2.
 
 ---
 
-# 1. Add new “prompt” module surface in `baml-bridge`
+# 1. Add new "prompt" module surface in `baml-bridge`
 
 ## Files to add
 
@@ -64,7 +64,7 @@ pub use prompt::*;
 
 # 2. Extend `Registry` so it can collect renderers (type-level)
 
-Your spec explicitly wants: “Registry can remain the builder concept, but it now also registers renderers.”
+Your spec explicitly wants: "Registry can remain the builder concept, but it now also registers renderers."
 
 That is a *perfect fit* for your existing `crates/baml-bridge/src/registry.rs`.
 
@@ -86,7 +86,7 @@ pub struct Registry {
 
 ### Define keys/specs (new types)
 
-You’ll add these in `prompt/renderer.rs`, but `Registry` will use them.
+You'll add these in `prompt/renderer.rs`, but `Registry` will use them.
 
 A good key shape:
 
@@ -113,7 +113,7 @@ pub fn register_renderer(&mut self, key: RendererKey, spec: RendererSpec) {
 }
 ```
 
-### Add a “build world” path
+### Add a "build world" path
 
 Right now, `Registry::build(self, target: TypeIR) -> OutputFormatContent`.
 
@@ -131,7 +131,7 @@ pub struct RendererDbSeed {
 }
 ```
 
-**Side effect:** existing callers of `build()` don’t need to change. Keep `build()` as-is and implement it in terms of `build_with_renderers().0`.
+**Side effect:** existing callers of `build()` don't need to change. Keep `build()` as-is and implement it in terms of `build_with_renderers().0`.
 
 ---
 
@@ -151,7 +151,7 @@ pub struct PromptWorld {
 }
 ```
 
-#### TypeDb (wrap OutputFormatContent’s arcs)
+#### TypeDb (wrap OutputFormatContent's arcs)
 
 You already basically have this in `OutputFormatContent`:
 
@@ -170,19 +170,17 @@ pub struct TypeDb {
 }
 ```
 
-Add helper methods you’ll need for typed traversal:
+Add helper methods you'll need for typed traversal:
 
 * `fn find_class(&self, name: &str, mode: StreamingMode) -> Option<&Class>`
 * `fn class_field_type(&self, name: &str, mode: StreamingMode, field: &str) -> Option<TypeIR>`
 * `fn resolve_recursive_alias(&self, name: &str) -> Option<&TypeIR>`
 
-#### RenderSettings / RenderFailureMode
+#### RenderSettings (strict-only, no failure mode enum)
 
 Put these in `prompt/renderer.rs` or `prompt/world.rs` (your choice, but keep public).
 
 ```rust
-pub enum RenderFailureMode { Strict, Permissive }
-
 pub struct RenderSettings {
     pub max_total_chars: usize,
     pub max_string_chars: usize,
@@ -190,11 +188,10 @@ pub struct RenderSettings {
     pub max_map_entries: usize,
     pub max_depth: usize,
     pub max_union_branches_shown: usize,
-    pub failure_mode: RenderFailureMode,
 }
 ```
 
-Give sensible defaults.
+Give sensible defaults. Note: no `failure_mode` field - we're strict-only.
 
 ### Constructing a PromptWorld
 
@@ -214,7 +211,7 @@ Inside:
 
 * Build `TypeDb` from the arcs inside `output_format`.
 * Build `RendererDb` (compile templates into the env, store references).
-* Build `jinja` via the existing `jsonish::jinja_helpers::get_env()` and then extend it with your “prompt” filters (see section 6).
+* Build `jinja` via the existing `jsonish::jinja_helpers::get_env()` and then extend it with your "prompt" filters (see section 6).
 * Choose a default `union_resolver` function.
 
 ### Critical decision: env ownership and template compilation
@@ -229,7 +226,7 @@ You have two routes:
 
 2. **Use `env.render_str(source, ctx)` every time**:
 
-   * Much simpler, but slower and less “compiled”.
+   * Much simpler, but slower and less "compiled".
 
 If you want compile-time validation and stable template identity for diagnostics (`renderer: "type:jinja:<name>"`), route (1) is cleaner.
 
@@ -248,6 +245,7 @@ pub struct PromptValue {
     pub value: BamlValue,
     pub ty: TypeIR,
     pub world: Arc<PromptWorld>,
+    pub session: Arc<RenderSession>,
     pub override_renderer: Option<RendererRef>,
     pub path: PromptPath,
 }
@@ -280,12 +278,12 @@ Implementation details:
 * For `TypeIR::RecursiveTypeAlias { name, .. }`, resolve via `world.types.structural_recursive_aliases`.
 * For `TypeIR::Union(...)`, call `world.union_resolver` and either:
 
-  * return a “resolved” view type for traversal, or
+  * return a "resolved" view type for traversal, or
   * keep it as union and limit traversal (see union policy below).
 
 ### Union resolution caching
 
-Determinism requirement implies: “pick once, reuse always”.
+Determinism requirement implies: "pick once, reuse always".
 
 So `PromptValue` should internally memoize union resolution. Since `PromptValue` is usually cheap to clone, the memo should be in an `Arc<Inner>`:
 
@@ -300,7 +298,7 @@ struct PromptValueInner {
 
 ---
 
-# 5. Implement renderer pipeline + diagnostics + fallback (the heart)
+# 5. Implement renderer pipeline + errors (strict-only)
 
 ## New file: `crates/baml-bridge/src/prompt/renderer.rs`
 
@@ -311,66 +309,87 @@ Your spec model:
 ```rust
 pub enum Renderer {
     Jinja { template_name: String },
-    Func(fn(&PromptValue, &RenderCtx) -> Result<String, RenderError>),
+    Func(fn(&PromptValue, &RenderSession) -> Result<String, RenderError>),
 }
 ```
 
 ### Specs vs compiled renderers
 
-You’ll want a “seed spec” stored in Registry, and then a compiled form in PromptWorld:
+You'll want a "seed spec" stored in Registry, and then a compiled form in PromptWorld:
 
 ```rust
 pub enum RendererSpec {
     Jinja { source: &'static str },
-    Func { f: fn(&PromptValue, &RenderCtx) -> Result<String, RenderError> },
+    Func { f: fn(&PromptValue, &RenderSession) -> Result<String, RenderError> },
 }
 ```
 
 Then compile Jinja specs into templates on world creation.
 
-### RenderResult + diagnostics
+### RenderResult and RenderError (strict-only, no diagnostics)
 
-Exactly as you wrote:
+Since we're strict-only, rendering either succeeds or fails:
 
 ```rust
+// Success case - just the text
 pub struct RenderResult {
     pub text: String,
-    pub diagnostics: Vec<RenderDiagnostic>,
 }
 
-pub struct RenderDiagnostic {
-    pub path: String,
-    pub ty: String,
-    pub style: String,
-    pub renderer: String,
-    pub error: String,
-    pub fell_back_to: String,
+// Failure case - rich error with context
+pub struct RenderError {
+    pub path: String,           // e.g., "inputs.history.entries[3].output"
+    pub ty: String,             // diagnostic type string
+    pub style: String,          // style requested ("default", "json", etc.)
+    pub renderer: String,       // identifier ("type:TypeName:style" or "field:FieldName")
+    pub template_name: Option<String>,
+    pub template_location: Option<(usize, usize)>,  // line, column
+    pub message: String,        // human-readable summary
+    pub cause: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 ```
 
-### RenderCtx
+No `fell_back_to` field - there are no fallbacks in strict mode.
 
-This is where you connect “value rendering inside Jinja” to a shared diagnostic sink:
+### RenderSession (per-render context)
+
+This is where you pass per-render overrides and custom context:
 
 ```rust
-pub struct RenderCtx {
-    pub settings: RenderSettings,
-    pub diagnostics: Arc<std::sync::Mutex<Vec<RenderDiagnostic>>>,
+pub struct RenderSession {
+    pub settings: RenderSettings,  // can override world defaults
+    pub ctx: minijinja::Value,  // custom template context object (e.g., { max_output_chars: 5000 })
     pub depth: usize,
+    pub stack: Vec<(TypeKey, String)>,  // recursion guard
 }
 ```
 
-You can optionally add:
+`CompiledSignature` provides two entry points:
 
-* `stack: Vec<(TypeKey, Style)>` for recursion guard (“renderer recursion loop”).
+```rust
+impl<S: Signature> CompiledSignature<S> {
+    /// Render with default settings
+    pub fn render_messages(&self, input: &S::Input) -> Result<RenderedMessages, RenderError>;
+    
+    /// Render with custom context (e.g., for max_output_chars)
+    pub fn render_messages_with_ctx(
+        &self,
+        input: &S::Input,
+        ctx: impl serde::Serialize,
+    ) -> Result<RenderedMessages, RenderError>;
+}
 
-### Renderer resolution pipeline
+Note: accept `impl Serialize` here so `dspy-rs` callers don't need a direct
+`minijinja` dependency; internally convert via `minijinja::Value::from_serialize`.
+```
+
+### Renderer resolution pipeline (strict-only)
 
 Implement something like:
 
 ```rust
 impl PromptWorld {
-    pub fn render_value(&self, pv: &PromptValue, style: Option<&str>) -> Result<RenderResult, RenderError>;
+    pub fn render_value(&self, pv: &PromptValue, style: Option<&str>) -> Result<String, RenderError>;
 }
 ```
 
@@ -387,19 +406,20 @@ Inside, execute the pipeline as an ordered iterator of steps:
    * per-field override renderer (if present and matches style)
    * type-level renderer (lookup by `TypeKey + style`)
    * built-in style renderer if style is `"json"|"yaml"|"toon"`
-   * structural fallback
-   * last-ditch JSON stringify
+   * structural fallback (only if NO renderer is defined - this is the default, not recovery)
 
-3. **Failure handling**:
+3. **Failure handling (strict-only)**:
 
-   * Strict: return `Err(RenderError::RendererFailed { ... })`
-   * Permissive: push diagnostic + proceed to next fallback
+   * Any failure returns `Err(RenderError { ... })` immediately
+   * No fallback chain, no diagnostics-and-continue
 
 4. **Budget enforcement**:
 
+   * Budgets **always truncate deterministically** - truncation is NOT an error
    * enforce `max_total_chars` on *each render result* (and optionally on whole message in compiled signature)
+   * If truncated, append suffix like `"... (truncated)"`
 
-### Built-in format styles (“json/yaml/toon”)
+### Built-in format styles ("json/yaml/toon")
 
 This is where you fix the schema-target bug.
 
@@ -409,7 +429,16 @@ Implement:
 fn render_format_style(pv: &PromptValue, fmt: &str) -> Result<String, RenderError> {
     let view = pv.world.types.output_format_view_for(&pv.ty);
     internal_baml_jinja::format_baml_value(&pv.value, &view, fmt)
-        .map_err(|e| RenderError::FormatFailed(e))
+        .map_err(|e| RenderError {
+            path: pv.path.to_string(),
+            ty: pv.ty.diagnostic_repr().to_string(),
+            style: fmt.to_string(),
+            renderer: format!("builtin:{fmt}"),
+            template_name: None,
+            template_location: None,
+            message: format!("format style render failed: {e}"),
+            cause: None,
+        })
 }
 ```
 
@@ -425,14 +454,14 @@ OutputFormatContent {
 }
 ```
 
-This is exactly the “wrong schema context” fix you called out.
+This is exactly the "wrong schema context" fix you called out.
 
 ### Structural fallback renderer
 
 Implement:
 
 ```rust
-fn render_structural(pv: &PromptValue, ctx: &RenderCtx) -> String
+fn render_structural(pv: &PromptValue, session: &RenderSession) -> String
 ```
 
 Rules:
@@ -448,10 +477,10 @@ Rules:
   * else print:
 
     * `one of: A | B | C`
-    * then `render_format_style(pv, "json")` with budgets applied
+    * then `render_structural(pv, session)` on the underlying value
 
 **Critical decision:** does traversal (Jinja iteration) also honor list/map caps?
-I recommend “yes by default” to prevent prompt blowups from custom templates; allow overrides later.
+I recommend "yes by default" to prevent prompt blowups from custom templates; allow overrides later.
 
 ---
 
@@ -459,7 +488,7 @@ I recommend “yes by default” to prevent prompt blowups from custom templates
 
 ## New file: `crates/baml-bridge/src/prompt/jinja.rs`
 
-This replaces the current “serialize BamlValue into minijinja Value” approach for prompt rendering.
+This replaces the current "serialize BamlValue into minijinja Value" approach for prompt rendering.
 
 ### Object wrapper
 
@@ -515,7 +544,7 @@ Implement these `Object` hooks:
 
   * This is invoked when template does `{{ value }}`.
   * Call `pv.world.render_value(&pv, None)`; write resulting text into formatter.
-  * In permissive mode, render never errors; it only logs diagnostics.
+  * In strict mode, errors bubble up as minijinja errors.
 
 ### `.render("style")` support
 
@@ -577,18 +606,18 @@ Implementation outline (scoring):
 * If value is list/map: match list/map branches, etc.
 
 **Architectural decision:**
-When ambiguous, keep union type and forbid field traversal by name unless value is class-like and you can treat it dynamically. The spec says “keep the union type for traversal”. That implies:
+When ambiguous, keep union type and forbid field traversal by name unless value is class-like and you can treat it dynamically. The spec says "keep the union type for traversal". That implies:
 
 * `child_field("x")` on unresolved union should either:
 
   * attempt resolution again (but must stay deterministic), or
-  * return `None` / `null` plus a diagnostic.
+  * return `None` / error (strict-only).
 
-I’d implement: “attempt resolution once; if ambiguous, refuse typed field traversal (return None)”.
+I'd implement: "attempt resolution once; if ambiguous, refuse typed field traversal (return error in strict mode)".
 
 ---
 
-# 8. Replace “DefaultJinjaRender” with type-level renderer registration
+# 8. Replace "DefaultJinjaRender" with type-level renderer registration
 
 You currently have:
 
@@ -599,7 +628,7 @@ You currently have:
 
 Two choices:
 
-### Choice A (clean): deprecate it, replace with `#[prompt(renderer(...))]`
+### Choice A (clean): deprecate it, replace with `#[render(...)]`
 
 * Keep the trait around temporarily as compatibility.
 * Stop relying on it for new rendering.
@@ -616,7 +645,7 @@ pub fn register_default_jinja_renderer<T: DefaultJinjaRender>(reg: &mut Registry
 }
 ```
 
-But you’d still need call sites to invoke it, which violates “no manual registry spelunking”.
+But you'd still need call sites to invoke it, which violates "no manual registry spelunking".
 
 **Recommendation:** Choice A.
 
@@ -626,14 +655,15 @@ But you’d still need call sites to invoke it, which violates “no manual regi
 
 ## Modify: `crates/baml-bridge-derive/src/lib.rs`
 
-### Parse new container attribute: `#[prompt(...)]`
+### Parse new container attribute: `#[render(...)]`
 
-Extend the derive macro’s attribute parsing to accept a `prompt` attribute on structs/enums.
+Extend the derive macro's attribute parsing to accept a `render` attribute on structs/enums.
 
 Support at least:
 
-* `#[prompt(renderer(default = r#"..."#))]`
-* `#[prompt(renderer_fn(default = "path::to::func"))]`
+* `#[render(default = r#"..."#)]` - default Jinja template
+* `#[render(style = "compact", template = r#"..."#)]` - named style with template
+* `#[render(style = "debug", fn = "path::to::func")]` - named style with function
 
 Generate in `BamlTypeInternal::register`:
 
@@ -650,15 +680,18 @@ For function renderer, store fn pointer (must be in scope).
 
 In the proc-macro crate, you can:
 
-* parse Jinja source with minijinja’s parser (syntax check)
+* parse Jinja source with minijinja's parser (syntax check)
 * validate filter/test names against your shipped env filters
+* validate static field references (e.g., `value.foo`) against the struct's declared fields
 
 This requires:
 
 * adding `minijinja` as a dependency of `baml-bridge-derive`
+  * (needed for template parsing in the macro; `dspy-rs` itself does **not** depend on `minijinja`)
 * maintaining a known list of filter names (regex_match, sum, truncate, slice_chars, format_count, etc.)
+* parsing the struct fields for static validation
 
-**Note:** you won’t validate field names like `value.entries`; that’s runtime schema-aware.
+**For dynamic access**, require explicit opt-in: `#[render(allow_dynamic = true, template = "...")]`
 
 ---
 
@@ -673,23 +706,27 @@ pub struct FieldSpec {
     pub description: &'static str,
     pub type_ir: fn() -> TypeIR,
     pub constraints: &'static [ConstraintSpec],
-    pub format: Option<&'static str>,
+    pub format: Option<&'static str>,  // TO BE DELETED
 }
 ```
 
 ## Modify: `crates/dspy-rs/src/core/signature.rs`
 
-### Add rendering fields
+### Remove `format`, add rendering fields
 
-Add:
+**Delete `format` entirely.** Any use of `#[format]` becomes a compile error with a clear migration message.
+
+New shape:
 
 ```rust
 pub struct FieldSpec {
-    // existing
-    pub format: Option<&'static str>, // treat as STYLE for now
-
-    // new
-    pub style: Option<&'static str>, // optional, can alias format to style or replace format
+    pub name: &'static str,
+    pub rust_name: &'static str,
+    pub description: &'static str,
+    pub type_ir: fn() -> TypeIR,
+    pub constraints: &'static [ConstraintSpec],
+    // format: REMOVED - use #[render(...)] instead
+    pub style: Option<&'static str>,
     pub renderer: Option<FieldRendererSpec>,
     pub render_settings: Option<FieldRenderSettings>,
 }
@@ -700,7 +737,7 @@ Where `FieldRendererSpec` is a copyable static description:
 ```rust
 pub enum FieldRendererSpec {
     Jinja { template: &'static str },
-    Func { f: fn(&PromptValue, &RenderCtx) -> Result<String, RenderError> },
+    Func { f: fn(&PromptValue, &RenderSession) -> Result<String, RenderError> },
 }
 ```
 
@@ -715,24 +752,23 @@ pub struct FieldRenderSettings {
 }
 ```
 
-**If you want to keep churn minimal:**
-
-* keep `format` and interpret it as style
-* add only `renderer` + `render_settings`
-* later rename `format -> style`
-
 ## Modify: `crates/dsrs-macros/src/lib.rs`
 
 Extend the `#[derive(Signature)]` macro to parse new attributes on fields, e.g.:
 
-* `#[prompt(style = "compact")]`
-* `#[prompt(renderer = r#"..."#)]`
-* `#[prompt(renderer_fn = "path::to::func")]`
-* `#[prompt(max_list_items = 5)]` etc.
+* `#[render(style = "compact")]`
+* `#[render(template = r#"..."#)]`
+* `#[render(fn = "path::to::func")]`
+* `#[render(max_list_items = 5)]` etc.
+
+**IMPORTANT:** Remove parsing of `#[format]` entirely. If anyone uses `#[format]`, emit a compile error:
+```
+error: #[format] is removed. Use #[render(style = "...")] instead.
+```
 
 Then emit those into the generated `FieldSpec`.
 
-This is the “per-field override attached during signature compilation” part of your spec.
+This is the "per-field override attached during signature compilation" part of your spec.
 
 ---
 
@@ -758,7 +794,6 @@ pub struct CompiledSignature<S: Signature> {
 pub struct RenderedMessages {
     pub system: String,
     pub user: String,
-    pub diagnostics: Vec<RenderDiagnostic>,
 }
 ```
 
@@ -793,7 +828,7 @@ Inside `compile()`:
 
 1. Build a `Registry`
 2. Register `Self::Input` and `Self::Output` into it
-3. `build_with_renderers(TypeIR::string() or TypeIR::Top)` (target doesn’t matter for the *db*, only for schema rendering)
+3. `build_with_renderers(TypeIR::string() or TypeIR::Top)` (target doesn't matter for the *db*, only for schema rendering)
 4. Create `PromptWorld::from_registry(...)`
 5. Build `SigMeta`:
 
@@ -810,6 +845,12 @@ Implement:
 ```rust
 impl<S: Signature> CompiledSignature<S> {
     pub fn render_messages(&self, input: &S::Input) -> Result<RenderedMessages, RenderError>;
+    
+    pub fn render_messages_with_ctx(
+        &self,
+        input: &S::Input,
+        ctx: impl Into<HashMap<String, Value>>,
+    ) -> Result<RenderedMessages, RenderError>;
 }
 ```
 
@@ -819,16 +860,17 @@ Steps:
 2. For each input field spec:
 
    * extract raw `BamlValue` for that field
-   * create a `PromptValue { value, ty: (field.type_ir)(), world, override_renderer: <from FieldSpec>, path: "inputs.<field>" }`
+   * create a `PromptValue { value, ty: (field.type_ir)(), world, session, override_renderer: <from FieldSpec>, path: "inputs.<field>" }`
 3. Build a Jinja context:
 
    * `sig` = `sig_meta` (serialized)
    * `inputs` = map `rust_name -> prompt_value.to_jinja()`
+   * `ctx` = custom context passed in (e.g., `max_output_chars`)
 4. Render:
 
    * system: template only uses `sig`, no data
-   * user: uses `sig + inputs`
-5. Pull diagnostics from the shared sink used during prompt value rendering.
+   * user: uses `sig + inputs + ctx`
+5. Return result or propagate error.
 
 ### Default templates
 
@@ -857,7 +899,7 @@ Your output fields are:
 {% endfor %}
 ```
 
-(These match your “templates become boring” goal.)
+(These match your "templates become boring" goal.)
 
 ---
 
@@ -880,12 +922,28 @@ Instead:
 * Call `compiled.render_messages(input)`
 * Use `RenderedMessages.system` and `RenderedMessages.user`
 
+### API Naming Changes
+
+**Drop the `_typed` suffix.** The typed API becomes the primary API:
+
+```rust
+// New signatures (typed, primary)
+fn format_user_message<S: Signature>(&self, input: &S::Input) -> Result<String>
+fn format_demo<S: Signature>(&self, demo: S) -> Result<(String, String)>
+fn format_system_message<S: Signature>(&self) -> Result<String>
+```
+
+**Rename the old untyped version** to `format_user_message_untyped` and keep it internal/private.
+This avoids the naming collision with the existing untyped helper in `ChatAdapter`
+(which currently serves `MetaSignature` + `Example`).
+
 Concretely:
 
-* keep `ChatAdapter::format_system_message_typed::<S>() -> Result<String>`
-* but rewrite it to call `S::compile()` and return `rendered.system`
-
-Same for `format_user_message_typed`.
+* `ChatAdapter::format_system_message::<S>() -> Result<String>` calls `S::compile()` and returns `rendered.system`
+* `ChatAdapter::format_user_message::<S>(input) -> Result<String>` does the same for user message
+* Update `Predict::call` and all call sites to propagate the `Result`
+* Update internal untyped call sites to use `format_user_message_untyped`
+  (e.g., `Adapter::format` flow that takes `MetaSignature` + `Example`)
 
 ### Caching (optional but clean)
 
@@ -913,14 +971,52 @@ With the new system:
 
 ```rust
 #[derive(Debug, Clone, Default, BamlType)]
-#[prompt(renderer(default = r#"...jinja..."#))]
-pub struct REPLHistory { ... }
+#[render(default = r#"
+{%- if value.entries | length == 0 -%}
+You have not interacted with the REPL environment yet.
+{%- else -%}
+{%- for entry in value.entries -%}
+=== Step {{ loop.index }} ===
+{% if entry.reasoning %}Reasoning: {{ entry.reasoning }}{% endif %}
+Code:
+```python
+{{ entry.code }}
+```
+{% set output_len = entry.output | length %}
+Output ({{ output_len | format_count }} chars):
+{% if output_len > ctx.max_output_chars %}
+{{ entry.output | slice_chars(ctx.max_output_chars) }}
+... (truncated to {{ ctx.max_output_chars | format_count }}/{{ output_len | format_count }} chars)
+{% else %}
+{{ entry.output }}
+{% endif %}
+{% endfor -%}
+{%- endif -%}
+"#)]
+pub struct REPLHistory {
+    pub entries: Vec<REPLEntry>,
+    #[baml(skip)]  // Does not appear in schema or JSON rendering
+    max_output_chars: usize,
+}
+```
+
+### Context Handling for max_output_chars
+
+Since `max_output_chars` is marked `#[baml(skip)]`, it doesn't leak into schema or JSON.
+The template accesses it via `ctx.max_output_chars`, which is passed through the render session:
+
+```rust
+// At call site (e.g., in RLM)
+compiled_sig.render_messages_with_ctx(
+    input,
+    RenderCtx { max_output_chars: config.max_history_output_chars }
+)
 ```
 
 * Delete the special `render()` method (or keep it as a thin wrapper around `PromptWorld` if you want ergonomics).
 * Ensure your PromptWorld env includes the filters used by that template (format_count, slice_chars, truncate, etc).
 
-This makes it the poster child for “no name-based hacks”.
+This makes it the poster child for "no name-based hacks".
 
 ---
 
@@ -939,16 +1035,16 @@ This makes it the poster child for “no name-based hacks”.
 
 * `crates/baml-bridge/src/lib.rs` (export prompt module)
 * `crates/baml-bridge/src/registry.rs` (store renderers + build_with_renderers)
-* `crates/baml-bridge-derive/src/lib.rs` (parse `#[prompt(...)]`, register renderers, validate templates)
-* `crates/dspy-rs/src/core/signature.rs` (extend FieldSpec with render overrides/settings)
-* `crates/dsrs-macros/src/lib.rs` (parse field-level prompt attrs, emit into FieldSpec)
-* `crates/dspy-rs/src/adapter/chat.rs` (use CompiledSignature rendering instead of format_baml_value_for_prompt_typed)
+* `crates/baml-bridge-derive/src/lib.rs` (parse `#[render(...)]`, register renderers, validate templates)
+* `crates/dspy-rs/src/core/signature.rs` (extend FieldSpec with render overrides/settings, remove `format`)
+* `crates/dsrs-macros/src/lib.rs` (parse field-level render attrs, emit into FieldSpec, error on `#[format]`)
+* `crates/dspy-rs/src/adapter/chat.rs` (use CompiledSignature rendering, rename APIs)
 * `crates/dspy-rs/src/rlm/history.rs` (convert to type-level renderer attribute; remove ad-hoc env hacks)
 * (Optional) `crates/baml-bridge/src/render_trait.rs` (deprecate DefaultJinjaRender or adapt)
 
 ---
 
-# 15. The few “don’t dodge these” decisions
+# 15. The few "don't dodge these" decisions
 
 These are the knobs you should decide early because they shape APIs:
 
@@ -963,18 +1059,18 @@ These are the knobs you should decide early because they shape APIs:
    * I recommend: `value.raw` in Jinja to bypass renderer/budgets when necessary.
 5. **Ambiguous union traversal behavior**:
 
-   * I recommend: “no field traversal unless resolved”, and print union summary + safe json render.
+   * I recommend: "no field traversal unless resolved", and error in strict mode.
 
 ---
 
-If you want the next step to be even more concrete, I can write the “method-by-method behavior contract” for `JinjaPromptValue` (for each `BamlValue`/`TypeIR` combination), including how `repr`, `get_value`, `enumerate`, and `.render(style)` behave, in a way that you can translate almost 1:1 into the Rust implementations.
+If you want the next step to be even more concrete, I can write the "method-by-method behavior contract" for `JinjaPromptValue` (for each `BamlValue`/`TypeIR` combination), including how `repr`, `get_value`, `enumerate`, and `.render(style)` behave, in a way that you can translate almost 1:1 into the Rust implementations.
 
 
 ===
 
-Got it. Let’s lock this all the way in: no “maybe”, no “later”, no “it depends”. Below is the **finalized spec + implementation contract** for `JinjaPromptValue` and the surrounding rendering pipeline, written so you can translate it straight into Rust with minimal second-guessing.
+Got it. Let's lock this all the way in: no "maybe", no "later", no "it depends". Below is the **finalized spec + implementation contract** for `JinjaPromptValue` and the surrounding rendering pipeline, written so you can translate it straight into Rust with minimal second-guessing.
 
-I’m going to do two things:
+I'm going to do two things:
 
 1. **Resolve ambiguities** by making explicit choices (and explaining why those are the best default choices).
 2. Provide the **method-by-method behavior contract** for `JinjaPromptValue` (plus the exact renderer pipeline hooks it relies on).
@@ -985,7 +1081,7 @@ This assumes the architectural shape from the previous plan: prompt system lives
 
 # Locked decisions and invariants
 
-These are the “I refuse to re-litigate this later” calls.
+These are the "I refuse to re-litigate this later" calls.
 
 ## Prompt system location
 
@@ -997,19 +1093,13 @@ Why: `baml-bridge` already owns the type universe (`OutputFormatContent`), value
 
 **Decision:** `PromptWorld` stores a `minijinja::Environment<'static>` configured for prompts. It may register templates that are `'static` (type and field renderer templates from attributes). It should render non-static message templates via `env.render_str(...)`.
 
-Why: avoids lifetime pain while still allowing “compiled templates by name” for renderer templates.
+Why: avoids lifetime pain while still allowing "compiled templates by name" for renderer templates.
 
 ## How strict mode actually works
 
-**Decision:** Strict vs permissive is enforced by the **environment formatter**, not `Object::render`.
+**Decision:** Strict mode is the only mode. Errors bubble up as `Result::Err`.
 
-Reason: `minijinja::value::Object::render` cannot return rich errors (it’s `fmt::Result`). The environment formatter can return `minijinja::Error`, so it’s the right choke point to make strict mode truly fail prompt rendering.
-
-Implementation implication: `PromptWorld` must install a formatter that:
-
-* Detects `JinjaPromptValue` values and routes them through the renderer pipeline.
-* In strict mode, bubbles errors as `minijinja::Error`.
-* In permissive mode, records diagnostics and prints fallback text.
+The environment formatter detects `JinjaPromptValue` values and routes them through the renderer pipeline. Any errors become minijinja errors and abort rendering.
 
 ## Budgets apply to Jinja iteration semantics
 
@@ -1018,9 +1108,11 @@ Implementation implication: `PromptWorld` must install a formatter that:
 * `enumerator_len()` / `enumerate()` for lists and maps
 * `get_value(index)` for lists (indices beyond cap are treated as missing)
 
-This is to prevent “accidental JSON landfill via `{% for x in huge_list %}`”.
+This is to prevent "accidental JSON landfill via `{% for x in huge_list %}`".
 
 Escape hatch: `.raw` bypasses these caps.
+
+**Budget behavior:** Budgets **always truncate deterministically** - truncation is NOT an error. Only renderer/template failures are errors.
 
 ## Reserved keys
 
@@ -1049,16 +1141,16 @@ This mirrors the existing conversion helper pattern (`get_field(name, alias)`) a
 
 **Decision:** union resolution is memoized per `PromptValue` instance. A union may resolve to a single branch or remain ambiguous. Ambiguous unions:
 
-* Render as “one of: …” + safe fallback.
-* Do not allow typed `.field` access. Accessing `.field` yields `Undefined` and emits a diagnostic.
+* Render as "one of: …" + safe fallback.
+* Do not allow typed `.field` access. Accessing `.field` yields an error in strict mode.
 
-No “resolve differently at different call sites”.
+No "resolve differently at different call sites".
 
 ## Schema context bug is fixed by construction
 
 **Decision:** all format styles (`json|yaml|toon`) must use an `OutputFormatContent` view whose `target = PromptValue.ty`.
 
-No exceptions. No “parent input format”.
+No exceptions. No "parent input format".
 
 ---
 
@@ -1090,31 +1182,23 @@ pub struct RenderSettings {
     pub max_map_entries: usize,
     pub max_depth: usize,
     pub max_union_branches_shown: usize,
-    pub failure_mode: RenderFailureMode,
 }
-pub enum RenderFailureMode { Strict, Permissive }
 ```
 
-## Render session and diagnostics
+No `failure_mode` - we're strict-only.
 
-You want one sink per “render messages” call.
+## Render session
+
+You want one session per "render messages" call.
 
 ```rust
 pub struct RenderSession {
-    diagnostics: std::sync::Mutex<Vec<RenderDiagnostic>>,
-}
-
-pub struct RenderDiagnostic {
-    pub path: String,
-    pub ty: String,
-    pub style: String,
-    pub renderer: String,
-    pub error: String,
-    pub fell_back_to: String,
+    pub settings: RenderSettings,  // can override world defaults
+    pub ctx: HashMap<String, Value>,  // custom template context
+    pub depth: usize,
+    pub stack: Vec<(TypeKey, String)>,  // recursion guard
 }
 ```
-
-You should pass `Arc<RenderSession>` through every PromptValue so all nested render calls accumulate into one list.
 
 ## PromptValue
 
@@ -1156,25 +1240,19 @@ When rendering `pv`:
 2. Per-field override renderer/style (if exists on `pv.override_renderer`)
 3. Type-level renderer for concrete type key + style
 4. Built-in style handlers (`json|yaml|toon`)
-5. Structural fallback renderer
-6. Last-ditch fallback: bounded JSON-ish stringification
+5. Structural fallback renderer (default, not recovery)
 
-### Failure handling
+### Failure handling (strict-only)
 
-* In `Strict`: any failure in (1)-(4) aborts the render and returns `Err`.
-* In `Permissive`: failures push a `RenderDiagnostic` and continue to next fallback step.
+Any failure in the pipeline returns `Err(RenderError { ... })` immediately. No fallback chain.
 
 ### Budget enforcement
 
-* Structural renderer must respect per-structure budgets (`max_*`) and depth.
-* After any renderer produces a string, enforce `max_total_chars`:
+Budgets truncate deterministically - they do NOT error:
 
-  * If exceeded:
-
-    * For custom/type renderers: truncate and add a suffix `"... (truncated)"`.
-    * For `json|yaml|toon`: do not emit half-structured output. Instead, treat overflow as a failure and fall back to structural. Emit a diagnostic with `fell_back_to = "structural"`.
-
-That last rule makes `render("json")` always produce something meaningful even under budgets.
+* After any renderer produces a string, enforce `max_total_chars`
+* If exceeded, truncate and add a suffix `"... (truncated)"`
+* Truncation is valid output, not an error
 
 ---
 
@@ -1204,17 +1282,15 @@ impl PromptValue {
 
 Your prompt Jinja environment MUST install a formatter like:
 
-* If value is `None` (minijinja “none”): print `"null"` (keep existing behavior).
+* If value is `None` (minijinja "none"): print `"null"` (keep existing behavior).
 * Else if value is a `JinjaPromptValue`: call `pv.world.render_prompt_value(&pv, None)`:
 
   * If success: write string
-  * If error:
-
-    * strict mode: return minijinja Error
-    * permissive: record diagnostic and write fallback like `"[render error]"` or better: render structural fallback immediately
+  * If error: return minijinja Error (strict mode)
 * Else: default formatting (likely `minijinja::escape_formatter`)
 
-This is the strict/permissive enforcement point.
+**Strict undefined behavior:** configure the environment to error on undefined access
+(`UndefinedBehavior::Strict`), so `{{ value.missing }}` becomes a hard error.
 
 ### Downcasting
 
@@ -1235,7 +1311,7 @@ Return based on **effective shape**:
 3. Else if `pv.ty` is `TypeIR::List` or `pv.value` is `BamlValue::List`: `ObjectRepr::Seq`
 4. Else: `ObjectRepr::Plain`
 
-This “type-first, value-fallback” rule avoids weirdness when types mismatch.
+This "type-first, value-fallback" rule avoids weirdness when types mismatch.
 
 ## get_value
 
@@ -1292,12 +1368,6 @@ Resolution steps:
    * child inherits `override_renderer = None` (unless you later want nested per-field overrides inside classes, which is optional)
    * child path appends `.real_name` (not alias)
 
-Diagnostics:
-
-* If class not found or field type not found but value exists: in permissive mode, emit a diagnostic about “type mismatch / missing schema” and return a child with `ty = TypeIR::Top` or treat as untyped. Since `TypeIR::Top` panics in schema rendering elsewhere, prefer:
-
-  * `ty = inferred_ty_from_value(child_value)` (see fallback typing rules below)
-
 #### If effective shape is map-like
 
 This means:
@@ -1320,7 +1390,7 @@ Resolution:
 Budgets:
 
 * If `k` exists but map entry is beyond `max_map_entries` when iterating, direct key access still works.
-* If you want strict “no bypass”, enforce cap by refusing keys not in the first N keys. I recommend **do not** do that. It’s surprising and it’s not how caps are usually expected to work.
+* If you want strict "no bypass", enforce cap by refusing keys not in the first N keys. I recommend **do not** do that. It's surprising and it's not how caps are usually expected to work.
 
 ### Case B: integer keys for sequences
 
@@ -1443,8 +1513,7 @@ When called:
 
 1. Parse style string. If missing or not string, return minijinja error.
 2. Call `pv.world.render_prompt_value(&pv, Some(style))`.
-3. If strict mode and render fails: return minijinja error.
-4. If permissive mode and render fails: record diagnostic and return fallback text.
+3. If error: return minijinja error (strict mode).
 
 `render(style)` is **call-site override** and must take precedence over field/type renderers.
 
@@ -1452,7 +1521,7 @@ When called:
 
 # Structural fallback renderer contract
 
-This is not JinjaPromptValue per se, but it’s what makes default `{{ value }}` safe. This must be deterministic and typed.
+This is not JinjaPromptValue per se, but it's what makes default `{{ value }}` safe. This must be deterministic and typed.
 
 Entry:
 
@@ -1499,10 +1568,8 @@ Render the rendered alias if possible:
   * For each field in class schema:
 
     * If present, render `field: <child structural>`
-    * If absent, skip (or show `field: null`? Decide now)
-
-      * **Decision:** skip absent fields. Prompts prefer signal over noise.
-* If more than `max_map_entries` fields, cap similarly with “...”.
+    * If absent, skip (skip absent fields - prompts prefer signal over noise)
+* If more than `max_map_entries` fields, cap similarly with "...".
 
 ## Union
 
@@ -1513,15 +1580,15 @@ If ambiguous:
 * Emit header: `"one of: A | B | C"` showing up to `max_union_branches_shown`
 * Then render the raw value in a safe way:
 
-  * **Decision:** use `render_structural` on the underlying value inferred type, not JSON, to keep bounded and meaningful.
+  * Use `render_structural` on the underlying value inferred type, not JSON, to keep bounded and meaningful.
 
-This avoids “ambiguous union prints 10KB JSON”.
+This avoids "ambiguous union prints 10KB JSON".
 
 ---
 
 # Fallback typing rules when schema is missing
 
-This removes a common “oops, type db missing” footgun.
+This removes a common "oops, type db missing" footgun.
 
 When you have a `BamlValue` but cannot reliably compute a child `TypeIR`:
 
@@ -1535,9 +1602,8 @@ When you have a `BamlValue` but cannot reliably compute a child `TypeIR`:
   * List -> TypeIR::list(TypeIR::Top?) but Top is dangerous; instead:
 
     * If non-empty: infer from first element, union-including-null across sample? Keep simple: first element type
-    * If empty: list[string] or list[ANY]? You don’t have ANY safely. Use list[string] and treat as untyped.
+    * If empty: list[string] or list[ANY]? You don't have ANY safely. Use list[string] and treat as untyped.
   * Map/Class -> map<string, string> or class name if present. For Class with unknown schema: treat as map<string, inferred>.
-* Emit a diagnostic: renderer `"structural"`, error `"missing schema for typed traversal"`, fell_back_to `"value_inference"`.
 
 This makes the system resilient even if registry misses a type.
 
@@ -1565,7 +1631,7 @@ pub struct JinjaRenderCtx {
 }
 ```
 
-If you want RLM-specific stuff like `max_output_chars`, pass it via a separate “user ctx” map that `CompiledSignature` can merge in, but do not couple PromptWorld to RLM.
+If you want RLM-specific stuff like `max_output_chars`, pass it via a separate "user ctx" map that `CompiledSignature` can merge in, but do not couple PromptWorld to RLM.
 
 ## Filters you must ship
 
@@ -1582,7 +1648,7 @@ These match patterns already used in `REPLHistory` templates.
 
 # The best way to implement this in code with minimal pain
 
-Here’s the “do it in this order so you don’t cry” approach.
+Here's the "do it in this order so you don't cry" approach.
 
 ## Step 1: implement PromptValue and PromptPath
 
@@ -1613,7 +1679,6 @@ At this point `{{ value }}` prints something reasonable, with caps.
 * Field override support
 * Type-level renderer support
 * Built-in format styles with correct schema target
-* Diagnostics capture in permissive mode
 
 ## Step 6: migrate one real type renderer
 
@@ -1625,11 +1690,10 @@ That is your end-to-end proof.
 
 # What you will end up with in practice
 
-After this is implemented, these are the invariant behaviors you’ll be able to rely on:
+After this is implemented, these are the invariant behaviors you'll be able to rely on:
 
 * `{{ inputs.history }}` always prints a safe, bounded representation with type-aware traversal.
 * `{{ inputs.history.render("json") }}` uses `inputs.history.ty` as schema target, never the input struct format.
-* Broken type renderers won’t silently fail in permissive mode: you’ll get diagnostics.
 * Broken type renderers will hard fail in strict mode: prompt rendering errors.
 * Template authors can loop over lists and maps without accidentally iterating millions of items.
 * If someone *really* wants raw behavior, `.raw` exists and is explicit.
@@ -1641,6 +1705,127 @@ If you want, I can also write the exact pseudocode for each of these methods (`g
 
 ===
 
-TODO/FIXME:
-- no lenient mode, wtf thats stupid
+# Final Decisions: Strict-Only Rendering + Error Model
 
+These decisions supersede earlier permissive/diagnostics notes.
+
+## Strict vs Lenient
+
+**Decision:** Strict-only. **Lenient/permissive mode is removed.**
+
+Implications:
+* All prompt rendering APIs return `Result<...>`.
+* Any render failure aborts the render and returns a rich error to the caller.
+* No silent fallbacks or diagnostics-only pathways.
+
+## Single Render Path (No `format`)
+
+**Decision:** One render path only. Remove `#[format]` and `FieldSpec.format`.
+* Per-field customization uses `#[render(...)]`.
+* Type-level renderers also use `#[render(...)]`.
+* `json|yaml|toon` remain **built-in styles** callable via `value.render("json")`, etc.
+
+## Compile-Time Validation (hard fail)
+
+We treat renderer definitions as part of the type signature and validate at compile time:
+* Invalid `#[render(...)]` syntax (unknown keys, wrong types).
+* Jinja syntax errors in `#[render(template = "...")]`.
+* Unknown filters/tests referenced in templates.
+* Static field references to unknown schema fields (e.g., `value.foo` where `foo` is not declared).
+  * If truly dynamic access is needed, require explicit opt-in: `#[render(allow_dynamic = true, ...)]`.
+* Non-builtin styles **must** define a renderer in the same attribute.
+  * Example: `#[render(style = "compact", template = "...")]` is required.
+  * This eliminates "missing renderer for style" as a runtime class of errors.
+
+## Runtime Errors (strict, surfaced to caller)
+
+Some failures are necessarily runtime because they depend on values:
+1. **Undefined field access** (Jinja strict undefined):
+   * Template tries to access a field that doesn't exist at runtime (e.g., union ambiguity).
+2. **Union ambiguity**:
+   * If a value's union branch cannot be deterministically resolved and the template attempts typed field access.
+3. **Renderer fn errors**:
+   * Custom renderer functions can return `Err`.
+4. **Built-in format failures**:
+   * Rare runtime data issues (e.g., `NaN` floats for JSON).
+
+**Budget behavior:** budgets **truncate deterministically**; they do **not** error.
+
+**Optional fields:** optional values are serialized as `null` (see `ToBamlValue for Option<T>`),
+so `value.optional_field` yields `null` rather than “undefined”. Strict errors only
+trigger on **unknown fields** or **invalid shape access**, not missing optional data.
+
+## Error Payload (make it excellent)
+
+All runtime errors must include:
+* `path`: full prompt path (`inputs.history.entries[3].output`)
+* `ty`: diagnostic type string
+* `style`: style requested (`default`, `json`, etc.)
+* `renderer`: identifier (`type:<TypeName>:<style>` or `field:<FieldName>`)
+* `template_name` and/or template source location
+* Jinja line/column (if applicable)
+* A short human-readable summary + underlying cause
+
+This is not optional — error quality is a feature.
+
+---
+
+# Attribute Surface: `#[render(...)]`
+
+The unified attribute for both type-level and field-level rendering is `#[render(...)]`.
+
+## Type-Level Examples
+
+```rust
+// Default renderer (Jinja template)
+#[derive(Debug, Clone, Default, BamlType)]
+#[render(default = r#"
+{%- if value.entries | length == 0 -%}
+You have not interacted with the REPL environment yet.
+{%- else -%}
+{%- for entry in value.entries -%}
+=== Step {{ loop.index }} ===
+...
+{% endfor -%}
+{%- endif -%}
+"#)]
+pub struct REPLHistory {
+    pub entries: Vec<REPLEntry>,
+    #[baml(skip)]
+    max_output_chars: usize,
+}
+
+// Named style with template
+#[render(style = "compact", template = r#"{{ value.entries | length }} steps"#)]
+
+// Named style with function
+#[render(style = "debug", fn = "crate::prompt::render_history_debug")]
+```
+
+## Field-Level Examples
+
+```rust
+#[derive(Signature)]
+struct MySig {
+    #[input]
+    #[render(style = "json")]
+    context: Vec<Document>,
+    
+    #[input]
+    #[render(template = r#"- {{ value.title }} ({{ value.tags | length }} tags)"#)]
+    note: NoteData,
+    
+    #[input]
+    #[render(fn = "crate::prompt::render_note")]
+    detailed_note: NoteData,
+}
+```
+
+## Using Styles in Templates
+
+```jinja
+{{ value.render("json") }}
+{{ value.render("compact") }}
+{{ value.raw }}
+{{ value.raw["field"] }}
+```
