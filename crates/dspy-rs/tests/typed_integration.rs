@@ -70,6 +70,17 @@ struct StrictQA {
     confidence: f32,
 }
 
+#[derive(Signature, Clone, Debug, PartialEq)]
+/// Uses a template that should fail at render time.
+struct RenderFailSig {
+    #[input]
+    #[render(template = "{{ value.missing }}")]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn typed_prediction_happy_path_with_metadata() {
@@ -118,6 +129,34 @@ async fn typed_prediction_check_failure_is_recorded() {
         .expect("check constraint should be recorded");
     assert!(!check.passed);
     assert!(result.has_failed_checks());
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn typed_prediction_render_error_surfaces() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let response = response_with_fields(&[("answer", "Paris")]);
+    let _client = configure_test_lm(vec![response]).await;
+
+    let predict = Predict::<RenderFailSig>::new();
+    let input = RenderFailSigInput {
+        question: "What is the capital of France?".to_string(),
+    };
+
+    let err = match predict.call(input).await {
+        Ok(_) => panic!("expected render error"),
+        Err(err) => err,
+    };
+    match err {
+        PredictError::Render { source } => {
+            assert!(
+                source.message.contains("missing") || source.message.contains("undefined"),
+                "unexpected render error message: {}",
+                source.message
+            );
+        }
+        other => panic!("unexpected error type: {other:?}"),
+    }
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
