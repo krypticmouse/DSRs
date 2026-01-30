@@ -19,12 +19,12 @@ fn typed_alias_is_used_in_prompt_and_user_message() {
         .format_system_message::<AliasSignature>()
         .expect("system message");
 
-    assert!(system.contains("[[ ## question_text ## ]]"));
-    assert!(system.contains("[[ ## final_answer ## ]]"));
-    assert!(!system.contains("[[ ## question ## ]]"));
-    assert!(!system.contains("[[ ## answer ## ]]"));
-    assert!(system.contains("`question_text` (string): Primary question"));
-    assert!(system.contains("`final_answer` (string): Final response"));
+    assert!(system.contains("Your input fields are:"));
+    assert!(system.contains("- question_text: string"));
+    assert!(system.contains("Your output fields are:"));
+    assert!(system.contains("- final_answer: string"));
+    assert!(!system.contains("- question:"));
+    assert!(!system.contains("- answer:"));
 
     let input = AliasSignatureInput {
         question: "Hello".to_string(),

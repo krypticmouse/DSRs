@@ -48,101 +48,106 @@ fn system_message() -> String {
         .expect("system message")
 }
 
-fn extract_field_block(message: &str, field_name: &str) -> String {
-    let marker = format!("[[ ## {field_name} ## ]]");
+fn output_section(message: &str) -> &str {
+    let marker = "Your output fields are:";
     let start = message
-        .find(&marker)
-        .unwrap_or_else(|| panic!("missing marker: {field_name}"));
-    let after = start + marker.len();
-    let remaining = &message[after..];
-    let end = remaining.find("[[ ##").unwrap_or(remaining.len());
-    remaining[..end].trim().to_string()
+        .find(marker)
+        .unwrap_or_else(|| panic!("missing output section"));
+    &message[start + marker.len()..]
+}
+
+fn output_field_line(message: &str, field_name: &str) -> String {
+    let needle = format!("- {field_name}:");
+    for line in output_section(message).lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(&needle) {
+            return trimmed.to_string();
+        }
+    }
+    panic!("missing output field: {field_name}");
+}
+
+fn output_schema_block(message: &str, field_name: &str) -> String {
+    let needle = format!("- {field_name}:");
+    let mut in_block = false;
+    let mut lines = Vec::new();
+    for line in output_section(message).lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("- ") && trimmed.contains(':') {
+            if in_block {
+                break;
+            }
+            if trimmed.starts_with(&needle) {
+                in_block = true;
+            }
+            continue;
+        }
+
+        if in_block {
+            lines.push(line.to_string());
+        }
+    }
+
+    lines.join("\n").trim().to_string()
 }
 
 #[test]
 fn test_primitive_types() {
     let message = system_message();
-    let answer = extract_field_block(&message, "answer");
-    let count = extract_field_block(&message, "count");
-    let score = extract_field_block(&message, "score");
-    let is_valid = extract_field_block(&message, "is_valid");
+    let answer = output_field_line(&message, "answer");
+    let count = output_field_line(&message, "count");
+    let score = output_field_line(&message, "score");
+    let is_valid = output_field_line(&message, "is_valid");
 
-    assert!(answer.contains("Output field `answer` should be of type:"));
-    assert!(answer.contains("string"));
-    assert!(count.contains("Output field `count` should be of type:"));
-    assert!(count.contains("int"));
-    assert!(score.contains("Output field `score` should be of type:"));
-    assert!(score.contains("float"));
-    assert!(is_valid.contains("Output field `is_valid` should be of type:"));
-    assert!(is_valid.contains("bool"));
+    assert_eq!(answer, "- answer: string");
+    assert_eq!(count, "- count: int");
+    assert_eq!(score, "- score: float");
+    assert_eq!(is_valid, "- is_valid: bool");
 }
 
 #[test]
 fn test_optional_renders_as_nullable() {
     let message = system_message();
-    let maybe_answer = extract_field_block(&message, "maybe_answer");
+    let maybe_answer = output_field_line(&message, "maybe_answer");
+    let maybe_schema = output_schema_block(&message, "maybe_answer");
 
     assert!(maybe_answer.contains("string"));
-    assert!(maybe_answer.contains("null"));
+    assert!(
+        maybe_answer.contains("null") || maybe_schema.contains("null"),
+        "expected optional type to mention null"
+    );
 }
 
 #[test]
 fn test_array_renders_with_brackets() {
     let message = system_message();
-    let keywords = extract_field_block(&message, "keywords");
-    let citations = extract_field_block(&message, "citations");
+    let keywords = output_field_line(&message, "keywords");
+    let citations = output_field_line(&message, "citations");
+    let citations_schema = output_schema_block(&message, "citations");
 
-    assert!(keywords.contains("string[]"));
-    assert!(citations.contains("["));
-    assert!(citations.contains("doc_id"));
-    assert!(citations.contains("quote"));
+    assert_eq!(keywords, "- keywords: string[]");
+    assert!(citations.contains("Citation[]"));
+    assert!(citations_schema.contains("doc_id"));
+    assert!(citations_schema.contains("quote"));
 }
 
 #[test]
 fn test_schema_is_separate_from_type_line() {
     let message = system_message();
-    let citations = extract_field_block(&message, "citations");
-    let schema_lines: Vec<&str> = citations.lines().collect();
-    let header_index = schema_lines
-        .iter()
-        .position(|line| line.starts_with("Output field `citations`"))
-        .expect("type header line");
-    let header_line = schema_lines[header_index];
-    assert!(header_line.contains("Citation[]"));
-    assert!(!header_line.contains("//"));
-    if let Some(line) = schema_lines.get(header_index + 1) {
-        assert!(
-            line.trim().is_empty(),
-            "expected blank line after type header"
-        );
-    }
-    let mut cursor = header_index + 1;
-    while cursor < schema_lines.len() && schema_lines[cursor].trim().is_empty() {
-        cursor += 1;
-    }
-    if schema_lines
-        .get(cursor)
-        .is_some_and(|line| line.trim() == "Definitions (used below):")
-    {
-        cursor += 1;
-    }
+    let header = output_field_line(&message, "citations");
+    let schema = output_schema_block(&message, "citations");
 
-    let mut has_main_schema = false;
-    for line in &schema_lines[cursor..] {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('{') || trimmed.starts_with('[') {
-            has_main_schema = true;
-            break;
-        }
-    }
-
-    assert!(has_main_schema, "missing main schema block");
+    assert!(header.contains("Citation[]"));
+    assert!(!header.contains("doc_id"));
+    assert!(!header.contains("quote"));
+    assert!(schema.contains("doc_id"));
+    assert!(schema.contains("quote"));
 }
 
 #[test]
 fn test_nested_struct_with_comments() {
     let message = system_message();
-    let citations = extract_field_block(&message, "citations");
+    let citations = output_schema_block(&message, "citations");
 
     assert!(citations.contains("Document identifier"));
     assert!(citations.contains("Relevant quote"));
@@ -151,7 +156,7 @@ fn test_nested_struct_with_comments() {
 #[test]
 fn test_enum_rendering() {
     let message = system_message();
-    let sentiment = extract_field_block(&message, "sentiment");
+    let sentiment = output_schema_block(&message, "sentiment");
 
     assert!(sentiment.contains("Positive"));
     assert!(sentiment.contains("Neutral"));
@@ -180,7 +185,7 @@ fn test_field_order_preserved() {
 
     let mut last_pos = None;
     for field in fields {
-        let marker = format!("[[ ## {field} ## ]]");
+        let marker = format!("- {field}:");
         let pos = message
             .find(&marker)
             .unwrap_or_else(|| panic!("missing marker: {field}"));
@@ -192,48 +197,16 @@ fn test_field_order_preserved() {
 }
 
 #[test]
-fn test_completed_marker_present() {
+fn test_system_sections_present() {
     let message = system_message();
-    assert!(message.contains("[[ ## completed ## ]]"));
+    assert!(message.contains("Your input fields are:"));
+    assert!(message.contains("Your output fields are:"));
 }
 
 #[test]
-fn test_objective_line_present() {
+fn test_old_system_scaffold_absent() {
     let message = system_message();
-    assert!(message.contains("In adhering to this structure, your objective is:"));
-    assert!(message.contains("Tests all output field types."));
-}
-
-#[test]
-fn test_response_instruction_line_present() {
-    let message = system_message();
-    let instruction_line = message
-        .lines()
-        .find(|line| line.starts_with("Respond with the corresponding output fields"))
-        .expect("response instruction line");
-
-    let markers = [
-        "answer",
-        "count",
-        "score",
-        "is_valid",
-        "maybe_answer",
-        "keywords",
-        "citations",
-        "sentiment",
-    ];
-
-    let mut last_pos = None;
-    for marker in markers {
-        let token = format!("[[ ## {marker} ## ]]");
-        let pos = instruction_line
-            .find(&token)
-            .unwrap_or_else(|| panic!("missing marker in response instruction: {marker}"));
-        if let Some(prev) = last_pos {
-            assert!(pos > prev, "marker {marker} is out of order");
-        }
-        last_pos = Some(pos);
-    }
-
-    assert!(instruction_line.contains("[[ ## completed ## ]]"));
+    assert!(!message.contains("Respond with the corresponding output fields"));
+    assert!(!message.contains("In adhering to this structure, your objective is:"));
+    assert!(!message.contains("[[ ## completed ## ]]"));
 }
