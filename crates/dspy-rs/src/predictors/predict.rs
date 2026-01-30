@@ -19,6 +19,7 @@ pub struct Predict<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<S>,
     instruction_override: Option<String>,
+    render_ctx: Option<Value>,
     lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
@@ -29,6 +30,7 @@ impl<S: Signature> Predict<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            render_ctx: None,
             lm_override: None,
             _marker: PhantomData,
         }
@@ -58,19 +60,23 @@ impl<S: Signature> Predict<S> {
             }
         };
         let chat_adapter = ChatAdapter;
+        let render_ctx = self.render_ctx.as_ref();
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
             ?;
-        let user = chat_adapter
-            .format_user_message::<S>(&input)
-            ?;
+        let user = match render_ctx {
+            Some(ctx) => chat_adapter.format_user_message_with_ctx::<S, _>(&input, ctx)?,
+            None => chat_adapter.format_user_message::<S>(&input)?,
+        };
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
-            let (demo_user, demo_assistant) = chat_adapter
-                .format_demo_typed::<S>(demo.clone())
-                ?;
+            let (demo_user, demo_assistant) = match render_ctx {
+                Some(ctx) => chat_adapter
+                    .format_demo_typed_with_ctx::<S, _>(demo.clone(), ctx)?,
+                None => chat_adapter.format_demo_typed::<S>(demo.clone())?,
+            };
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -159,19 +165,23 @@ impl<S: Signature> Predict<S> {
                     parsed: input_value,
                 }
             })?;
+        let render_ctx = self.render_ctx.as_ref();
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
             ?;
-        let user = chat_adapter
-            .format_user_message::<S>(&typed_input)
-            ?;
+        let user = match render_ctx {
+            Some(ctx) => chat_adapter.format_user_message_with_ctx::<S, _>(&typed_input, ctx)?,
+            None => chat_adapter.format_user_message::<S>(&typed_input)?,
+        };
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
-            let (demo_user, demo_assistant) = chat_adapter
-                .format_demo_typed::<S>(demo.clone())
-                ?;
+            let (demo_user, demo_assistant) = match render_ctx {
+                Some(ctx) => chat_adapter
+                    .format_demo_typed_with_ctx::<S, _>(demo.clone(), ctx)?,
+                None => chat_adapter.format_demo_typed::<S>(demo.clone())?,
+            };
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -242,19 +252,23 @@ impl<S: Signature> Predict<S> {
         };
         let chat_adapter = ChatAdapter;
         let typed_input: S::Input = input.clone().into();
+        let render_ctx = self.render_ctx.as_ref();
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
             ?;
-        let user = chat_adapter
-            .format_user_message::<S>(&typed_input)
-            ?;
+        let user = match render_ctx {
+            Some(ctx) => chat_adapter.format_user_message_with_ctx::<S, _>(&typed_input, ctx)?,
+            None => chat_adapter.format_user_message::<S>(&typed_input)?,
+        };
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
-            let (demo_user, demo_assistant) = chat_adapter
-                .format_demo_typed::<S>(demo.clone())
-                ?;
+            let (demo_user, demo_assistant) = match render_ctx {
+                Some(ctx) => chat_adapter
+                    .format_demo_typed_with_ctx::<S, _>(demo.clone(), ctx)?,
+                None => chat_adapter.format_demo_typed::<S>(demo.clone())?,
+            };
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -317,6 +331,7 @@ pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<S>,
     instruction_override: Option<String>,
+    render_ctx: Option<Value>,
     lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
@@ -327,6 +342,7 @@ impl<S: Signature> PredictBuilder<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            render_ctx: None,
             lm_override: None,
             _marker: PhantomData,
         }
@@ -357,6 +373,11 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
+    pub fn render_ctx(mut self, ctx: Value) -> Self {
+        self.render_ctx = Some(ctx);
+        self
+    }
+
     pub fn with_lm(mut self, lm: Arc<LM>) -> Self {
         self.lm_override = Some(lm);
         self
@@ -367,6 +388,7 @@ impl<S: Signature> PredictBuilder<S> {
             tools: self.tools,
             demos: self.demos,
             instruction_override: self.instruction_override,
+            render_ctx: self.render_ctx,
             lm_override: self.lm_override,
             _marker: PhantomData,
         }

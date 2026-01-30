@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 use pyo3::{Py, PyResult, Python};
 use regex::Regex;
+use serde_json::json;
 use tokio::runtime::Handle;
 use std::sync::LazyLock;
 
@@ -86,10 +87,13 @@ impl<S: Signature> Rlm<S> {
         let action_instruction = adapter.build_action_instruction::<S>();
         let extract_instruction = adapter.build_extract_instruction::<S>();
 
+        let render_ctx = json!({ "max_output_chars": config.max_history_output_chars });
         let mut generate_action = Predict::<RlmActionSig>::builder()
-            .instruction(action_instruction);
+            .instruction(action_instruction)
+            .render_ctx(render_ctx.clone());
         let mut extract = Predict::<RlmExtractSig<S>>::builder()
-            .instruction(extract_instruction);
+            .instruction(extract_instruction)
+            .render_ctx(render_ctx);
 
         if let Some(lm) = lm_override {
             generate_action = generate_action.with_lm(Arc::clone(&lm));
@@ -101,6 +105,7 @@ impl<S: Signature> Rlm<S> {
         (generate_action, extract)
     }
 
+    #[allow(clippy::result_large_err)]
     fn get_lm(&self) -> Result<Arc<LM>, RlmError> {
         if let Some(lm) = &self.lm_override {
             return Ok(Arc::clone(lm));
@@ -130,7 +135,7 @@ impl<S: Signature> Rlm<S> {
         let lm = self.get_lm()?;
         let tools = LlmTools::new(Arc::clone(&lm), self.config.max_llm_calls, runtime);
         let globals = setup_globals::<S>(&input, &tools, &submit_handler)?;
-        let mut history = REPLHistory::with_max_output_chars(self.config.max_history_output_chars);
+        let mut history = REPLHistory::new();
         let mut iterations = 0usize;
         let mut main_calls = 0usize;
 
@@ -270,10 +275,10 @@ static CODE_FENCE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 
 fn strip_code_fences(code: &str) -> String {
     let trimmed = code.trim();
-    if let Some(caps) = CODE_FENCE_PATTERN.captures(trimmed) {
-        if let Some(capture) = caps.name("code") {
-            return capture.as_str().to_string();
-        }
+    if let Some(caps) = CODE_FENCE_PATTERN.captures(trimmed)
+        && let Some(capture) = caps.name("code")
+    {
+        return capture.as_str().to_string();
     }
     trimmed.to_string()
 }

@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 use regex::Regex;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
@@ -255,9 +256,21 @@ impl ChatAdapter {
     where
         S::Input: ToBamlValue,
     {
+        self.format_user_message_with_ctx::<S, _>(input, ())
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn format_user_message_with_ctx<S: Signature, C: Serialize>(
+        &self,
+        input: &S::Input,
+        ctx: C,
+    ) -> std::result::Result<String, RenderError>
+    where
+        S::Input: ToBamlValue,
+    {
         let compiled = S::compile();
         let rendered = compiled
-            .render_messages(input)
+            .render_messages_with_ctx(input, ctx)
             .map_err(|err| *err)?;
         Ok(rendered.user)
     }
@@ -296,10 +309,23 @@ impl ChatAdapter {
         S::Input: ToBamlValue,
         S::Output: ToBamlValue,
     {
+        self.format_demo_typed_with_ctx::<S, _>(demo, ())
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn format_demo_typed_with_ctx<S: Signature, C: Serialize>(
+        &self,
+        demo: S,
+        ctx: C,
+    ) -> std::result::Result<(String, String), RenderError>
+    where
+        S::Input: ToBamlValue,
+        S::Output: ToBamlValue,
+    {
         let (input, output) = demo.into_parts();
         let compiled = S::compile();
         let rendered = compiled
-            .render_messages(&input)
+            .render_messages_with_ctx(&input, ctx)
             .map_err(|err| *err)?;
         let user_msg = rendered.user;
         let assistant_msg = self.format_assistant_message_typed::<S>(&output);
