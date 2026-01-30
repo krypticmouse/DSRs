@@ -1,6 +1,6 @@
 #![cfg(feature = "rlm")]
 
-use baml_bridge::{BamlType, DefaultJinjaRender, ToBamlValue};
+use baml_bridge::BamlType;
 
 /// A single entry in the REPL history.
 #[derive(Debug, Clone, BamlType)]
@@ -37,28 +37,39 @@ impl REPLEntry {
 /// history instance, preserving the original. This aligns with Python
 /// DSPy's frozen model pattern.
 #[derive(Debug, Clone, Default, BamlType)]
+#[render(default = r#"
+{%- if value.entries | length == 0 -%}
+You have not interacted with the REPL environment yet.
+{%- else -%}
+{%- for entry in value.entries -%}
+=== Step {{ loop.index }} ===
+{% if entry.reasoning %}
+Reasoning: {{ entry.reasoning }}
+{% endif %}
+Code:
+```python
+{{ entry.code }}
+```
+{% set output_len = entry.output.raw | length %}
+Output ({{ output_len | format_count }} chars):
+{% if output_len > ctx.max_output_chars %}
+{{ entry.output.raw | slice_chars(ctx.max_output_chars) }}
+... (truncated to {{ ctx.max_output_chars | format_count }}/{{ output_len | format_count }} chars)
+{% else %}
+{{ entry.output }}
+{% endif %}
+{% endfor -%}
+{%- endif -%}
+"#)]
 pub struct REPLHistory {
     pub entries: Vec<REPLEntry>,
-    max_output_chars: usize,
 }
 
 impl REPLHistory {
-    /// Default maximum output characters for truncation.
-    pub const DEFAULT_MAX_OUTPUT_CHARS: usize = 5000;
-
     /// Create a new empty REPL history.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            max_output_chars: Self::DEFAULT_MAX_OUTPUT_CHARS,
-        }
-    }
-
-    /// Create a new empty REPL history with custom max output chars.
-    pub fn with_max_output_chars(max_output_chars: usize) -> Self {
-        Self {
-            entries: Vec::new(),
-            max_output_chars,
         }
     }
 
@@ -68,7 +79,6 @@ impl REPLHistory {
         entries.push(REPLEntry::new(code, output));
         Self {
             entries,
-            max_output_chars: self.max_output_chars,
         }
     }
 
@@ -78,7 +88,6 @@ impl REPLHistory {
         entries.push(REPLEntry::with_reasoning(reasoning, code, output));
         Self {
             entries,
-            max_output_chars: self.max_output_chars,
         }
     }
 
@@ -96,112 +105,6 @@ impl REPLHistory {
     pub fn entries(&self) -> &[REPLEntry] {
         &self.entries
     }
-
-    /// Get the maximum output characters setting.
-    pub fn max_output_chars(&self) -> usize {
-        self.max_output_chars
-    }
-
-    /// Render the history to a string using the default template.
-    pub fn render(&self) -> String {
-        let ctx = minijinja::Value::from_serialize(RenderContext {
-            max_output_chars: self.max_output_chars as i64,
-        });
-        let baml_value = self.to_baml_value();
-        let template_ctx = minijinja::Value::from_serialize(TemplateContext {
-            value: &baml_value,
-            ctx: &ctx,
-        });
-
-        let mut env = crate::baml_bridge::jsonish::jinja_helpers::get_env();
-        env.add_filter("format_count", format_count_filter);
-        env.add_filter("slice_chars", slice_chars_filter);
-        env.render_str(Self::DEFAULT_TEMPLATE, template_ctx)
-            .unwrap_or_else(|err| format!("[Error rendering history: {}]", err))
-    }
-}
-
-#[derive(serde::Serialize)]
-struct RenderContext {
-    max_output_chars: i64,
-}
-
-#[derive(serde::Serialize)]
-struct TemplateContext<'a> {
-    value: &'a baml_bridge::baml_types::BamlValue,
-    ctx: &'a minijinja::Value,
-}
-
-fn format_count_filter(value: i64) -> String {
-    if value <= 0 {
-        return "0".to_string();
-    }
-    format_count(value as usize)
-}
-
-fn slice_chars_filter(value: String, length: i64) -> String {
-    if length <= 0 {
-        return String::new();
-    }
-    value.chars().take(length as usize).collect()
-}
-
-
-impl DefaultJinjaRender for REPLHistory {
-    const DEFAULT_TEMPLATE: &'static str = r#"
-{%- if value.entries | length == 0 -%}
-You have not interacted with the REPL environment yet.
-{%- else %}
-{%- for entry in value.entries %}
-=== Step {{ loop.index }} ===
-{% if entry.reasoning %}
-Reasoning: {{ entry.reasoning }}
-{% endif %}
-Code:
-```python
-{{ entry.code }}
-```
-{% set output_len = entry.output | length %}
-Output ({{ output_len | format_count }} chars):
-{% if output_len > ctx.max_output_chars %}
-{{ entry.output | slice_chars(ctx.max_output_chars) }}
-... (truncated to {{ ctx.max_output_chars | format_count }}/{{ output_len | format_count }} chars)
-{% else %}
-{{ entry.output }}
-{% endif %}
-{% endfor -%}
-{%- endif -%}
-"#;
-}
-
-/// Truncate text with a marker if it exceeds max_chars.
-#[cfg(test)]
-fn truncate_output(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let total = text.chars().count();
-    if total <= max_chars {
-        return text.to_string();
-    }
-    let truncated: String = text.chars().take(max_chars).collect();
-    format!(
-        "{truncated}\n... (truncated to {max_chars}/{total} chars)",
-        max_chars = format_count(max_chars),
-        total = format_count(total)
-    )
-}
-
-fn format_count(value: usize) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (idx, ch) in digits.chars().rev().enumerate() {
-        if idx > 0 && idx % 3 == 0 {
-            formatted.push(',');
-        }
-        formatted.push(ch);
-    }
-    formatted.chars().rev().collect()
 }
 
 #[cfg(test)]
@@ -209,6 +112,48 @@ mod tests {
     use super::*;
     use baml_bridge::baml_types::BamlValue;
     use baml_bridge::ToBamlValue;
+    use crate::ChatAdapter;
+    use serde_json::json;
+
+    #[derive(Clone, Debug, crate::Signature)]
+    #[signature(rlm = false)]
+    struct HistorySig {
+        #[input]
+        repl_history: REPLHistory,
+
+        #[output]
+        summary: String,
+    }
+
+    const DEFAULT_MAX_OUTPUT_CHARS: usize = 5_000;
+
+    fn render_history_with_ctx(history: &REPLHistory, max_output_chars: usize) -> String {
+        let adapter = ChatAdapter;
+        let input = HistorySigInput {
+            repl_history: history.clone(),
+        };
+        let ctx = json!({ "max_output_chars": max_output_chars });
+        let message = adapter
+            .format_user_message_with_ctx::<HistorySig, _>(&input, &ctx)
+            .expect("render repl history");
+
+        extract_field(&message, "repl_history")
+    }
+
+    fn render_history(history: &REPLHistory) -> String {
+        render_history_with_ctx(history, DEFAULT_MAX_OUTPUT_CHARS)
+    }
+
+    fn extract_field(message: &str, field_name: &str) -> String {
+        let start_marker = format!("[[ ## {field_name} ## ]]");
+        let start_pos = message
+            .find(&start_marker)
+            .unwrap_or_else(|| panic!("missing marker: {field_name}"));
+        let after_marker = start_pos + start_marker.len();
+        let remaining = &message[after_marker..];
+        let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
+        remaining[..end_pos].trim().to_string()
+    }
 
     // ==================== REPLEntry Tests ====================
 
@@ -292,24 +237,7 @@ mod tests {
         assert_eq!(h3.entries()[1].reasoning, "r2");
     }
 
-    #[test]
-    fn repl_history_with_max_output_chars_preserves_setting() {
-        let history = REPLHistory::with_max_output_chars(100)
-            .append("x".into(), "y".into())
-            .append("z".into(), "w".into());
-
-        assert_eq!(history.max_output_chars(), 100);
-    }
-
-    #[test]
-    fn repl_history_default_max_output_chars() {
-        let history = REPLHistory::new();
-        assert_eq!(history.max_output_chars(), REPLHistory::DEFAULT_MAX_OUTPUT_CHARS);
-        assert_eq!(history.max_output_chars(), 5000);
-    }
-
     // ==================== REPLHistory ToBamlValue Tests ====================
-
     #[test]
     fn repl_history_to_baml_value_empty() {
         let history = REPLHistory::new();
@@ -366,7 +294,7 @@ mod tests {
     #[test]
     fn render_empty_history_message() {
         let history = REPLHistory::new();
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         assert_eq!(
             rendered.trim(),
@@ -378,7 +306,7 @@ mod tests {
     fn render_single_entry_format() {
         let history = REPLHistory::new()
             .append("print('hello')".into(), "hello".into());
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         // Check structure
         assert!(rendered.contains("=== Step 1 ==="), "Missing step header");
@@ -401,7 +329,7 @@ mod tests {
                 "1 + 1".into(),
                 "2".into(),
             );
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         assert!(rendered.contains("Reasoning: Let me calculate the sum"));
     }
@@ -415,7 +343,7 @@ mod tests {
             .append("d = 4".into(), "".into())
             .append("e = 5".into(), "".into());
 
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         assert!(rendered.contains("=== Step 1 ==="), "Missing Step 1");
         assert!(rendered.contains("=== Step 2 ==="), "Missing Step 2");
@@ -435,28 +363,28 @@ mod tests {
     fn render_output_char_count_accurate() {
         let history = REPLHistory::new()
             .append("x".into(), "abc".into()); // 3 chars
-        let rendered = history.render();
+        let rendered = render_history(&history);
         assert!(rendered.contains("Output (3 chars):"));
 
         let history2 = REPLHistory::new()
             .append("x".into(), "".into()); // 0 chars
-        let rendered2 = history2.render();
+        let rendered2 = render_history(&history2);
         assert!(rendered2.contains("Output (0 chars):"));
 
         // Unicode: "café" = 4 chars
         let history3 = REPLHistory::new()
             .append("x".into(), "café".into());
-        let rendered3 = history3.render();
+        let rendered3 = render_history(&history3);
         assert!(rendered3.contains("Output (4 chars):"));
     }
 
     #[test]
     fn render_truncates_long_output() {
         let long_output = "x".repeat(100);
-        let history = REPLHistory::with_max_output_chars(20)
+        let history = REPLHistory::new()
             .append("code".into(), long_output.clone());
 
-        let rendered = history.render();
+        let rendered = render_history_with_ctx(&history, 20);
 
         // Should NOT contain full output
         assert!(
@@ -475,10 +403,10 @@ mod tests {
     #[test]
     fn render_preserves_short_output() {
         let short_output = "short";
-        let history = REPLHistory::with_max_output_chars(1000)
+        let history = REPLHistory::new()
             .append("code".into(), short_output.into());
 
-        let rendered = history.render();
+        let rendered = render_history_with_ctx(&history, 1000);
         assert!(rendered.contains(short_output));
     }
 
@@ -488,7 +416,7 @@ mod tests {
         let history = REPLHistory::new()
             .append(code.into(), "42".into());
 
-        let rendered = history.render();
+        let rendered = render_history(&history);
         assert!(rendered.contains("def foo():"));
         assert!(rendered.contains("    return 42"));
         assert!(rendered.contains("result = foo()"));
@@ -500,7 +428,7 @@ mod tests {
         let history = REPLHistory::new()
             .append("print('test')".into(), output.into());
 
-        let rendered = history.render();
+        let rendered = render_history(&history);
         assert!(rendered.contains("line1\nline2\nline3"));
     }
 
@@ -510,7 +438,7 @@ mod tests {
     fn empty_code_renders() {
         let history = REPLHistory::new()
             .append("".into(), "output".into());
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         assert!(rendered.contains("```python\n\n```"));
     }
@@ -519,7 +447,7 @@ mod tests {
     fn empty_output_renders() {
         let history = REPLHistory::new()
             .append("pass".into(), "".into());
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         assert!(rendered.contains("Output (0 chars):"));
     }
@@ -528,7 +456,7 @@ mod tests {
     fn empty_reasoning_not_shown() {
         let history = REPLHistory::new()
             .append_with_reasoning("".into(), "x".into(), "y".into());
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         // Empty reasoning should not produce "Reasoning:" line
         assert!(!rendered.contains("Reasoning:"));
@@ -540,7 +468,7 @@ mod tests {
         let history = REPLHistory::new()
             .append(code.into(), "hello \"world\"".into());
 
-        let rendered = history.render();
+        let rendered = render_history(&history);
         assert!(rendered.contains(code));
     }
 
@@ -553,7 +481,7 @@ mod tests {
                 "3".into(),
             );
 
-        let rendered = history.render();
+        let rendered = render_history(&history);
         assert!(rendered.contains("计算 café 的长度"));
         assert!(rendered.contains("len('日本語')"));
         assert!(rendered.contains("3"));
@@ -564,7 +492,7 @@ mod tests {
     #[test]
     fn render_format_golden_test() {
         // This test locks down the exact format to prevent regressions
-        let history = REPLHistory::with_max_output_chars(5000)
+        let history = REPLHistory::new()
             .append_with_reasoning(
                 "First, set up variables".into(),
                 "x = 1\ny = 2".into(),
@@ -575,7 +503,7 @@ mod tests {
                 "3".into(),
             );
 
-        let rendered = history.render();
+        let rendered = render_history_with_ctx(&history, 5000);
 
         // Verify exact structure (allowing for whitespace variations)
         assert!(rendered.contains("=== Step 1 ==="));
@@ -589,68 +517,11 @@ mod tests {
         assert!(rendered.contains("\n3\n"));
     }
 
-    // ==================== Helper Function Tests ====================
-
-    #[test]
-    fn format_count_edge_cases() {
-        assert_eq!(format_count(0), "0");
-        assert_eq!(format_count(1), "1");
-        assert_eq!(format_count(12), "12");
-        assert_eq!(format_count(123), "123");
-        assert_eq!(format_count(1234), "1,234");
-        assert_eq!(format_count(12345), "12,345");
-        assert_eq!(format_count(123456), "123,456");
-        assert_eq!(format_count(1234567), "1,234,567");
-        assert_eq!(format_count(1000000), "1,000,000");
-    }
-
-    #[test]
-    fn truncate_output_edge_cases() {
-        // Zero max returns empty
-        assert_eq!(truncate_output("hello", 0), "");
-
-        // Exact length preserved
-        assert_eq!(truncate_output("hello", 5), "hello");
-
-        // One over gets truncated
-        let result = truncate_output("hello!", 5);
-        assert!(result.starts_with("hello"));
-        assert!(result.contains("truncated"));
-    }
-
-    #[test]
-    fn truncate_output_unicode_boundary() {
-        // "héllo" = 5 chars, truncate at 3 should give "hél"
-        let result = truncate_output("héllo", 3);
-        assert!(result.starts_with("hél"));
-        assert!(result.contains("truncated to 3/5 chars"));
-    }
-
-    // ==================== Template Format Tests ====================
-
-    #[test]
-    fn template_has_no_leading_whitespace_on_first_content_line() {
-        // The template should start with `{%-` not `  {%-`
-        // This ensures the raw string literal doesn't have unintended indentation
-        let template = <REPLHistory as DefaultJinjaRender>::DEFAULT_TEMPLATE;
-        let first_content_line = template
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .expect("Template should have at least one non-empty line");
-
-        let first_char = first_content_line.chars().next().unwrap();
-        assert!(
-            !first_char.is_whitespace(),
-            "First non-empty line should not start with whitespace. Got: {:?}",
-            first_content_line
-        );
-    }
-
     #[test]
     fn render_output_has_no_leading_whitespace() {
         // Verify rendered output doesn't start with unintended spaces
         let history = REPLHistory::new();
-        let rendered = history.render();
+        let rendered = render_history(&history);
 
         // The very first non-empty line should start without leading whitespace
         let first_content_line = rendered
