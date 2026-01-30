@@ -129,6 +129,7 @@ pub struct RenderError {
 pub type RenderResult = Result<String, RenderError>;
 
 /// Specification for a renderer (pre-compilation).
+#[derive(Debug)]
 pub enum RendererSpec {
     /// Jinja template source.
     Jinja { source: &'static str },
