@@ -73,6 +73,23 @@ impl JinjaPromptValue {
             _ => matches!(self.pv.value(), BamlValue::List(_)),
         }
     }
+
+    fn list_len(&self) -> usize {
+        match self.pv.value() {
+            BamlValue::List(items) => items.len(),
+            _ => 0,
+        }
+    }
+
+    fn map_keys_sorted(&self) -> Vec<String> {
+        let mut keys: Vec<String> = match self.pv.value() {
+            BamlValue::Map(map) => map.keys().cloned().collect(),
+            BamlValue::Class(_, fields) => fields.keys().cloned().collect(),
+            _ => Vec::new(),
+        };
+        keys.sort();
+        keys
+    }
 }
 
 impl Object for JinjaPromptValue {
@@ -126,11 +143,63 @@ impl Object for JinjaPromptValue {
     }
 
     fn enumerate(self: &Arc<Self>) -> Enumerator {
-        Enumerator::Empty
+        let max_list_items = self.pv.session.settings.max_list_items;
+        let max_map_entries = self.pv.session.settings.max_map_entries;
+
+        match self.pv.resolved_ty() {
+            TypeIR::List(_, _) => {
+                let capped_len = self.list_len().min(max_list_items);
+                Enumerator::Seq(capped_len)
+            }
+            TypeIR::Class { name, mode, .. } => {
+                if let Some(class) = self.pv.world.types.find_class(&name, mode) {
+                    let keys: Vec<Value> = class
+                        .fields
+                        .iter()
+                        .take(max_map_entries)
+                        .map(|(field_name, _, _, _)| {
+                            Value::from(field_name.real_name().to_string())
+                        })
+                        .collect();
+                    Enumerator::Values(keys)
+                } else {
+                    Enumerator::Empty
+                }
+            }
+            TypeIR::Map(_, _, _) => {
+                let keys: Vec<Value> = self
+                    .map_keys_sorted()
+                    .into_iter()
+                    .take(max_map_entries)
+                    .map(Value::from)
+                    .collect();
+                Enumerator::Values(keys)
+            }
+            _ => {
+                if self.is_list_like() {
+                    let capped_len = self.list_len().min(max_list_items);
+                    Enumerator::Seq(capped_len)
+                } else if self.is_class_like() || self.is_map_like() {
+                    let keys: Vec<Value> = self
+                        .map_keys_sorted()
+                        .into_iter()
+                        .take(max_map_entries)
+                        .map(Value::from)
+                        .collect();
+                    Enumerator::Values(keys)
+                } else {
+                    Enumerator::Empty
+                }
+            }
+        }
     }
 
     fn enumerator_len(self: &Arc<Self>) -> Option<usize> {
-        Some(0)
+        match self.enumerate() {
+            Enumerator::Seq(len) => Some(len),
+            Enumerator::Values(values) => Some(values.len()),
+            _ => None,
+        }
     }
 }
 
@@ -180,7 +249,7 @@ mod tests {
     use baml_types::{BamlValue, TypeIR};
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum};
-    use minijinja::value::{Object, ObjectRepr, Value};
+    use minijinja::value::{Enumerator, Object, ObjectRepr, Value};
     use std::sync::Arc;
 
     #[test]
@@ -326,8 +395,107 @@ mod tests {
         assert!(obj.get_value(&Value::from("missing")).is_none());
     }
 
+    #[test]
+    fn enumerate_caps_list_length() {
+        let pv = make_prompt_value_with_settings(
+            BamlValue::List(vec![
+                BamlValue::String("a".to_string()),
+                BamlValue::String("b".to_string()),
+                BamlValue::String("c".to_string()),
+            ]),
+            TypeIR::list(TypeIR::string()),
+            RenderSettings {
+                max_list_items: 2,
+                ..RenderSettings::default()
+            },
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert_eq!(obj.enumerator_len(), Some(2));
+        match obj.enumerate() {
+            Enumerator::Seq(len) => assert_eq!(len, 2),
+            _ => panic!("expected seq enumerator"),
+        }
+    }
+
+    #[test]
+    fn enumerate_sorts_and_caps_map_keys() {
+        let pv = make_prompt_value_with_settings(
+            BamlValue::Map(IndexMap::from([
+                ("b".to_string(), BamlValue::Bool(true)),
+                ("a".to_string(), BamlValue::Bool(false)),
+                ("c".to_string(), BamlValue::Bool(true)),
+            ])),
+            TypeIR::map(TypeIR::string(), TypeIR::bool()),
+            RenderSettings {
+                max_map_entries: 2,
+                ..RenderSettings::default()
+            },
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        match obj.enumerate() {
+            Enumerator::Values(values) => {
+                let keys: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
+                assert_eq!(keys, vec!["a", "b"]);
+            }
+            _ => panic!("expected values enumerator"),
+        }
+        assert_eq!(obj.enumerator_len(), Some(2));
+    }
+
+    #[test]
+    fn enumerate_uses_schema_field_order_for_classes() {
+        let mut class_fields = Vec::new();
+        class_fields.push(("z".to_string(), TypeIR::string()));
+        class_fields.push(("a".to_string(), TypeIR::string()));
+        class_fields.push(("m".to_string(), TypeIR::string()));
+
+        let world = make_world_with_class("Widget", class_fields);
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([
+                    ("a".to_string(), BamlValue::String("1".to_string())),
+                    ("m".to_string(), BamlValue::String("2".to_string())),
+                    ("z".to_string(), BamlValue::String("3".to_string())),
+                ]),
+            ),
+            TypeIR::class("Widget"),
+            world,
+            RenderSettings {
+                max_map_entries: 2,
+                ..RenderSettings::default()
+            },
+            PromptPath::new(),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        match obj.enumerate() {
+            Enumerator::Values(values) => {
+                let keys: Vec<&str> = values.iter().filter_map(|v| v.as_str()).collect();
+                assert_eq!(keys, vec!["z", "a"]);
+            }
+            _ => panic!("expected values enumerator"),
+        }
+    }
+
     fn make_prompt_value(value: BamlValue, ty: TypeIR) -> PromptValue {
         make_prompt_value_with_path(value, ty, PromptPath::new())
+    }
+
+    fn make_prompt_value_with_settings(
+        value: BamlValue,
+        ty: TypeIR,
+        settings: RenderSettings,
+    ) -> PromptValue {
+        make_prompt_value_with_world_and_settings(
+            value,
+            ty,
+            make_world_empty(),
+            settings,
+            PromptPath::new(),
+        )
     }
 
     fn make_prompt_value_with_path(
@@ -335,7 +503,33 @@ mod tests {
         ty: TypeIR,
         path: PromptPath,
     ) -> PromptValue {
-        let world = PromptWorld {
+        make_prompt_value_with_world_and_settings(
+            value,
+            ty,
+            make_world_empty(),
+            RenderSettings::default(),
+            path,
+        )
+    }
+
+    fn make_prompt_value_with_world_and_settings(
+        value: BamlValue,
+        ty: TypeIR,
+        world: PromptWorld,
+        settings: RenderSettings,
+        path: PromptPath,
+    ) -> PromptValue {
+        PromptValue::new(
+            value,
+            ty,
+            Arc::new(world),
+            Arc::new(RenderSession::new(settings)),
+            path,
+        )
+    }
+
+    fn make_world_empty() -> PromptWorld {
+        PromptWorld {
             types: TypeDb {
                 enums: Arc::new(IndexMap::<String, Enum>::new()),
                 classes: Arc::new(IndexMap::<(String, baml_types::StreamingMode), Class>::new()),
@@ -346,14 +540,43 @@ mod tests {
             jinja: crate::jsonish::jinja_helpers::get_env(),
             settings: RenderSettings::default(),
             union_resolver: default_union_resolver,
+        }
+    }
+
+    fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWorld {
+        let class = Class {
+            name: internal_baml_jinja::types::Name::new(name.to_string()),
+            description: None,
+            namespace: baml_types::StreamingMode::NonStreaming,
+            fields: fields
+                .into_iter()
+                .map(|(field_name, field_type)| {
+                    (
+                        internal_baml_jinja::types::Name::new(field_name),
+                        field_type,
+                        None,
+                        false,
+                    )
+                })
+                .collect(),
+            constraints: Vec::new(),
+            streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
         };
 
-        PromptValue::new(
-            value,
-            ty,
-            Arc::new(world),
-            Arc::new(RenderSession::new(RenderSettings::default())),
-            path,
-        )
+        PromptWorld {
+            types: TypeDb {
+                enums: Arc::new(IndexMap::<String, Enum>::new()),
+                classes: Arc::new(IndexMap::from([(
+                    (name.to_string(), baml_types::StreamingMode::NonStreaming),
+                    class,
+                )])),
+                structural_recursive_aliases: Arc::new(IndexMap::new()),
+                recursive_classes: Arc::new(IndexSet::new()),
+            },
+            renderers: RendererDb::new(),
+            jinja: crate::jsonish::jinja_helpers::get_env(),
+            settings: RenderSettings::default(),
+            union_resolver: default_union_resolver,
+        }
     }
 }
