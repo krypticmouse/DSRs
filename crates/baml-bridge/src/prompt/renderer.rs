@@ -149,12 +149,13 @@ mod tests {
             "undefined field 'outputs'",
         );
 
-        let expected = "\
-Render failed at 'inputs.history.entries[3].output'\n\
-  Type: REPLEntry\n\
-  Style: json\n\
-  Renderer: type:REPLEntry:json\n\
-  Error: undefined field 'outputs'";
+        let expected = concat!(
+            "Render failed at 'inputs.history.entries[3].output'\n",
+            "  Type: REPLEntry\n",
+            "  Style: json\n",
+            "  Renderer: type:REPLEntry:json\n",
+            "  Error: undefined field 'outputs'",
+        );
 
         assert_eq!(err.to_string(), expected);
     }
@@ -172,14 +173,15 @@ Render failed at 'inputs.history.entries[3].output'\n\
         )
         .with_cause(io::Error::new(io::ErrorKind::Other, "boom"));
 
-        let expected = "\
-Render failed at 'inputs.history.entries[3].output'\n\
-  Type: REPLEntry\n\
-  Style: json\n\
-  Renderer: type:REPLEntry:json\n\
-  Template: repl_entry.jinja:15:8\n\
-  Error: undefined field 'outputs'\n\
-  Cause: boom";
+        let expected = concat!(
+            "Render failed at 'inputs.history.entries[3].output'\n",
+            "  Type: REPLEntry\n",
+            "  Style: json\n",
+            "  Renderer: type:REPLEntry:json\n",
+            "  Template: repl_entry.jinja:15:8\n",
+            "  Error: undefined field 'outputs'\n",
+            "  Cause: boom",
+        );
 
         assert_eq!(err.to_string(), expected);
     }
