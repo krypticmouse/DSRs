@@ -9,6 +9,8 @@ pub use baml_bridge_derive::BamlType;
 #[cfg(feature = "pyo3")]
 pub mod py;
 
+pub mod prompt;
+
 mod convert;
 mod registry;
 mod render_trait;
@@ -31,6 +33,7 @@ use sha2::{Digest, Sha256};
 
 pub use convert::{get_field, BamlConvertError, BamlValueConvert};
 pub use registry::{default_streaming_behavior, Registry};
+pub use prompt::*;
 pub use render_trait::DefaultJinjaRender;
 pub use to_value::ToBamlValue;
 
