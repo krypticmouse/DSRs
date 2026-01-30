@@ -26,6 +26,22 @@ async-trait = "0.1.83"
 anyhow = "1.0.99"
 bon = "3.7.0"
 baml-bridge = { path = "../baml-bridge", features = ["derive"] }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "loader",
+  "serde",
+] }
 thiserror = "2.0.17"
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
 rlm-core = { path = "../rlm-core", optional = true }

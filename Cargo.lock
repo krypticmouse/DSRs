@@ -1216,6 +1216,7 @@ dependencies = [
  "hf-hub",
  "indexmap",
  "kdam",
+ "minijinja",
  "parquet",
  "pyo3",
  "rand 0.8.5",

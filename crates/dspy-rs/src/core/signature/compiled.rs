@@ -3,11 +3,15 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::baml_bridge::prompt::{PromptWorld, RenderError, RenderSettings};
-use crate::baml_bridge::{BamlTypeInternal, Registry};
-use crate::TypeIR;
+use crate::baml_bridge::prompt::{
+    PromptPath, PromptValue, PromptWorld, RenderError, RenderSession, RenderSettings,
+    RendererOverride,
+};
+use crate::baml_bridge::{BamlTypeInternal, Registry, ToBamlValue};
+use crate::{BamlValue, TypeIR};
+use minijinja::value::Value;
 
-use super::{SigMeta, Signature};
+use super::{FieldRenderSettings, FieldRendererSpec, FieldSpec, SigMeta, Signature};
 
 /// Default system template - describes input/output fields.
 pub const DEFAULT_SYSTEM_TEMPLATE: &str = r#"
@@ -95,6 +99,129 @@ pub fn register_default_templates(
     Ok(())
 }
 
+fn register_field_templates<S: Signature>(
+    world: &mut PromptWorld,
+) -> Result<(), Box<RenderError>> {
+    for field in S::input_fields() {
+        let Some(FieldRendererSpec::Jinja { template }) = field.renderer else {
+            continue;
+        };
+        let template_name = field_template_name(field);
+        world
+            .jinja
+            .add_template_owned(template_name.clone(), template.to_string())
+            .map_err(|err| {
+                Box::new(
+                    RenderError::template_error(
+                        "<signature>",
+                        "signature",
+                        "default",
+                        "template",
+                        template_name,
+                        err.line().map(|line| (line, 0)),
+                        err.to_string(),
+                    )
+                    .with_cause(err),
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn field_template_name(field: &FieldSpec) -> String {
+    format!("sig::input:{}:template", field.rust_name)
+}
+
+fn apply_field_settings(
+    base: &RenderSettings,
+    field_settings: &FieldRenderSettings,
+) -> RenderSettings {
+    let mut settings = base.clone();
+    if let Some(max) = field_settings.max_string_chars {
+        settings.max_string_chars = max;
+    }
+    if let Some(max) = field_settings.max_list_items {
+        settings.max_list_items = max;
+    }
+    if let Some(max) = field_settings.max_map_entries {
+        settings.max_map_entries = max;
+    }
+    if let Some(max) = field_settings.max_depth {
+        settings.max_depth = max;
+    }
+    settings
+}
+
+fn extract_input_field(
+    input_value: &BamlValue,
+    field: &FieldSpec,
+) -> Result<BamlValue, Box<RenderError>> {
+    match input_value {
+        BamlValue::Class(_, fields) => fields.get(field.rust_name).cloned().ok_or_else(|| {
+            Box::new(RenderError::new(
+                format!("inputs.{}", field.rust_name),
+                "input",
+                "default",
+                "compiled_signature",
+                format!("missing input field '{}'", field.rust_name),
+            ))
+        }),
+        BamlValue::Map(fields) => fields.get(field.rust_name).cloned().ok_or_else(|| {
+            Box::new(RenderError::new(
+                format!("inputs.{}", field.rust_name),
+                "input",
+                "default",
+                "compiled_signature",
+                format!("missing input field '{}'", field.rust_name),
+            ))
+        }),
+        other => Err(Box::new(RenderError::new(
+            "inputs",
+            format!("{other:?}"),
+            "default",
+            "compiled_signature",
+            "input value is not a class or map",
+        ))),
+    }
+}
+
+fn render_signature_template(
+    world: &PromptWorld,
+    template_name: &str,
+    ctx: &Value,
+    role: &str,
+) -> Result<String, Box<RenderError>> {
+    let template = world.jinja.get_template(template_name).map_err(|err| {
+        Box::new(
+            RenderError::template_error(
+                role,
+                "signature",
+                "default",
+                "template",
+                template_name,
+                err.line().map(|line| (line, 0)),
+                err.to_string(),
+            )
+            .with_cause(err),
+        )
+    })?;
+
+    template.render(ctx).map_err(|err| {
+        Box::new(
+            RenderError::template_error(
+                role,
+                "signature",
+                "default",
+                "template",
+                template_name,
+                err.line().map(|line| (line, 0)),
+                err.to_string(),
+            )
+            .with_cause(err),
+        )
+    })
+}
+
 /// Extension trait for compiling signatures.
 pub trait CompileExt: Signature + Sized {
     /// Compile this signature for prompt rendering.
@@ -116,6 +243,8 @@ impl<T: Signature> CompileExt for T {
         .expect("failed to build prompt world");
         register_default_templates(&mut world)
             .expect("failed to register default signature templates");
+        register_field_templates::<Self>(&mut world)
+            .expect("failed to register field templates");
 
         CompiledSignature {
             world: Arc::new(world),
@@ -132,16 +261,74 @@ impl<S: Signature> CompiledSignature<S> {
     pub fn render_messages(
         &self,
         input: &S::Input,
-    ) -> Result<RenderedMessages, Box<RenderError>> {
+    ) -> Result<RenderedMessages, Box<RenderError>>
+    where
+        S::Input: ToBamlValue,
+    {
         self.render_messages_with_ctx(input, ())
     }
 
     /// Render messages with custom context.
     pub fn render_messages_with_ctx<C: Serialize>(
         &self,
-        _input: &S::Input,
-        _ctx: C,
-    ) -> Result<RenderedMessages, Box<RenderError>> {
-        todo!("render_messages_with_ctx implemented in dsrs-n9u.40")
+        input: &S::Input,
+        ctx: C,
+    ) -> Result<RenderedMessages, Box<RenderError>>
+    where
+        S::Input: ToBamlValue,
+    {
+        let input_value = input.to_baml_value();
+        let session = Arc::new(RenderSession::new(self.world.settings.clone()).with_ctx(ctx));
+
+        let mut inputs = Vec::new();
+        for field in S::input_fields() {
+            let field_value = extract_input_field(&input_value, field)?;
+            let field_ty = (field.type_ir)();
+            let path = PromptPath::new()
+                .push_field("inputs")
+                .push_field(field.rust_name);
+
+            let field_session = if let Some(settings) = field.render_settings.as_ref() {
+                let mut adjusted = (*session).clone();
+                adjusted.settings = apply_field_settings(&session.settings, settings);
+                Arc::new(adjusted)
+            } else {
+                session.clone()
+            };
+
+            let mut pv = PromptValue::new(
+                field_value,
+                field_ty,
+                self.world.clone(),
+                field_session,
+                path,
+            );
+
+            if let Some(override_renderer) = match field.renderer {
+                Some(FieldRendererSpec::Jinja { template }) => Some(RendererOverride::Template {
+                    source: template,
+                    compiled_name: Some(field_template_name(field)),
+                }),
+                Some(FieldRendererSpec::Func { f }) => Some(RendererOverride::Func { f }),
+                None => None,
+            } {
+                pv = pv.with_override(override_renderer);
+            }
+
+            inputs.push((field.rust_name.to_string(), pv.as_jinja_value()));
+        }
+
+        let ctx_value = Value::from_iter([
+            ("sig".to_string(), Value::from_serialize(&self.sig_meta)),
+            ("inputs".to_string(), Value::from_iter(inputs)),
+            ("ctx".to_string(), session.ctx.clone()),
+        ]);
+
+        let system =
+            render_signature_template(&self.world, &self.system_template, &ctx_value, "system")?;
+        let user =
+            render_signature_template(&self.world, &self.user_template, &ctx_value, "user")?;
+
+        Ok(RenderedMessages { system, user })
     }
 }
