@@ -63,8 +63,9 @@ static EXTRACT_INPUT_FIELDS: &[FieldSpec] = &[
         description: "Metadata about variables available in REPL",
         type_ir: || TypeIR::string(),
         constraints: &[],
-        format: None,
-        render: None,
+        style: None,
+        renderer: None,
+        render_settings: None,
     },
     FieldSpec {
         name: "repl_history",
@@ -72,8 +73,9 @@ static EXTRACT_INPUT_FIELDS: &[FieldSpec] = &[
         description: "Previous REPL interactions",
         type_ir: || <REPLHistory as crate::baml_bridge::BamlTypeInternal>::baml_type_ir(),
         constraints: &[],
-        format: None,
-        render: None,
+        style: None,
+        renderer: None,
+        render_settings: None,
     },
 ];
 

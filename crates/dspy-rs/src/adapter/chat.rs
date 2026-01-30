@@ -516,7 +516,7 @@ impl ChatAdapter {
                 result.push_str(&format_baml_value_for_prompt_typed(
                     value,
                     input_output_format,
-                    field_spec.format,
+                    field_spec.style,
                 ));
                 result.push_str("\n\n");
             }
@@ -737,10 +737,10 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
 fn format_baml_value_for_prompt_typed(
     value: &BamlValue,
     output_format: &OutputFormatContent,
-    format: Option<&str>,
+    style: Option<&str>,
 ) -> String {
-    let format = match format {
-        Some(format) => format,
+    let style = match style {
+        Some(style) => style,
         None => {
             if let BamlValue::String(s) = value {
                 return s.clone();
@@ -749,7 +749,7 @@ fn format_baml_value_for_prompt_typed(
         }
     };
 
-    crate::baml_bridge::internal_baml_jinja::format_baml_value(value, output_format, format)
+    crate::baml_bridge::internal_baml_jinja::format_baml_value(value, output_format, style)
         .unwrap_or_else(|_| "<error>".to_string())
 }
 

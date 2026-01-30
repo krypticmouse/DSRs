@@ -1,3 +1,4 @@
+use crate::baml_bridge::prompt::{PromptValue, RenderResult, RenderSession};
 use crate::{Example, OutputFormatContent, TypeIR};
 use anyhow::Result;
 use serde_json::Value;
@@ -9,7 +10,25 @@ pub struct FieldSpec {
     pub description: &'static str,
     pub type_ir: fn() -> TypeIR,
     pub constraints: &'static [ConstraintSpec],
-    pub format: Option<&'static str>,
+    pub style: Option<&'static str>,
+    pub renderer: Option<FieldRendererSpec>,
+    pub render_settings: Option<FieldRenderSettings>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum FieldRendererSpec {
+    Jinja { template: &'static str },
+    Func {
+        f: fn(&PromptValue, &RenderSession) -> RenderResult,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FieldRenderSettings {
+    pub max_string_chars: Option<usize>,
+    pub max_list_items: Option<usize>,
+    pub max_map_entries: Option<usize>,
+    pub max_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]

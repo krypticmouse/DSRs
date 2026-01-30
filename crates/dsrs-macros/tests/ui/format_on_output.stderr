@@ -1,7 +1,5 @@
-error: #[format] is only supported on #[input] fields
-  --> tests/ui/format_on_output.rs:8:5
-   |
- 8 | /     #[output]
- 9 | |     #[format("json")]
-10 | |     answer: String,
-   | |__________________^
+error: #[format] is removed. Use #[render(style = "...")] instead.
+ --> tests/ui/format_on_output.rs:9:5
+  |
+9 |     #[format("json")]
+  |     ^^^^^^^^^^^^^^^^^

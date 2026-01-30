@@ -1,5 +1,5 @@
-error: #[format] can only be specified once per field
- --> tests/ui/format_duplicate.rs:7:5
+error: #[format] is removed. Use #[render(style = "...")] instead.
+ --> tests/ui/format_duplicate.rs:6:5
   |
-7 |     #[format("yaml")]
+6 |     #[format("json")]
   |     ^^^^^^^^^^^^^^^^^

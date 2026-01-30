@@ -26,6 +26,7 @@ pub struct QA {
     pub question: String,
 
     /// Think step by step before answering.
+    #[output]
     pub reasoning: String,
 
     #[output]

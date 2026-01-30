@@ -1,7 +1,5 @@
-error: unsupported #[format] value; use "json", "yaml", or "toon"
- --> tests/ui/format_invalid.rs:5:5
+error: #[format] is removed. Use #[render(style = "...")] instead.
+ --> tests/ui/format_invalid.rs:6:5
   |
-5 | /     #[input]
-6 | |     #[format("xml")]
-7 | |     context: String,
-  | |___________________^
+6 |     #[format("xml")]
+  |     ^^^^^^^^^^^^^^^^
