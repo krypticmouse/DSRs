@@ -278,6 +278,149 @@ impl PromptValue {
         self
     }
 
+    /// Navigate to a class field by name.
+    /// Supports both real_name and rendered_name.
+    pub fn child_field(&self, field: &str) -> Option<PromptValue> {
+        let (class_name, fields) = match &self.value {
+            BamlValue::Class(name, fields) => (name.as_str(), fields),
+            _ => return None,
+        };
+
+        let resolved_ty = self.resolved_ty();
+        let class = match self.resolve_alias(&resolved_ty) {
+            TypeIR::Class { name, mode, .. } => self.world.types.find_class(name, *mode),
+            _ => self
+                .world
+                .types
+                .classes
+                .iter()
+                .find(|((name, _), _)| name == class_name)
+                .map(|(_, class)| class),
+        };
+
+        let mut candidate_keys = vec![field];
+        let mut child_type = None;
+
+        if let Some(class) = class {
+            if let Some((field_name, field_type, _, _)) = class.fields.iter().find(|(name, ..)| {
+                name.real_name() == field || name.rendered_name() == field
+            }) {
+                candidate_keys = vec![field_name.real_name()];
+                if field_name.rendered_name() != field_name.real_name() {
+                    candidate_keys.push(field_name.rendered_name());
+                }
+                child_type = Some(field_type.clone());
+            }
+        }
+
+        let child_value = candidate_keys
+            .into_iter()
+            .find_map(|key| fields.get(key))?;
+        let child_type = child_type.unwrap_or_else(|| Self::infer_type_from_value(child_value));
+
+        Some(PromptValue::new(
+            child_value.clone(),
+            child_type,
+            self.world.clone(),
+            self.session.clone(),
+            self.path.push_field(field),
+        ))
+    }
+
+    /// Navigate to a list element by index.
+    /// Respects max_list_items budget.
+    pub fn child_index(&self, idx: usize) -> Option<PromptValue> {
+        if idx >= self.session.settings.max_list_items {
+            return None;
+        }
+
+        let items = match &self.value {
+            BamlValue::List(items) => items,
+            _ => return None,
+        };
+
+        let child_value = items.get(idx)?;
+        let resolved_ty = self.resolved_ty();
+        let child_type = match self.resolve_alias(&resolved_ty) {
+            TypeIR::List(inner, _) => inner.as_ref().clone(),
+            _ => Self::infer_type_from_value(child_value),
+        };
+
+        Some(PromptValue::new(
+            child_value.clone(),
+            child_type,
+            self.world.clone(),
+            self.session.clone(),
+            self.path.push_index(idx),
+        ))
+    }
+
+    /// Navigate to a map value by key.
+    pub fn child_map_value(&self, key: &str) -> Option<PromptValue> {
+        let map = match &self.value {
+            BamlValue::Map(map) => map,
+            _ => return None,
+        };
+
+        let child_value = map.get(key)?;
+        let resolved_ty = self.resolved_ty();
+        let child_type = match self.resolve_alias(&resolved_ty) {
+            TypeIR::Map(_, value_type, _) => value_type.as_ref().clone(),
+            _ => Self::infer_type_from_value(child_value),
+        };
+
+        Some(PromptValue::new(
+            child_value.clone(),
+            child_type,
+            self.world.clone(),
+            self.session.clone(),
+            self.path.push_map_key(key),
+        ))
+    }
+
+    /// Infer type from value when schema info is unavailable.
+    fn infer_type_from_value(value: &BamlValue) -> TypeIR {
+        match value {
+            BamlValue::String(_) => TypeIR::string(),
+            BamlValue::Int(_) => TypeIR::int(),
+            BamlValue::Float(_) => TypeIR::float(),
+            BamlValue::Bool(_) => TypeIR::bool(),
+            BamlValue::Null => TypeIR::null(),
+            BamlValue::List(items) => {
+                let inner = items
+                    .first()
+                    .map(Self::infer_type_from_value)
+                    .unwrap_or_else(TypeIR::string);
+                TypeIR::list(inner)
+            }
+            BamlValue::Map(map) => {
+                let value_type = map
+                    .values()
+                    .next()
+                    .map(Self::infer_type_from_value)
+                    .unwrap_or_else(TypeIR::string);
+                TypeIR::map(TypeIR::string(), value_type)
+            }
+            BamlValue::Media(media) => match media.media_type {
+                baml_types::BamlMediaType::Image => TypeIR::image(),
+                baml_types::BamlMediaType::Audio => TypeIR::audio(),
+                baml_types::BamlMediaType::Pdf => TypeIR::pdf(),
+                baml_types::BamlMediaType::Video => TypeIR::video(),
+            },
+            BamlValue::Enum(name, _) => TypeIR::r#enum(name),
+            BamlValue::Class(name, _) => TypeIR::class(name),
+        }
+    }
+
+    fn resolve_alias<'a>(&'a self, ty: &'a TypeIR) -> &'a TypeIR {
+        match ty {
+            TypeIR::RecursiveTypeAlias { name, .. } => {
+                self.world.types.resolve_recursive_alias(name).unwrap_or(ty)
+            }
+            _ => ty,
+        }
+    }
+
     pub fn resolved_ty(&self) -> TypeIR {
         // TODO: resolve unions with memoization.
         self.ty.clone()
