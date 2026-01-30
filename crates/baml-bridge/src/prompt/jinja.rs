@@ -444,6 +444,41 @@ mod tests {
     }
 
     #[test]
+    fn get_value_reads_rendered_field_names() {
+        let world = make_world_with_class_alias(
+            "Widget",
+            vec![("real".to_string(), TypeIR::string(), Some("alias".to_string()))],
+        );
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("real".to_string(), BamlValue::String("ok".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let value = obj.get_value(&Value::from("alias")).unwrap();
+        let child = value.downcast_object_ref::<JinjaPromptValue>().unwrap();
+        assert_eq!(child.pv.value(), &BamlValue::String("ok".to_string()));
+        assert_eq!(child.pv.path.to_string(), "alias");
+    }
+
+    #[test]
+    fn get_value_returns_none_for_missing_class_field() {
+        let pv = make_prompt_value(
+            BamlValue::Class("Widget".to_string(), IndexMap::new()),
+            TypeIR::class("Widget"),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.get_value(&Value::from("missing")).is_none());
+    }
+
+    #[test]
     fn get_value_reads_map_keys() {
         let pv = make_prompt_value(
             BamlValue::Map(IndexMap::from([("flag".to_string(), BamlValue::Bool(true))])),
@@ -470,6 +505,32 @@ mod tests {
         let value = obj.get_value(&Value::from(1)).unwrap();
         let child = value.downcast_object_ref::<JinjaPromptValue>().unwrap();
         assert_eq!(child.pv.value(), &BamlValue::String("b".to_string()));
+    }
+
+    #[test]
+    fn get_value_list_index_respects_budget() {
+        let pv = make_prompt_value_with_settings(
+            BamlValue::List(vec![
+                BamlValue::String("a".to_string()),
+                BamlValue::String("b".to_string()),
+            ]),
+            TypeIR::list(TypeIR::string()),
+            RenderSettings {
+                max_list_items: 1,
+                ..RenderSettings::default()
+            },
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.get_value(&Value::from(1)).is_none());
+    }
+
+    #[test]
+    fn get_value_list_index_on_non_list_returns_none() {
+        let pv = make_prompt_value(BamlValue::String("x".to_string()), TypeIR::string());
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.get_value(&Value::from(0)).is_none());
     }
 
     #[test]
@@ -563,6 +624,29 @@ mod tests {
             }
             _ => panic!("expected values enumerator"),
         }
+    }
+
+    #[test]
+    fn get_value_returns_none_for_ambiguous_union_missing_field() {
+        let world = make_world_with_class(
+            "Foo",
+            vec![],
+        );
+        let world = make_world_with_class_extra(
+            world,
+            "Bar",
+            vec![],
+        );
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class("Foo".to_string(), IndexMap::new()),
+            TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.get_value(&Value::from("missing")).is_none());
     }
 
     #[test]
@@ -713,15 +797,22 @@ mod tests {
     }
 
     fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWorld {
+        make_world_with_class_alias(name, fields.into_iter().map(|(field, ty)| (field, ty, None)).collect())
+    }
+
+    fn make_world_with_class_alias(
+        name: &str,
+        fields: Vec<(String, TypeIR, Option<String>)>,
+    ) -> PromptWorld {
         let class = Class {
             name: internal_baml_jinja::types::Name::new(name.to_string()),
             description: None,
             namespace: baml_types::StreamingMode::NonStreaming,
             fields: fields
                 .into_iter()
-                .map(|(field_name, field_type)| {
+                .map(|(field_name, field_type, alias)| {
                     (
-                        internal_baml_jinja::types::Name::new(field_name),
+                        internal_baml_jinja::types::Name::new_with_alias(field_name, alias),
                         field_type,
                         None,
                         false,
@@ -747,5 +838,38 @@ mod tests {
             settings: RenderSettings::default(),
             union_resolver: default_union_resolver,
         }
+    }
+
+    fn make_world_with_class_extra(
+        mut world: PromptWorld,
+        name: &str,
+        fields: Vec<(String, TypeIR)>,
+    ) -> PromptWorld {
+        let class = Class {
+            name: internal_baml_jinja::types::Name::new(name.to_string()),
+            description: None,
+            namespace: baml_types::StreamingMode::NonStreaming,
+            fields: fields
+                .into_iter()
+                .map(|(field_name, field_type)| {
+                    (
+                        internal_baml_jinja::types::Name::new(field_name),
+                        field_type,
+                        None,
+                        false,
+                    )
+                })
+                .collect(),
+            constraints: Vec::new(),
+            streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
+        };
+
+        let classes = Arc::make_mut(&mut world.types.classes);
+        classes.insert(
+            (name.to_string(), baml_types::StreamingMode::NonStreaming),
+            class,
+        );
+
+        world
     }
 }
