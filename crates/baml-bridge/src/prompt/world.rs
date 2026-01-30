@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use baml_types::{StreamingMode, TypeIR};
+use baml_types::{BamlValue, StreamingMode, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum};
 use minijinja::{Environment, UndefinedBehavior};
@@ -206,7 +206,259 @@ impl PromptWorld {
     }
 
     fn render_structural(&self, pv: &super::PromptValue) -> String {
-        format!("<structural> {}", pv.value())
+        let mut buf = String::new();
+        let resolved = pv.resolved_ty();
+        self.render_structural_inner(pv, &resolved, pv.session.depth, &mut buf);
+        buf
+    }
+
+    fn render_structural_inner(
+        &self,
+        pv: &super::PromptValue,
+        resolved_ty: &TypeIR,
+        depth: usize,
+        buf: &mut String,
+    ) {
+        let settings = &pv.session.settings;
+
+        if matches!(pv.ty(), TypeIR::Union(_, _)) && !pv.is_union_resolved() {
+            self.render_union_ambiguous(pv, buf);
+            return;
+        }
+
+        if depth >= settings.max_depth {
+            let label = self.type_display_name(resolved_ty);
+            buf.push_str(&format!("{label} {{ ... }}"));
+            return;
+        }
+
+        match pv.value() {
+            BamlValue::String(s) => self.render_string(s, buf, settings),
+            BamlValue::Int(i) => buf.push_str(&i.to_string()),
+            BamlValue::Float(f) => buf.push_str(&f.to_string()),
+            BamlValue::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
+            BamlValue::Null => buf.push_str("null"),
+            BamlValue::List(items) => self.render_list_structural(pv, items, depth, buf),
+            BamlValue::Map(map) => self.render_map_structural(pv, map, depth, buf),
+            BamlValue::Class(name, fields) => {
+                self.render_class_structural(pv, resolved_ty, name, fields, depth, buf)
+            }
+            BamlValue::Enum(_, variant) => self.render_enum_structural(resolved_ty, variant, buf),
+            BamlValue::Media(media) => {
+                buf.push_str(&format!("<media: {}>", media.media_type));
+            }
+        }
+    }
+
+    fn render_string(&self, s: &str, buf: &mut String, settings: &RenderSettings) {
+        let max = settings.max_string_chars;
+        if s.chars().count() > max {
+            let truncated: String = s.chars().take(max).collect();
+            buf.push_str(&truncated);
+            buf.push_str("... (truncated)");
+        } else {
+            buf.push_str(s);
+        }
+    }
+
+    fn render_list_structural(
+        &self,
+        pv: &super::PromptValue,
+        items: &[BamlValue],
+        depth: usize,
+        buf: &mut String,
+    ) {
+        let settings = &pv.session.settings;
+        let capped = items.len().min(settings.max_list_items);
+
+        buf.push('[');
+        for (idx, item) in items.iter().take(capped).enumerate() {
+            if idx > 0 {
+                buf.push_str(", ");
+            }
+            if let Some(child) = pv.child_index(idx) {
+                let resolved = child.resolved_ty();
+                self.render_structural_inner(&child, &resolved, depth + 1, buf);
+            } else {
+                buf.push_str(&format!("{}", item));
+            }
+        }
+
+        if items.len() > capped {
+            if capped > 0 {
+                buf.push_str(", ");
+            }
+            let remaining = items.len() - capped;
+            buf.push_str(&format!("... (+{remaining} more)"));
+        }
+
+        buf.push(']');
+    }
+
+    fn render_map_structural(
+        &self,
+        pv: &super::PromptValue,
+        map: &IndexMap<String, BamlValue>,
+        depth: usize,
+        buf: &mut String,
+    ) {
+        let settings = &pv.session.settings;
+        let mut keys: Vec<&String> = map.keys().collect();
+        keys.sort();
+
+        let capped = keys.len().min(settings.max_map_entries);
+        buf.push('{');
+        for (idx, key) in keys.iter().take(capped).enumerate() {
+            if idx > 0 {
+                buf.push_str(", ");
+            }
+            buf.push_str(key);
+            buf.push_str(": ");
+            if let Some(child) = pv.child_map_value(key) {
+                let resolved = child.resolved_ty();
+                self.render_structural_inner(&child, &resolved, depth + 1, buf);
+            } else if let Some(value) = map.get(*key) {
+                buf.push_str(&format!("{}", value));
+            }
+        }
+
+        if keys.len() > capped {
+            if capped > 0 {
+                buf.push_str(", ");
+            }
+            let remaining = keys.len() - capped;
+            buf.push_str(&format!("... (+{remaining} more)"));
+        }
+
+        buf.push('}');
+    }
+
+    fn render_class_structural(
+        &self,
+        pv: &super::PromptValue,
+        resolved_ty: &TypeIR,
+        class_name: &str,
+        fields: &IndexMap<String, BamlValue>,
+        depth: usize,
+        buf: &mut String,
+    ) {
+        let settings = &pv.session.settings;
+        let label = match resolved_ty {
+            TypeIR::Class { name, .. } => name.as_str(),
+            _ => class_name,
+        };
+
+        let mut ordered: Vec<String> = Vec::new();
+        let mut used_keys = IndexSet::new();
+
+        let class = match resolved_ty {
+            TypeIR::Class { name, mode, .. } => self.types.find_class(name, *mode),
+            _ => self.types.find_class(class_name, baml_types::StreamingMode::NonStreaming),
+        };
+
+        if let Some(class) = class {
+            for (field_name, ..) in &class.fields {
+                let real = field_name.real_name();
+                let rendered = field_name.rendered_name();
+                if fields.contains_key(real) || fields.contains_key(rendered) {
+                    ordered.push(rendered.to_string());
+                    used_keys.insert(real.to_string());
+                    used_keys.insert(rendered.to_string());
+                }
+            }
+        }
+
+        let mut extras: Vec<String> = fields
+            .keys()
+            .filter(|key| !used_keys.contains(*key))
+            .cloned()
+            .collect();
+        extras.sort();
+        ordered.extend(extras);
+
+        let capped = ordered.len().min(settings.max_map_entries);
+        buf.push_str(label);
+        buf.push_str(" {");
+        for (idx, key) in ordered.iter().take(capped).enumerate() {
+            if idx > 0 {
+                buf.push_str(", ");
+            }
+            buf.push_str(key);
+            buf.push_str(": ");
+            if let Some(child) = pv.child_field(key) {
+                let resolved = child.resolved_ty();
+                self.render_structural_inner(&child, &resolved, depth + 1, buf);
+            } else if let Some(value) = fields.get(key) {
+                buf.push_str(&format!("{}", value));
+            }
+        }
+
+        if ordered.len() > capped {
+            if capped > 0 {
+                buf.push_str(", ");
+            }
+            let remaining = ordered.len() - capped;
+            buf.push_str(&format!("... (+{remaining} more)"));
+        }
+
+        buf.push('}');
+    }
+
+    fn render_enum_structural(&self, resolved_ty: &TypeIR, variant: &str, buf: &mut String) {
+        let rendered = match resolved_ty {
+            TypeIR::Enum { name, .. } => self
+                .types
+                .find_enum(name)
+                .and_then(|enum_type| {
+                    enum_type
+                        .values
+                        .iter()
+                        .find(|(enum_name, _)| {
+                            enum_name.real_name() == variant
+                                || enum_name.rendered_name() == variant
+                        })
+                        .map(|(enum_name, _)| enum_name.rendered_name().to_string())
+                })
+                .unwrap_or_else(|| variant.to_string()),
+            _ => variant.to_string(),
+        };
+
+        buf.push_str(&rendered);
+    }
+
+    fn render_union_ambiguous(&self, pv: &super::PromptValue, buf: &mut String) {
+        let TypeIR::Union(union, _) = pv.ty() else {
+            return;
+        };
+        let max = pv.session.settings.max_union_branches_shown;
+        let mut labels: Vec<String> = union
+            .iter_skip_null()
+            .into_iter()
+            .map(|ty| self.type_display_name(ty))
+            .collect();
+
+        if labels.is_empty() {
+            buf.push_str("one of: <unknown>");
+            return;
+        }
+
+        buf.push_str("one of: ");
+        if labels.len() > max {
+            let remaining = labels.len() - max;
+            labels.truncate(max);
+            buf.push_str(&labels.join(" | "));
+            buf.push_str(&format!(" | ... (+{remaining} more)"));
+        } else {
+            buf.push_str(&labels.join(" | "));
+        }
+    }
+
+    fn type_display_name(&self, ty: &TypeIR) -> String {
+        match ty {
+            TypeIR::Class { name, .. } => name.to_string(),
+            TypeIR::Enum { name, .. } => name.to_string(),
+            _ => ty.diagnostic_repr().to_string(),
+        }
     }
 
     fn apply_budget_truncation(&self, rendered: String, pv: &super::PromptValue) -> String {
@@ -295,9 +547,11 @@ mod tests {
     };
     use crate::prompt::value::default_union_resolver;
     use crate::prompt::{PromptPath, PromptValue, TypeDb};
-    use baml_types::{BamlValue, StreamingMode, TypeIR};
+    use baml_types::{
+        ir_type::UnionConstructor, BamlMedia, BamlMediaType, BamlValue, StreamingMode, TypeIR,
+    };
     use indexmap::{IndexMap, IndexSet};
-    use internal_baml_jinja::types::{Class, Enum};
+    use internal_baml_jinja::types::{Class, Enum, Name};
     use std::sync::Arc;
 
     #[test]
@@ -369,7 +623,7 @@ mod tests {
         let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string());
 
         let rendered = world.render_prompt_value(&pv, None).unwrap();
-        assert_eq!(rendered, "<structural> String(\"hi\")");
+        assert_eq!(rendered, "hi");
     }
 
     #[test]
@@ -382,7 +636,7 @@ mod tests {
         let pv = make_prompt_value(&world, BamlValue::String("hello".to_string()), TypeIR::string());
 
         let rendered = world.render_prompt_value(&pv, None).unwrap();
-        assert_eq!(rendered, "<str");
+        assert_eq!(rendered, "hell");
     }
 
     #[test]
@@ -403,11 +657,237 @@ mod tests {
         assert_eq!(err.message, "boom");
     }
 
+    #[test]
+    fn structural_renders_primitives() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let cases = vec![
+            (BamlValue::String("hi".to_string()), TypeIR::string(), "hi"),
+            (BamlValue::Int(42), TypeIR::int(), "42"),
+            (BamlValue::Float(1.5), TypeIR::float(), "1.5"),
+            (BamlValue::Bool(true), TypeIR::bool(), "true"),
+            (BamlValue::Null, TypeIR::null(), "null"),
+        ];
+
+        for (value, ty, expected) in cases {
+            let pv = make_prompt_value(&world, value, ty);
+            assert_eq!(world.render_structural(&pv), expected);
+        }
+    }
+
+    #[test]
+    fn structural_renders_enum_alias() {
+        let enum_type = build_enum(
+            "Choice",
+            vec![("Yes", Some("y")), ("No", None)],
+        );
+        let world = make_world_with_types(
+            RendererDb::new(),
+            RenderSettings::default(),
+            vec![enum_type],
+            vec![],
+        );
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Enum("Choice".to_string(), "Yes".to_string()),
+            TypeIR::r#enum("Choice"),
+        );
+
+        assert_eq!(world.render_structural(&pv), "y");
+    }
+
+    #[test]
+    fn structural_renders_media() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let media = BamlMedia::url(BamlMediaType::Image, "http://example.com".to_string(), None);
+        let pv = make_prompt_value(&world, BamlValue::Media(media), TypeIR::image());
+
+        assert_eq!(world.render_structural(&pv), "<media: image>");
+    }
+
+    #[test]
+    fn structural_truncates_strings() {
+        let settings = RenderSettings {
+            max_string_chars: 3,
+            ..RenderSettings::default()
+        };
+        let world = make_world(RendererDb::new(), settings);
+        let pv = make_prompt_value(&world, BamlValue::String("hello".to_string()), TypeIR::string());
+
+        assert_eq!(world.render_structural(&pv), "hel... (truncated)");
+    }
+
+    #[test]
+    fn structural_caps_lists() {
+        let settings = RenderSettings {
+            max_list_items: 2,
+            ..RenderSettings::default()
+        };
+        let world = make_world(RendererDb::new(), settings);
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::List(vec![
+                BamlValue::String("a".to_string()),
+                BamlValue::String("b".to_string()),
+                BamlValue::String("c".to_string()),
+            ]),
+            TypeIR::list(TypeIR::string()),
+        );
+
+        assert_eq!(world.render_structural(&pv), "[a, b, ... (+1 more)]");
+    }
+
+    #[test]
+    fn structural_caps_maps_sorted() {
+        let settings = RenderSettings {
+            max_map_entries: 1,
+            ..RenderSettings::default()
+        };
+        let world = make_world(RendererDb::new(), settings);
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Map(IndexMap::from([
+                ("b".to_string(), BamlValue::Int(1)),
+                ("a".to_string(), BamlValue::Int(2)),
+            ])),
+            TypeIR::map(TypeIR::string(), TypeIR::int()),
+        );
+
+        assert_eq!(world.render_structural(&pv), "{a: 2, ... (+1 more)}");
+    }
+
+    #[test]
+    fn structural_renders_class_in_schema_order() {
+        let class = build_class(
+            "Widget",
+            vec![
+                ("z".to_string(), TypeIR::int(), None),
+                ("a".to_string(), TypeIR::int(), None),
+            ],
+        );
+        let world = make_world_with_types(
+            RendererDb::new(),
+            RenderSettings::default(),
+            vec![],
+            vec![class],
+        );
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([
+                    ("a".to_string(), BamlValue::Int(1)),
+                    ("z".to_string(), BamlValue::Int(2)),
+                ]),
+            ),
+            TypeIR::class("Widget"),
+        );
+
+        assert_eq!(world.render_structural(&pv), "Widget {z: 2, a: 1}");
+    }
+
+    #[test]
+    fn structural_depth_limit_shows_type() {
+        let settings = RenderSettings {
+            max_depth: 0,
+            ..RenderSettings::default()
+        };
+        let class = build_class(
+            "Widget",
+            vec![("name".to_string(), TypeIR::string(), None)],
+        );
+        let world = make_world_with_types(RendererDb::new(), settings, vec![], vec![class]);
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("hi".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+        );
+
+        assert_eq!(world.render_structural(&pv), "Widget { ... }");
+    }
+
+    #[test]
+    fn structural_renders_union_ambiguous() {
+        let class_foo = build_class("Foo", vec![]);
+        let class_bar = build_class("Bar", vec![]);
+        let world = make_world_with_types(
+            RendererDb::new(),
+            RenderSettings::default(),
+            vec![],
+            vec![class_foo, class_bar],
+        );
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Class("Foo".to_string(), IndexMap::new()),
+            TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
+        );
+
+        assert_eq!(world.render_structural(&pv), "one of: Foo | Bar");
+    }
+
+    #[test]
+    fn structural_renders_union_resolved() {
+        let class_foo = build_class(
+            "Foo",
+            vec![("a".to_string(), TypeIR::int(), None)],
+        );
+        let class_bar = build_class(
+            "Bar",
+            vec![
+                ("a".to_string(), TypeIR::int(), None),
+                ("b".to_string(), TypeIR::int(), None),
+            ],
+        );
+        let world = make_world_with_types(
+            RendererDb::new(),
+            RenderSettings::default(),
+            vec![],
+            vec![class_foo, class_bar],
+        );
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Class(
+                "Bar".to_string(),
+                IndexMap::from([
+                    ("a".to_string(), BamlValue::Int(1)),
+                    ("b".to_string(), BamlValue::Int(2)),
+                ]),
+            ),
+            TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
+        );
+
+        assert_eq!(world.render_structural(&pv), "Bar {a: 1, b: 2}");
+    }
+
     fn make_world(renderers: RendererDb, settings: RenderSettings) -> PromptWorld {
+        make_world_with_types(renderers, settings, vec![], vec![])
+    }
+
+    fn make_world_with_types(
+        renderers: RendererDb,
+        settings: RenderSettings,
+        enums: Vec<Enum>,
+        classes: Vec<Class>,
+    ) -> PromptWorld {
+        let mut enum_map = IndexMap::new();
+        for enum_type in enums {
+            enum_map.insert(enum_type.name.real_name().to_string(), enum_type);
+        }
+
+        let mut class_map = IndexMap::new();
+        for class in classes {
+            class_map.insert(
+                (class.name.real_name().to_string(), class.namespace),
+                class,
+            );
+        }
+
         PromptWorld {
             types: TypeDb {
-                enums: Arc::new(IndexMap::<String, Enum>::new()),
-                classes: Arc::new(IndexMap::<(String, StreamingMode), Class>::new()),
+                enums: Arc::new(enum_map),
+                classes: Arc::new(class_map),
                 structural_recursive_aliases: Arc::new(IndexMap::new()),
                 recursive_classes: Arc::new(IndexSet::new()),
             },
@@ -415,6 +895,47 @@ mod tests {
             jinja: crate::jsonish::jinja_helpers::get_env(),
             settings,
             union_resolver: default_union_resolver,
+        }
+    }
+
+    fn build_enum(name: &str, variants: Vec<(&str, Option<&str>)>) -> Enum {
+        Enum {
+            name: Name::new(name.to_string()),
+            description: None,
+            values: variants
+                .into_iter()
+                .map(|(variant, alias)| {
+                    (
+                        Name::new_with_alias(
+                            variant.to_string(),
+                            alias.map(|alias| alias.to_string()),
+                        ),
+                        None,
+                    )
+                })
+                .collect(),
+            constraints: Vec::new(),
+        }
+    }
+
+    fn build_class(name: &str, fields: Vec<(String, TypeIR, Option<String>)>) -> Class {
+        Class {
+            name: Name::new(name.to_string()),
+            description: None,
+            namespace: StreamingMode::NonStreaming,
+            fields: fields
+                .into_iter()
+                .map(|(field_name, field_type, alias)| {
+                    (
+                        Name::new_with_alias(field_name, alias),
+                        field_type,
+                        None,
+                        false,
+                    )
+                })
+                .collect(),
+            constraints: Vec::new(),
+            streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
         }
     }
 
