@@ -306,7 +306,7 @@ mod tests {
     use crate::prompt::value::default_union_resolver;
     use crate::prompt::world::{PromptWorld, TypeDb};
     use crate::prompt::PromptPath;
-    use baml_types::{BamlValue, TypeIR};
+    use baml_types::{BamlMedia, BamlMediaType, BamlValue, TypeIR};
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum};
     use minijinja::value::{Enumerator, Object, ObjectRepr, Value};
@@ -563,6 +563,90 @@ mod tests {
             }
             _ => panic!("expected values enumerator"),
         }
+    }
+
+    #[test]
+    fn is_true_handles_primitives() {
+        let cases = vec![
+            (BamlValue::Null, TypeIR::null(), false),
+            (BamlValue::Bool(false), TypeIR::bool(), false),
+            (BamlValue::Bool(true), TypeIR::bool(), true),
+            (BamlValue::String(String::new()), TypeIR::string(), false),
+            (BamlValue::String("ok".to_string()), TypeIR::string(), true),
+            (BamlValue::Int(0), TypeIR::int(), false),
+            (BamlValue::Int(3), TypeIR::int(), true),
+            (BamlValue::Float(0.0), TypeIR::float(), false),
+            (BamlValue::Float(1.25), TypeIR::float(), true),
+            (BamlValue::Float(f64::NAN), TypeIR::float(), false),
+        ];
+
+        for (value, ty, expected) in cases {
+            let pv = make_prompt_value(value, ty);
+            let obj = Arc::new(JinjaPromptValue { pv });
+            assert_eq!(obj.is_true(), expected);
+        }
+    }
+
+    #[test]
+    fn is_true_handles_containers() {
+        let cases = vec![
+            (
+                BamlValue::List(Vec::new()),
+                TypeIR::list(TypeIR::string()),
+                false,
+            ),
+            (
+                BamlValue::Map(IndexMap::new()),
+                TypeIR::map(TypeIR::string(), TypeIR::bool()),
+                false,
+            ),
+            (
+                BamlValue::Class("Widget".to_string(), IndexMap::new()),
+                TypeIR::class("Widget"),
+                false,
+            ),
+            (
+                BamlValue::List(vec![BamlValue::String("x".to_string())]),
+                TypeIR::list(TypeIR::string()),
+                true,
+            ),
+            (
+                BamlValue::Map(IndexMap::from([("flag".to_string(), BamlValue::Bool(true))])),
+                TypeIR::map(TypeIR::string(), TypeIR::bool()),
+                true,
+            ),
+            (
+                BamlValue::Class(
+                    "Widget".to_string(),
+                    IndexMap::from([("name".to_string(), BamlValue::String("ok".to_string()))]),
+                ),
+                TypeIR::class("Widget"),
+                true,
+            ),
+        ];
+
+        for (value, ty, expected) in cases {
+            let pv = make_prompt_value(value, ty);
+            let obj = Arc::new(JinjaPromptValue { pv });
+            assert_eq!(obj.is_true(), expected);
+        }
+    }
+
+    #[test]
+    fn is_true_prefers_value_over_type() {
+        let pv = make_prompt_value(BamlValue::Null, TypeIR::list(TypeIR::string()));
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(!obj.is_true());
+    }
+
+    #[test]
+    fn is_true_media_is_truthy() {
+        let media = BamlMedia::url(BamlMediaType::Image, "https://example.com".to_string(), None);
+        let pv = make_prompt_value(BamlValue::Media(media), TypeIR::image());
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.is_true());
     }
 
     fn make_prompt_value(value: BamlValue, ty: TypeIR) -> PromptValue {
