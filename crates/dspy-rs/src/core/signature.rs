@@ -1,3 +1,8 @@
+use std::collections::HashSet;
+
+use crate::baml_bridge::baml_types::ir_type::UnionTypeViewGeneric;
+use crate::baml_bridge::baml_types::{LiteralValue, StreamingMode};
+use crate::baml_bridge::internal_baml_jinja::types::{Class, Enum};
 use crate::baml_bridge::prompt::{PromptValue, RenderResult, RenderSession};
 use crate::{Example, OutputFormatContent, RenderOptions, TypeIR};
 use anyhow::Result;
@@ -6,6 +11,10 @@ use serde_json::Value;
 
 mod compiled;
 pub use compiled::*;
+
+// ============================================================================
+// Field specification (from derive macro)
+// ============================================================================
 
 #[derive(Debug, Clone, Copy)]
 pub struct FieldSpec {
@@ -35,6 +44,85 @@ pub struct FieldRenderSettings {
     pub max_depth: Option<usize>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ConstraintSpec {
+    pub kind: ConstraintKind,
+    pub label: &'static str,
+    pub expression: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstraintKind {
+    Check,
+    Assert,
+}
+
+// ============================================================================
+// Structured type metadata (for templates)
+// ============================================================================
+
+/// Structured type metadata that templates can traverse.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SigTypeMeta {
+    /// Accepts any type (Top)
+    Any,
+    /// Primitive type: string, int, float, bool, null, image, audio, etc.
+    Primitive { name: String },
+    /// Literal value: "foo", 42, true
+    Literal { value: String },
+    /// List of items
+    List { item: Box<SigTypeMeta> },
+    /// Map from key to value
+    Map {
+        key: Box<SigTypeMeta>,
+        value: Box<SigTypeMeta>,
+    },
+    /// Tuple of items
+    Tuple { items: Vec<SigTypeMeta> },
+    /// Union of types, possibly nullable
+    Union {
+        options: Vec<SigTypeMeta>,
+        nullable: bool,
+    },
+    /// Enum with named values
+    Enum {
+        name: String,
+        dynamic: bool,
+        values: Vec<SigEnumValue>,
+    },
+    /// Class with named fields
+    Class {
+        name: String,
+        dynamic: bool,
+        recursive: bool,
+        fields: Vec<SigClassField>,
+    },
+    /// Reference to a type (cycle breaker)
+    Ref { name: String },
+    /// Unsupported type (Arrow, etc.)
+    Other { description: String },
+}
+
+/// Enum value metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct SigEnumValue {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// Class field metadata.
+#[derive(Debug, Clone, Serialize)]
+pub struct SigClassField {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub r#type: SigTypeMeta,
+}
+
 /// Metadata about a single signature field (input or output).
 #[derive(Debug, Clone, Serialize)]
 pub struct SigFieldMeta {
@@ -42,10 +130,16 @@ pub struct SigFieldMeta {
     pub llm_name: &'static str,
     /// Rust field name (for lookup in inputs map).
     pub rust_name: &'static str,
+    /// Field description from the signature.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'static str>,
     /// Simplified type name for prompt templates.
     pub type_name: String,
     /// Schema string for output fields (JSON/YAML format description).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<String>,
+    /// Structured type metadata (for nested render introspection).
+    pub r#type: SigTypeMeta,
 }
 
 /// Metadata about a signature for prompt templates.
@@ -55,10 +149,24 @@ pub struct SigMeta {
     pub outputs: Vec<SigFieldMeta>,
 }
 
+// ============================================================================
+// Type metadata builder
+// ============================================================================
+
+/// Tracks visited types during traversal to detect cycles.
+#[derive(Default)]
+struct VisitedTypes {
+    classes: HashSet<String>,
+    aliases: HashSet<String>,
+}
+
 impl SigMeta {
-    /// Build from a Signature type's metadata.
-    pub fn from_signature<S: Signature>() -> Self {
-        let output_format = S::output_format_content();
+    /// Build from a Signature type using the provided OutputFormatContent.
+    ///
+    /// This should be called with the registry-built format that contains
+    /// both input and output types.
+    pub fn from_format<S: Signature>(format: &OutputFormatContent) -> Self {
+        let mut visited = VisitedTypes::default();
 
         let inputs = S::input_fields()
             .iter()
@@ -67,8 +175,14 @@ impl SigMeta {
                 SigFieldMeta {
                     llm_name: field.name,
                     rust_name: field.rust_name,
+                    description: if field.description.is_empty() {
+                        None
+                    } else {
+                        Some(field.description)
+                    },
                     type_name: simplify_type_name(&ty),
                     schema: None,
+                    r#type: build_type_meta(format, &ty, &mut visited),
                 }
             })
             .collect();
@@ -80,8 +194,14 @@ impl SigMeta {
                 SigFieldMeta {
                     llm_name: field.name,
                     rust_name: field.rust_name,
+                    description: if field.description.is_empty() {
+                        None
+                    } else {
+                        Some(field.description)
+                    },
                     type_name: simplify_type_name(&ty),
-                    schema: Some(build_field_schema(output_format, &ty)),
+                    schema: Some(build_field_schema(format, &ty)),
+                    r#type: build_type_meta(format, &ty, &mut visited),
                 }
             })
             .collect();
@@ -90,6 +210,200 @@ impl SigMeta {
     }
 }
 
+/// Build structured type metadata from a TypeIR.
+fn build_type_meta(
+    format: &OutputFormatContent,
+    ty: &TypeIR,
+    visited: &mut VisitedTypes,
+) -> SigTypeMeta {
+    match ty {
+        TypeIR::Top(_) => SigTypeMeta::Any,
+
+        TypeIR::Primitive(type_value, _) => SigTypeMeta::Primitive {
+            name: type_value.to_string(),
+        },
+
+        TypeIR::Literal(lit, _) => SigTypeMeta::Literal {
+            value: literal_to_string(lit),
+        },
+
+        TypeIR::List(inner, _) => SigTypeMeta::List {
+            item: Box::new(build_type_meta(format, inner, visited)),
+        },
+
+        TypeIR::Map(key, value, _) => SigTypeMeta::Map {
+            key: Box::new(build_type_meta(format, key, visited)),
+            value: Box::new(build_type_meta(format, value, visited)),
+        },
+
+        TypeIR::Tuple(items, _) => SigTypeMeta::Tuple {
+            items: items
+                .iter()
+                .map(|item| build_type_meta(format, item, visited))
+                .collect(),
+        },
+
+        TypeIR::Union(union, _) => {
+            let view = union.view();
+            match view {
+                UnionTypeViewGeneric::Null => SigTypeMeta::Primitive {
+                    name: "null".to_string(),
+                },
+                UnionTypeViewGeneric::Optional(inner) => SigTypeMeta::Union {
+                    options: vec![build_type_meta(format, inner, visited)],
+                    nullable: true,
+                },
+                UnionTypeViewGeneric::OneOf(types) => SigTypeMeta::Union {
+                    options: types
+                        .into_iter()
+                        .map(|t| build_type_meta(format, t, visited))
+                        .collect(),
+                    nullable: false,
+                },
+                UnionTypeViewGeneric::OneOfOptional(types) => SigTypeMeta::Union {
+                    options: types
+                        .into_iter()
+                        .map(|t| build_type_meta(format, t, visited))
+                        .collect(),
+                    nullable: true,
+                },
+            }
+        }
+
+        TypeIR::Enum { name, dynamic, .. } => {
+            let values = format
+                .enums
+                .get(name)
+                .map(build_enum_values)
+                .unwrap_or_default();
+
+            // Use rendered name from enum definition if available, otherwise simplify
+            let display_name = format
+                .enums
+                .get(name)
+                .map(|e| e.name.rendered_name().to_string())
+                .unwrap_or_else(|| simplify_name(name));
+
+            SigTypeMeta::Enum {
+                name: display_name,
+                dynamic: *dynamic,
+                values,
+            }
+        }
+
+        TypeIR::Class { name, dynamic, .. } => {
+            // Check if this is a recursive class
+            let recursive = format.recursive_classes.contains(name);
+
+            // Cycle detection - use simplified name as key
+            let key = simplify_name(name);
+            if visited.classes.contains(&key) {
+                return SigTypeMeta::Ref { name: key };
+            }
+
+            // Look up class (always NonStreaming for dspy-rs)
+            let class = lookup_class(format, name);
+
+            match class {
+                Some(cls) => {
+                    let display_name = cls.name.rendered_name().to_string();
+                    visited.classes.insert(key.clone());
+
+                    let fields = cls
+                        .fields
+                        .iter()
+                        .map(|(field_name, field_ty, desc, _)| SigClassField {
+                            name: field_name.rendered_name().to_string(),
+                            description: desc.clone(),
+                            r#type: build_type_meta(format, field_ty, visited),
+                        })
+                        .collect();
+
+                    visited.classes.remove(&key);
+
+                    SigTypeMeta::Class {
+                        name: display_name,
+                        dynamic: *dynamic,
+                        recursive,
+                        fields,
+                    }
+                }
+                None if *dynamic => SigTypeMeta::Class {
+                    name: simplify_name(name),
+                    dynamic: true,
+                    recursive: false,
+                    fields: vec![],
+                },
+                None => SigTypeMeta::Ref {
+                    name: simplify_name(name),
+                },
+            }
+        }
+
+        TypeIR::RecursiveTypeAlias { name, .. } => {
+            let key = simplify_name(name);
+
+            // Cycle detection for aliases
+            if visited.aliases.contains(&key) {
+                return SigTypeMeta::Ref { name: key };
+            }
+
+            if let Some(target) = format.structural_recursive_aliases.get(name) {
+                visited.aliases.insert(key.clone());
+                let result = build_type_meta(format, target, visited);
+                visited.aliases.remove(&key);
+                result
+            } else {
+                SigTypeMeta::Ref { name: key }
+            }
+        }
+
+        TypeIR::Arrow(_, _) => SigTypeMeta::Other {
+            description: "function".to_string(),
+        },
+    }
+}
+
+/// Look up a class by name (always uses NonStreaming, with fallback to Streaming).
+fn lookup_class<'a>(format: &'a OutputFormatContent, name: &str) -> Option<&'a Class> {
+    let name_owned = name.to_string();
+    format
+        .classes
+        .get(&(name_owned.clone(), StreamingMode::NonStreaming))
+        .or_else(|| format.classes.get(&(name_owned, StreamingMode::Streaming)))
+}
+
+/// Build enum values from an Enum definition.
+fn build_enum_values(e: &Enum) -> Vec<SigEnumValue> {
+    e.values
+        .iter()
+        .map(|(name, description)| {
+            let real = name.real_name().to_string();
+            let rendered = name.rendered_name().to_string();
+            SigEnumValue {
+                name: rendered.clone(),
+                alias: if real != rendered { Some(real) } else { None },
+                description: description.clone(),
+            }
+        })
+        .collect()
+}
+
+/// Convert a LiteralValue to a properly escaped display string.
+fn literal_to_string(lit: &LiteralValue) -> String {
+    match lit {
+        LiteralValue::String(s) => serde_json::to_string(s).unwrap_or_else(|_| format!("{s:?}")),
+        LiteralValue::Int(i) => i.to_string(),
+        LiteralValue::Bool(b) => b.to_string(),
+    }
+}
+
+/// Simplify a fully-qualified name to just the last segment.
+fn simplify_name(name: &str) -> String {
+    name.rsplit("::").next().unwrap_or(name).to_string()
+}
+
+/// Build a simplified type name string from TypeIR for display in templates.
 fn simplify_type_name(type_ir: &TypeIR) -> String {
     let raw = type_ir.diagnostic_repr().to_string();
     let mut result = String::with_capacity(raw.len());
@@ -118,6 +432,7 @@ fn simplify_type_name(type_ir: &TypeIR) -> String {
         .to_string()
 }
 
+/// Build a schema string for an output field using BAML's renderer.
 fn build_field_schema(output_format: &OutputFormatContent, type_ir: &TypeIR) -> String {
     let field_format = OutputFormatContent {
         enums: output_format.enums.clone(),
@@ -134,18 +449,9 @@ fn build_field_schema(output_format: &OutputFormatContent, type_ir: &TypeIR) -> 
         .unwrap_or_else(|| type_ir.diagnostic_repr().to_string())
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct ConstraintSpec {
-    pub kind: ConstraintKind,
-    pub label: &'static str,
-    pub expression: &'static str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstraintKind {
-    Check,
-    Assert,
-}
+// ============================================================================
+// Traits
+// ============================================================================
 
 pub trait MetaSignature: Send + Sync {
     fn demos(&self) -> Vec<Example>;

@@ -257,6 +257,10 @@ fn compile_signature_inner<S: Signature>() -> CompiledSignature<S> {
     <S::Output as BamlTypeInternal>::register(&mut registry);
 
     let (output_format, renderer_seed) = registry.build_with_renderers(TypeIR::string());
+    
+    // Build SigMeta from registry's output_format (has both input + output types)
+    let sig_meta = SigMeta::from_format::<S>(&output_format);
+    
     let mut world =
         PromptWorld::from_registry(output_format, renderer_seed, RenderSettings::default())
             .expect("failed to build prompt world");
@@ -268,7 +272,7 @@ fn compile_signature_inner<S: Signature>() -> CompiledSignature<S> {
         world: Arc::new(world),
         system_template: "sig::system".to_string(),
         user_template: "sig::user".to_string(),
-        sig_meta: SigMeta::from_signature::<S>(),
+        sig_meta,
         _phantom: PhantomData,
     }
 }
