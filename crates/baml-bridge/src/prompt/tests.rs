@@ -1,9 +1,11 @@
 use super::{JinjaPromptValue, PromptPath, PromptValue, PromptWorld};
-use crate::prompt::renderer::{RenderSession, RenderSettings, RendererDb, RendererOverride};
+use crate::prompt::renderer::{
+    RenderSession, RenderSettings, RendererDb, RendererKey, RendererOverride, RendererSpec,
+};
 use crate::prompt::value::default_union_resolver;
 use crate::prompt::world::TypeDb;
-use crate::{BamlType, BamlTypeInternal, Registry, ToBamlValue};
-use baml_types::{BamlValue, TypeIR};
+use crate::Registry;
+use baml_types::{BamlValue, StreamingMode, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum, Name};
 use minijinja::value::Value;
@@ -105,20 +107,26 @@ fn jinja_prompt_value_get_value_smoke() {
     assert_eq!(child_path.as_str(), Some("root.name"));
 }
 
-#[derive(Clone, Debug, BamlType)]
-struct SimpleRender {
-    name: String,
-    count: i64,
-}
-
 #[test]
 fn prompt_value_renders_structural_by_default() {
-    let world = make_world_for_type::<SimpleRender>();
-    let value = SimpleRender {
-        name: "Ada".to_string(),
-        count: 2,
-    };
-    let pv = make_prompt_value_typed(&world, &value, PromptPath::new().push_field("value"));
+    let world = Arc::new(make_world_with_class(
+        "SimpleRender",
+        vec![("name".to_string(), TypeIR::string()), ("count".to_string(), TypeIR::int())],
+    ));
+    let value = BamlValue::Class(
+        "SimpleRender".to_string(),
+        IndexMap::from([
+            ("name".to_string(), BamlValue::String("Ada".to_string())),
+            ("count".to_string(), BamlValue::Int(2)),
+        ]),
+    );
+    let pv = PromptValue::new(
+        value,
+        TypeIR::class("SimpleRender"),
+        world.clone(),
+        make_session(),
+        PromptPath::new().push_field("value"),
+    );
 
     let rendered = world
         .render_prompt_value(&pv, None)
@@ -127,19 +135,45 @@ fn prompt_value_renders_structural_by_default() {
     assert_eq!(rendered, "SimpleRender {name: Ada, count: 2}");
 }
 
-#[derive(Clone, Debug, BamlType)]
-#[render(default = "Name: {{ value.name }}")]
-struct RenderWithTemplate {
-    name: String,
-}
-
 #[test]
 fn prompt_value_uses_type_level_renderer() {
-    let world = make_world_for_type::<RenderWithTemplate>();
-    let value = RenderWithTemplate {
-        name: "Ada".to_string(),
+    let class = Class {
+        name: Name::new("RenderWithTemplate".to_string()),
+        description: None,
+        namespace: StreamingMode::NonStreaming,
+        fields: vec![(
+            Name::new("name".to_string()),
+            TypeIR::string(),
+            None,
+            false,
+        )],
+        constraints: Vec::new(),
+        streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
     };
-    let pv = make_prompt_value_typed(&world, &value, PromptPath::new().push_field("value"));
+    let mut reg = Registry::new();
+    reg.register_class(class);
+    reg.register_renderer(
+        RendererKey::for_class("RenderWithTemplate", StreamingMode::NonStreaming, "default"),
+        RendererSpec::Jinja {
+            source: "Name: {{ value.name }}",
+        },
+    );
+    let (output_format, renderers) = reg.build_with_renderers(TypeIR::class("RenderWithTemplate"));
+    let world = Arc::new(
+        PromptWorld::from_registry(output_format, renderers, RenderSettings::default())
+        .expect("prompt world");
+    );
+    let value = BamlValue::Class(
+        "RenderWithTemplate".to_string(),
+        IndexMap::from([("name".to_string(), BamlValue::String("Ada".to_string()))]),
+    );
+    let pv = PromptValue::new(
+        value,
+        TypeIR::class("RenderWithTemplate"),
+        world.clone(),
+        make_session(),
+        PromptPath::new().push_field("value"),
+    );
 
     let rendered = world
         .render_prompt_value(&pv, None)
@@ -150,20 +184,24 @@ fn prompt_value_uses_type_level_renderer() {
 
 #[test]
 fn prompt_value_passes_ctx_to_templates() {
-    let mut world = make_world_for_type::<RenderWithTemplate>();
+    let mut world = make_world_with_class(
+        "RenderWithTemplate",
+        vec![("name".to_string(), TypeIR::string())],
+    );
     world
         .jinja
         .add_template_owned("ctx_template".to_string(), "{{ ctx.max_output_chars }}".to_string())
         .expect("template add");
-    let value = RenderWithTemplate {
-        name: "Ada".to_string(),
-    };
+    let value = BamlValue::Class(
+        "RenderWithTemplate".to_string(),
+        IndexMap::from([("name".to_string(), BamlValue::String("Ada".to_string()))]),
+    );
     let session = Arc::new(
         RenderSession::new(RenderSettings::default()).with_ctx(json!({ "max_output_chars": 42 })),
     );
     let pv = PromptValue::new(
-        value.to_baml_value(),
-        RenderWithTemplate::baml_type_ir(),
+        value,
+        TypeIR::class("RenderWithTemplate"),
         Arc::new(world),
         session,
         PromptPath::new().push_field("value"),
@@ -182,11 +220,17 @@ fn prompt_value_passes_ctx_to_templates() {
 
 #[test]
 fn prompt_value_budget_truncation_returns_output() {
-    let world = make_world_for_type::<SimpleRender>();
-    let value = SimpleRender {
-        name: "Ada".to_string(),
-        count: 2,
-    };
+    let world = Arc::new(make_world_with_class(
+        "SimpleRender",
+        vec![("name".to_string(), TypeIR::string()), ("count".to_string(), TypeIR::int())],
+    ));
+    let value = BamlValue::Class(
+        "SimpleRender".to_string(),
+        IndexMap::from([
+            ("name".to_string(), BamlValue::String("Ada".to_string())),
+            ("count".to_string(), BamlValue::Int(2)),
+        ]),
+    );
     let session = Arc::new(RenderSession {
         settings: RenderSettings {
             max_total_chars: 20,
@@ -195,9 +239,9 @@ fn prompt_value_budget_truncation_returns_output() {
         ..RenderSession::new(RenderSettings::default())
     });
     let pv = PromptValue::new(
-        value.to_baml_value(),
-        SimpleRender::baml_type_ir(),
-        Arc::new(world),
+        value,
+        TypeIR::class("SimpleRender"),
+        world.clone(),
         session,
         PromptPath::new().push_field("value"),
     );
@@ -267,26 +311,4 @@ fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWor
         settings: RenderSettings::default(),
         union_resolver: default_union_resolver,
     }
-}
-
-fn make_world_for_type<T: BamlTypeInternal>() -> PromptWorld {
-    let mut reg = Registry::new();
-    T::register(&mut reg);
-    let (output_format, renderers) = reg.build_with_renderers(T::baml_type_ir());
-    PromptWorld::from_registry(output_format, renderers, RenderSettings::default())
-        .expect("prompt world")
-}
-
-fn make_prompt_value_typed<T: BamlTypeInternal + ToBamlValue>(
-    world: &PromptWorld,
-    value: &T,
-    path: PromptPath,
-) -> PromptValue {
-    PromptValue::new(
-        value.to_baml_value(),
-        T::baml_type_ir(),
-        Arc::new(world.clone()),
-        make_session(),
-        path,
-    )
 }
