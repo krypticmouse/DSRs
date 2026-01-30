@@ -1,11 +1,13 @@
 use super::{JinjaPromptValue, PromptPath, PromptValue, PromptWorld};
-use crate::prompt::renderer::{RenderSession, RenderSettings, RendererDb};
+use crate::prompt::renderer::{RenderSession, RenderSettings, RendererDb, RendererOverride};
 use crate::prompt::value::default_union_resolver;
 use crate::prompt::world::TypeDb;
+use crate::{BamlType, BamlTypeInternal, Registry, ToBamlValue};
 use baml_types::{BamlValue, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum, Name};
 use minijinja::value::Value;
+use serde_json::json;
 use std::sync::Arc;
 
 #[test]
@@ -103,6 +105,114 @@ fn jinja_prompt_value_get_value_smoke() {
     assert_eq!(child_path.as_str(), Some("root.name"));
 }
 
+#[derive(Clone, Debug, BamlType)]
+struct SimpleRender {
+    name: String,
+    count: i64,
+}
+
+#[test]
+fn prompt_value_renders_structural_by_default() {
+    let world = make_world_for_type::<SimpleRender>();
+    let value = SimpleRender {
+        name: "Ada".to_string(),
+        count: 2,
+    };
+    let pv = make_prompt_value_typed(&world, &value, PromptPath::new().push_field("value"));
+
+    let rendered = world
+        .render_prompt_value(&pv, None)
+        .expect("rendered");
+
+    assert_eq!(rendered, "SimpleRender {name: Ada, count: 2}");
+}
+
+#[derive(Clone, Debug, BamlType)]
+#[render(default = "Name: {{ value.name }}")]
+struct RenderWithTemplate {
+    name: String,
+}
+
+#[test]
+fn prompt_value_uses_type_level_renderer() {
+    let world = make_world_for_type::<RenderWithTemplate>();
+    let value = RenderWithTemplate {
+        name: "Ada".to_string(),
+    };
+    let pv = make_prompt_value_typed(&world, &value, PromptPath::new().push_field("value"));
+
+    let rendered = world
+        .render_prompt_value(&pv, None)
+        .expect("rendered");
+
+    assert_eq!(rendered, "Name: Ada");
+}
+
+#[test]
+fn prompt_value_passes_ctx_to_templates() {
+    let mut world = make_world_for_type::<RenderWithTemplate>();
+    world
+        .jinja
+        .add_template_owned("ctx_template".to_string(), "{{ ctx.max_output_chars }}".to_string())
+        .expect("template add");
+    let value = RenderWithTemplate {
+        name: "Ada".to_string(),
+    };
+    let session = Arc::new(
+        RenderSession::new(RenderSettings::default()).with_ctx(json!({ "max_output_chars": 42 })),
+    );
+    let pv = PromptValue::new(
+        value.to_baml_value(),
+        RenderWithTemplate::baml_type_ir(),
+        Arc::new(world),
+        session,
+        PromptPath::new().push_field("value"),
+    )
+    .with_override(RendererOverride::Template {
+        source: "{{ ctx.max_output_chars }}",
+        compiled_name: Some("ctx_template".to_string()),
+    });
+
+    let rendered = pv
+        .world
+        .render_prompt_value(&pv, None)
+        .expect("rendered");
+    assert_eq!(rendered, "42");
+}
+
+#[test]
+fn prompt_value_budget_truncation_returns_output() {
+    let world = make_world_for_type::<SimpleRender>();
+    let value = SimpleRender {
+        name: "Ada".to_string(),
+        count: 2,
+    };
+    let session = Arc::new(RenderSession {
+        settings: RenderSettings {
+            max_total_chars: 20,
+            ..RenderSettings::default()
+        },
+        ..RenderSession::new(RenderSettings::default())
+    });
+    let pv = PromptValue::new(
+        value.to_baml_value(),
+        SimpleRender::baml_type_ir(),
+        Arc::new(world),
+        session,
+        PromptPath::new().push_field("value"),
+    );
+
+    let rendered = pv
+        .world
+        .render_prompt_value(&pv, None)
+        .expect("rendered");
+
+    assert!(
+        rendered.ends_with("... (truncated)"),
+        "expected truncation, got: {rendered}"
+    );
+}
+
 fn make_session() -> Arc<RenderSession> {
     Arc::new(RenderSession::new(RenderSettings::default()))
 }
@@ -157,4 +267,26 @@ fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWor
         settings: RenderSettings::default(),
         union_resolver: default_union_resolver,
     }
+}
+
+fn make_world_for_type<T: BamlTypeInternal>() -> PromptWorld {
+    let mut reg = Registry::new();
+    T::register(&mut reg);
+    let (output_format, renderers) = reg.build_with_renderers(T::baml_type_ir());
+    PromptWorld::from_registry(output_format, renderers, RenderSettings::default())
+        .expect("prompt world")
+}
+
+fn make_prompt_value_typed<T: BamlTypeInternal + ToBamlValue>(
+    world: &PromptWorld,
+    value: &T,
+    path: PromptPath,
+) -> PromptValue {
+    PromptValue::new(
+        value.to_baml_value(),
+        T::baml_type_ir(),
+        Arc::new(world.clone()),
+        make_session(),
+        path,
+    )
 }
