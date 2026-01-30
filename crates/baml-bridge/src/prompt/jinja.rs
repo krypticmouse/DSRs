@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use minijinja::{
     value::{Enumerator, Object, ObjectRepr, Value},
-    Environment,
+    Environment, Error, Output, State, UndefinedBehavior,
 };
 
 use baml_types::{BamlMediaContent, BamlValue, TypeIR};
@@ -263,6 +263,38 @@ impl Object for JinjaPromptValue {
     }
 }
 
+/// Configure the Jinja environment for prompt rendering.
+pub fn configure_prompt_env(env: &mut Environment<'static>) {
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    register_prompt_filters(env);
+    env.set_formatter(prompt_formatter);
+}
+
+fn prompt_formatter(
+    out: &mut Output<'_>,
+    state: &State<'_, '_>,
+    value: &Value,
+) -> Result<(), Error> {
+    if let Some(obj) = value.as_object() {
+        if let Some(jpv) = obj.downcast_ref::<JinjaPromptValue>() {
+            let rendered = jpv
+                .pv
+                .world
+                .render_prompt_value(&jpv.pv, None)
+                .map_err(|err| Error::new(minijinja::ErrorKind::InvalidOperation, err.message))?;
+            out.write_str(&rendered)?;
+            return Ok(());
+        }
+    }
+
+    if value.is_none() {
+        out.write_str("null")?;
+        return Ok(());
+    }
+
+    minijinja::escape_formatter(out, state, value)
+}
+
 /// Register prompt-specific filters.
 pub fn register_prompt_filters(env: &mut Environment<'static>) {
     env.add_filter("truncate", filter_truncate);
@@ -300,7 +332,8 @@ fn filter_format_count(n: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_format_count, filter_slice_chars, filter_truncate, JinjaPromptValue, PromptValue,
+        configure_prompt_env, filter_format_count, filter_slice_chars, filter_truncate,
+        JinjaPromptValue, PromptValue,
     };
     use crate::prompt::renderer::{RenderSession, RenderSettings, RendererDb};
     use crate::prompt::value::default_union_resolver;
@@ -332,6 +365,24 @@ mod tests {
     #[test]
     fn format_count_handles_negative() {
         assert_eq!(filter_format_count(-12345), "-12,345");
+    }
+
+    #[test]
+    fn formatter_renders_prompt_value_via_pipeline() {
+        let mut world = make_world_empty();
+        world.jinja.add_template("entry", "{{ value }}").unwrap();
+
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::String("hi".to_string()),
+            TypeIR::string(),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+
+        let rendered = pv.world.jinja.get_template("entry").unwrap().render(ctx).unwrap();
+        assert_eq!(rendered, "hi");
     }
 
     #[test]
@@ -787,7 +838,11 @@ mod tests {
                 recursive_classes: Arc::new(IndexSet::new()),
             },
             renderers: RendererDb::new(),
-            jinja: crate::jsonish::jinja_helpers::get_env(),
+            jinja: {
+                let mut jinja = crate::jsonish::jinja_helpers::get_env();
+                configure_prompt_env(&mut jinja);
+                jinja
+            },
             settings: RenderSettings::default(),
             union_resolver: default_union_resolver,
         }
@@ -828,7 +883,11 @@ mod tests {
                 recursive_classes: Arc::new(IndexSet::new()),
             },
             renderers: RendererDb::new(),
-            jinja: crate::jsonish::jinja_helpers::get_env(),
+            jinja: {
+                let mut jinja = crate::jsonish::jinja_helpers::get_env();
+                configure_prompt_env(&mut jinja);
+                jinja
+            },
             settings: RenderSettings::default(),
             union_resolver: default_union_resolver,
         }

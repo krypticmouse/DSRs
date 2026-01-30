@@ -5,9 +5,9 @@ use std::sync::Arc;
 use baml_types::{BamlValue, StreamingMode, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum};
-use minijinja::{Environment, UndefinedBehavior};
+use minijinja::Environment;
 
-use super::jinja::register_prompt_filters;
+use super::jinja::configure_prompt_env;
 use super::renderer::{
     CompiledRenderer, RenderError, RenderResult, RenderSettings, RendererDb, RendererDbSeed,
     RendererOverride, TypeKey,
@@ -88,8 +88,7 @@ impl PromptWorld {
         };
 
         let mut jinja = crate::jsonish::jinja_helpers::get_env();
-        jinja.set_undefined_behavior(UndefinedBehavior::Strict);
-        register_prompt_filters(&mut jinja);
+        configure_prompt_env(&mut jinja);
 
         let renderers = RendererDb::compile_from_seed(renderer_seed, &mut jinja)?;
 
@@ -604,6 +603,7 @@ impl PromptWorld {
 #[cfg(test)]
 mod tests {
     use super::PromptWorld;
+    use crate::prompt::jinja::configure_prompt_env;
     use crate::prompt::renderer::{
         CompiledRenderer, RenderError, RenderSession, RenderSettings, RendererDb, RendererKey,
         RendererOverride, TypeKey,
@@ -1151,7 +1151,11 @@ mod tests {
                 recursive_classes: Arc::new(IndexSet::new()),
             },
             renderers,
-            jinja: crate::jsonish::jinja_helpers::get_env(),
+            jinja: {
+                let mut jinja = crate::jsonish::jinja_helpers::get_env();
+                configure_prompt_env(&mut jinja);
+                jinja
+            },
             settings,
             union_resolver: default_union_resolver,
         }
