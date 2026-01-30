@@ -191,10 +191,10 @@ impl PromptWorld {
         pv: &super::PromptValue,
         style: &str,
     ) -> Result<Option<String>, RenderError> {
-        let type_key = match pv.resolved_ty() {
-            TypeIR::Class { name, mode, .. } => TypeKey::Class { name, mode },
-            TypeIR::Enum { name, .. } => TypeKey::Enum { name },
-            _ => return Ok(None),
+        let resolved = pv.resolved_ty();
+        let type_key = match self.renderer_key_for_type(&resolved) {
+            Some(key) => key,
+            None => return Ok(None),
         };
 
         let renderer = match self.renderers.find(&type_key, style) {
@@ -203,12 +203,46 @@ impl PromptWorld {
         };
 
         let label = format!("type:{}:{}", type_key, style);
-        match renderer {
-            CompiledRenderer::Func { f } => f(pv, &pv.session).map(Some),
-            CompiledRenderer::Jinja { template_name } => self
-                .render_named_template(pv, style, &label, template_name)
-                .map(Some),
+        self.execute_renderer(renderer, pv, style, &label)
+            .map(Some)
+    }
+
+    fn renderer_key_for_type(&self, ty: &TypeIR) -> Option<TypeKey> {
+        match ty {
+            TypeIR::Class { name, mode, .. } => Some(TypeKey::Class {
+                name: name.clone(),
+                mode: *mode,
+            }),
+            TypeIR::Enum { name, .. } => Some(TypeKey::Enum { name: name.clone() }),
+            _ => None,
         }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn execute_renderer(
+        &self,
+        renderer: &CompiledRenderer,
+        pv: &super::PromptValue,
+        style: &str,
+        label: &str,
+    ) -> RenderResult {
+        match renderer {
+            CompiledRenderer::Func { f } => f(pv, &pv.session),
+            CompiledRenderer::Jinja { template_name } => {
+                self.execute_jinja_renderer(template_name, pv, style, label)
+            }
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn execute_jinja_renderer(
+        &self,
+        template_name: &str,
+        pv: &super::PromptValue,
+        style: &str,
+        renderer: &str,
+    ) -> RenderResult {
+        self.render_named_template(pv, style, renderer, template_name)
     }
 
     #[allow(clippy::result_large_err)]
@@ -566,7 +600,7 @@ mod tests {
     use super::PromptWorld;
     use crate::prompt::renderer::{
         CompiledRenderer, RenderError, RenderSession, RenderSettings, RendererDb, RendererKey,
-        RendererOverride,
+        RendererOverride, TypeKey,
     };
     use crate::prompt::value::default_union_resolver;
     use crate::prompt::{PromptPath, PromptValue, TypeDb};
@@ -575,6 +609,7 @@ mod tests {
     };
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum, Name};
+    use serde::Serialize;
     use std::sync::Arc;
 
     #[test]
@@ -749,6 +784,77 @@ mod tests {
 
         let view = world.build_output_format_view(pv.ty());
         assert_eq!(view.target, TypeIR::string());
+    }
+
+    #[test]
+    fn renderer_key_for_type_handles_class_and_enum() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let class_key = world
+            .renderer_key_for_type(&TypeIR::class("Widget"))
+            .expect("class key");
+        assert_eq!(
+            class_key,
+            TypeKey::Class {
+                name: "Widget".to_string(),
+                mode: StreamingMode::NonStreaming,
+            }
+        );
+
+        let enum_key = world
+            .renderer_key_for_type(&TypeIR::r#enum("Choice"))
+            .expect("enum key");
+        assert_eq!(
+            enum_key,
+            TypeKey::Enum {
+                name: "Choice".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn type_renderer_template_uses_context() {
+        #[derive(Serialize)]
+        struct Ctx<'a> {
+            note: &'a str,
+        }
+
+        let class = build_class(
+            "Widget",
+            vec![("name".to_string(), TypeIR::string(), None)],
+        );
+        let mut renderers = RendererDb::new();
+        renderers.insert(
+            RendererKey::for_class("Widget", StreamingMode::NonStreaming, "default"),
+            CompiledRenderer::Jinja {
+                template_name: "type_template".to_string(),
+            },
+        );
+        let mut world = make_world_with_types(
+            renderers,
+            RenderSettings::default(),
+            vec![],
+            vec![class],
+        );
+        world
+            .jinja
+            .add_template_owned(
+                "type_template".to_string(),
+                "{{ value.name.raw }}|{{ ctx.note }}".to_string(),
+            )
+            .expect("template add");
+
+        let pv = make_prompt_value_with_ctx(
+            &world,
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("hi".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+            Ctx { note: "ok" },
+        );
+
+        let rendered = world.render_prompt_value(&pv, None).unwrap();
+        assert_eq!(rendered, "hi|ok");
     }
 
     #[test]
@@ -1052,6 +1158,21 @@ mod tests {
             ty,
             Arc::new(world.clone()),
             Arc::new(RenderSession::new(world.settings.clone())),
+            PromptPath::new(),
+        )
+    }
+
+    fn make_prompt_value_with_ctx<T: Serialize>(
+        world: &PromptWorld,
+        value: BamlValue,
+        ty: TypeIR,
+        ctx: T,
+    ) -> PromptValue {
+        PromptValue::new(
+            value,
+            ty,
+            Arc::new(world.clone()),
+            Arc::new(RenderSession::new(world.settings.clone()).with_ctx(ctx)),
             PromptPath::new(),
         )
     }
