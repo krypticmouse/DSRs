@@ -108,7 +108,7 @@ fn submit_missing_fields_error() -> PyResult<()> {
         let message = call_submit(py, &handler, &kwargs)?;
         assert_eq!(
             message,
-            "[Error] Missing output fields: [\"numbers\"]. Use SUBMIT(answer, numbers)"
+            "[Error] Missing output fields: [\"numbers\"]. Use SUBMIT(answer=answer, numbers=numbers)"
         );
 
         let result = result_tx.lock().unwrap().clone().expect("result set");
