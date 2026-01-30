@@ -2150,6 +2150,8 @@ fn validate_template(
     let mut filter_refs = BTreeSet::new();
     collect_from_stmt(&ast, &mut field_refs, &mut filter_refs);
 
+    // TODO(dsrs-ocy): Enum render templates (struct_fields == None) don't validate field access yet.
+    // Design per-variant field access checks + compile-fail coverage for enum templates.
     if let Some(fields) = struct_fields {
         if !allow_dynamic {
             let known_fields: BTreeSet<String> = fields
