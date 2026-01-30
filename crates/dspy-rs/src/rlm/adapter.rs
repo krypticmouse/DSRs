@@ -58,10 +58,7 @@ impl RlmAdapter {
         })
     }
 
-    pub fn build_action_instruction<S: Signature>(&self) -> String
-    where
-        S: Signature,
-    {
+    pub fn build_action_instruction<S: Signature>(&self) -> String {
         let mut instruction = String::new();
         let task = S::instruction().trim();
         if !task.is_empty() {
@@ -72,10 +69,7 @@ impl RlmAdapter {
         instruction
     }
 
-    pub fn build_extract_instruction<S: Signature>(&self) -> String
-    where
-        S: Signature,
-    {
+    pub fn build_extract_instruction<S: Signature>(&self) -> String {
         let mut instruction = String::new();
         let task = S::instruction().trim();
         if !task.is_empty() {
@@ -95,10 +89,7 @@ then provide the final outputs.",
         &self,
         variable_descriptions: &str,
         schema: &str,
-    ) -> String
-    where
-        S: Signature,
-    {
+    ) -> String {
         let mut info = String::new();
 
         if !variable_descriptions.trim().is_empty() {

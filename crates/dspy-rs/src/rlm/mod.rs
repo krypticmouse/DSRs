@@ -9,6 +9,7 @@ pub mod prompt;
 pub mod signatures;
 pub mod submit;
 pub mod tools;
+#[allow(clippy::module_inception)]
 mod rlm;
 
 pub use adapter::RlmAdapter;
