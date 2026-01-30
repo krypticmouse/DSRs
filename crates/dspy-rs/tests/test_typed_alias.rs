@@ -16,7 +16,7 @@ struct AliasSignature {
 fn typed_alias_is_used_in_prompt_and_user_message() {
     let adapter = ChatAdapter;
     let system = adapter
-        .format_system_message_typed::<AliasSignature>()
+        .format_system_message::<AliasSignature>()
         .expect("system message");
 
     assert!(system.contains("[[ ## question_text ## ]]"));
@@ -29,7 +29,9 @@ fn typed_alias_is_used_in_prompt_and_user_message() {
     let input = AliasSignatureInput {
         question: "Hello".to_string(),
     };
-    let user = adapter.format_user_message_typed::<AliasSignature>(&input);
+    let user = adapter
+        .format_user_message::<AliasSignature>(&input)
+        .expect("user message");
     assert!(user.contains("[[ ## question_text ## ]]"));
     assert!(user.contains("Hello"));
     assert!(!user.contains("[[ ## question ## ]]"));

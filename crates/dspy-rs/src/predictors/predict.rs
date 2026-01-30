@@ -9,10 +9,11 @@ use std::sync::Arc;
 use crate::adapter::Adapter;
 use crate::baml_bridge::baml_types::BamlMap;
 use crate::baml_bridge::{BamlValueConvert, ToBamlValue};
+use crate::baml_bridge::prompt::RenderError;
 use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
 use crate::{
-    BamlValue, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM, LmError, LmUsage,
-    PredictError, Prediction,
+    BamlValue, CallResult, Chat, ChatAdapter, ConversionError, Example, GLOBAL_SETTINGS, LM,
+    LmError, LmUsage, PredictError, Prediction,
 };
 
 pub struct Predict<S: Signature> {
@@ -21,6 +22,16 @@ pub struct Predict<S: Signature> {
     instruction_override: Option<String>,
     lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
+}
+
+fn map_render_error(err: RenderError) -> PredictError {
+    PredictError::Lm {
+        source: LmError::Provider {
+            provider: "internal".to_string(),
+            message: err.to_string(),
+            source: None,
+        },
+    }
 }
 
 impl<S: Signature> Predict<S> {
@@ -59,20 +70,18 @@ impl<S: Signature> Predict<S> {
         };
         let chat_adapter = ChatAdapter;
         let system = chat_adapter
-            .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
-            .map_err(|err| PredictError::Lm {
-                source: LmError::Provider {
-                    provider: "internal".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            })?;
-        let user = chat_adapter.format_user_message_typed::<S>(&input);
+            .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
+            .map_err(map_render_error)?;
+        let user = chat_adapter
+            .format_user_message::<S>(&input)
+            .map_err(map_render_error)?;
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
-            let (demo_user, demo_assistant) = chat_adapter.format_demo_typed::<S>(demo.clone());
+            let (demo_user, demo_assistant) = chat_adapter
+                .format_demo_typed::<S>(demo.clone())
+                .map_err(map_render_error)?;
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -100,6 +109,190 @@ impl<S: Signature> Predict<S> {
             })?;
 
         let output = S::from_parts(input, typed_output);
+
+        let node_id = if crate::trace::is_tracing() {
+            crate::trace::record_node(
+                crate::trace::NodeType::Predict {
+                    signature_name: std::any::type_name::<S>().to_string(),
+                },
+                vec![],
+                None,
+            )
+        } else {
+            None
+        };
+
+        Ok(CallResult::new(
+            output,
+            raw_response,
+            lm_usage,
+            response.tool_calls,
+            response.tool_executions,
+            node_id,
+            field_metas,
+        ))
+    }
+
+    pub async fn call_with_example(
+        &self,
+        inputs: Example,
+    ) -> Result<CallResult<S>, PredictError>
+    where
+        S: Clone,
+        S::Input: ToBamlValue,
+        S::Output: ToBamlValue,
+    {
+        let lm = match &self.lm_override {
+            Some(lm) => Arc::clone(lm),
+            None => {
+                let guard = GLOBAL_SETTINGS.read().unwrap();
+                let settings = guard.as_ref().unwrap();
+                Arc::clone(&settings.lm)
+            }
+        };
+        let chat_adapter = ChatAdapter;
+        let input_map = baml_map_from_example_keys(
+            &inputs.data,
+            &input_keys_for_signature::<S>(&inputs),
+        )
+        .map_err(|err| PredictError::Conversion {
+            source: ConversionError::TypeMismatch {
+                expected: "input",
+                actual: err.to_string(),
+            },
+            parsed: BamlValue::Map(BamlMap::new()),
+        })?;
+        let input_value = BamlValue::Map(input_map);
+        let typed_input =
+            S::Input::try_from_baml_value(input_value.clone(), Vec::new()).map_err(|err| {
+                PredictError::Conversion {
+                    source: err.into(),
+                    parsed: input_value,
+                }
+            })?;
+        let system = chat_adapter
+            .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
+            .map_err(map_render_error)?;
+        let user = chat_adapter
+            .format_user_message::<S>(&typed_input)
+            .map_err(map_render_error)?;
+
+        let mut chat = Chat::new(vec![]);
+        chat.push("system", &system);
+        for demo in &self.demos {
+            let (demo_user, demo_assistant) = chat_adapter
+                .format_demo_typed::<S>(demo.clone())
+                .map_err(map_render_error)?;
+            chat.push("user", &demo_user);
+            chat.push("assistant", &demo_assistant);
+        }
+        chat.push("user", &user);
+
+        let response = lm
+            .call(chat, self.tools.clone())
+            .await
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: lm.model.clone(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
+
+        let raw_response = response.output.content().to_string();
+        let lm_usage = response.usage.clone();
+        let (typed_output, field_metas) = chat_adapter
+            .parse_response_typed::<S>(&response.output)
+            .map_err(|err| PredictError::Parse {
+                source: err,
+                raw_response: raw_response.clone(),
+                lm_usage: lm_usage.clone(),
+            })?;
+
+        let output = S::from_parts(typed_input, typed_output);
+
+        let node_id = if crate::trace::is_tracing() {
+            crate::trace::record_node(
+                crate::trace::NodeType::Predict {
+                    signature_name: std::any::type_name::<S>().to_string(),
+                },
+                vec![],
+                None,
+            )
+        } else {
+            None
+        };
+
+        Ok(CallResult::new(
+            output,
+            raw_response,
+            lm_usage,
+            response.tool_calls,
+            response.tool_executions,
+            node_id,
+            field_metas,
+        ))
+    }
+
+    pub async fn call_with_raw_input(
+        &self,
+        input: String,
+    ) -> Result<CallResult<S>, PredictError>
+    where
+        S: Clone,
+        S::Input: ToBamlValue + From<String>,
+        S::Output: ToBamlValue,
+    {
+        let lm = match &self.lm_override {
+            Some(lm) => Arc::clone(lm),
+            None => {
+                let guard = GLOBAL_SETTINGS.read().unwrap();
+                let settings = guard.as_ref().unwrap();
+                Arc::clone(&settings.lm)
+            }
+        };
+        let chat_adapter = ChatAdapter;
+        let typed_input: S::Input = input.clone().into();
+        let system = chat_adapter
+            .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
+            .map_err(map_render_error)?;
+        let user = chat_adapter
+            .format_user_message::<S>(&typed_input)
+            .map_err(map_render_error)?;
+
+        let mut chat = Chat::new(vec![]);
+        chat.push("system", &system);
+        for demo in &self.demos {
+            let (demo_user, demo_assistant) = chat_adapter
+                .format_demo_typed::<S>(demo.clone())
+                .map_err(map_render_error)?;
+            chat.push("user", &demo_user);
+            chat.push("assistant", &demo_assistant);
+        }
+        chat.push("user", &user);
+
+        let response = lm
+            .call(chat, self.tools.clone())
+            .await
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: "internal".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                },
+            })?;
+
+        let raw_response = response.output.content().to_string();
+        let lm_usage = response.usage.clone();
+        let (typed_output, field_metas) = chat_adapter
+            .parse_response_typed::<S>(&response.output)
+            .map_err(|err| PredictError::Parse {
+                source: err,
+                raw_response: raw_response.clone(),
+                lm_usage: lm_usage.clone(),
+            })?;
+
+        let output = S::from_parts(typed_input, typed_output);
 
         let node_id = if crate::trace::is_tracing() {
             crate::trace::record_node(

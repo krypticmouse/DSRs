@@ -44,7 +44,7 @@ struct ComprehensiveSignature {
 fn system_message() -> String {
     let adapter = ChatAdapter;
     adapter
-        .format_system_message_typed::<ComprehensiveSignature>()
+        .format_system_message::<ComprehensiveSignature>()
         .expect("system message")
 }
 

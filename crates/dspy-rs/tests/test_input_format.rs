@@ -44,7 +44,9 @@ fn typed_input_default_string_is_raw() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    let message = adapter
+        .format_user_message::<DefaultFormatSig>(&input)
+        .expect("format user message");
     let question_value = extract_field(&message, "question");
 
     assert_eq!(question_value, "Raw string");
@@ -60,7 +62,9 @@ fn typed_input_default_non_string_is_json() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    let message = adapter
+        .format_user_message::<DefaultFormatSig>(&input)
+        .expect("format user message");
     let context_value = extract_field(&message, "context");
     let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
     let first = parsed
