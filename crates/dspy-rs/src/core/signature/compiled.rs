@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::baml_bridge::prompt::{
     PromptPath, PromptValue, PromptWorld, RenderError, RenderSession, RenderSettings,
-    RendererOverride,
+    RendererOverride, TypeKey,
 };
 use crate::baml_bridge::{BamlTypeInternal, Registry, ToBamlValue};
 use crate::utils::SyncCache;
@@ -69,6 +69,17 @@ impl<S: Signature> Clone for CompiledSignature<S> {
 pub struct RenderedMessages {
     pub system: String,
     pub user: String,
+}
+
+fn type_key_for(ty: &TypeIR) -> Option<TypeKey> {
+    match ty {
+        TypeIR::Class { name, mode, .. } => Some(TypeKey::Class {
+            name: name.clone(),
+            mode: *mode,
+        }),
+        TypeIR::Enum { name, .. } => Some(TypeKey::Enum { name: name.clone() }),
+        _ => None,
+    }
 }
 
 pub fn register_default_templates(
@@ -334,6 +345,10 @@ impl<S: Signature> CompiledSignature<S> {
             let field_value = extract_input_field(&input_value, field)?;
             let is_string = matches!(field_value, BamlValue::String(_));
             let field_ty = (field.type_ir)();
+            let has_default_renderer = type_key_for(&field_ty)
+                .as_ref()
+                .and_then(|key| self.world.renderers.find(key, "default"))
+                .is_some();
             let path = PromptPath::new()
                 .push_field("inputs")
                 .push_field(field.rust_name);
@@ -363,7 +378,7 @@ impl<S: Signature> CompiledSignature<S> {
                 None => {
                     if let Some(style) = field.style {
                         Some(RendererOverride::style(style))
-                    } else if !is_string {
+                    } else if !is_string && !has_default_renderer {
                         Some(RendererOverride::style("json"))
                     } else {
                         None
