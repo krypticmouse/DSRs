@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
-    ExprLit, Fields, Lit, Meta, Path, Type,
+    ExprLit, Fields, Lit, LitStr, Meta, Path, Type,
 };
 
 #[proc_macro_derive(BamlType, attributes(baml, serde))]
@@ -35,6 +35,7 @@ struct ContainerAttrs {
     as_union: bool,
     as_enum: bool,
     description: Option<String>,
+    render_attrs: Vec<RenderAttr>,
 }
 
 #[derive(Default)]
@@ -53,6 +54,33 @@ struct FieldAttrs {
 struct VariantAttrs {
     alias: Option<String>,
     description: Option<String>,
+}
+
+struct RenderAttr {
+    default: Option<LitStr>,
+    style: Option<LitStr>,
+    template: Option<LitStr>,
+    func: Option<Path>,
+    allow_dynamic: bool,
+    span: proc_macro2::Span,
+}
+
+impl Default for RenderAttr {
+    fn default() -> Self {
+        Self {
+            default: None,
+            style: None,
+            template: None,
+            func: None,
+            allow_dynamic: false,
+            span: proc_macro2::Span::call_site(),
+        }
+    }
+}
+
+enum RenderTarget {
+    Class,
+    Enum,
 }
 
 #[derive(Clone, Copy)]
@@ -179,6 +207,13 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
         });
         field_idents.push(ident);
     }
+
+    let render_calls = render_registration_tokens(
+        &container_attrs.render_attrs,
+        RenderTarget::Class,
+        &internal_name_expr,
+    )?;
+    register_calls.extend(render_calls);
 
     let type_constraints = constraints_tokens(&container_attrs.constraints);
     let type_ir = quote! {{
@@ -369,6 +404,7 @@ fn derive_unit_enum(
             internal_name_expr,
             rendered_name,
             rename_all,
+            container_attrs,
             type_constraints,
         );
     }
@@ -422,6 +458,12 @@ fn derive_unit_enum(
         r#type
     }};
 
+    let render_calls = render_registration_tokens(
+        &container_attrs.render_attrs,
+        RenderTarget::Enum,
+        internal_name_expr,
+    )?;
+
     let register_impl = quote! {
         impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
@@ -442,6 +484,7 @@ fn derive_unit_enum(
                     values: vec![#(#values),*],
                     constraints: #type_constraints,
                 });
+                #(#render_calls;)*
             }
         }
     };
@@ -515,6 +558,7 @@ fn derive_unit_enum_as_union(
     internal_name_expr: &proc_macro2::TokenStream,
     _rendered_name: &str,
     rename_all: Option<RenameRule>,
+    container_attrs: &ContainerAttrs,
     type_constraints: proc_macro2::TokenStream,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let mut literals = Vec::new();
@@ -552,6 +596,12 @@ fn derive_unit_enum_as_union(
         r#type
     }};
 
+    let render_calls = render_registration_tokens(
+        &container_attrs.render_attrs,
+        RenderTarget::Enum,
+        internal_name_expr,
+    )?;
+
     let register_impl = quote! {
         impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
@@ -562,7 +612,12 @@ fn derive_unit_enum_as_union(
                 #type_ir
             }
 
-            fn register(_reg: &mut ::dspy_rs::baml_bridge::Registry) {}
+            fn register(reg: &mut ::dspy_rs::baml_bridge::Registry) {
+                if !reg.mark_type(<Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name()) {
+                    return;
+                }
+                #(#render_calls;)*
+            }
         }
     };
 
@@ -798,6 +853,12 @@ fn derive_data_enum(
         r#type
     }};
 
+    let render_calls = render_registration_tokens(
+        &container_attrs.render_attrs,
+        RenderTarget::Enum,
+        internal_name_expr,
+    )?;
+
     let register_impl = quote! {
         impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
@@ -814,6 +875,7 @@ fn derive_data_enum(
                 }
                 #(reg.register_class(#variant_classes);)*
                 #(#register_calls;)*
+                #(#render_calls;)*
             }
         }
     };
@@ -1870,6 +1932,9 @@ fn container_description(attrs: &ContainerAttrs, raw_attrs: &[Attribute]) -> Opt
 fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
     let mut out = ContainerAttrs::default();
     for attr in attrs {
+        if attr.path().is_ident("render") {
+            out.render_attrs.push(parse_render_attr(attr)?);
+        }
         if attr.path().is_ident("baml") {
             parse_baml_meta(attr, |meta| {
                 match meta {
@@ -1952,6 +2017,163 @@ fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
         }
     }
     Ok(out)
+}
+
+fn parse_render_attr(attr: &Attribute) -> syn::Result<RenderAttr> {
+    let mut out = RenderAttr {
+        span: attr.span(),
+        ..RenderAttr::default()
+    };
+    let metas = parse_meta_list(attr)?;
+    for meta in metas {
+        match meta {
+            Meta::NameValue(meta) if meta.path.is_ident("default") => {
+                if out.default.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        meta,
+                        "duplicate render attribute: default",
+                    ));
+                }
+                out.default = Some(parse_lit_str_expr(&meta.value, meta.span())?);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("style") => {
+                if out.style.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        meta,
+                        "duplicate render attribute: style",
+                    ));
+                }
+                out.style = Some(parse_lit_str_expr(&meta.value, meta.span())?);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("template") => {
+                if out.template.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        meta,
+                        "duplicate render attribute: template",
+                    ));
+                }
+                out.template = Some(parse_lit_str_expr(&meta.value, meta.span())?);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("fn") => {
+                if out.func.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        meta,
+                        "duplicate render attribute: fn",
+                    ));
+                }
+                out.func = Some(parse_path_expr(&meta.value, meta.span())?);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("allow_dynamic") => {
+                out.allow_dynamic = parse_bool_expr(&meta.value, meta.span())?;
+            }
+            Meta::Path(path) if path.is_ident("allow_dynamic") => {
+                out.allow_dynamic = true;
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "unsupported #[render(...)] attribute; hint: use default/style/template/fn/allow_dynamic",
+                ));
+            }
+        }
+    }
+
+    validate_render_attr(&out)?;
+    Ok(out)
+}
+
+fn validate_render_attr(attr: &RenderAttr) -> syn::Result<()> {
+    if attr.default.is_some() {
+        if attr.style.is_some() || attr.template.is_some() || attr.func.is_some() {
+            return Err(syn::Error::new(
+                attr.span,
+                "render(default = ...) cannot be combined with style/template/fn",
+            ));
+        }
+        return Ok(());
+    }
+
+    if attr.template.is_some() && attr.func.is_some() {
+        return Err(syn::Error::new(
+            attr.span,
+            "render attribute must specify either template or fn, not both",
+        ));
+    }
+
+    if attr.template.is_none() && attr.func.is_none() {
+        return Err(syn::Error::new(
+            attr.span,
+            "render attribute missing template or fn",
+        ));
+    }
+
+    Ok(())
+}
+
+fn render_registration_tokens(
+    attrs: &[RenderAttr],
+    target: RenderTarget,
+    internal_name_expr: &proc_macro2::TokenStream,
+) -> syn::Result<Vec<proc_macro2::TokenStream>> {
+    let mut calls = Vec::new();
+    for attr in attrs {
+        let (style, spec) = render_spec_tokens(attr)?;
+        let key = match target {
+            RenderTarget::Class => quote! {
+                ::dspy_rs::baml_bridge::RendererKey::for_class(
+                    #internal_name_expr.to_string(),
+                    ::dspy_rs::baml_bridge::baml_types::StreamingMode::NonStreaming,
+                    #style,
+                )
+            },
+            RenderTarget::Enum => quote! {
+                ::dspy_rs::baml_bridge::RendererKey::for_enum(
+                    #internal_name_expr.to_string(),
+                    #style,
+                )
+            },
+        };
+        calls.push(quote! {
+            reg.register_renderer(#key, #spec)
+        });
+    }
+    Ok(calls)
+}
+
+fn render_spec_tokens(
+    attr: &RenderAttr,
+) -> syn::Result<(LitStr, proc_macro2::TokenStream)> {
+    if let Some(default) = &attr.default {
+        let style = LitStr::new("default", default.span());
+        return Ok((
+            style,
+            quote! { ::dspy_rs::baml_bridge::RendererSpec::Jinja { source: #default } },
+        ));
+    }
+
+    let style = attr
+        .style
+        .clone()
+        .unwrap_or_else(|| LitStr::new("default", attr.span));
+
+    match (&attr.template, &attr.func) {
+        (Some(template), None) => Ok((
+            style,
+            quote! { ::dspy_rs::baml_bridge::RendererSpec::Jinja { source: #template } },
+        )),
+        (None, Some(func)) => Ok((
+            style,
+            quote! { ::dspy_rs::baml_bridge::RendererSpec::Func { f: #func } },
+        )),
+        (None, None) => Err(syn::Error::new(
+            attr.span,
+            "render attribute missing template or fn",
+        )),
+        (Some(_), Some(_)) => Err(syn::Error::new(
+            attr.span,
+            "render attribute must specify either template or fn, not both",
+        )),
+    }
 }
 
 fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
@@ -2162,6 +2384,40 @@ fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String
         _ => Err(syn::Error::new(
             span,
             "expected string literal; hint: wrap the value in quotes",
+        )),
+    }
+}
+
+fn parse_lit_str_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<LitStr> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(s), ..
+        }) => Ok(s.clone()),
+        _ => Err(syn::Error::new(
+            span,
+            "expected string literal; hint: wrap the value in quotes",
+        )),
+    }
+}
+
+fn parse_path_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<Path> {
+    match expr {
+        Expr::Path(path) => Ok(path.path.clone()),
+        _ => Err(syn::Error::new(
+            span,
+            "expected path; hint: use a function path like crate::render",
+        )),
+    }
+}
+
+fn parse_bool_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<bool> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Bool(b), ..
+        }) => Ok(b.value()),
+        _ => Err(syn::Error::new(
+            span,
+            "expected boolean literal; hint: use true or false",
         )),
     }
 }

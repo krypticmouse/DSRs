@@ -14,3 +14,19 @@ proc-macro2 = "1.0"
 quote = "1.0"
 syn = { version = "2.0", features = ["full", "parsing", "extra-traits"] }
 convert_case = "0.6.0"
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "loader",
+  "serde",
+] }
