@@ -283,6 +283,29 @@ impl<T: Signature> CompileExt for T {
 }
 
 impl<S: Signature> CompiledSignature<S> {
+    /// Render system message without input values.
+    pub fn render_system_message(&self) -> Result<String, Box<RenderError>> {
+        self.render_system_message_with_ctx(())
+    }
+
+    /// Render system message with custom context.
+    pub fn render_system_message_with_ctx<C: Serialize>(
+        &self,
+        ctx: C,
+    ) -> Result<String, Box<RenderError>> {
+        let session = RenderSession::new(self.world.settings.clone()).with_ctx(ctx);
+        let ctx_value = Value::from_iter([
+            ("sig".to_string(), Value::from_serialize(&self.sig_meta)),
+            (
+                "inputs".to_string(),
+                Value::from_iter(std::iter::empty::<(String, Value)>()),
+            ),
+            ("ctx".to_string(), session.ctx.clone()),
+        ]);
+
+        render_signature_template(&self.world, &self.system_template, &ctx_value, "system")
+    }
+
     /// Render messages with default settings.
     pub fn render_messages(
         &self,
@@ -330,14 +353,16 @@ impl<S: Signature> CompiledSignature<S> {
                 path,
             );
 
-            if let Some(override_renderer) = match field.renderer {
+            let override_renderer = match field.renderer {
                 Some(FieldRendererSpec::Jinja { template }) => Some(RendererOverride::Template {
                     source: template,
                     compiled_name: Some(field_template_name(field)),
                 }),
                 Some(FieldRendererSpec::Func { f }) => Some(RendererOverride::Func { f }),
-                None => None,
-            } {
+                None => field.style.map(RendererOverride::style),
+            };
+
+            if let Some(override_renderer) = override_renderer {
                 pv = pv.with_override(override_renderer);
             }
 
