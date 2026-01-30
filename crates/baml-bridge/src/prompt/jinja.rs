@@ -11,6 +11,23 @@ use baml_types::{BamlMediaContent, BamlValue, TypeIR};
 
 use super::PromptValue;
 
+/// Callable object for value.render('style') syntax.
+pub struct JinjaRenderMethod {
+    pv: PromptValue,
+}
+
+impl std::fmt::Debug for JinjaRenderMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JinjaRenderMethod({})", self.pv.path)
+    }
+}
+
+impl std::fmt::Display for JinjaRenderMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<render method>")
+    }
+}
+
 /// Jinja object wrapper for typed prompt values.
 pub struct JinjaPromptValue {
     pv: PromptValue,
@@ -37,7 +54,7 @@ impl std::fmt::Display for JinjaPromptValue {
 
 impl JinjaPromptValue {
     fn render_method(&self) -> Value {
-        Value::from("<render>")
+        Value::from_object(JinjaRenderMethod { pv: self.pv.clone() })
     }
 
     fn raw_value(&self) -> Value {
@@ -89,6 +106,25 @@ impl JinjaPromptValue {
         };
         keys.sort();
         keys
+    }
+}
+
+impl Object for JinjaRenderMethod {
+    fn call(self: &Arc<Self>, _state: &State<'_, '_>, args: &[Value]) -> Result<Value, Error> {
+        let style = args.first().and_then(Value::as_str).ok_or_else(|| {
+            Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                "render() requires a style string argument",
+            )
+        })?;
+
+        let rendered = self
+            .pv
+            .world
+            .render_prompt_value(&self.pv, Some(style))
+            .map_err(|err| Error::new(minijinja::ErrorKind::InvalidOperation, err.message))?;
+
+        Ok(Value::from(rendered))
     }
 }
 
@@ -383,6 +419,27 @@ mod tests {
 
         let rendered = pv.world.jinja.get_template("entry").unwrap().render(ctx).unwrap();
         assert_eq!(rendered, "hi");
+    }
+
+    #[test]
+    fn render_method_uses_style_override() {
+        let mut world = make_world_empty();
+        world
+            .jinja
+            .add_template("entry", "{{ value.render('json') }}")
+            .unwrap();
+
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::String("hi".to_string()),
+            TypeIR::string(),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+
+        let rendered = pv.world.jinja.get_template("entry").unwrap().render(ctx).unwrap();
+        assert_eq!(rendered, "\"hi\"");
     }
 
     #[test]
