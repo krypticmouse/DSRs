@@ -7,7 +7,7 @@ use minijinja::{
     Environment,
 };
 
-use baml_types::{BamlValue, TypeIR};
+use baml_types::{BamlMediaContent, BamlValue, TypeIR};
 
 use super::PromptValue;
 
@@ -41,7 +41,7 @@ impl JinjaPromptValue {
     }
 
     fn raw_value(&self) -> Value {
-        Value::from_serialize(self.pv.value())
+        baml_value_to_jinja(self.pv.value())
     }
 
     fn full_length(&self) -> usize {
@@ -89,6 +89,51 @@ impl JinjaPromptValue {
         };
         keys.sort();
         keys
+    }
+}
+
+fn baml_value_to_jinja(value: &BamlValue) -> Value {
+    match value {
+        BamlValue::String(s) => Value::from(s.as_str()),
+        BamlValue::Int(i) => Value::from(*i),
+        BamlValue::Float(f) => Value::from(*f),
+        BamlValue::Bool(b) => Value::from(*b),
+        BamlValue::Null => Value::from(()),
+        BamlValue::List(items) => {
+            Value::from_iter(items.iter().map(baml_value_to_jinja))
+        }
+        BamlValue::Map(map) => Value::from_iter(
+            map.iter()
+                .map(|(k, v)| (k.clone(), baml_value_to_jinja(v))),
+        ),
+        BamlValue::Class(_, fields) => Value::from_iter(
+            fields
+                .iter()
+                .map(|(k, v)| (k.clone(), baml_value_to_jinja(v))),
+        ),
+        BamlValue::Enum(_, variant) => Value::from(variant.as_str()),
+        BamlValue::Media(media) => {
+            let mut entries = Vec::new();
+            entries.push(("type".to_string(), Value::from(media.media_type.to_string())));
+            if let Some(mime_type) = &media.mime_type {
+                entries.push(("mime_type".to_string(), Value::from(mime_type.as_str())));
+            }
+            match &media.content {
+                BamlMediaContent::File(file) => {
+                    entries.push((
+                        "file".to_string(),
+                        Value::from(file.relpath.to_string_lossy().to_string()),
+                    ));
+                }
+                BamlMediaContent::Url(url) => {
+                    entries.push(("url".to_string(), Value::from(url.url.as_str())));
+                }
+                BamlMediaContent::Base64(base64) => {
+                    entries.push(("base64".to_string(), Value::from(base64.base64.as_str())));
+                }
+            }
+            Value::from_iter(entries)
+        }
     }
 }
 
@@ -339,6 +384,31 @@ mod tests {
 
         let raw = obj.get_value(&Value::from("raw")).unwrap();
         assert_eq!(raw.as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn raw_null_is_none() {
+        let pv = make_prompt_value(BamlValue::Null, TypeIR::null());
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let raw = obj.get_value(&Value::from("raw")).unwrap();
+        assert!(raw.is_none());
+    }
+
+    #[test]
+    fn raw_class_exposes_fields() {
+        let pv = make_prompt_value(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("ok".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let raw = obj.get_value(&Value::from("raw")).unwrap();
+        let field = raw.get_item(&Value::from("name")).unwrap();
+        assert_eq!(field.as_str(), Some("ok"));
     }
 
     #[test]
