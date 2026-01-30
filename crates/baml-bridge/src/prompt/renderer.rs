@@ -3,6 +3,8 @@
 use std::{error::Error, fmt};
 
 use baml_types::StreamingMode;
+use minijinja::Value;
+use serde::Serialize;
 
 #[derive(Debug, Clone)]
 pub struct PromptRenderer;
@@ -33,6 +35,45 @@ impl Default for RenderSettings {
             max_depth: 10,
             max_union_branches_shown: 5,
         }
+    }
+}
+
+/// Per-render context (one per render_messages call).
+#[derive(Debug, Clone)]
+pub struct RenderSession {
+    /// Settings (can override world defaults).
+    pub settings: RenderSettings,
+    /// Custom template context (passed to templates as `ctx`).
+    pub ctx: Value,
+    /// Current recursion depth.
+    pub depth: usize,
+    /// Recursion guard stack: (TypeKey, path) pairs.
+    pub stack: Vec<(TypeKey, String)>,
+}
+
+impl RenderSession {
+    pub fn new(settings: RenderSettings) -> Self {
+        Self {
+            settings,
+            ctx: Value::UNDEFINED,
+            depth: 0,
+            stack: Vec::new(),
+        }
+    }
+
+    pub fn with_ctx<T: Serialize>(mut self, ctx: T) -> Self {
+        self.ctx = Value::from_serialize(&ctx);
+        self
+    }
+
+    pub fn push_depth(&self) -> Self {
+        let mut new = self.clone();
+        new.depth += 1;
+        new
+    }
+
+    pub fn check_recursion(&self, key: &TypeKey) -> bool {
+        self.stack.iter().any(|(k, _)| k == key)
     }
 }
 
