@@ -80,6 +80,39 @@ impl RenderSession {
     }
 }
 
+/// Per-field renderer override (from #[render(...)] on Signature fields).
+#[derive(Debug, Clone)]
+pub enum RendererOverride {
+    /// Use a specific style (looks up type-level renderer for that style).
+    Style { style: &'static str },
+    /// Use an inline Jinja template.
+    Template {
+        source: &'static str,
+        compiled_name: Option<String>,
+    },
+    /// Use a function.
+    Func {
+        f: fn(&PromptValue, &RenderSession) -> RenderResult,
+    },
+}
+
+impl RendererOverride {
+    pub fn style(style: &'static str) -> Self {
+        Self::Style { style }
+    }
+
+    pub fn template(source: &'static str) -> Self {
+        Self::Template {
+            source,
+            compiled_name: None,
+        }
+    }
+
+    pub fn func(f: fn(&PromptValue, &RenderSession) -> RenderResult) -> Self {
+        Self::Func { f }
+    }
+}
+
 /// Key for looking up renderers in the registry.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RendererKey {
