@@ -18,7 +18,10 @@ pub fn derive_optimizable(input: TokenStream) -> TokenStream {
     optim::optimizable_impl(input)
 }
 
-#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format, render))]
+#[proc_macro_derive(
+    Signature,
+    attributes(signature, input, output, check, assert, alias, format, render)
+)]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_signature(&input) {

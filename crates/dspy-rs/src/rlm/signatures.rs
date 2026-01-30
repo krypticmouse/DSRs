@@ -6,6 +6,8 @@
 //! where signatures are types, not runtime objects. Dynamic instructions can be
 //! injected via `Predict::instruction_override` at runtime.
 
+use super::history::REPLHistory;
+
 /// Action signature for asking the LLM "what should I run next?"
 ///
 /// This replaces direct `lm.prompt()` calls in the RLM loop.
