@@ -1,11 +1,15 @@
 use proc_macro::TokenStream;
+use std::collections::BTreeSet;
+
+use minijinja::machinery as jinja_machinery;
+use minijinja::machinery::ast as jinja_ast;
 use quote::quote;
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, Data, DataEnum, DataStruct, DeriveInput, Expr,
     ExprLit, Fields, Lit, LitStr, Meta, Path, Type,
 };
 
-#[proc_macro_derive(BamlType, attributes(baml, serde))]
+#[proc_macro_derive(BamlType, attributes(baml, serde, render))]
 pub fn derive_baml_type(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_derive(&input) {
@@ -155,6 +159,8 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
             ))
         }
     };
+
+    validate_render_templates(&container_attrs.render_attrs, Some(&fields.named))?;
 
     let mut field_defs = Vec::new();
     let mut register_calls = Vec::new();
@@ -340,6 +346,8 @@ fn derive_enum(input: &DeriveInput, data: &DataEnum) -> syn::Result<proc_macro2:
         .unwrap_or_else(|| name.to_string());
 
     let rename_all = container_attrs.rename_all;
+
+    validate_render_templates(&container_attrs.render_attrs, None)?;
 
     let mut has_data_variant = false;
     for variant in &data.variants {
@@ -2108,6 +2116,264 @@ fn validate_render_attr(attr: &RenderAttr) -> syn::Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_render_templates(
+    attrs: &[RenderAttr],
+    struct_fields: Option<&syn::punctuated::Punctuated<syn::Field, syn::Token![,]>>,
+) -> syn::Result<()> {
+    for attr in attrs {
+        let Some(template) = &attr.template else {
+            continue;
+        };
+        validate_template(template, struct_fields, attr.allow_dynamic, attr.span)?;
+    }
+    Ok(())
+}
+
+fn validate_template(
+    template: &LitStr,
+    struct_fields: Option<&syn::punctuated::Punctuated<syn::Field, syn::Token![,]>>,
+    allow_dynamic: bool,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    let source = template.value();
+    let ast = jinja_machinery::parse(
+        &source,
+        "<render>",
+        Default::default(),
+        Default::default(),
+    )
+    .map_err(|err| syn::Error::new(span, format!("Jinja syntax error: {}", err)))?;
+
+    let mut field_refs = BTreeSet::new();
+    let mut filter_refs = BTreeSet::new();
+    collect_from_stmt(&ast, &mut field_refs, &mut filter_refs);
+
+    if let Some(fields) = struct_fields {
+        if !allow_dynamic {
+            let known_fields: BTreeSet<String> = fields
+                .iter()
+                .filter_map(|field| field.ident.as_ref().map(|ident| ident.to_string()))
+                .collect();
+            for field in field_refs {
+                if !known_fields.contains(&field) {
+                    return Err(syn::Error::new(
+                        span,
+                        format!(
+                            "Template references unknown field 'value.{field}'. Use #[render(allow_dynamic = true)] for dynamic access."
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+
+    let known_filters = [
+        "truncate",
+        "slice_chars",
+        "format_count",
+        "length",
+        "sum",
+        "regex_match",
+    ];
+    for filter in filter_refs {
+        if !known_filters.contains(&filter.as_str()) {
+            return Err(syn::Error::new(
+                span,
+                format!("Template uses unknown filter '{filter}'"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_from_stmt(
+    stmt: &jinja_ast::Stmt<'_>,
+    field_refs: &mut BTreeSet<String>,
+    filter_refs: &mut BTreeSet<String>,
+) {
+    match stmt {
+        jinja_ast::Stmt::Template(template) => {
+            for child in &template.children {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::EmitExpr(expr) => {
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+        }
+        jinja_ast::Stmt::EmitRaw(_) => {}
+        jinja_ast::Stmt::ForLoop(loop_stmt) => {
+            collect_from_expr(&loop_stmt.target, field_refs, filter_refs);
+            collect_from_expr(&loop_stmt.iter, field_refs, filter_refs);
+            if let Some(filter_expr) = &loop_stmt.filter_expr {
+                collect_from_expr(filter_expr, field_refs, filter_refs);
+            }
+            for child in &loop_stmt.body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+            for child in &loop_stmt.else_body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::IfCond(cond) => {
+            collect_from_expr(&cond.expr, field_refs, filter_refs);
+            for child in &cond.true_body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+            for child in &cond.false_body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::WithBlock(block) => {
+            for (target, expr) in &block.assignments {
+                collect_from_expr(target, field_refs, filter_refs);
+                collect_from_expr(expr, field_refs, filter_refs);
+            }
+            for child in &block.body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::Set(stmt) => {
+            collect_from_expr(&stmt.target, field_refs, filter_refs);
+            collect_from_expr(&stmt.expr, field_refs, filter_refs);
+        }
+        jinja_ast::Stmt::SetBlock(stmt) => {
+            collect_from_expr(&stmt.target, field_refs, filter_refs);
+            if let Some(filter_expr) = &stmt.filter {
+                collect_from_expr(filter_expr, field_refs, filter_refs);
+            }
+            for child in &stmt.body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::AutoEscape(stmt) => {
+            collect_from_expr(&stmt.enabled, field_refs, filter_refs);
+            for child in &stmt.body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::FilterBlock(stmt) => {
+            collect_from_expr(&stmt.filter, field_refs, filter_refs);
+            for child in &stmt.body {
+                collect_from_stmt(child, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Stmt::Do(stmt) => {
+            collect_from_expr(&stmt.call.expr, field_refs, filter_refs);
+            for arg in &stmt.call.args {
+                collect_from_call_arg(arg, field_refs, filter_refs);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_from_expr(
+    expr: &jinja_ast::Expr<'_>,
+    field_refs: &mut BTreeSet<String>,
+    filter_refs: &mut BTreeSet<String>,
+) {
+    match expr {
+        jinja_ast::Expr::Var(_) | jinja_ast::Expr::Const(_) => {}
+        jinja_ast::Expr::Slice(expr) => {
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+            if let Some(start) = &expr.start {
+                collect_from_expr(start, field_refs, filter_refs);
+            }
+            if let Some(stop) = &expr.stop {
+                collect_from_expr(stop, field_refs, filter_refs);
+            }
+            if let Some(step) = &expr.step {
+                collect_from_expr(step, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::UnaryOp(expr) => {
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+        }
+        jinja_ast::Expr::BinOp(expr) => {
+            collect_from_expr(&expr.left, field_refs, filter_refs);
+            collect_from_expr(&expr.right, field_refs, filter_refs);
+        }
+        jinja_ast::Expr::IfExpr(expr) => {
+            collect_from_expr(&expr.test_expr, field_refs, filter_refs);
+            collect_from_expr(&expr.true_expr, field_refs, filter_refs);
+            if let Some(false_expr) = &expr.false_expr {
+                collect_from_expr(false_expr, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::Filter(expr) => {
+            filter_refs.insert(expr.name.to_string());
+            if let Some(inner) = &expr.expr {
+                collect_from_expr(inner, field_refs, filter_refs);
+            }
+            for arg in &expr.args {
+                collect_from_call_arg(arg, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::Test(expr) => {
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+            for arg in &expr.args {
+                collect_from_call_arg(arg, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::GetAttr(expr) => {
+            if let jinja_ast::Expr::Var(var) = &expr.expr {
+                if var.id == "value" {
+                    field_refs.insert(expr.name.to_string());
+                }
+            }
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+        }
+        jinja_ast::Expr::GetItem(expr) => {
+            if let jinja_ast::Expr::Var(var) = &expr.expr {
+                if var.id == "value" {
+                    if let jinja_ast::Expr::Const(constant) = &expr.subscript_expr {
+                        if let Some(key) = constant.value.as_str() {
+                            field_refs.insert(key.to_string());
+                        }
+                    }
+                }
+            }
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+            collect_from_expr(&expr.subscript_expr, field_refs, filter_refs);
+        }
+        jinja_ast::Expr::Call(expr) => {
+            collect_from_expr(&expr.expr, field_refs, filter_refs);
+            for arg in &expr.args {
+                collect_from_call_arg(arg, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::List(expr) => {
+            for item in &expr.items {
+                collect_from_expr(item, field_refs, filter_refs);
+            }
+        }
+        jinja_ast::Expr::Map(expr) => {
+            for key in &expr.keys {
+                collect_from_expr(key, field_refs, filter_refs);
+            }
+            for value in &expr.values {
+                collect_from_expr(value, field_refs, filter_refs);
+            }
+        }
+    }
+}
+
+fn collect_from_call_arg(
+    arg: &jinja_ast::CallArg<'_>,
+    field_refs: &mut BTreeSet<String>,
+    filter_refs: &mut BTreeSet<String>,
+) {
+    match arg {
+        jinja_ast::CallArg::Pos(expr)
+        | jinja_ast::CallArg::PosSplat(expr)
+        | jinja_ast::CallArg::Kwarg(_, expr)
+        | jinja_ast::CallArg::KwargSplat(expr) => {
+            collect_from_expr(expr, field_refs, filter_refs);
+        }
+    }
 }
 
 fn render_registration_tokens(
