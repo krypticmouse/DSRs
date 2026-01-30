@@ -7,7 +7,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use super::Adapter;
-use crate::baml_bridge::BamlType;
 use crate::baml_bridge::BamlValueConvert;
 use crate::baml_bridge::ToBamlValue;
 use crate::baml_bridge::jsonish;
@@ -18,9 +17,8 @@ use crate::baml_bridge::prompt::RenderError;
 use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
-    BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature, TypeIR,
+    BamlValue, Cache, Chat, CompileExt, ConstraintLevel, ConstraintResult, Example, FieldMeta,
+    Flag, JsonishError, LM, Message, MetaSignature, ParseError, Prediction, Signature,
 };
 
 #[derive(Default, Clone)]
@@ -33,209 +31,7 @@ fn get_type_hint(_field: &Value) -> String {
     String::new()
 }
 
-#[allow(clippy::result_large_err)]
-fn render_field_type_schema(
-    parent_format: &OutputFormatContent,
-    type_ir: &TypeIR,
-) -> std::result::Result<String, RenderError> {
-    let field_format = OutputFormatContent {
-        enums: parent_format.enums.clone(),
-        classes: parent_format.classes.clone(),
-        recursive_classes: parent_format.recursive_classes.clone(),
-        structural_recursive_aliases: parent_format.structural_recursive_aliases.clone(),
-        target: type_ir.clone(),
-    };
-
-    let schema = field_format
-        .render(RenderOptions::default().with_prefix(None))
-        .map_err(|err| {
-            RenderError::new(
-                "<schema>",
-                type_ir.diagnostic_repr().to_string(),
-                "default",
-                "schema",
-                err.to_string(),
-            )
-            .with_cause(err)
-        })?
-        .unwrap_or_else(|| type_ir.diagnostic_repr().to_string());
-
-    Ok(schema)
-}
-
-fn simplify_type_name(raw: &str) -> String {
-    let mut result = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '`' {
-            let mut token = String::new();
-            for next in chars.by_ref() {
-                if next == '`' {
-                    break;
-                }
-                token.push(next);
-            }
-            let simplified = token.rsplit("::").next().unwrap_or(&token);
-            result.push_str(simplified);
-        } else {
-            result.push(ch);
-        }
-    }
-    result
-}
-
-fn render_type_name_for_prompt(type_ir: &TypeIR) -> String {
-    let raw = type_ir.diagnostic_repr().to_string();
-    let simplified = simplify_type_name(&raw);
-    simplified
-        .replace("class ", "")
-        .replace("enum ", "")
-        .replace(" | ", " or ")
-        .trim()
-        .to_string()
-}
-
-fn split_schema_definitions(schema: &str) -> Option<(String, String)> {
-    let lines: Vec<&str> = schema.lines().collect();
-    let mut index = 0;
-    let mut definitions = Vec::new();
-    let mut parsed_any = false;
-
-    while index < lines.len() {
-        let start_index = index;
-
-        while index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-        }
-
-        while index < lines.len() && lines[index].trim_start().starts_with("//") {
-            index += 1;
-        }
-
-        while index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-        }
-
-        if index >= lines.len() {
-            break;
-        }
-
-        let name_line = lines[index].trim();
-        if name_line.is_empty() {
-            break;
-        }
-        index += 1;
-
-        if index >= lines.len() || lines[index].trim() != "----" {
-            index = start_index;
-            break;
-        }
-        index += 1;
-
-        let mut values_found = 0;
-        while index < lines.len() {
-            let trimmed = lines[index].trim_start();
-            if trimmed.is_empty() {
-                break;
-            }
-            if trimmed.starts_with('-') {
-                values_found += 1;
-                index += 1;
-                continue;
-            }
-            break;
-        }
-
-        if values_found == 0 {
-            index = start_index;
-            break;
-        }
-
-        let mut block_end = index;
-        if index < lines.len() && lines[index].trim().is_empty() {
-            index += 1;
-            block_end = index;
-        }
-
-        definitions.extend_from_slice(&lines[start_index..block_end]);
-        parsed_any = true;
-    }
-
-    if !parsed_any {
-        return None;
-    }
-
-    let mut main_lines = Vec::new();
-    if index < lines.len() {
-        main_lines.extend_from_slice(&lines[index..]);
-    }
-
-    let defs = definitions.join("\n").trim_end().to_string();
-    let main = main_lines.join("\n").trim_start().to_string();
-    if defs.is_empty() || main.is_empty() {
-        None
-    } else {
-        Some((defs, main))
-    }
-}
-
-fn format_schema_for_prompt(schema: &str) -> String {
-    let Some((definitions, main)) = split_schema_definitions(schema) else {
-        return schema.to_string();
-    };
-
-    format!("Definitions (used below):\n\n{definitions}\n\n{main}")
-}
-
 impl ChatAdapter {
-    fn format_task_description_typed<S: Signature>(
-        &self,
-        instruction_override: Option<&str>,
-    ) -> String {
-        let instruction = instruction_override.unwrap_or(S::instruction());
-        let instruction = if instruction.is_empty() {
-            let input_fields = S::input_fields()
-                .iter()
-                .map(|field| format!("`{}`", field.name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let output_fields = S::output_fields()
-                .iter()
-                .map(|field| format!("`{}`", field.name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Given the fields {input_fields}, produce the fields {output_fields}.")
-        } else {
-            instruction.to_string()
-        };
-
-        let mut indented = String::new();
-        for line in instruction.lines() {
-            indented.push('\n');
-            indented.push_str("        ");
-            indented.push_str(line);
-        }
-
-        format!("In adhering to this structure, your objective is: {indented}")
-    }
-
-    fn format_response_instructions_typed<S: Signature>(&self) -> String {
-        let mut output_fields = S::output_fields().iter();
-        let Some(first_field) = output_fields.next() else {
-            return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
-        };
-
-        let mut message = format!(
-            "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
-            first_field.name
-        );
-        for field in output_fields {
-            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.name));
-        }
-        message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
-
-        message
-    }
 
     fn get_field_attribute_list(
         &self,
@@ -443,79 +239,12 @@ impl ChatAdapter {
         &self,
         instruction_override: Option<&str>,
     ) -> std::result::Result<String, RenderError> {
-        let parts = [
-            self.format_field_descriptions_typed::<S>(),
-            self.format_field_structure_typed::<S>()?,
-            self.format_response_instructions_typed::<S>(),
-            self.format_task_description_typed::<S>(instruction_override),
-        ];
-
-        Ok(parts.join("\n\n"))
-    }
-
-    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
-        let mut lines = Vec::new();
-        lines.push("Your input fields are:".to_string());
-        for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)());
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
-                line.push_str(": ");
-                line.push_str(field.description);
-            }
-            lines.push(line);
-        }
-
-        lines.push(String::new());
-        lines.push("Your output fields are:".to_string());
-        for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)());
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
-                line.push_str(": ");
-                line.push_str(field.description);
-            }
-            lines.push(line);
-        }
-
-        lines.join("\n")
-    }
-
-    #[allow(clippy::result_large_err)]
-    fn format_field_structure_typed<S: Signature>(
-        &self,
-    ) -> std::result::Result<String, RenderError> {
-        let mut lines = vec![
-            "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
-            String::new(),
-        ];
-
-        for field in S::input_fields() {
-            lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(field.name.to_string());
-            lines.push(String::new());
-        }
-
-        let parent_format = S::output_format_content();
-        for field in S::output_fields() {
-            let type_ir = (field.type_ir)();
-            let type_name = render_type_name_for_prompt(&type_ir);
-            let schema = render_field_type_schema(parent_format, &type_ir)?;
-            lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(format!(
-                "Output field `{}` should be of type: {type_name}",
-                field.name
-            ));
-            if !schema.is_empty() && schema != type_name {
-                lines.push(String::new());
-                lines.push(format_schema_for_prompt(&schema));
-            }
-            lines.push(String::new());
-        }
-
-        lines.push("[[ ## completed ## ]]".to_string());
-
-        Ok(lines.join("\n"))
+        let compiled = S::compile();
+        let instruction = instruction_override.unwrap_or(S::instruction());
+        let ctx = json!({ "instruction": instruction });
+        compiled
+            .render_system_message_with_ctx(ctx)
+            .map_err(|err| *err)
     }
 
     #[allow(clippy::result_large_err)]
@@ -526,32 +255,11 @@ impl ChatAdapter {
     where
         S::Input: ToBamlValue,
     {
-        let baml_value = input.to_baml_value();
-        let Some(fields) = baml_value_fields(&baml_value) else {
-            return Err(RenderError::new(
-                "inputs",
-                format!("{baml_value:?}"),
-                "default",
-                "format_user_message",
-                "input value is not a class or map",
-            ));
-        };
-        let input_output_format = <S::Input as BamlType>::baml_output_format();
-
-        let mut result = String::new();
-        for field_spec in S::input_fields() {
-            if let Some(value) = fields.get(field_spec.rust_name) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
-                result.push_str(&format_baml_value_for_prompt_typed(
-                    value,
-                    input_output_format,
-                    field_spec.style,
-                ));
-                result.push_str("\n\n");
-            }
-        }
-
-        Ok(result)
+        let compiled = S::compile();
+        let rendered = compiled
+            .render_messages(input)
+            .map_err(|err| *err)?;
+        Ok(rendered.user)
     }
 
     pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
@@ -589,7 +297,11 @@ impl ChatAdapter {
         S::Output: ToBamlValue,
     {
         let (input, output) = demo.into_parts();
-        let user_msg = self.format_user_message::<S>(&input)?;
+        let compiled = S::compile();
+        let rendered = compiled
+            .render_messages(&input)
+            .map_err(|err| *err)?;
+        let user_msg = rendered.user;
         let assistant_msg = self.format_assistant_message_typed::<S>(&output);
         Ok((user_msg, assistant_msg))
     }
@@ -765,25 +477,6 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
         BamlValue::Null => "null".to_string(),
         other => serde_json::to_string(other).unwrap_or_else(|_| "<error>".to_string()),
     }
-}
-
-fn format_baml_value_for_prompt_typed(
-    value: &BamlValue,
-    output_format: &OutputFormatContent,
-    style: Option<&str>,
-) -> String {
-    let style = match style {
-        Some(style) => style,
-        None => {
-            if let BamlValue::String(s) = value {
-                return s.clone();
-            }
-            "json"
-        }
-    };
-
-    crate::baml_bridge::internal_baml_jinja::format_baml_value(value, output_format, style)
-        .unwrap_or_else(|_| "<error>".to_string())
 }
 
 fn collect_flags(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {
