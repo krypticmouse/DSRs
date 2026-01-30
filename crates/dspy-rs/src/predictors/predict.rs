@@ -9,7 +9,6 @@ use std::sync::Arc;
 use crate::adapter::Adapter;
 use crate::baml_bridge::baml_types::BamlMap;
 use crate::baml_bridge::{BamlValueConvert, ToBamlValue};
-use crate::baml_bridge::prompt::RenderError;
 use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
 use crate::{
     BamlValue, CallResult, Chat, ChatAdapter, ConversionError, Example, GLOBAL_SETTINGS, LM,
@@ -22,16 +21,6 @@ pub struct Predict<S: Signature> {
     instruction_override: Option<String>,
     lm_override: Option<Arc<LM>>,
     _marker: PhantomData<S>,
-}
-
-fn map_render_error(err: RenderError) -> PredictError {
-    PredictError::Lm {
-        source: LmError::Provider {
-            provider: "internal".to_string(),
-            message: err.to_string(),
-            source: None,
-        },
-    }
 }
 
 impl<S: Signature> Predict<S> {
@@ -71,17 +60,17 @@ impl<S: Signature> Predict<S> {
         let chat_adapter = ChatAdapter;
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
-            .map_err(map_render_error)?;
+            ?;
         let user = chat_adapter
             .format_user_message::<S>(&input)
-            .map_err(map_render_error)?;
+            ?;
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
             let (demo_user, demo_assistant) = chat_adapter
                 .format_demo_typed::<S>(demo.clone())
-                .map_err(map_render_error)?;
+                ?;
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -172,17 +161,17 @@ impl<S: Signature> Predict<S> {
             })?;
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
-            .map_err(map_render_error)?;
+            ?;
         let user = chat_adapter
             .format_user_message::<S>(&typed_input)
-            .map_err(map_render_error)?;
+            ?;
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
             let (demo_user, demo_assistant) = chat_adapter
                 .format_demo_typed::<S>(demo.clone())
-                .map_err(map_render_error)?;
+                ?;
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
@@ -255,17 +244,17 @@ impl<S: Signature> Predict<S> {
         let typed_input: S::Input = input.clone().into();
         let system = chat_adapter
             .format_system_message_with_instruction::<S>(self.instruction_override.as_deref())
-            .map_err(map_render_error)?;
+            ?;
         let user = chat_adapter
             .format_user_message::<S>(&typed_input)
-            .map_err(map_render_error)?;
+            ?;
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
             let (demo_user, demo_assistant) = chat_adapter
                 .format_demo_typed::<S>(demo.clone())
-                .map_err(map_render_error)?;
+                ?;
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }

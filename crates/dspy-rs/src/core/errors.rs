@@ -1,6 +1,7 @@
 use std::{error::Error as StdError, time::Duration};
 
 use crate::{BamlConvertError, BamlValue, LmUsage};
+use crate::baml_bridge::prompt::RenderError;
 
 #[derive(Debug)]
 pub struct JsonishError(pub(crate) anyhow::Error);
@@ -35,6 +36,12 @@ pub enum ErrorClass {
 
 #[derive(Debug, thiserror::Error)]
 pub enum PredictError {
+    #[error("failed to render prompt")]
+    Render {
+        #[from]
+        source: RenderError,
+    },
+
     #[error("LLM call failed")]
     Lm {
         #[source]
@@ -60,6 +67,7 @@ pub enum PredictError {
 impl PredictError {
     pub fn class(&self) -> ErrorClass {
         match self {
+            Self::Render { .. } => ErrorClass::BadRequest,
             Self::Lm { source } => source.class(),
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
@@ -68,6 +76,7 @@ impl PredictError {
 
     pub fn is_retryable(&self) -> bool {
         match self {
+            Self::Render { .. } => false,
             Self::Lm { source } => source.is_retryable(),
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
