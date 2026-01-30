@@ -332,6 +332,7 @@ impl<S: Signature> CompiledSignature<S> {
         let mut inputs = Vec::new();
         for field in S::input_fields() {
             let field_value = extract_input_field(&input_value, field)?;
+            let is_string = matches!(field_value, BamlValue::String(_));
             let field_ty = (field.type_ir)();
             let path = PromptPath::new()
                 .push_field("inputs")
@@ -362,7 +363,7 @@ impl<S: Signature> CompiledSignature<S> {
                 None => {
                     if let Some(style) = field.style {
                         Some(RendererOverride::style(style))
-                    } else if !matches!(field_value, BamlValue::String(_)) {
+                    } else if !is_string {
                         Some(RendererOverride::style("json"))
                     } else {
                         None
