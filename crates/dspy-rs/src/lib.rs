@@ -263,8 +263,8 @@ macro_rules! sign {
     }};
 }
 
-/// Source: https://github.com/wholesome-ghoul/hashmap_macro/blob/master/src/lib.rs
-/// Author: https://github.com/wholesome-ghoul
+/// Source: <https://github.com/wholesome-ghoul/hashmap_macro/blob/master/src/lib.rs>
+/// Author: <https://github.com/wholesome-ghoul>
 /// License: MIT
 /// Description: This macro creates a HashMap from a list of key-value pairs.
 /// Reason for Reuse: Want to avoid adding a dependency for a simple macro.

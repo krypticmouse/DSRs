@@ -259,7 +259,7 @@ pub struct PromptValue {
     pub session: Arc<RenderSession>,
     /// Per-field renderer override (if any).
     pub override_renderer: Option<RendererOverride>,
-    /// Path for error reporting (e.g., "inputs.history.entries[3]").
+    /// Path for error reporting (e.g., `inputs.history.entries[3]`).
     pub path: PromptPath,
 }
 

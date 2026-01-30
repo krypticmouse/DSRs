@@ -254,12 +254,12 @@ impl RenderOptions {
     const DEFAULT_OR_SPLITTER: &'static str = " or ";
     const DEFAULT_TYPE_PREFIX_IN_RENDER_MESSAGE: &'static str = "schema";
 
-    /// Option<Option<T>> Basically means that we can have a paremeter which
+    /// `Option<Option<T>>` Basically means that we can have a paremeter which
     /// 1. the user can completely omit: None
     /// 2. the user can set to null:     Some(None)
     ///
     /// This might be a little annoying, maybe we can change the code in mod.rs
-    /// to flatten the types Option<Option<T>> => Option<T>
+    /// to flatten the types `Option<Option<T>>` => `Option<T>`
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         prefix: Option<Option<String>>,

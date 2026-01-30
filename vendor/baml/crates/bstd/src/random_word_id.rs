@@ -1007,9 +1007,9 @@ const SCALES: &[&str] = &[
     "cherimoya",
 ];
 
-/// Generate a random identifier in the format of <tail>-<scale>-<3 digit number>
+/// Generate a random identifier in the format of `<tail>-<scale>-<3 digit number>`
 ///
-/// Taken from Tailscale's wordlist: https://github.com/tailscale/tailscale/blob/v1.76.3/words/tails.txt
+/// Taken from Tailscale's wordlist: <https://github.com/tailscale/tailscale/blob/v1.76.3/words/tails.txt>
 ///
 /// Criteria I evaluated:
 ///

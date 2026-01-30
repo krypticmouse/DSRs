@@ -52,9 +52,9 @@ pub struct RlmFieldDesc {
     pub type_name: &'static str,
     /// Optional human-readable description.
     pub description: Option<&'static str>,
-    /// Whether this field is optional (Option<T>).
+    /// Whether this field is optional (`Option<T>`).
     pub is_optional: bool,
-    /// Whether this field contains a collection (Vec<T>, etc.).
+    /// Whether this field contains a collection (`Vec<T>`, etc.).
     pub is_collection: bool,
 }
 
@@ -226,13 +226,13 @@ pub trait RlmDescribe {
 /// This trait provides a way to get type metadata without requiring
 /// a value instance. It's primarily used by derive macros.
 pub trait RlmTypeInfo {
-    /// The simple type name (e.g., "String", "Vec<User>").
+    /// The simple type name (e.g., "String", "`Vec<User>`").
     const TYPE_NAME: &'static str;
 
-    /// Whether this is an optional type (Option<T>).
+    /// Whether this is an optional type (`Option<T>`).
     const IS_OPTIONAL: bool = false;
 
-    /// Whether this is a collection type (Vec<T>, etc.).
+    /// Whether this is a collection type (`Vec<T>`, etc.).
     const IS_COLLECTION: bool = false;
 
     /// Whether the inner type implements RlmDescribe.
