@@ -227,6 +227,16 @@ impl RendererDb {
         self.renderers.get(key)
     }
 
+    pub fn find(&self, type_key: &TypeKey, style: &str) -> Option<&CompiledRenderer> {
+        self.renderers.iter().find_map(|(key, renderer)| {
+            if &key.type_key == type_key && key.style == style {
+                Some(renderer)
+            } else {
+                None
+            }
+        })
+    }
+
     pub fn insert(&mut self, key: RendererKey, renderer: CompiledRenderer) {
         self.renderers.insert(key, renderer);
     }
