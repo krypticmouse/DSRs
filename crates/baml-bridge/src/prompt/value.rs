@@ -1,6 +1,9 @@
 //! Prompt value wrappers for typed rendering.
 
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{Arc, OnceLock},
+};
 
 use baml_types::{
     ir_type::UnionTypeGeneric,
@@ -238,13 +241,18 @@ fn score_class_fields(fields: &IndexMap<String, BamlValue>, class: &internal_bam
         .count()
 }
 
+/// Inner storage for PromptValue with memoized union resolution.
+#[derive(Debug)]
+struct PromptValueInner {
+    value: BamlValue,
+    ty: TypeIR,
+    union_resolution: OnceLock<UnionResolution>,
+}
+
 /// A typed value in the prompt rendering system.
 #[derive(Clone)]
 pub struct PromptValue {
-    /// The underlying runtime value.
-    pub value: BamlValue,
-    /// The declared/inferred type.
-    pub ty: TypeIR,
+    inner: Arc<PromptValueInner>,
     /// Reference to the type universe.
     pub world: Arc<PromptWorld>,
     /// Per-render session (settings, ctx, depth).
@@ -264,13 +272,24 @@ impl PromptValue {
         path: PromptPath,
     ) -> Self {
         Self {
-            value,
-            ty,
+            inner: Arc::new(PromptValueInner {
+                value,
+                ty,
+                union_resolution: OnceLock::new(),
+            }),
             world,
             session,
             override_renderer: None,
             path,
         }
+    }
+
+    pub fn value(&self) -> &BamlValue {
+        &self.inner.value
+    }
+
+    pub fn ty(&self) -> &TypeIR {
+        &self.inner.ty
     }
 
     pub fn with_override(mut self, override_renderer: RendererOverride) -> Self {
@@ -281,7 +300,7 @@ impl PromptValue {
     /// Navigate to a class field by name.
     /// Supports both real_name and rendered_name.
     pub fn child_field(&self, field: &str) -> Option<PromptValue> {
-        let (class_name, fields) = match &self.value {
+        let (class_name, fields) = match self.value() {
             BamlValue::Class(name, fields) => (name.as_str(), fields),
             _ => return None,
         };
@@ -334,7 +353,7 @@ impl PromptValue {
             return None;
         }
 
-        let items = match &self.value {
+        let items = match self.value() {
             BamlValue::List(items) => items,
             _ => return None,
         };
@@ -357,7 +376,7 @@ impl PromptValue {
 
     /// Navigate to a map value by key.
     pub fn child_map_value(&self, key: &str) -> Option<PromptValue> {
-        let map = match &self.value {
+        let map = match self.value() {
             BamlValue::Map(map) => map,
             _ => return None,
         };
@@ -421,21 +440,59 @@ impl PromptValue {
         }
     }
 
+    fn union_resolution(&self) -> Option<&UnionResolution> {
+        match &self.inner.ty {
+            TypeIR::Union(union, _) => Some(
+                self.inner
+                    .union_resolution
+                    .get_or_init(|| (self.world.union_resolver)(&self.inner.value, union, &self.world)),
+            ),
+            _ => None,
+        }
+    }
+
     pub fn resolved_ty(&self) -> TypeIR {
-        // TODO: resolve unions with memoization.
-        self.ty.clone()
+        match self.union_resolution() {
+            Some(UnionResolution::Resolved(ty)) => ty.clone(),
+            Some(UnionResolution::Ambiguous { .. }) => self.inner.ty.clone(),
+            None => self.inner.ty.clone(),
+        }
+    }
+
+    pub fn is_union_resolved(&self) -> bool {
+        match self.union_resolution() {
+            Some(UnionResolution::Resolved(_)) | None => true,
+            Some(UnionResolution::Ambiguous { .. }) => false,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{default_union_resolver, PromptPath, UnionResolution};
-    use crate::prompt::renderer::{RenderSettings, RendererDb};
+    use super::{default_union_resolver, PromptPath, PromptValue, UnionResolution};
+    use crate::prompt::renderer::{RenderSession, RenderSettings, RendererDb};
     use crate::prompt::world::{PromptWorld, TypeDb};
-    use baml_types::{ir_type::UnionConstructor, type_meta, BamlValue, TypeIR};
+    use baml_types::{
+        ir_type::{UnionConstructor, UnionTypeGeneric},
+        type_meta, BamlValue, TypeIR,
+    };
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum, Name};
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    static UNION_RESOLUTION_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    fn counting_union_resolver(
+        value: &BamlValue,
+        union: &UnionTypeGeneric<type_meta::IR>,
+        world: &PromptWorld,
+    ) -> UnionResolution {
+        UNION_RESOLUTION_CALLS.fetch_add(1, Ordering::SeqCst);
+        default_union_resolver(value, union, world)
+    }
 
     #[test]
     fn formats_field_and_index_path() {
@@ -539,6 +596,155 @@ mod tests {
         assert_eq!(resolved, UnionResolution::Resolved(TypeIR::null()));
     }
 
+    #[test]
+    fn resolved_ty_memoizes_union_resolution() {
+        UNION_RESOLUTION_CALLS.store(0, Ordering::SeqCst);
+        let mut world = make_world(vec![], vec![]);
+        world.union_resolver = counting_union_resolver;
+        let session = Arc::new(RenderSession::new(RenderSettings::default()));
+        let value = BamlValue::String("hi".to_string());
+        let union_type = TypeIR::union(vec![TypeIR::string(), TypeIR::int()]);
+
+        let prompt = PromptValue::new(
+            value,
+            union_type,
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        let first = prompt.resolved_ty();
+        let second = prompt.resolved_ty();
+
+        assert_eq!(first, TypeIR::string());
+        assert_eq!(second, TypeIR::string());
+        assert_eq!(UNION_RESOLUTION_CALLS.load(Ordering::SeqCst), 1);
+        assert!(prompt.is_union_resolved());
+    }
+
+    #[test]
+    fn resolved_ty_returns_union_when_ambiguous() {
+        let world = make_world(
+            vec![],
+            vec![class("Foo", &[]), class("Bar", &[])],
+        );
+        let session = Arc::new(RenderSession::new(RenderSettings::default()));
+        let value = BamlValue::Class("Foo".to_string(), IndexMap::new());
+        let union_type = TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]);
+
+        let prompt = PromptValue::new(
+            value,
+            union_type.clone(),
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        assert_eq!(prompt.resolved_ty(), union_type);
+        assert!(!prompt.is_union_resolved());
+    }
+
+    #[test]
+    fn child_field_supports_rendered_name() {
+        let world = make_world(
+            vec![],
+            vec![class_with_alias("Widget", &[("real", Some("alias"))])],
+        );
+        let session = Arc::new(RenderSession::new(RenderSettings::default()));
+        let value = BamlValue::Class(
+            "Widget".to_string(),
+            IndexMap::from([(
+                "real".to_string(),
+                BamlValue::String("ok".to_string()),
+            )]),
+        );
+
+        let prompt = PromptValue::new(
+            value,
+            TypeIR::class("Widget"),
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        let child = prompt.child_field("alias").expect("child field");
+        assert_eq!(child.value(), &BamlValue::String("ok".to_string()));
+        assert_eq!(child.ty(), &TypeIR::string());
+        assert_eq!(child.path.to_string(), "alias");
+        assert!(child.override_renderer.is_none());
+    }
+
+    #[test]
+    fn child_field_falls_back_to_value_inference() {
+        let world = make_world(vec![], vec![]);
+        let session = Arc::new(RenderSession::new(RenderSettings::default()));
+        let value = BamlValue::Class(
+            "Unknown".to_string(),
+            IndexMap::from([("flag".to_string(), BamlValue::Bool(true))]),
+        );
+
+        let prompt = PromptValue::new(
+            value,
+            TypeIR::class("Unknown"),
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        let child = prompt.child_field("flag").expect("child field");
+        assert_eq!(child.value(), &BamlValue::Bool(true));
+        assert_eq!(child.ty(), &TypeIR::bool());
+    }
+
+    #[test]
+    fn child_index_respects_budget_and_schema() {
+        let world = make_world(vec![], vec![]);
+        let settings = RenderSettings {
+            max_list_items: 1,
+            ..RenderSettings::default()
+        };
+        let session = Arc::new(RenderSession::new(settings));
+        let value = BamlValue::List(vec![
+            BamlValue::String("a".to_string()),
+            BamlValue::String("b".to_string()),
+        ]);
+
+        let prompt = PromptValue::new(
+            value,
+            TypeIR::list(TypeIR::string()),
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        assert!(prompt.child_index(1).is_none());
+        let child = prompt.child_index(0).expect("child index");
+        assert_eq!(child.ty(), &TypeIR::string());
+        assert_eq!(child.path.to_string(), "[0]");
+    }
+
+    #[test]
+    fn child_map_value_infers_type_without_schema() {
+        let world = make_world(vec![], vec![]);
+        let session = Arc::new(RenderSession::new(RenderSettings::default()));
+        let value = BamlValue::Map(IndexMap::from([(
+            "flag".to_string(),
+            BamlValue::Bool(true),
+        )]));
+
+        let prompt = PromptValue::new(
+            value,
+            TypeIR::string(),
+            Arc::new(world),
+            session,
+            PromptPath::new(),
+        );
+
+        let child = prompt.child_map_value("flag").expect("child map value");
+        assert_eq!(child.ty(), &TypeIR::bool());
+        assert_eq!(child.path.to_string(), "[\"flag\"]");
+    }
+
     fn make_world(enums: Vec<Enum>, classes: Vec<Class>) -> PromptWorld {
         let mut enum_map = IndexMap::new();
         for enum_type in enums {
@@ -578,6 +784,30 @@ mod tests {
                 .map(|field_name| {
                     (
                         Name::new(field_name.to_string()),
+                        TypeIR::string(),
+                        None,
+                        false,
+                    )
+                })
+                .collect(),
+            constraints: Vec::new(),
+            streaming_behavior: type_meta::base::StreamingBehavior::default(),
+        }
+    }
+
+    fn class_with_alias(name: &str, fields: &[(&str, Option<&str>)]) -> Class {
+        Class {
+            name: Name::new(name.to_string()),
+            description: None,
+            namespace: baml_types::StreamingMode::NonStreaming,
+            fields: fields
+                .iter()
+                .map(|(field_name, alias)| {
+                    (
+                        Name::new_with_alias(
+                            field_name.to_string(),
+                            alias.map(|alias| alias.to_string()),
+                        ),
                         TypeIR::string(),
                         None,
                         false,
