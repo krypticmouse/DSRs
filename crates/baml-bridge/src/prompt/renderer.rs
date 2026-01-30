@@ -94,6 +94,15 @@ pub enum TypeKey {
     Enum { name: String },
 }
 
+impl fmt::Display for TypeKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeKey::Class { name, mode } => write!(f, "class:{name}:{mode:?}"),
+            TypeKey::Enum { name } => write!(f, "enum:{name}"),
+        }
+    }
+}
+
 impl RendererKey {
     pub fn for_class(name: impl Into<String>, mode: StreamingMode, style: &'static str) -> Self {
         Self {
@@ -154,6 +163,74 @@ impl RendererDbSeed {
 
     pub fn insert(&mut self, key: RendererKey, spec: RendererSpec) {
         self.specs.insert(key, spec);
+    }
+}
+
+/// Compiled renderer (after template registration).
+#[derive(Debug, Clone)]
+pub enum CompiledRenderer {
+    /// Jinja template registered in environment by name.
+    Jinja { template_name: String },
+    /// Function-based renderer.
+    Func {
+        f: fn(&PromptValue, &RenderSession) -> RenderResult,
+    },
+}
+
+/// Database of compiled renderers.
+#[derive(Debug, Default)]
+pub struct RendererDb {
+    renderers: IndexMap<RendererKey, CompiledRenderer>,
+}
+
+impl RendererDb {
+    pub fn new() -> Self {
+        Self {
+            renderers: IndexMap::new(),
+        }
+    }
+
+    pub fn get(&self, key: &RendererKey) -> Option<&CompiledRenderer> {
+        self.renderers.get(key)
+    }
+
+    pub fn insert(&mut self, key: RendererKey, renderer: CompiledRenderer) {
+        self.renderers.insert(key, renderer);
+    }
+
+    /// Compile from seed specs, registering Jinja templates in the environment.
+    #[allow(clippy::result_large_err)]
+    pub fn compile_from_seed(
+        seed: RendererDbSeed,
+        env: &mut minijinja::Environment<'static>,
+    ) -> Result<Self, RenderError> {
+        let mut db = Self::new();
+        for (key, spec) in seed.specs {
+            match spec {
+                RendererSpec::Jinja { source } => {
+                    let template_name = format!("renderer::{}::{}", key.type_key, key.style);
+                    let template_name_for_error = template_name.clone();
+                    env.add_template_owned(template_name.clone(), source.to_string())
+                        .map_err(|err| {
+                            let renderer = template_name_for_error.clone();
+                            RenderError::new(
+                                "<registry>",
+                                key.type_key.to_string(),
+                                key.style,
+                                renderer,
+                                format!("failed to register template: {err}"),
+                            )
+                            .with_template(template_name_for_error, None)
+                            .with_cause(err)
+                        })?;
+                    db.insert(key, CompiledRenderer::Jinja { template_name });
+                }
+                RendererSpec::Func { f } => {
+                    db.insert(key, CompiledRenderer::Func { f });
+                }
+            }
+        }
+        Ok(db)
     }
 }
 

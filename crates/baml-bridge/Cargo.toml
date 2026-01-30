@@ -24,6 +24,7 @@ minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "mai
   "custom_syntax",
   "internal_debug",
   "deserialization",
+  "loader",
   "serde",
 ] }
 serde = { version = "1", features = ["derive"] }
