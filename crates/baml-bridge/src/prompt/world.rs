@@ -150,20 +150,38 @@ impl PromptWorld {
         style: &str,
     ) -> Result<Option<String>, RenderError> {
         match pv.override_renderer.as_ref() {
-            Some(RendererOverride::Func { f }) => f(pv, &pv.session).map(Some),
-            Some(RendererOverride::Template {
-                source,
-                compiled_name,
-            }) => {
-                let renderer = "field_override:template";
-                let rendered = if let Some(name) = compiled_name.as_deref() {
-                    self.render_named_template(pv, style, renderer, name)?
-                } else {
-                    self.render_inline_template(pv, style, renderer, source)?
-                };
+            Some(RendererOverride::Style { style: override_style }) => {
+                if style == *override_style || style == "default" {
+                    return self.try_type_renderer(pv, override_style);
+                }
+                Ok(None)
+            }
+            Some(RendererOverride::Template { compiled_name, .. }) => {
+                if style != "default" && style != "template" {
+                    return Ok(None);
+                }
+
+                let template_name = compiled_name.as_deref().ok_or_else(|| {
+                    RenderError::new(
+                        pv.path.to_string(),
+                        pv.ty().diagnostic_repr().to_string(),
+                        style.to_string(),
+                        "field_override:template",
+                        "field template not compiled",
+                    )
+                })?;
+
+                let rendered =
+                    self.render_named_template(pv, style, "field_override:template", template_name)?;
                 Ok(Some(rendered))
             }
-            Some(RendererOverride::Style { .. }) | None => Ok(None),
+            Some(RendererOverride::Func { f }) => {
+                if style != "default" && style != "func" {
+                    return Ok(None);
+                }
+                f(pv, &pv.session).map(Some)
+            }
+            None => Ok(None),
         }
     }
 
@@ -200,8 +218,36 @@ impl PromptWorld {
         style: &str,
     ) -> Result<Option<String>, RenderError> {
         match style {
-            "json" | "yaml" | "toon" => Ok(Some(format!("<{style}> {}", pv.value()))),
+            "json" | "yaml" | "toon" => self.render_format_style(pv, style).map(Some),
             _ => Ok(None),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn render_format_style(
+        &self,
+        pv: &super::PromptValue,
+        fmt: &str,
+    ) -> Result<String, RenderError> {
+        let view = self.build_output_format_view(pv.ty());
+        internal_baml_jinja::format_baml_value(pv.value(), &view, fmt).map_err(|err| {
+            RenderError::new(
+                pv.path.to_string(),
+                pv.ty().diagnostic_repr().to_string(),
+                fmt.to_string(),
+                format!("builtin:{fmt}"),
+                format!("format style render failed: {err}"),
+            )
+        })
+    }
+
+    fn build_output_format_view(&self, target: &TypeIR) -> OutputFormatContent {
+        OutputFormatContent {
+            enums: self.types.enums.clone(),
+            classes: self.types.classes.clone(),
+            recursive_classes: self.types.recursive_classes.clone(),
+            structural_recursive_aliases: self.types.structural_recursive_aliases.clone(),
+            target: target.clone(),
         }
     }
 
@@ -507,29 +553,6 @@ impl PromptWorld {
         })
     }
 
-    #[allow(clippy::result_large_err)]
-    fn render_inline_template(
-        &self,
-        pv: &super::PromptValue,
-        style: &str,
-        renderer: &str,
-        source: &str,
-    ) -> RenderResult {
-        let ctx = self.render_context(pv);
-        self.jinja.render_str(source, ctx).map_err(|err| {
-            RenderError::template_error(
-                pv.path.to_string(),
-                pv.ty().diagnostic_repr().to_string(),
-                style.to_string(),
-                renderer.to_string(),
-                "<inline>",
-                err.line().map(|line| (line, 0)),
-                err.to_string(),
-            )
-            .with_cause(err)
-        })
-    }
-
     fn render_context(&self, pv: &super::PromptValue) -> Value {
         Value::from_iter([
             ("value".to_string(), pv.as_jinja_value()),
@@ -614,7 +637,7 @@ mod tests {
         let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string());
 
         let rendered = world.render_prompt_value(&pv, Some("json")).unwrap();
-        assert_eq!(rendered, "<json> String(\"hi\")");
+        assert_eq!(rendered, "\"hi\"");
     }
 
     #[test]
@@ -655,6 +678,90 @@ mod tests {
 
         let err = world.render_prompt_value(&pv, None).unwrap_err();
         assert_eq!(err.message, "boom");
+    }
+
+    #[test]
+    fn field_override_style_delegates_to_type_renderer() {
+        let mut renderers = RendererDb::new();
+        renderers.insert(
+            RendererKey::for_class("Widget", StreamingMode::NonStreaming, "json"),
+            CompiledRenderer::Func { f: |_, _| Ok("type-json".to_string()) },
+        );
+        let world = make_world(renderers, RenderSettings::default());
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::Class("Widget".to_string(), IndexMap::new()),
+            TypeIR::class("Widget"),
+        )
+        .with_override(RendererOverride::Style { style: "json" });
+
+        let rendered = world.render_prompt_value(&pv, None).unwrap();
+        assert_eq!(rendered, "type-json");
+    }
+
+    #[test]
+    fn field_override_style_ignores_mismatch() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string())
+            .with_override(RendererOverride::Style { style: "json" });
+
+        assert!(world.try_field_override(&pv, "yaml").unwrap().is_none());
+    }
+
+    #[test]
+    fn field_override_template_requires_compiled_name() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string())
+            .with_override(RendererOverride::Template {
+                source: "{{ value.raw }}",
+                compiled_name: None,
+            });
+
+        let err = world.try_field_override(&pv, "default").unwrap_err();
+        assert_eq!(err.message, "field template not compiled");
+    }
+
+    #[test]
+    fn field_override_template_executes_compiled_template() {
+        let mut world = make_world(RendererDb::new(), RenderSettings::default());
+        world
+            .jinja
+            .add_template_owned("field_template".to_string(), "{{ value.raw }}".to_string())
+            .expect("template add");
+        let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string())
+            .with_override(RendererOverride::Template {
+                source: "{{ value.raw }}",
+                compiled_name: Some("field_template".to_string()),
+            });
+
+        let rendered = world.render_prompt_value(&pv, None).unwrap();
+        assert_eq!(rendered, "hi");
+    }
+
+    #[test]
+    fn builtin_format_uses_value_type_target() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::String("hi".to_string()),
+            TypeIR::string(),
+        );
+
+        let view = world.build_output_format_view(pv.ty());
+        assert_eq!(view.target, TypeIR::string());
+    }
+
+    #[test]
+    fn field_override_func_respects_style_filter() {
+        let world = make_world(RendererDb::new(), RenderSettings::default());
+        let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string())
+            .with_override(RendererOverride::Func { f: |_, _| Ok("func".to_string()) });
+
+        assert!(world.try_field_override(&pv, "json").unwrap().is_none());
+        assert_eq!(
+            world.try_field_override(&pv, "func").unwrap(),
+            Some("func".to_string())
+        );
     }
 
     #[test]
