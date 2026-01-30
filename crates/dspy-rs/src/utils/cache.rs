@@ -1,4 +1,7 @@
 use anyhow::Result;
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::sync::Mutex;
 use async_trait::async_trait;
 use foyer::{BlockEngineBuilder, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder};
 use serde::{Deserialize, Serialize};
@@ -29,6 +32,30 @@ pub struct ResponseCache {
     handler: HybridCache<CacheKey, CacheEntry>,
     window_size: usize,
     history_window: Vec<CacheEntry>,
+}
+
+#[derive(Debug)]
+pub struct SyncCache<K, V> {
+    inner: Mutex<HashMap<K, V>>,
+}
+
+impl<K, V> Default for SyncCache<K, V> {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl<K, V> SyncCache<K, V>
+where
+    K: Eq + Hash,
+    V: Clone,
+{
+    pub fn get_or_insert_with(&self, key: K, f: impl FnOnce() -> V) -> V {
+        let mut guard = self.inner.lock().expect("cache mutex poisoned");
+        guard.entry(key).or_insert_with(f).clone()
+    }
 }
 
 #[async_trait]

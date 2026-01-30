@@ -19,6 +19,7 @@ struct TestCtx {
 #[test]
 fn compiled_signature_renders_defaults_and_overrides() {
     let compiled = SimpleSig::compile();
+    let compiled_again = SimpleSig::compile();
     let input = SimpleSigInput {
         name: "Ada".to_string(),
         count: 2,
@@ -27,6 +28,11 @@ fn compiled_signature_renders_defaults_and_overrides() {
     let rendered = compiled
         .render_messages_with_ctx(&input, TestCtx { suffix: "!" })
         .expect("rendered messages");
+
+    assert!(std::sync::Arc::ptr_eq(
+        &compiled.world,
+        &compiled_again.world
+    ));
 
     assert!(rendered.system.contains("Your input fields are:"));
     assert!(rendered.system.contains("name"));

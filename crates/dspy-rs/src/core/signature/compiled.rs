@@ -1,5 +1,6 @@
+use std::any::TypeId;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use serde::Serialize;
 
@@ -8,6 +9,7 @@ use crate::baml_bridge::prompt::{
     RendererOverride,
 };
 use crate::baml_bridge::{BamlTypeInternal, Registry, ToBamlValue};
+use crate::utils::SyncCache;
 use crate::{BamlValue, TypeIR};
 use minijinja::value::Value;
 
@@ -49,6 +51,18 @@ pub struct CompiledSignature<S: Signature> {
     /// Signature metadata for templates.
     pub sig_meta: SigMeta,
     pub(crate) _phantom: PhantomData<S>,
+}
+
+impl<S: Signature> Clone for CompiledSignature<S> {
+    fn clone(&self) -> Self {
+        Self {
+            world: self.world.clone(),
+            system_template: self.system_template.clone(),
+            user_template: self.user_template.clone(),
+            sig_meta: self.sig_meta.clone(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 /// Rendered prompt messages.
@@ -222,6 +236,32 @@ fn render_signature_template(
     })
 }
 
+static COMPILED_SIGNATURE_CACHE: LazyLock<
+    SyncCache<TypeId, Arc<dyn std::any::Any + Send + Sync>>,
+> = LazyLock::new(SyncCache::default);
+
+fn compile_signature_inner<S: Signature>() -> CompiledSignature<S> {
+    let mut registry = Registry::new();
+    <S::Input as BamlTypeInternal>::register(&mut registry);
+    <S::Output as BamlTypeInternal>::register(&mut registry);
+
+    let (output_format, renderer_seed) = registry.build_with_renderers(TypeIR::string());
+    let mut world =
+        PromptWorld::from_registry(output_format, renderer_seed, RenderSettings::default())
+            .expect("failed to build prompt world");
+    register_default_templates(&mut world)
+        .expect("failed to register default signature templates");
+    register_field_templates::<S>(&mut world).expect("failed to register field templates");
+
+    CompiledSignature {
+        world: Arc::new(world),
+        system_template: "sig::system".to_string(),
+        user_template: "sig::user".to_string(),
+        sig_meta: SigMeta::from_signature::<S>(),
+        _phantom: PhantomData,
+    }
+}
+
 /// Extension trait for compiling signatures.
 pub trait CompileExt: Signature + Sized {
     /// Compile this signature for prompt rendering.
@@ -230,29 +270,15 @@ pub trait CompileExt: Signature + Sized {
 
 impl<T: Signature> CompileExt for T {
     fn compile() -> CompiledSignature<Self> {
-        let mut registry = Registry::new();
-        <Self::Input as BamlTypeInternal>::register(&mut registry);
-        <Self::Output as BamlTypeInternal>::register(&mut registry);
-
-        let (output_format, renderer_seed) = registry.build_with_renderers(TypeIR::string());
-        let mut world = PromptWorld::from_registry(
-            output_format,
-            renderer_seed,
-            RenderSettings::default(),
-        )
-        .expect("failed to build prompt world");
-        register_default_templates(&mut world)
-            .expect("failed to register default signature templates");
-        register_field_templates::<Self>(&mut world)
-            .expect("failed to register field templates");
-
-        CompiledSignature {
-            world: Arc::new(world),
-            system_template: "sig::system".to_string(),
-            user_template: "sig::user".to_string(),
-            sig_meta: SigMeta::from_signature::<Self>(),
-            _phantom: PhantomData,
-        }
+        let type_id = TypeId::of::<Self>();
+        let cached = COMPILED_SIGNATURE_CACHE.get_or_insert_with(type_id, || {
+            Arc::new(compile_signature_inner::<Self>())
+                as Arc<dyn std::any::Any + Send + Sync>
+        });
+        cached
+            .downcast_ref::<CompiledSignature<Self>>()
+            .expect("cached signature has wrong type")
+            .clone()
     }
 }
 
