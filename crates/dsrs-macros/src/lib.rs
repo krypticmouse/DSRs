@@ -18,7 +18,7 @@ pub fn derive_optimizable(input: TokenStream) -> TokenStream {
     optim::optimizable_impl(input)
 }
 
-#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format))]
+#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format, render))]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_signature(&input) {
@@ -463,7 +463,12 @@ fn parse_render_attr(attr: &Attribute) -> syn::Result<FieldRenderAttr> {
             }
             let value = parse_string_expr(&nv.value, nv.span())?;
             render.template = Some(LitStr::new(&value, proc_macro2::Span::call_site()));
-        } else if nv.path.is_ident("fn") {
+        } else if nv
+            .path
+            .get_ident()
+            .map(|ident| ident == "fn" || ident == "r#fn")
+            .unwrap_or(false)
+        {
             if render.func.is_some() {
                 return Err(syn::Error::new_spanned(
                     nv,

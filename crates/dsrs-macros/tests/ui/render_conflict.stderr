@@ -1,0 +1,5 @@
+error: #[render] supports only one of style, template, or fn
+ --> tests/ui/render_conflict.rs:6:5
+  |
+6 |     #[render(style = "json", template = "{{ value }}")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
