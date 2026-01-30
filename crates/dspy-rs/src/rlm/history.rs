@@ -152,7 +152,7 @@ mod tests {
         let after_marker = start_pos + start_marker.len();
         let remaining = &message[after_marker..];
         let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
-        remaining[..end_pos].trim().to_string()
+        remaining[..end_pos].to_string()
     }
 
     // ==================== REPLEntry Tests ====================
