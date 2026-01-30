@@ -1,0 +1,5 @@
+error: #[format] is removed. Use #[render(style = "...")] instead.
+ --> tests/ui/format_removed.rs:6:5
+  |
+6 |     #[format]
+  |     ^^^^^^^^^
