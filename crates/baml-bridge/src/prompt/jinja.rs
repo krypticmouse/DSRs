@@ -187,6 +187,21 @@ impl Object for JinjaPromptValue {
         None
     }
 
+    fn is_true(self: &Arc<Self>) -> bool {
+        match self.pv.value() {
+            BamlValue::Null => false,
+            BamlValue::Bool(b) => *b,
+            BamlValue::String(s) => !s.is_empty(),
+            BamlValue::Int(i) => *i != 0,
+            BamlValue::Float(f) => *f != 0.0 && !f.is_nan(),
+            BamlValue::List(items) => !items.is_empty(),
+            BamlValue::Map(map) => !map.is_empty(),
+            BamlValue::Class(_, fields) => !fields.is_empty(),
+            BamlValue::Enum(_, variant) => !variant.is_empty(),
+            BamlValue::Media(_) => true,
+        }
+    }
+
     fn enumerate(self: &Arc<Self>) -> Enumerator {
         let max_list_items = self.pv.session.settings.max_list_items;
         let max_map_entries = self.pv.session.settings.max_map_entries;
