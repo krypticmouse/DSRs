@@ -35,6 +35,46 @@ impl std::fmt::Display for JinjaPromptValue {
     }
 }
 
+impl JinjaPromptValue {
+    fn render_method(&self) -> Value {
+        Value::from("<render>")
+    }
+
+    fn raw_value(&self) -> Value {
+        Value::from_serialize(self.pv.value())
+    }
+
+    fn full_length(&self) -> usize {
+        match self.pv.value() {
+            BamlValue::Class(_, fields) => fields.len(),
+            BamlValue::Map(map) => map.len(),
+            BamlValue::List(items) => items.len(),
+            _ => 0,
+        }
+    }
+
+    fn is_class_like(&self) -> bool {
+        match self.pv.resolved_ty() {
+            TypeIR::Class { .. } => true,
+            _ => matches!(self.pv.value(), BamlValue::Class(_, _)),
+        }
+    }
+
+    fn is_map_like(&self) -> bool {
+        match self.pv.resolved_ty() {
+            TypeIR::Map(_, _, _) => true,
+            _ => matches!(self.pv.value(), BamlValue::Map(_)),
+        }
+    }
+
+    fn is_list_like(&self) -> bool {
+        match self.pv.resolved_ty() {
+            TypeIR::List(_, _) => true,
+            _ => matches!(self.pv.value(), BamlValue::List(_)),
+        }
+    }
+}
+
 impl Object for JinjaPromptValue {
     fn repr(self: &Arc<Self>) -> ObjectRepr {
         match self.pv.resolved_ty() {
@@ -48,7 +88,40 @@ impl Object for JinjaPromptValue {
         }
     }
 
-    fn get_value(self: &Arc<Self>, _key: &Value) -> Option<Value> {
+    fn get_value(self: &Arc<Self>, key: &Value) -> Option<Value> {
+        if let Some(k) = key.as_str() {
+            match k {
+                "render" => return Some(self.render_method()),
+                "raw" => return Some(self.raw_value()),
+                "__type__" => {
+                    return Some(Value::from(self.pv.ty().diagnostic_repr().to_string()))
+                }
+                "__path__" => return Some(Value::from(self.pv.path.to_string())),
+                "__full_len__" => return Some(Value::from(self.full_length())),
+                _ => {}
+            }
+
+            if self.is_class_like() {
+                return self.pv.child_field(k).map(|child| child.as_jinja_value());
+            }
+
+            if self.is_map_like() {
+                return self
+                    .pv
+                    .child_map_value(k)
+                    .map(|child| child.as_jinja_value());
+            }
+        }
+
+        if let Some(idx) = key.as_usize() {
+            if self.is_list_like() {
+                return self
+                    .pv
+                    .child_index(idx)
+                    .map(|child| child.as_jinja_value());
+            }
+        }
+
         None
     }
 
@@ -107,7 +180,7 @@ mod tests {
     use baml_types::{BamlValue, TypeIR};
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum};
-    use minijinja::value::{Object, ObjectRepr};
+    use minijinja::value::{Object, ObjectRepr, Value};
     use std::sync::Arc;
 
     #[test]
@@ -165,7 +238,103 @@ mod tests {
         assert_eq!(obj.repr(), ObjectRepr::Plain);
     }
 
+    #[test]
+    fn get_value_exposes_reserved_keys() {
+        let path = PromptPath::new().push_field("root");
+        let pv = make_prompt_value_with_path(
+            BamlValue::List(vec![BamlValue::String("a".to_string())]),
+            TypeIR::list(TypeIR::string()),
+            path.clone(),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let expected_type = TypeIR::list(TypeIR::string())
+            .diagnostic_repr()
+            .to_string();
+        let ty_value = obj.get_value(&Value::from("__type__")).unwrap();
+        assert_eq!(ty_value.as_str(), Some(expected_type.as_str()));
+
+        let path_value = obj.get_value(&Value::from("__path__")).unwrap();
+        assert_eq!(path_value.as_str(), Some(path.to_string().as_str()));
+
+        let len_value = obj.get_value(&Value::from("__full_len__")).unwrap();
+        assert_eq!(len_value.as_usize(), Some(1));
+
+        assert!(obj.get_value(&Value::from("render")).is_some());
+    }
+
+    #[test]
+    fn get_value_raw_returns_untyped_value() {
+        let pv = make_prompt_value(BamlValue::String("hello".to_string()), TypeIR::string());
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let raw = obj.get_value(&Value::from("raw")).unwrap();
+        assert_eq!(raw.as_str(), Some("hello"));
+    }
+
+    #[test]
+    fn get_value_reads_class_fields() {
+        let pv = make_prompt_value(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("ok".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let value = obj.get_value(&Value::from("name")).unwrap();
+        let child = value.downcast_object_ref::<JinjaPromptValue>().unwrap();
+        assert_eq!(child.pv.value(), &BamlValue::String("ok".to_string()));
+        assert_eq!(child.pv.path.to_string(), "name");
+    }
+
+    #[test]
+    fn get_value_reads_map_keys() {
+        let pv = make_prompt_value(
+            BamlValue::Map(IndexMap::from([("flag".to_string(), BamlValue::Bool(true))])),
+            TypeIR::map(TypeIR::string(), TypeIR::bool()),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let value = obj.get_value(&Value::from("flag")).unwrap();
+        let child = value.downcast_object_ref::<JinjaPromptValue>().unwrap();
+        assert_eq!(child.pv.value(), &BamlValue::Bool(true));
+    }
+
+    #[test]
+    fn get_value_reads_list_indices() {
+        let pv = make_prompt_value(
+            BamlValue::List(vec![
+                BamlValue::String("a".to_string()),
+                BamlValue::String("b".to_string()),
+            ]),
+            TypeIR::list(TypeIR::string()),
+        );
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        let value = obj.get_value(&Value::from(1)).unwrap();
+        let child = value.downcast_object_ref::<JinjaPromptValue>().unwrap();
+        assert_eq!(child.pv.value(), &BamlValue::String("b".to_string()));
+    }
+
+    #[test]
+    fn get_value_returns_none_for_missing() {
+        let pv = make_prompt_value(BamlValue::String("x".to_string()), TypeIR::string());
+        let obj = Arc::new(JinjaPromptValue { pv });
+
+        assert!(obj.get_value(&Value::from("missing")).is_none());
+    }
+
     fn make_prompt_value(value: BamlValue, ty: TypeIR) -> PromptValue {
+        make_prompt_value_with_path(value, ty, PromptPath::new())
+    }
+
+    fn make_prompt_value_with_path(
+        value: BamlValue,
+        ty: TypeIR,
+        path: PromptPath,
+    ) -> PromptValue {
         let world = PromptWorld {
             types: TypeDb {
                 enums: Arc::new(IndexMap::<String, Enum>::new()),
@@ -184,7 +353,7 @@ mod tests {
             ty,
             Arc::new(world),
             Arc::new(RenderSession::new(RenderSettings::default())),
-            PromptPath::new(),
+            path,
         )
     }
 }
