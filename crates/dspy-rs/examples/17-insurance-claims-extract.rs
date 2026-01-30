@@ -506,6 +506,7 @@ async fn main() -> Result<()> {
             }
             Err(err) => {
                 let error_detail = match &err {
+                    PredictError::Render { source } => source.to_string(),
                     PredictError::Lm { source } => source.to_string(),
                     PredictError::Parse { source, .. } => source.to_string(),
                     PredictError::Conversion { source, .. } => source.to_string(),
@@ -531,6 +532,7 @@ async fn main() -> Result<()> {
                                 map.insert("parsed".to_string(), parsed_value);
                             }
                         }
+                        PredictError::Render { .. } => {}
                         PredictError::Lm { .. } => {}
                     }
                 }

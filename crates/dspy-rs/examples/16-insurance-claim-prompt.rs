@@ -186,11 +186,13 @@ pub struct InsuranceClaimInfo {
 fn main() {
     let adapter = ChatAdapter;
     let system = adapter
-        .format_system_message_typed::<InsuranceClaimInfo>()
+        .format_system_message::<InsuranceClaimInfo>()
         .expect("system prompt");
-    let user = adapter.format_user_message_typed::<InsuranceClaimInfo>(&InsuranceClaimInfoInput {
-        claim_text: "A raccoon bumped a parked scooter in a driveway. Reported by Taylor P. via phone. No policy details provided.".to_string(),
-    });
+    let user = adapter
+        .format_user_message::<InsuranceClaimInfo>(&InsuranceClaimInfoInput {
+            claim_text: "A raccoon bumped a parked scooter in a driveway. Reported by Taylor P. via phone. No policy details provided.".to_string(),
+        })
+        .expect("user prompt");
 
     println!("=== System ===\n{system}\n");
     println!("=== User ===\n{user}");
