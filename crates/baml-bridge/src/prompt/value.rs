@@ -1,6 +1,6 @@
 //! Prompt value wrappers for typed rendering.
 
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use baml_types::{
     ir_type::UnionTypeGeneric,
@@ -8,6 +8,7 @@ use baml_types::{
 };
 use indexmap::IndexMap;
 
+use super::renderer::{RenderSession, RendererOverride};
 use super::PromptWorld;
 
 #[derive(Debug, Clone, Default)]
@@ -237,8 +238,51 @@ fn score_class_fields(fields: &IndexMap<String, BamlValue>, class: &internal_bam
         .count()
 }
 
-#[derive(Debug, Clone)]
-pub struct PromptValue;
+/// A typed value in the prompt rendering system.
+#[derive(Clone)]
+pub struct PromptValue {
+    /// The underlying runtime value.
+    pub value: BamlValue,
+    /// The declared/inferred type.
+    pub ty: TypeIR,
+    /// Reference to the type universe.
+    pub world: Arc<PromptWorld>,
+    /// Per-render session (settings, ctx, depth).
+    pub session: Arc<RenderSession>,
+    /// Per-field renderer override (if any).
+    pub override_renderer: Option<RendererOverride>,
+    /// Path for error reporting (e.g., "inputs.history.entries[3]").
+    pub path: PromptPath,
+}
+
+impl PromptValue {
+    pub fn new(
+        value: BamlValue,
+        ty: TypeIR,
+        world: Arc<PromptWorld>,
+        session: Arc<RenderSession>,
+        path: PromptPath,
+    ) -> Self {
+        Self {
+            value,
+            ty,
+            world,
+            session,
+            override_renderer: None,
+            path,
+        }
+    }
+
+    pub fn with_override(mut self, override_renderer: RendererOverride) -> Self {
+        self.override_renderer = Some(override_renderer);
+        self
+    }
+
+    pub fn resolved_ty(&self) -> TypeIR {
+        // TODO: resolve unions with memoization.
+        self.ty.clone()
+    }
+}
 
 #[cfg(test)]
 mod tests {
