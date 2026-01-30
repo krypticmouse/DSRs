@@ -2,6 +2,8 @@
 
 use std::{error::Error, fmt};
 
+use baml_types::StreamingMode;
+
 #[derive(Debug, Clone)]
 pub struct PromptRenderer;
 
@@ -30,6 +32,39 @@ impl Default for RenderSettings {
             max_map_entries: 50,
             max_depth: 10,
             max_union_branches_shown: 5,
+        }
+    }
+}
+
+/// Key for looking up renderers in the registry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RendererKey {
+    pub type_key: TypeKey,
+    pub style: &'static str,
+}
+
+/// Identifies a type for renderer lookup.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TypeKey {
+    Class { name: String, mode: StreamingMode },
+    Enum { name: String },
+}
+
+impl RendererKey {
+    pub fn for_class(name: impl Into<String>, mode: StreamingMode, style: &'static str) -> Self {
+        Self {
+            type_key: TypeKey::Class {
+                name: name.into(),
+                mode,
+            },
+            style,
+        }
+    }
+
+    pub fn for_enum(name: impl Into<String>, style: &'static str) -> Self {
+        Self {
+            type_key: TypeKey::Enum { name: name.into() },
+            style,
         }
     }
 }
