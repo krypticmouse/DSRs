@@ -133,3 +133,54 @@ impl Error for RenderError {
             .map(|cause| cause as &(dyn Error + 'static))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::RenderError;
+    use std::io;
+
+    #[test]
+    fn formats_basic_render_error() {
+        let err = RenderError::new(
+            "inputs.history.entries[3].output",
+            "REPLEntry",
+            "json",
+            "type:REPLEntry:json",
+            "undefined field 'outputs'",
+        );
+
+        let expected = "\
+Render failed at 'inputs.history.entries[3].output'\n\
+  Type: REPLEntry\n\
+  Style: json\n\
+  Renderer: type:REPLEntry:json\n\
+  Error: undefined field 'outputs'";
+
+        assert_eq!(err.to_string(), expected);
+    }
+
+    #[test]
+    fn formats_template_render_error_with_cause() {
+        let err = RenderError::template_error(
+            "inputs.history.entries[3].output",
+            "REPLEntry",
+            "json",
+            "type:REPLEntry:json",
+            "repl_entry.jinja",
+            Some((15, 8)),
+            "undefined field 'outputs'",
+        )
+        .with_cause(io::Error::new(io::ErrorKind::Other, "boom"));
+
+        let expected = "\
+Render failed at 'inputs.history.entries[3].output'\n\
+  Type: REPLEntry\n\
+  Style: json\n\
+  Renderer: type:REPLEntry:json\n\
+  Template: repl_entry.jinja:15:8\n\
+  Error: undefined field 'outputs'\n\
+  Cause: boom";
+
+        assert_eq!(err.to_string(), expected);
+    }
+}
