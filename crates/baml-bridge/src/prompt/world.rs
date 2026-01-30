@@ -543,11 +543,17 @@ impl PromptWorld {
 
     fn apply_budget_truncation(&self, rendered: String, pv: &super::PromptValue) -> String {
         let max = pv.session.settings.max_total_chars;
-        let len = rendered.chars().count();
-        if len <= max {
+        if rendered.len() <= max {
             rendered
         } else {
-            rendered.chars().take(max).collect()
+            let suffix = "... (truncated)";
+            let mut end = max.saturating_sub(suffix.len());
+            while end > 0 && !rendered.is_char_boundary(end) {
+                end -= 1;
+            }
+            let mut text = rendered[..end].to_string();
+            text.push_str(suffix);
+            text
         }
     }
 
@@ -687,14 +693,18 @@ mod tests {
     #[test]
     fn render_prompt_value_truncates_budget() {
         let settings = RenderSettings {
-            max_total_chars: 4,
+            max_total_chars: 20,
             ..RenderSettings::default()
         };
         let world = make_world(RendererDb::new(), settings);
-        let pv = make_prompt_value(&world, BamlValue::String("hello".to_string()), TypeIR::string());
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::String("hello world and more!".to_string()),
+            TypeIR::string(),
+        );
 
         let rendered = world.render_prompt_value(&pv, None).unwrap();
-        assert_eq!(rendered, "hell");
+        assert_eq!(rendered, "hello... (truncated)");
     }
 
     #[test]
@@ -784,6 +794,42 @@ mod tests {
 
         let view = world.build_output_format_view(pv.ty());
         assert_eq!(view.target, TypeIR::string());
+    }
+
+    #[test]
+    fn budget_truncation_respects_utf8_boundaries() {
+        let settings = RenderSettings {
+            max_total_chars: 19,
+            ..RenderSettings::default()
+        };
+        let world = make_world(RendererDb::new(), settings);
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::String("ok".to_string()),
+            TypeIR::string(),
+        );
+        let rendered = "\u{1F44D}\u{1F44D}\u{1F44D}\u{1F44D}\u{1F44D}".to_string();
+
+        let truncated = world.apply_budget_truncation(rendered, &pv);
+        assert_eq!(truncated, "\u{1F44D}... (truncated)");
+    }
+
+    #[test]
+    fn budget_truncation_leaves_short_output() {
+        let settings = RenderSettings {
+            max_total_chars: 40,
+            ..RenderSettings::default()
+        };
+        let world = make_world(RendererDb::new(), settings);
+        let pv = make_prompt_value(
+            &world,
+            BamlValue::String("ok".to_string()),
+            TypeIR::string(),
+        );
+        let rendered = "short".to_string();
+
+        let truncated = world.apply_budget_truncation(rendered, &pv);
+        assert_eq!(truncated, "short");
     }
 
     #[test]
