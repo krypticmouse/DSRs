@@ -46,6 +46,9 @@ pub struct RenderError {
     pub cause: Option<Box<dyn Error + Send + Sync>>,
 }
 
+/// Result type for render operations.
+pub type RenderResult = Result<String, RenderError>;
+
 impl RenderError {
     pub fn new(
         path: impl Into<String>,
