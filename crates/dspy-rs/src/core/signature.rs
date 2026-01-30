@@ -4,6 +4,9 @@ use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
 
+mod compiled;
+pub use compiled::*;
+
 #[derive(Debug, Clone, Copy)]
 pub struct FieldSpec {
     pub name: &'static str,
