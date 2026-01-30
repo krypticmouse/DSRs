@@ -1,6 +1,55 @@
 //! Jinja helpers for prompt rendering.
 
-use minijinja::Environment;
+use std::sync::Arc;
+
+use minijinja::{
+    value::{Enumerator, Object, ObjectRepr, Value},
+    Environment,
+};
+
+use super::PromptValue;
+
+/// Jinja object wrapper for typed prompt values.
+pub struct JinjaPromptValue {
+    pv: PromptValue,
+}
+
+impl PromptValue {
+    /// Convert to a Jinja Value for template use.
+    pub fn as_jinja_value(&self) -> Value {
+        Value::from_object(JinjaPromptValue { pv: self.clone() })
+    }
+}
+
+impl std::fmt::Debug for JinjaPromptValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "JinjaPromptValue({:?} at {})", self.pv.ty(), self.pv.path)
+    }
+}
+
+impl std::fmt::Display for JinjaPromptValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<PromptValue>")
+    }
+}
+
+impl Object for JinjaPromptValue {
+    fn repr(self: &Arc<Self>) -> ObjectRepr {
+        ObjectRepr::Map
+    }
+
+    fn get_value(self: &Arc<Self>, _key: &Value) -> Option<Value> {
+        None
+    }
+
+    fn enumerate(self: &Arc<Self>) -> Enumerator {
+        Enumerator::Empty
+    }
+
+    fn enumerator_len(self: &Arc<Self>) -> Option<usize> {
+        Some(0)
+    }
+}
 
 /// Register prompt-specific filters.
 pub fn register_prompt_filters(env: &mut Environment<'static>) {
