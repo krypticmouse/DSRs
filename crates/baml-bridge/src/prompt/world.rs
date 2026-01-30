@@ -7,6 +7,7 @@ use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum};
 use minijinja::{Environment, UndefinedBehavior};
 
+use super::jinja::register_prompt_filters;
 use super::renderer::{RenderError, RenderSettings, RendererDb, RendererDbSeed};
 use super::value::{default_union_resolver, UnionResolver};
 use internal_baml_jinja::types::OutputFormatContent;
@@ -84,6 +85,7 @@ impl PromptWorld {
 
         let mut jinja = crate::jsonish::jinja_helpers::get_env();
         jinja.set_undefined_behavior(UndefinedBehavior::Strict);
+        register_prompt_filters(&mut jinja);
 
         let renderers = RendererDb::compile_from_seed(renderer_seed, &mut jinja)?;
 
