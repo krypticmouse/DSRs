@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::baml_bridge::prompt::{PromptWorld, RenderError};
+use crate::baml_bridge::prompt::{PromptWorld, RenderError, RenderSettings};
+use crate::baml_bridge::{BamlTypeInternal, Registry};
+use crate::TypeIR;
 
 use super::{SigMeta, Signature};
 
@@ -91,6 +93,38 @@ pub fn register_default_templates(
         })?;
 
     Ok(())
+}
+
+/// Extension trait for compiling signatures.
+pub trait CompileExt: Signature + Sized {
+    /// Compile this signature for prompt rendering.
+    fn compile() -> CompiledSignature<Self>;
+}
+
+impl<T: Signature> CompileExt for T {
+    fn compile() -> CompiledSignature<Self> {
+        let mut registry = Registry::new();
+        <Self::Input as BamlTypeInternal>::register(&mut registry);
+        <Self::Output as BamlTypeInternal>::register(&mut registry);
+
+        let (output_format, renderer_seed) = registry.build_with_renderers(TypeIR::string());
+        let mut world = PromptWorld::from_registry(
+            output_format,
+            renderer_seed,
+            RenderSettings::default(),
+        )
+        .expect("failed to build prompt world");
+        register_default_templates(&mut world)
+            .expect("failed to register default signature templates");
+
+        CompiledSignature {
+            world: Arc::new(world),
+            system_template: "sig::system".to_string(),
+            user_template: "sig::user".to_string(),
+            sig_meta: SigMeta::from_signature::<Self>(),
+            _phantom: PhantomData,
+        }
+    }
 }
 
 impl<S: Signature> CompiledSignature<S> {
