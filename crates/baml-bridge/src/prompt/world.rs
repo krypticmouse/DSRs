@@ -55,4 +55,6 @@ impl TypeDb {
 }
 
 #[derive(Debug, Clone)]
-pub struct PromptWorld;
+pub struct PromptWorld {
+    pub types: TypeDb,
+}
