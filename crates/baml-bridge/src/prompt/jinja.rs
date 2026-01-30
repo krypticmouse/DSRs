@@ -306,7 +306,9 @@ mod tests {
     use crate::prompt::value::default_union_resolver;
     use crate::prompt::world::{PromptWorld, TypeDb};
     use crate::prompt::PromptPath;
-    use baml_types::{BamlMedia, BamlMediaType, BamlValue, TypeIR};
+    use baml_types::{
+        ir_type::UnionConstructor, BamlMedia, BamlMediaType, BamlValue, TypeIR,
+    };
     use indexmap::{IndexMap, IndexSet};
     use internal_baml_jinja::types::{Class, Enum};
     use minijinja::value::{Enumerator, Object, ObjectRepr, Value};
@@ -628,15 +630,10 @@ mod tests {
 
     #[test]
     fn get_value_returns_none_for_ambiguous_union_missing_field() {
-        let world = make_world_with_class(
-            "Foo",
-            vec![],
-        );
-        let world = make_world_with_class_extra(
-            world,
-            "Bar",
-            vec![],
-        );
+        let world = make_world_with_classes(vec![
+            build_class("Foo", vec![]),
+            build_class("Bar", vec![]),
+        ]);
         let pv = make_prompt_value_with_world_and_settings(
             BamlValue::Class("Foo".to_string(), IndexMap::new()),
             TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
@@ -797,14 +794,58 @@ mod tests {
     }
 
     fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWorld {
-        make_world_with_class_alias(name, fields.into_iter().map(|(field, ty)| (field, ty, None)).collect())
+        make_world_with_class_alias(
+            name,
+            fields
+                .into_iter()
+                .map(|(field, ty)| (field, ty, None))
+                .collect(),
+        )
     }
 
     fn make_world_with_class_alias(
         name: &str,
         fields: Vec<(String, TypeIR, Option<String>)>,
     ) -> PromptWorld {
-        let class = Class {
+        make_world_with_classes(vec![build_class_with_alias(name, fields)])
+    }
+
+    fn make_world_with_classes(classes: Vec<Class>) -> PromptWorld {
+        let mut class_map = IndexMap::new();
+        for class in classes {
+            let key = (
+                class.name.real_name().to_string(),
+                baml_types::StreamingMode::NonStreaming,
+            );
+            class_map.insert(key, class);
+        }
+
+        PromptWorld {
+            types: TypeDb {
+                enums: Arc::new(IndexMap::<String, Enum>::new()),
+                classes: Arc::new(class_map),
+                structural_recursive_aliases: Arc::new(IndexMap::new()),
+                recursive_classes: Arc::new(IndexSet::new()),
+            },
+            renderers: RendererDb::new(),
+            jinja: crate::jsonish::jinja_helpers::get_env(),
+            settings: RenderSettings::default(),
+            union_resolver: default_union_resolver,
+        }
+    }
+
+    fn build_class(name: &str, fields: Vec<(String, TypeIR)>) -> Class {
+        build_class_with_alias(
+            name,
+            fields.into_iter().map(|(field, ty)| (field, ty, None)).collect(),
+        )
+    }
+
+    fn build_class_with_alias(
+        name: &str,
+        fields: Vec<(String, TypeIR, Option<String>)>,
+    ) -> Class {
+        Class {
             name: internal_baml_jinja::types::Name::new(name.to_string()),
             description: None,
             namespace: baml_types::StreamingMode::NonStreaming,
@@ -821,55 +862,6 @@ mod tests {
                 .collect(),
             constraints: Vec::new(),
             streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
-        };
-
-        PromptWorld {
-            types: TypeDb {
-                enums: Arc::new(IndexMap::<String, Enum>::new()),
-                classes: Arc::new(IndexMap::from([(
-                    (name.to_string(), baml_types::StreamingMode::NonStreaming),
-                    class,
-                )])),
-                structural_recursive_aliases: Arc::new(IndexMap::new()),
-                recursive_classes: Arc::new(IndexSet::new()),
-            },
-            renderers: RendererDb::new(),
-            jinja: crate::jsonish::jinja_helpers::get_env(),
-            settings: RenderSettings::default(),
-            union_resolver: default_union_resolver,
         }
-    }
-
-    fn make_world_with_class_extra(
-        mut world: PromptWorld,
-        name: &str,
-        fields: Vec<(String, TypeIR)>,
-    ) -> PromptWorld {
-        let class = Class {
-            name: internal_baml_jinja::types::Name::new(name.to_string()),
-            description: None,
-            namespace: baml_types::StreamingMode::NonStreaming,
-            fields: fields
-                .into_iter()
-                .map(|(field_name, field_type)| {
-                    (
-                        internal_baml_jinja::types::Name::new(field_name),
-                        field_type,
-                        None,
-                        false,
-                    )
-                })
-                .collect(),
-            constraints: Vec::new(),
-            streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
-        };
-
-        let classes = Arc::make_mut(&mut world.types.classes);
-        classes.insert(
-            (name.to_string(), baml_types::StreamingMode::NonStreaming),
-            class,
-        );
-
-        world
     }
 }
