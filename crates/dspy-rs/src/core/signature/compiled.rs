@@ -359,7 +359,15 @@ impl<S: Signature> CompiledSignature<S> {
                     compiled_name: Some(field_template_name(field)),
                 }),
                 Some(FieldRendererSpec::Func { f }) => Some(RendererOverride::Func { f }),
-                None => field.style.map(RendererOverride::style),
+                None => {
+                    if let Some(style) = field.style {
+                        Some(RendererOverride::style(style))
+                    } else if !matches!(field_value, BamlValue::String(_)) {
+                        Some(RendererOverride::style("json"))
+                    } else {
+                        None
+                    }
+                }
             };
 
             if let Some(override_renderer) = override_renderer {
