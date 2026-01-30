@@ -4,8 +4,8 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use serde_json::{Value, json};
 use syn::{
-    Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitStr, Meta, MetaNameValue,
-    Token, Visibility,
+    Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitInt, LitStr, Meta,
+    MetaNameValue, Token, Visibility,
     parse::{Parse, ParseStream},
     parse_macro_input,
     spanned::Spanned,
@@ -60,7 +60,19 @@ struct ParsedField {
     is_output: bool,
     description: String,
     alias: Option<String>,
+    render: Option<FieldRenderAttr>,
     constraints: Vec<ParsedConstraint>,
+}
+
+#[derive(Clone)]
+struct FieldRenderAttr {
+    style: Option<LitStr>,
+    template: Option<LitStr>,
+    func: Option<syn::Path>,
+    max_string_chars: Option<LitInt>,
+    max_list_items: Option<LitInt>,
+    max_map_entries: Option<LitInt>,
+    max_depth: Option<LitInt>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -251,6 +263,8 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 attr.span(),
                 "#[format] is removed. Use #[render(style = \"...\")] instead.",
             ));
+        } else if attr.path().is_ident("render") {
+            // Parsed separately to consolidate validation.
         } else if attr.path().is_ident("check") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Check)?);
         } else if attr.path().is_ident("assert") {
@@ -261,6 +275,8 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let doc_comment = collect_doc_comment(&field.attrs);
     let description = desc_override.unwrap_or(doc_comment);
 
+    let render = parse_field_render_attr(&field.attrs)?;
+
     Ok(ParsedField {
         ident,
         ty: field.ty.clone(),
@@ -268,6 +284,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         is_output,
         description,
         alias,
+        render,
         constraints,
     })
 }
@@ -364,6 +381,159 @@ fn parse_bool_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<bool> {
             "expected boolean literal; use true or false",
         )),
     }
+}
+
+fn parse_int_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<LitInt> {
+    match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Int(value),
+            ..
+        }) => Ok(value.clone()),
+        _ => Err(syn::Error::new(
+            span,
+            "expected integer literal; use a numeric value",
+        )),
+    }
+}
+
+fn parse_path_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<syn::Path> {
+    match expr {
+        Expr::Path(value) => Ok(value.path.clone()),
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(value),
+            ..
+        }) => syn::parse_str::<syn::Path>(&value.value()).map_err(|_| {
+            syn::Error::new(span, "expected path; use fn = \"crate::path\"")
+        }),
+        _ => Err(syn::Error::new(
+            span,
+            "expected path; use fn = \"crate::path\"",
+        )),
+    }
+}
+
+fn parse_field_render_attr(attrs: &[Attribute]) -> syn::Result<Option<FieldRenderAttr>> {
+    let mut parsed: Option<FieldRenderAttr> = None;
+    for attr in attrs {
+        if attr.path().is_ident("render") {
+            if parsed.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[render] can only be specified once per field",
+                ));
+            }
+            parsed = Some(parse_render_attr(attr)?);
+        }
+    }
+    Ok(parsed)
+}
+
+fn parse_render_attr(attr: &Attribute) -> syn::Result<FieldRenderAttr> {
+    let list = attr.meta.require_list()?;
+    let nested = list.parse_args_with(
+        syn::punctuated::Punctuated::<MetaNameValue, Token![,]>::parse_terminated,
+    )?;
+
+    let mut render = FieldRenderAttr {
+        style: None,
+        template: None,
+        func: None,
+        max_string_chars: None,
+        max_list_items: None,
+        max_map_entries: None,
+        max_depth: None,
+    };
+
+    for nv in nested {
+        if nv.path.is_ident("style") {
+            if render.style.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(style = ...)] can only be specified once",
+                ));
+            }
+            let value = parse_string_expr(&nv.value, nv.span())?;
+            render.style = Some(LitStr::new(&value, proc_macro2::Span::call_site()));
+        } else if nv.path.is_ident("template") {
+            if render.template.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(template = ...)] can only be specified once",
+                ));
+            }
+            let value = parse_string_expr(&nv.value, nv.span())?;
+            render.template = Some(LitStr::new(&value, proc_macro2::Span::call_site()));
+        } else if nv.path.is_ident("fn") {
+            if render.func.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(fn = ...)] can only be specified once",
+                ));
+            }
+            render.func = Some(parse_path_expr(&nv.value, nv.span())?);
+        } else if nv.path.is_ident("max_string_chars") {
+            if render.max_string_chars.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(max_string_chars = ...)] can only be specified once",
+                ));
+            }
+            render.max_string_chars = Some(parse_int_expr(&nv.value, nv.span())?);
+        } else if nv.path.is_ident("max_list_items") {
+            if render.max_list_items.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(max_list_items = ...)] can only be specified once",
+                ));
+            }
+            render.max_list_items = Some(parse_int_expr(&nv.value, nv.span())?);
+        } else if nv.path.is_ident("max_map_entries") {
+            if render.max_map_entries.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(max_map_entries = ...)] can only be specified once",
+                ));
+            }
+            render.max_map_entries = Some(parse_int_expr(&nv.value, nv.span())?);
+        } else if nv.path.is_ident("max_depth") {
+            if render.max_depth.is_some() {
+                return Err(syn::Error::new_spanned(
+                    nv,
+                    "#[render(max_depth = ...)] can only be specified once",
+                ));
+            }
+            render.max_depth = Some(parse_int_expr(&nv.value, nv.span())?);
+        } else {
+            return Err(syn::Error::new_spanned(
+                nv,
+                "unsupported #[render(...)] argument",
+            ));
+        }
+    }
+
+    let renderer_count = usize::from(render.style.is_some())
+        + usize::from(render.template.is_some())
+        + usize::from(render.func.is_some());
+    if renderer_count > 1 {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[render] supports only one of style, template, or fn",
+        ));
+    }
+
+    if renderer_count == 0
+        && render.max_string_chars.is_none()
+        && render.max_list_items.is_none()
+        && render.max_map_entries.is_none()
+        && render.max_depth.is_none()
+    {
+        return Err(syn::Error::new_spanned(
+            attr,
+            "#[render] requires at least one argument",
+        ));
+    }
+
+    Ok(render)
 }
 
 fn generate_signature_code(
@@ -561,6 +731,64 @@ fn generate_field_specs(
         let llm_name = LitStr::new(llm_name, proc_macro2::Span::call_site());
         let rust_name = LitStr::new(&field_name, proc_macro2::Span::call_site());
         let description = LitStr::new(&field.description, proc_macro2::Span::call_site());
+        let (style, renderer, render_settings) = match &field.render {
+            Some(render) => {
+                let style = render
+                    .style
+                    .as_ref()
+                    .map(|value| quote! { Some(#value) })
+                    .unwrap_or_else(|| quote! { None });
+
+                let renderer = if let Some(template) = &render.template {
+                    quote! { Some(::dspy_rs::FieldRendererSpec::Jinja { template: #template }) }
+                } else if let Some(func) = &render.func {
+                    quote! { Some(::dspy_rs::FieldRendererSpec::Func { f: #func }) }
+                } else {
+                    quote! { None }
+                };
+
+                let max_string_chars = render
+                    .max_string_chars
+                    .as_ref()
+                    .map(|value| quote! { Some(#value) })
+                    .unwrap_or_else(|| quote! { None });
+                let max_list_items = render
+                    .max_list_items
+                    .as_ref()
+                    .map(|value| quote! { Some(#value) })
+                    .unwrap_or_else(|| quote! { None });
+                let max_map_entries = render
+                    .max_map_entries
+                    .as_ref()
+                    .map(|value| quote! { Some(#value) })
+                    .unwrap_or_else(|| quote! { None });
+                let max_depth = render
+                    .max_depth
+                    .as_ref()
+                    .map(|value| quote! { Some(#value) })
+                    .unwrap_or_else(|| quote! { None });
+
+                let render_settings = if render.max_string_chars.is_some()
+                    || render.max_list_items.is_some()
+                    || render.max_map_entries.is_some()
+                    || render.max_depth.is_some()
+                {
+                    quote! {
+                        Some(::dspy_rs::FieldRenderSettings {
+                            max_string_chars: #max_string_chars,
+                            max_list_items: #max_list_items,
+                            max_map_entries: #max_map_entries,
+                            max_depth: #max_depth,
+                        })
+                    }
+                } else {
+                    quote! { None }
+                };
+
+                (style, renderer, render_settings)
+            }
+            None => (quote! { None }, quote! { None }, quote! { None }),
+        };
 
         let type_ir_fn_name = format_ident!("__{}_{}_type_ir", prefix, field_name_ident);
 
@@ -645,9 +873,9 @@ fn generate_field_specs(
                 description: #description,
                 type_ir: #type_ir_fn_name,
                 constraints: #constraints_name,
-                style: None,
-                renderer: None,
-                render_settings: None,
+                style: #style,
+                renderer: #renderer,
+                render_settings: #render_settings,
             }
         });
     }
