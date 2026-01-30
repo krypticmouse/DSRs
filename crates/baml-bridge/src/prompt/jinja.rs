@@ -737,6 +737,192 @@ mod tests {
     }
 
     #[test]
+    fn render_method_supports_json_style() {
+        let mut world = make_world_with_class(
+            "Widget",
+            vec![("name".to_string(), TypeIR::string())],
+        );
+        world
+            .jinja
+            .add_template_owned(
+                "render_json".to_string(),
+                "{{ value.render(\"json\") }}".to_string(),
+            )
+            .expect("template add");
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("Ada".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+        let rendered = pv
+            .world
+            .jinja
+            .get_template("render_json")
+            .expect("template get")
+            .render(ctx)
+            .expect("rendered");
+
+        assert!(rendered.trim_start().starts_with('{'));
+        assert!(rendered.contains("\"name\""));
+    }
+
+    #[test]
+    fn render_method_uses_nested_schema_target() {
+        let inner = build_class("Inner", vec![("label".to_string(), TypeIR::string())]);
+        let outer = build_class(
+            "Outer",
+            vec![
+                ("inner".to_string(), TypeIR::class("Inner")),
+                ("extra".to_string(), TypeIR::string()),
+            ],
+        );
+        let mut world = make_world_with_classes(vec![inner, outer]);
+        world
+            .jinja
+            .add_template_owned(
+                "render_nested".to_string(),
+                "{{ value.inner.render(\"json\") }}".to_string(),
+            )
+            .expect("template add");
+
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Outer".to_string(),
+                IndexMap::from([
+                    (
+                        "inner".to_string(),
+                        BamlValue::Class(
+                            "Inner".to_string(),
+                            IndexMap::from([(
+                                "label".to_string(),
+                                BamlValue::String("Ada".to_string()),
+                            )]),
+                        ),
+                    ),
+                    ("extra".to_string(), BamlValue::String("skip".to_string())),
+                ]),
+            ),
+            TypeIR::class("Outer"),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+        let rendered = pv
+            .world
+            .jinja
+            .get_template("render_nested")
+            .expect("template get")
+            .render(ctx)
+            .expect("rendered");
+
+        assert!(rendered.contains("\"label\""));
+        assert!(!rendered.contains("\"extra\""));
+    }
+
+    #[test]
+    fn render_errors_on_missing_field_in_template() {
+        let mut world = make_world_with_class(
+            "Widget",
+            vec![("name".to_string(), TypeIR::string())],
+        );
+        world
+            .jinja
+            .add_template_owned("missing".to_string(), "{{ value.missing }}".to_string())
+            .expect("template add");
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Widget".to_string(),
+                IndexMap::from([("name".to_string(), BamlValue::String("Ada".to_string()))]),
+            ),
+            TypeIR::class("Widget"),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+        let err = pv
+            .world
+            .jinja
+            .get_template("missing")
+            .expect("template get")
+            .render(ctx)
+            .expect_err("expected render error");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("missing") || message.contains("undefined"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn union_resolution_is_deterministic() {
+        let world = make_world_with_classes(vec![
+            build_class("Foo", vec![("a".to_string(), TypeIR::int())]),
+            build_class("Bar", vec![("b".to_string(), TypeIR::int())]),
+        ]);
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class(
+                "Foo".to_string(),
+                IndexMap::from([("a".to_string(), BamlValue::Int(1))]),
+            ),
+            TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+
+        let rendered = pv
+            .world
+            .render_prompt_value(&pv, None)
+            .expect("rendered");
+        assert!(rendered.contains("Foo {a: 1}"));
+        assert!(!rendered.contains("one of:"));
+    }
+
+    #[test]
+    fn ambiguous_union_field_access_errors() {
+        let world = make_world_with_classes(vec![build_class("Foo", vec![]), build_class("Bar", vec![])]);
+        let mut world = world;
+        world
+            .jinja
+            .add_template_owned("ambiguous".to_string(), "{{ value.anything }}".to_string())
+            .expect("template add");
+        let pv = make_prompt_value_with_world_and_settings(
+            BamlValue::Class("Foo".to_string(), IndexMap::new()),
+            TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
+            world,
+            RenderSettings::default(),
+            PromptPath::new(),
+        );
+
+        let ctx = Value::from_iter([("value".to_string(), pv.as_jinja_value())]);
+        let err = pv
+            .world
+            .jinja
+            .get_template("ambiguous")
+            .expect("template get")
+            .render(ctx)
+            .expect_err("expected render error");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("undefined") || message.contains("anything"),
+            "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
     fn get_value_returns_none_for_ambiguous_union_missing_field() {
         let world = make_world_with_classes(vec![
             build_class("Foo", vec![]),
