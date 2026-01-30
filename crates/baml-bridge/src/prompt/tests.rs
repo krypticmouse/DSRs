@@ -161,7 +161,7 @@ fn prompt_value_uses_type_level_renderer() {
     let (output_format, renderers) = reg.build_with_renderers(TypeIR::class("RenderWithTemplate"));
     let world = Arc::new(
         PromptWorld::from_registry(output_format, renderers, RenderSettings::default())
-        .expect("prompt world");
+            .expect("prompt world"),
     );
     let value = BamlValue::Class(
         "RenderWithTemplate".to_string(),
