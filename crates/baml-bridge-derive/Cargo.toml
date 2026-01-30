@@ -30,3 +30,7 @@ minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "mai
   "loader",
   "serde",
 ] }
+
+[dev-dependencies]
+dspy-rs = { path = "../dspy-rs" }
+trybuild = "1.0.96"

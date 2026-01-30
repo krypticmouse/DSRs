@@ -509,10 +509,12 @@ name = "baml-bridge-derive"
 version = "0.1.0"
 dependencies = [
  "convert_case",
+ "dspy-rs",
  "minijinja",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
+ "trybuild",
 ]
 
 [[package]]

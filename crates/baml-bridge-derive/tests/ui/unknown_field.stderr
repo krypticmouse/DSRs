@@ -1,0 +1,5 @@
+error: Template references unknown field 'value.missing'. Use #[render(allow_dynamic = true)] for dynamic access.
+ --> tests/ui/unknown_field.rs:4:1
+  |
+4 | #[render(template = "{{ value.missing }}")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

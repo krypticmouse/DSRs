@@ -1,0 +1,5 @@
+error: Template uses unknown filter 'not_a_filter'
+ --> tests/ui/unknown_filter.rs:4:1
+  |
+4 | #[render(template = "{{ value.title | not_a_filter }}")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

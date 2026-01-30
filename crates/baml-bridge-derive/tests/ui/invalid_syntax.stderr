@@ -1,0 +1,5 @@
+error: Jinja syntax error: syntax error: unexpected end of input, expected end of variable block (in <render>:1)
+ --> tests/ui/invalid_syntax.rs:4:1
+  |
+4 | #[render(template = "{{ value")]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
