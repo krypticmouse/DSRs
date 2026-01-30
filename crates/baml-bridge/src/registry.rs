@@ -4,6 +4,8 @@ use baml_types::{type_meta, StreamingMode, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum, OutputFormatContent};
 
+use crate::prompt::renderer::{RendererDbSeed, RendererKey, RendererSpec};
+
 #[derive(Debug, Default)]
 pub struct Registry {
     enums: IndexMap<String, Enum>,
@@ -11,6 +13,7 @@ pub struct Registry {
     class_deps: IndexMap<String, IndexSet<String>>,
     structural_recursive_aliases: IndexMap<String, TypeIR>,
     registered: HashSet<String>,
+    renderers: RendererDbSeed,
 }
 
 impl Registry {
@@ -47,7 +50,11 @@ impl Registry {
         self.structural_recursive_aliases.insert(name, alias);
     }
 
-    pub fn build(self, target: TypeIR) -> OutputFormatContent {
+    pub fn register_renderer(&mut self, key: RendererKey, spec: RendererSpec) {
+        self.renderers.insert(key, spec);
+    }
+
+    pub fn build_with_renderers(self, target: TypeIR) -> (OutputFormatContent, RendererDbSeed) {
         let recursive_classes = compute_recursive_classes(&self.class_deps);
 
         let mut enums = self.enums.into_iter().collect::<Vec<_>>();
@@ -65,12 +72,18 @@ impl Registry {
         });
         let classes = classes.into_iter().map(|(_, v)| v).collect::<Vec<_>>();
 
-        OutputFormatContent::target(target)
+        let output_format = OutputFormatContent::target(target)
             .enums(enums)
             .classes(classes)
             .recursive_classes(recursive_classes)
             .structural_recursive_aliases(self.structural_recursive_aliases)
-            .build()
+            .build();
+
+        (output_format, self.renderers)
+    }
+
+    pub fn build(self, target: TypeIR) -> OutputFormatContent {
+        self.build_with_renderers(target).0
     }
 }
 
