@@ -243,6 +243,7 @@ pub struct PromptValue;
 #[cfg(test)]
 mod tests {
     use super::{default_union_resolver, PromptPath, UnionResolution};
+    use crate::prompt::renderer::{RenderSettings, RendererDb};
     use crate::prompt::world::{PromptWorld, TypeDb};
     use baml_types::{ir_type::UnionConstructor, type_meta, BamlValue, TypeIR};
     use indexmap::{IndexMap, IndexSet};
@@ -365,6 +366,7 @@ mod tests {
             );
         }
 
+        let jinja = crate::jsonish::jinja_helpers::get_env();
         PromptWorld {
             types: TypeDb {
                 enums: Arc::new(enum_map),
@@ -372,6 +374,10 @@ mod tests {
                 structural_recursive_aliases: Arc::new(IndexMap::new()),
                 recursive_classes: Arc::new(IndexSet::new()),
             },
+            renderers: RendererDb::new(),
+            jinja,
+            settings: RenderSettings::default(),
+            union_resolver: default_union_resolver,
         }
     }
 

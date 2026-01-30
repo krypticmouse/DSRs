@@ -5,6 +5,11 @@ use std::sync::Arc;
 use baml_types::{StreamingMode, TypeIR};
 use indexmap::{IndexMap, IndexSet};
 use internal_baml_jinja::types::{Class, Enum};
+use minijinja::{Environment, UndefinedBehavior};
+
+use super::renderer::{RenderError, RenderSettings, RendererDb, RendererDbSeed};
+use super::value::{default_union_resolver, UnionResolver};
+use internal_baml_jinja::types::OutputFormatContent;
 
 /// Type database extracted from OutputFormatContent.
 #[derive(Debug, Clone)]
@@ -57,4 +62,37 @@ impl TypeDb {
 #[derive(Debug, Clone)]
 pub struct PromptWorld {
     pub types: TypeDb,
+    pub renderers: RendererDb,
+    pub jinja: Environment<'static>,
+    pub settings: RenderSettings,
+    pub union_resolver: UnionResolver,
+}
+
+impl PromptWorld {
+    #[allow(clippy::result_large_err)]
+    pub fn from_registry(
+        output_format: OutputFormatContent,
+        renderer_seed: RendererDbSeed,
+        settings: RenderSettings,
+    ) -> Result<Self, RenderError> {
+        let types = TypeDb {
+            enums: output_format.enums.clone(),
+            classes: output_format.classes.clone(),
+            structural_recursive_aliases: output_format.structural_recursive_aliases.clone(),
+            recursive_classes: output_format.recursive_classes.clone(),
+        };
+
+        let mut jinja = crate::jsonish::jinja_helpers::get_env();
+        jinja.set_undefined_behavior(UndefinedBehavior::Strict);
+
+        let renderers = RendererDb::compile_from_seed(renderer_seed, &mut jinja)?;
+
+        Ok(Self {
+            types,
+            renderers,
+            jinja,
+            settings,
+            union_resolver: default_union_resolver,
+        })
+    }
 }

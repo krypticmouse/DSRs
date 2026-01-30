@@ -211,7 +211,7 @@ pub enum CompiledRenderer {
 }
 
 /// Database of compiled renderers.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct RendererDb {
     renderers: IndexMap<RendererKey, CompiledRenderer>,
 }
