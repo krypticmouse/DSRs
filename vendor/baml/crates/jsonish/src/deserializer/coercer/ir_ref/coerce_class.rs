@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use baml_types::{BamlMap, Constraint, TypeIR};
-use internal_baml_jinja::types::{Class, Name};
+use internal_baml_jinja::types::{Class, FieldRenderSpec, Name};
 
 use super::ParsingContext;
 use crate::deserializer::{
@@ -17,7 +17,7 @@ use crate::deserializer::{
 };
 
 // Name, type, description, streaming_needed.
-type FieldValue = (Name, TypeIR, Option<String>, bool);
+type FieldValue = (Name, TypeIR, Option<String>, bool, Option<FieldRenderSpec>);
 
 impl TypeCoercer for Class {
     fn try_cast(
@@ -72,7 +72,7 @@ impl TypeCoercer for Class {
         let mut fill_result = self
             .fields
             .iter()
-            .map(|(name, field_type, _, streaming_needed)| {
+            .map(|(name, field_type, _, streaming_needed, _render_spec)| {
                 (
                     name.rendered_name(),
                     (name, field_type, *streaming_needed, Triple::Pending),

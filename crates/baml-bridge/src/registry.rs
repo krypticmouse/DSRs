@@ -41,7 +41,7 @@ impl Registry {
         let entry = self.classes.entry(key).or_insert_with(|| class);
 
         let deps = self.class_deps.entry(name).or_default();
-        for (_, field_type, _, _) in &entry.fields {
+        for (_, field_type, _, _, _) in &entry.fields {
             collect_class_refs(field_type, deps);
         }
     }

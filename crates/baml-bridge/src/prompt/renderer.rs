@@ -41,6 +41,24 @@ impl Default for RenderSettings {
     }
 }
 
+impl RenderSettings {
+    /// Apply overrides from a FieldRenderSpec, returning new settings.
+    /// Only `Some(...)` fields from the spec overwrite base settings.
+    pub fn with_field_spec(
+        &self,
+        spec: &internal_baml_jinja::types::FieldRenderSpec,
+    ) -> RenderSettings {
+        RenderSettings {
+            max_total_chars: self.max_total_chars,
+            max_string_chars: spec.max_string_chars.unwrap_or(self.max_string_chars),
+            max_list_items: spec.max_list_items.unwrap_or(self.max_list_items),
+            max_map_entries: spec.max_map_entries.unwrap_or(self.max_map_entries),
+            max_depth: spec.max_depth.unwrap_or(self.max_depth),
+            max_union_branches_shown: self.max_union_branches_shown,
+        }
+    }
+}
+
 /// Per-render context (one per render_messages call).
 #[derive(Debug, Clone)]
 pub struct RenderSession {

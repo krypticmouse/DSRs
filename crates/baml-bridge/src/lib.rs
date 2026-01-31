@@ -289,7 +289,7 @@ fn collect_assert_constraints(of: &OutputFormatContent) -> Vec<ResponseCheck> {
         for constraint in &class.constraints {
             push_assert_constraint(constraint, &mut failed, &mut seen);
         }
-        for (_, field_type, _, _) in &class.fields {
+        for (_, field_type, _, _, _) in &class.fields {
             collect_assert_constraints_in_type(field_type, &mut failed, &mut seen);
         }
     }

@@ -1,0 +1,5 @@
+error: empty `#[render()]`; expected at least one of: style, template, max_string_chars, max_list_items, max_map_entries, max_depth
+ --> tests/ui/nested_empty_render.rs:5:6
+  |
+5 |     #[render()]
+  |      ^^^^^^^^^^

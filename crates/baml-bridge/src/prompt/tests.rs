@@ -146,6 +146,7 @@ fn prompt_value_uses_type_level_renderer() {
             TypeIR::string(),
             None,
             false,
+            None,
         )],
         constraints: Vec::new(),
         streaming_behavior: baml_types::type_meta::base::StreamingBehavior::default(),
@@ -289,6 +290,7 @@ fn make_world_with_class(name: &str, fields: Vec<(String, TypeIR)>) -> PromptWor
                     field_type,
                     None,
                     false,
+                    None,
                 )
             })
             .collect(),

@@ -1,0 +1,5 @@
+error: unsupported render attribute; supported: style, template, max_string_chars, max_list_items, max_map_entries, max_depth
+ --> tests/ui/nested_unknown_key.rs:5:14
+  |
+5 |     #[render(nope = 1)]
+  |              ^^^^^^^^

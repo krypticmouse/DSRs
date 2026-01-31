@@ -71,7 +71,7 @@ fn class_aliases(
 ) -> Option<HashMap<String, String>> {
     let class = find_class(output_format, class_name)?;
     let mut aliases = HashMap::new();
-    for (name, _, _, _) in &class.fields {
+    for (name, _, _, _, _) in &class.fields {
         aliases.insert(
             name.real_name().to_string(),
             name.rendered_name().to_string(),
@@ -88,8 +88,8 @@ fn enum_alias(
     let enm = output_format.enums.get(enum_name)?;
     enm.values
         .iter()
-        .find(|(name, _)| name.real_name() == variant)
-        .map(|(name, _)| name.rendered_name().to_string())
+        .find(|(name, _, _)| name.real_name() == variant)
+        .map(|(name, _, _)| name.rendered_name().to_string())
 }
 
 fn find_class<'a>(output_format: &'a OutputFormatContent, class_name: &str) -> Option<&'a Class> {

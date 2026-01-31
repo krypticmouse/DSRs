@@ -1,0 +1,5 @@
+error: Template uses unknown filter 'nonexistent_filter'
+ --> tests/ui/nested_unknown_filter.rs:5:14
+  |
+5 |     #[render(template = "{{ value | nonexistent_filter }}")]
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

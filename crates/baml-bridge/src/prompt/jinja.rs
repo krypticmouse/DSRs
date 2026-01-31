@@ -253,7 +253,7 @@ impl Object for JinjaPromptValue {
                         .fields
                         .iter()
                         .take(max_map_entries)
-                        .map(|(field_name, _, _, _)| {
+                        .map(|(field_name, _, _, _, _)| {
                             Value::from(field_name.real_name().to_string())
                         })
                         .collect();
@@ -1159,6 +1159,7 @@ mod tests {
                         field_type,
                         None,
                         false,
+                        None,
                     )
                 })
                 .collect(),

@@ -312,7 +312,7 @@ fn build_type_meta(
                     let fields = cls
                         .fields
                         .iter()
-                        .map(|(field_name, field_ty, desc, _)| SigClassField {
+                        .map(|(field_name, field_ty, desc, _, _)| SigClassField {
                             name: field_name.rendered_name().to_string(),
                             description: desc.clone(),
                             r#type: build_type_meta(format, field_ty, visited),
@@ -377,7 +377,7 @@ fn lookup_class<'a>(format: &'a OutputFormatContent, name: &str) -> Option<&'a C
 fn build_enum_values(e: &Enum) -> Vec<SigEnumValue> {
     e.values
         .iter()
-        .map(|(name, description)| {
+        .map(|(name, description, _render_spec)| {
             let real = name.real_name().to_string();
             let rendered = name.rendered_name().to_string();
             SigEnumValue {

@@ -52,12 +52,37 @@ struct FieldAttrs {
     description: Option<String>,
     int_repr: Option<IntRepr>,
     map_key_repr: Option<MapKeyRepr>,
+    render: Option<NestedRenderAttr>,
 }
 
 #[derive(Default)]
 struct VariantAttrs {
     alias: Option<String>,
     description: Option<String>,
+    render: Option<NestedRenderAttr>,
+}
+
+/// Render attributes for nested fields/variants (no fn support).
+struct NestedRenderAttr {
+    style: Option<LitStr>,
+    template: Option<LitStr>,
+    max_string_chars: Option<syn::LitInt>,
+    max_list_items: Option<syn::LitInt>,
+    max_map_entries: Option<syn::LitInt>,
+    max_depth: Option<syn::LitInt>,
+}
+
+impl Default for NestedRenderAttr {
+    fn default() -> Self {
+        Self {
+            style: None,
+            template: None,
+            max_string_chars: None,
+            max_list_items: None,
+            max_map_entries: None,
+            max_depth: None,
+        }
+    }
 }
 
 struct RenderAttr {
@@ -193,9 +218,10 @@ fn derive_struct(input: &DeriveInput, data: &DataStruct) -> syn::Result<proc_mac
             Some(desc) => quote! { Some(#desc.to_string()) },
             None => quote! { None },
         };
+        let render_spec_expr = nested_render_spec_tokens(&field_attrs.render);
 
         field_defs.push(quote! {
-            (#name_expr, #field_type_ir, #desc_expr, false)
+            (#name_expr, #field_type_ir, #desc_expr, false, #render_spec_expr)
         });
 
         register_calls.push(register_call_tokens(
@@ -433,7 +459,8 @@ fn derive_unit_enum(
             Some(desc) => quote! { Some(#desc.to_string()) },
             None => quote! { None },
         };
-        values.push(quote! { (#name_expr, #desc_expr) });
+        let render_spec_expr = nested_render_spec_tokens(&variant_attrs.render);
+        values.push(quote! { (#name_expr, #desc_expr, #render_spec_expr) });
 
         let match_values = match_strings_for_variant(&variant_name, rendered_variant.as_deref());
         match_arms.push(quote! { #(#match_values)|* => Ok(Self::#variant_ident) });
@@ -577,6 +604,17 @@ fn derive_unit_enum_as_union(
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string();
         let variant_attrs = parse_variant_attrs(&variant.attrs)?;
+
+        // Variant-level #[render(...)] is not supported for as_union enums
+        // because there's no Enum.values metadata to attach it to.
+        if variant_attrs.render.is_some() {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "`#[render(...)]` on variants is not supported for `#[baml(as_union)]` enums; \
+                use type-level renderers instead",
+            ));
+        }
+
         let rendered_variant = variant_alias(&variant_attrs, rename_all, &variant_name);
         let literal = rendered_variant
             .clone()
@@ -716,6 +754,17 @@ fn derive_data_enum(
         let variant_ident = &variant.ident;
         let variant_name = variant_ident.to_string();
         let variant_attrs = parse_variant_attrs(&variant.attrs)?;
+
+        // Variant-level #[render(...)] is not supported for data enums (tagged unions)
+        // because there's no Enum.values metadata to attach it to.
+        if variant_attrs.render.is_some() {
+            return Err(syn::Error::new_spanned(
+                variant,
+                "`#[render(...)]` on variants is not supported for data enums (tagged unions); \
+                use type-level renderers instead",
+            ));
+        }
+
         let rendered_variant = variant_alias(&variant_attrs, rename_all, &variant_name)
             .unwrap_or_else(|| variant_name.clone());
 
@@ -732,7 +781,7 @@ fn derive_data_enum(
         let mut to_value_bindings = Vec::new();
         let tag_field_name = name_tokens(&tag, None);
         let tag_field_type = quote! { ::dspy_rs::baml_bridge::baml_types::TypeIR::literal_string(#rendered_variant.to_string()) };
-        fields.push(quote! { (#tag_field_name, #tag_field_type, None, false) });
+        fields.push(quote! { (#tag_field_name, #tag_field_type, None, false, None) });
 
         match &variant.fields {
             Fields::Unit => {}
@@ -767,8 +816,9 @@ fn derive_data_enum(
                         Some(desc) => quote! { Some(#desc.to_string()) },
                         None => quote! { None },
                     };
+                    let render_spec_expr = nested_render_spec_tokens(&field_attrs.render);
 
-                    fields.push(quote! { (#name_expr, #field_type_ir, #desc_expr, false) });
+                    fields.push(quote! { (#name_expr, #field_type_ir, #desc_expr, false, #render_spec_expr) });
                     register_calls.push(register_call_tokens(
                         &field.ty,
                         &field_attrs,
@@ -1886,8 +1936,8 @@ fn map_entry_class_tokens(
             description: None,
             namespace: ::dspy_rs::baml_bridge::baml_types::StreamingMode::NonStreaming,
             fields: vec![
-                (#key_name, #key_ir, None, false),
-                (#value_name, #value_ir, None, false),
+                (#key_name, #key_ir, None, false, None),
+                (#value_name, #value_ir, None, false, None),
             ],
             constraints: Vec::new(),
             streaming_behavior: ::dspy_rs::baml_bridge::default_streaming_behavior(),
@@ -2444,6 +2494,49 @@ fn render_spec_tokens(
     }
 }
 
+/// Generate tokens for a nested FieldRenderSpec (used in class fields and enum variants).
+fn nested_render_spec_tokens(attr: &Option<NestedRenderAttr>) -> proc_macro2::TokenStream {
+    let Some(attr) = attr else {
+        return quote! { None };
+    };
+
+    let style_expr = match &attr.style {
+        Some(s) => quote! { Some(#s) },
+        None => quote! { None },
+    };
+    let template_expr = match &attr.template {
+        Some(t) => quote! { Some(#t) },
+        None => quote! { None },
+    };
+    let max_string_chars_expr = match &attr.max_string_chars {
+        Some(v) => quote! { Some(#v) },
+        None => quote! { None },
+    };
+    let max_list_items_expr = match &attr.max_list_items {
+        Some(v) => quote! { Some(#v) },
+        None => quote! { None },
+    };
+    let max_map_entries_expr = match &attr.max_map_entries {
+        Some(v) => quote! { Some(#v) },
+        None => quote! { None },
+    };
+    let max_depth_expr = match &attr.max_depth {
+        Some(v) => quote! { Some(#v) },
+        None => quote! { None },
+    };
+
+    quote! {
+        Some(::dspy_rs::baml_bridge::internal_baml_jinja::types::FieldRenderSpec {
+            style: #style_expr,
+            template: #template_expr,
+            max_string_chars: #max_string_chars_expr,
+            max_list_items: #max_list_items_expr,
+            max_map_entries: #max_map_entries_expr,
+            max_depth: #max_depth_expr,
+        })
+    }
+}
+
 fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
     let mut out = FieldAttrs::default();
     for attr in attrs {
@@ -2524,6 +2617,13 @@ fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
             }
             })?;
         }
+
+        if attr.path().is_ident("render") {
+            if out.render.is_some() {
+                return Err(syn::Error::new_spanned(attr, "duplicate #[render] attribute"));
+            }
+            out.render = Some(parse_nested_render_attr(attr)?);
+        }
     }
     Ok(out)
 }
@@ -2567,7 +2667,119 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
             }
             })?;
         }
+
+        if attr.path().is_ident("render") {
+            if out.render.is_some() {
+                return Err(syn::Error::new_spanned(attr, "duplicate #[render] attribute"));
+            }
+            out.render = Some(parse_nested_render_attr(attr)?);
+        }
     }
+    Ok(out)
+}
+
+/// Parse a nested `#[render(...)]` attribute (for struct fields and enum variants).
+/// Unlike type-level render, `fn` is not supported.
+fn parse_nested_render_attr(attr: &Attribute) -> syn::Result<NestedRenderAttr> {
+    let span = attr.bracket_token.span.join();
+    let mut out = NestedRenderAttr::default();
+
+    let metas = parse_meta_list(attr)?;
+    for meta in metas {
+        match meta {
+            Meta::NameValue(meta) if meta.path.is_ident("style") => {
+                if out.style.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate `style`"));
+                }
+                out.style = Some(parse_lit_str_expr(&meta.value, meta.span())?);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("template") || meta.path.is_ident("default") => {
+                if out.template.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate template"));
+                }
+                let template = parse_lit_str_expr(&meta.value, meta.span())?;
+                // Validate Jinja syntax at compile time (struct_fields=None, allow_dynamic=true
+                // since nested templates access `value` dynamically)
+                validate_template(&template, None, true, meta.span())?;
+                out.template = Some(template);
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("max_string_chars") => {
+                if out.max_string_chars.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate `max_string_chars`"));
+                }
+                if let Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) = &meta.value {
+                    out.max_string_chars = Some(lit.clone());
+                } else {
+                    return Err(syn::Error::new_spanned(&meta.value, "expected integer literal"));
+                }
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("max_list_items") => {
+                if out.max_list_items.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate `max_list_items`"));
+                }
+                if let Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) = &meta.value {
+                    out.max_list_items = Some(lit.clone());
+                } else {
+                    return Err(syn::Error::new_spanned(&meta.value, "expected integer literal"));
+                }
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("max_map_entries") => {
+                if out.max_map_entries.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate `max_map_entries`"));
+                }
+                if let Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) = &meta.value {
+                    out.max_map_entries = Some(lit.clone());
+                } else {
+                    return Err(syn::Error::new_spanned(&meta.value, "expected integer literal"));
+                }
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("max_depth") => {
+                if out.max_depth.is_some() {
+                    return Err(syn::Error::new_spanned(&meta, "duplicate `max_depth`"));
+                }
+                if let Expr::Lit(ExprLit { lit: Lit::Int(lit), .. }) = &meta.value {
+                    out.max_depth = Some(lit.clone());
+                } else {
+                    return Err(syn::Error::new_spanned(&meta.value, "expected integer literal"));
+                }
+            }
+            Meta::NameValue(meta) if meta.path.is_ident("fn") => {
+                return Err(syn::Error::new_spanned(
+                    &meta,
+                    "nested `#[render(fn = ...)]` is not supported; use a type-level renderer instead",
+                ));
+            }
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    meta,
+                    "unsupported render attribute; supported: style, template, max_string_chars, max_list_items, max_map_entries, max_depth",
+                ));
+            }
+        }
+    }
+
+    // Validate: style and template are mutually exclusive
+    if out.style.is_some() && out.template.is_some() {
+        return Err(syn::Error::new(
+            span,
+            "`style` and `template` are mutually exclusive",
+        ));
+    }
+
+    // Validate: must specify at least one option
+    let has_something = out.style.is_some()
+        || out.template.is_some()
+        || out.max_string_chars.is_some()
+        || out.max_list_items.is_some()
+        || out.max_map_entries.is_some()
+        || out.max_depth.is_some();
+    if !has_something {
+        return Err(syn::Error::new(
+            span,
+            "empty `#[render()]`; expected at least one of: style, template, max_string_chars, max_list_items, max_map_entries, max_depth",
+        ));
+    }
+
     Ok(out)
 }
 

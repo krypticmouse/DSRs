@@ -48,14 +48,32 @@ impl std::fmt::Display for Name {
 pub struct Enum {
     pub name: Name,
     pub description: Option<String>,
-    // name and description
-    pub values: Vec<(Name, Option<String>)>,
+    /// Enum values: (name, description, render_spec).
+    pub values: Vec<(Name, Option<String>, Option<FieldRenderSpec>)>,
     pub constraints: Vec<Constraint>,
 }
 
 pub struct EnumValue {
     pub name: Name,
     pub description: Option<String>,
+}
+
+/// Render specification for a nested field or enum variant.
+/// Used for input value rendering only; ignored by schema rendering.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FieldRenderSpec {
+    /// Named render style (e.g., "json", "yaml").
+    pub style: Option<&'static str>,
+    /// Inline Jinja template.
+    pub template: Option<&'static str>,
+    /// Maximum characters for string values.
+    pub max_string_chars: Option<usize>,
+    /// Maximum items for list values.
+    pub max_list_items: Option<usize>,
+    /// Maximum entries for map values.
+    pub max_map_entries: Option<usize>,
+    /// Maximum nesting depth.
+    pub max_depth: Option<usize>,
 }
 
 /// The components of a Class needed to render `OutputFormatContent`.
@@ -65,10 +83,10 @@ pub struct Class {
     pub name: Name,
     pub description: Option<String>,
     pub namespace: baml_types::StreamingMode,
-    // fields have name, type, description, and streaming_needed.
-    pub fields: Vec<(Name, TypeIR, Option<String>, bool)>,
+    /// Fields: (name, type, description, streaming_needed, render_spec).
+    pub fields: Vec<(Name, TypeIR, Option<String>, bool, Option<FieldRenderSpec>)>,
     pub constraints: Vec<Constraint>,
-    // We use this for parsing
+    /// Used for parsing.
     pub streaming_behavior: type_meta::base::StreamingBehavior,
 }
 
@@ -77,7 +95,7 @@ impl std::fmt::Display for Class {
         writeln!(f, "Class {{")?;
         writeln!(f, "    name: {}.{}", self.namespace, self.name)?;
         writeln!(f, "    fields: {{")?;
-        for (name, r#type, description, streaming_needed) in &self.fields {
+        for (name, r#type, description, streaming_needed, _render_spec) in &self.fields {
             writeln!(
                 f,
                 "      {name}: {type} (description: {description:?}, streaming_needed: {streaming_needed})",
@@ -566,7 +584,7 @@ impl OutputFormatContent {
             values: enm
                 .values
                 .iter()
-                .map(|(name, description)| Attribute {
+                .map(|(name, description, _render_spec)| Attribute {
                     name: name.rendered_name().to_string(),
                     description: description.clone(),
                 })
@@ -744,7 +762,7 @@ impl OutputFormatContent {
                 } else {
                     enm.values
                         .iter()
-                        .map(|(n, _)| format!("'{}'", n.rendered_name()))
+                        .map(|(n, _, _)| format!("'{}'", n.rendered_name()))
                         .collect::<Vec<_>>()
                         .join(&options.or_splitter)
                 }
@@ -765,7 +783,7 @@ impl OutputFormatContent {
                     values: class
                         .fields
                         .iter()
-                        .map(|(name, field_type, description, _streaming_needed)| {
+                        .map(|(name, field_type, description, _streaming_needed, _render_spec)| {
                             Ok(ClassFieldRender {
                                 name: name.rendered_name().to_string(),
                                 description: description.clone(),
@@ -857,7 +875,7 @@ impl OutputFormatContent {
         // https://github.com/BoundaryML/baml/blob/ee15d0f379f53a93f2d80b39909c74495b19930b/engine/baml-lib/jinja-runtime/src/output_format/types.rs#L480-L496
         for enm in self.enums.values() {
             if enm.values.len() > INLINE_RENDER_ENUM_MAX_VALUES
-                || enm.values.iter().any(|(_, desc)| desc.is_some())
+                || enm.values.iter().any(|(_, desc, _)| desc.is_some())
                 || matches!(options.always_hoist_enums, RenderSetting::Always(true))
             //  || group_hoisted_literals
             {
@@ -1147,9 +1165,9 @@ mod tests {
             name: Name::new("Color".to_string()),
             description: None,
             values: vec![
-                (Name::new("Red".to_string()), None),
-                (Name::new("Green".to_string()), None),
-                (Name::new("Blue".to_string()), None),
+                (Name::new("Red".to_string()), None, None),
+                (Name::new("Green".to_string()), None, None),
+                (Name::new("Blue".to_string()), None, None),
             ],
             constraints: Vec::new(),
         }];
@@ -1183,12 +1201,14 @@ Color
                     TypeIR::string(),
                     Some("The person's name".to_string()),
                     false,
+                    None,
                 ),
                 (
                     Name::new("age".to_string()),
                     TypeIR::int(),
                     Some("The person's age".to_string()),
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -1225,14 +1245,16 @@ Color
                     TypeIR::optional(TypeIR::string()),
                     Some("111\n  ".to_string()),
                     false,
+                    None,
                 ),
                 (
                     Name::new("degree".to_string()),
                     TypeIR::string(),
                     Some("2222222".to_string()),
                     false,
+                    None,
                 ),
-                (Name::new("year".to_string()), TypeIR::int(), None, false),
+                (Name::new("year".to_string()), TypeIR::int(), None, false, None),
             ],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -1264,7 +1286,7 @@ Color
             name: Name::new("User".to_string()),
             description: Some("Represents a system user".to_string()),
             namespace: baml_types::StreamingMode::NonStreaming,
-            fields: vec![(Name::new("name".to_string()), TypeIR::string(), None, false)],
+            fields: vec![(Name::new("name".to_string()), TypeIR::string(), None, false, None)],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
         }];
@@ -1289,12 +1311,13 @@ Color
             description: Some("A node in a linked list".to_string()),
             namespace: baml_types::StreamingMode::NonStreaming,
             fields: vec![
-                (Name::new("value".to_string()), TypeIR::int(), None, false),
+                (Name::new("value".to_string()), TypeIR::int(), None, false, None),
                 (
                     Name::new("next".to_string()),
                     TypeIR::optional(TypeIR::class("Node")),
                     None,
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -1323,7 +1346,7 @@ Color
                 "A professional resume\ncontaining work history\nand qualifications".to_string(),
             ),
             namespace: baml_types::StreamingMode::NonStreaming,
-            fields: vec![(Name::new("name".to_string()), TypeIR::string(), None, false)],
+            fields: vec![(Name::new("name".to_string()), TypeIR::string(), None, false, None)],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
         }];
@@ -1353,12 +1376,14 @@ Color
                     TypeIR::string(),
                     Some("The person's name".to_string()),
                     false,
+                    None,
                 ),
                 (
                     Name::new("age".to_string()),
                     TypeIR::int(),
                     Some("The person's age".to_string()),
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -1394,13 +1419,13 @@ Color
             name: Name::new("Enm".to_string()),
             description: None,
             values: vec![
-                (Name::new("A".to_string()), None),
-                (Name::new("B".to_string()), None),
-                (Name::new("C".to_string()), None),
-                (Name::new("D".to_string()), None),
-                (Name::new("E".to_string()), None),
-                (Name::new("F".to_string()), None),
-                (Name::new("G".to_string()), None),
+                (Name::new("A".to_string()), None, None),
+                (Name::new("B".to_string()), None, None),
+                (Name::new("C".to_string()), None, None),
+                (Name::new("D".to_string()), None, None),
+                (Name::new("E".to_string()), None, None),
+                (Name::new("F".to_string()), None, None),
+                (Name::new("G".to_string()), None, None),
             ],
             constraints: Vec::new(),
         }];
@@ -1414,6 +1439,7 @@ Color
                 TypeIR::r#enum("Enm"),
                 None,
                 false,
+                None,
             )],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -1454,12 +1480,13 @@ Answer in JSON using this schema:
                 (
                     Name::new("A".to_string()),
                     Some("A description".to_string()),
+                None,
                 ),
-                (Name::new("B".to_string()), None),
-                (Name::new("C".to_string()), None),
-                (Name::new("D".to_string()), None),
-                (Name::new("E".to_string()), None),
-                (Name::new("F".to_string()), None),
+                (Name::new("B".to_string()), None, None),
+                (Name::new("C".to_string()), None, None),
+                (Name::new("D".to_string()), None, None),
+                (Name::new("E".to_string()), None, None),
+                (Name::new("F".to_string()), None, None),
             ],
             constraints: Vec::new(),
         }];
@@ -1473,6 +1500,7 @@ Answer in JSON using this schema:
                 TypeIR::r#enum("Enm"),
                 None,
                 false,
+                None,
             )],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -1509,12 +1537,12 @@ Answer in JSON using this schema:
             name: Name::new("Enm".to_string()),
             description: None,
             values: vec![
-                (Name::new("A".to_string()), None),
-                (Name::new("B".to_string()), None),
-                (Name::new("C".to_string()), None),
-                (Name::new("D".to_string()), None),
-                (Name::new("E".to_string()), None),
-                (Name::new("F".to_string()), None),
+                (Name::new("A".to_string()), None, None),
+                (Name::new("B".to_string()), None, None),
+                (Name::new("C".to_string()), None, None),
+                (Name::new("D".to_string()), None, None),
+                (Name::new("E".to_string()), None, None),
+                (Name::new("F".to_string()), None, None),
             ],
             constraints: Vec::new(),
         }];
@@ -1528,6 +1556,7 @@ Answer in JSON using this schema:
                 TypeIR::r#enum("Enm"),
                 None,
                 false,
+                None,
             )],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -1576,12 +1605,14 @@ Answer in JSON using this schema:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("severity".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1597,12 +1628,14 @@ Answer in JSON using this schema:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("description".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1618,12 +1651,14 @@ Answer in JSON using this schema:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("format".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1675,8 +1710,9 @@ r#"Answer in JSON using any of these schemas:
                         ]),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("date".to_string()), TypeIR::string(), None, false),
+                    (Name::new("date".to_string()), TypeIR::string(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1691,12 +1727,14 @@ r#"Answer in JSON using any of these schemas:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("severity".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1712,12 +1750,14 @@ r#"Answer in JSON using any of these schemas:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("description".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1733,12 +1773,14 @@ r#"Answer in JSON using any of these schemas:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("format".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1779,12 +1821,13 @@ r#"Answer in JSON using this schema:
             description: None,
             namespace: baml_types::StreamingMode::NonStreaming,
             fields: vec![
-                (Name::new("data".to_string()), TypeIR::int(), None, false),
+                (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                 (
                     Name::new("next".to_string()),
                     TypeIR::optional(TypeIR::class("Node")),
                     None,
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -1818,12 +1861,13 @@ Answer in JSON using this schema: Node"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -1839,8 +1883,9 @@ Answer in JSON using this schema: Node"#
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("len".to_string()), TypeIR::int(), None, false),
+                    (Name::new("len".to_string()), TypeIR::int(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1882,6 +1927,7 @@ Answer in JSON using this schema:
                     TypeIR::class("B"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1895,6 +1941,7 @@ Answer in JSON using this schema:
                     TypeIR::class("C"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1908,6 +1955,7 @@ Answer in JSON using this schema:
                     TypeIR::optional(TypeIR::class("A")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1954,6 +2002,7 @@ Answer in JSON using this schema: A"#
                     TypeIR::class("B"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1967,6 +2016,7 @@ Answer in JSON using this schema: A"#
                     TypeIR::class("C"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1980,6 +2030,7 @@ Answer in JSON using this schema: A"#
                     TypeIR::optional(TypeIR::class("A")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -1994,9 +2045,10 @@ Answer in JSON using this schema: A"#
                         TypeIR::class("A"),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("field".to_string()), TypeIR::bool(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("field".to_string()), TypeIR::bool(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2049,12 +2101,14 @@ Answer in JSON using this schema:
                         TypeIR::class("B"),
                         None,
                         false,
+                        None,
                     ),
                     (
                         Name::new("nested".to_string()),
                         TypeIR::class("Nested"),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2069,6 +2123,7 @@ Answer in JSON using this schema:
                     TypeIR::class("C"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2082,6 +2137,7 @@ Answer in JSON using this schema:
                     TypeIR::optional(TypeIR::class("A")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2096,9 +2152,10 @@ Answer in JSON using this schema:
                         TypeIR::class("A"),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("field".to_string()), TypeIR::bool(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("field".to_string()), TypeIR::bool(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2108,8 +2165,8 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("field".to_string()), TypeIR::bool(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("field".to_string()), TypeIR::bool(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2161,12 +2218,13 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::class("Forest"),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2181,6 +2239,7 @@ Answer in JSON using this schema:
                     TypeIR::list(TypeIR::class("Tree")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2227,6 +2286,7 @@ Answer in JSON using this schema: Tree"#
                 ]),
                 None,
                 false,
+                None,
             )],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -2260,12 +2320,13 @@ Answer in JSON using this schema: SelfReferential"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2276,12 +2337,13 @@ Answer in JSON using this schema: SelfReferential"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2332,13 +2394,15 @@ Node or Tree"#
                         TypeIR::union(vec![TypeIR::class("Node"), TypeIR::class("Tree")]),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("len".to_string()), TypeIR::int(), None, false),
+                    (Name::new("len".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("description".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2349,12 +2413,13 @@ Node or Tree"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2365,12 +2430,13 @@ Node or Tree"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2417,12 +2483,13 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2433,12 +2500,13 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2449,8 +2517,8 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("tag".to_string()), TypeIR::string(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("tag".to_string()), TypeIR::string(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2508,13 +2576,15 @@ Node or Tree or {
                         ]),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("len".to_string()), TypeIR::int(), None, false),
+                    (Name::new("len".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("description".to_string()),
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2525,12 +2595,13 @@ Node or Tree or {
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2541,12 +2612,13 @@ Node or Tree or {
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2557,8 +2629,8 @@ Node or Tree or {
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("tag".to_string()), TypeIR::string(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("tag".to_string()), TypeIR::string(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2611,6 +2683,7 @@ Answer in JSON using this schema:
                     TypeIR::class("B"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2624,6 +2697,7 @@ Answer in JSON using this schema:
                     TypeIR::class("C"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2637,6 +2711,7 @@ Answer in JSON using this schema:
                     TypeIR::optional(TypeIR::class("A")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2651,9 +2726,10 @@ Answer in JSON using this schema:
                         TypeIR::class("A"),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("field".to_string()), TypeIR::bool(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("field".to_string()), TypeIR::bool(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2703,12 +2779,13 @@ Answer in JSON using this interface:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2719,12 +2796,13 @@ Answer in JSON using this interface:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2770,12 +2848,13 @@ Node or int or string or Tree"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2786,12 +2865,13 @@ Node or int or string or Tree"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("children".to_string()),
                         TypeIR::list(TypeIR::class("Tree")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -2810,9 +2890,10 @@ Node or int or string or Tree"#
                         ]),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
-                    (Name::new("field".to_string()), TypeIR::bool(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
+                    (Name::new("field".to_string()), TypeIR::bool(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2857,12 +2938,13 @@ Answer in JSON using this schema:
             description: None,
             namespace: baml_types::StreamingMode::NonStreaming,
             fields: vec![
-                (Name::new("data".to_string()), TypeIR::int(), None, false),
+                (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                 (
                     Name::new("next".to_string()),
                     TypeIR::optional(TypeIR::class("Node")),
                     None,
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -2900,6 +2982,7 @@ Node[]"#
                 TypeIR::map(TypeIR::string(), TypeIR::class("RecursiveMap")),
                 None,
                 false,
+                None,
             )],
             constraints: Vec::new(),
             streaming_behavior: Default::default(),
@@ -2935,6 +3018,7 @@ Answer in JSON using this schema: RecursiveMap"#
                     TypeIR::map(TypeIR::string(), TypeIR::class("RecursiveMap")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2948,6 +3032,7 @@ Answer in JSON using this schema: RecursiveMap"#
                     TypeIR::class("RecursiveMap"),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -2982,12 +3067,13 @@ Answer in JSON using this schema:
             description: None,
             namespace: baml_types::StreamingMode::NonStreaming,
             fields: vec![
-                (Name::new("data".to_string()), TypeIR::int(), None, false),
+                (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                 (
                     Name::new("next".to_string()),
                     TypeIR::optional(TypeIR::class("Node")),
                     None,
                     false,
+                    None,
                 ),
             ],
             constraints: Vec::new(),
@@ -3027,6 +3113,7 @@ map<string, Node>"#
                     TypeIR::map(TypeIR::string(), TypeIR::class("Node")),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3036,12 +3123,13 @@ map<string, Node>"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -3083,6 +3171,7 @@ Answer in JSON using this schema:
                     TypeIR::map(TypeIR::string(), TypeIR::optional(TypeIR::class("Node"))),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3092,12 +3181,13 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -3135,12 +3225,13 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -3156,8 +3247,9 @@ Answer in JSON using this schema:
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3213,6 +3305,7 @@ map<string, Node or int or {
                     ),
                     None,
                     false,
+                    None,
                 )],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3222,12 +3315,13 @@ map<string, Node or int or {
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                     (
                         Name::new("next".to_string()),
                         TypeIR::optional(TypeIR::class("Node")),
                         None,
                         false,
+                        None,
                     ),
                 ],
                 constraints: Vec::new(),
@@ -3243,8 +3337,9 @@ map<string, Node or int or {
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     ),
-                    (Name::new("data".to_string()), TypeIR::int(), None, false),
+                    (Name::new("data".to_string()), TypeIR::int(), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3361,7 +3456,7 @@ Answer in JSON using this type: A"#
                 name: Name::new("A".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::int(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::int(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3369,7 +3464,7 @@ Answer in JSON using this type: A"#
                 name: Name::new("B".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::string(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::string(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3377,7 +3472,7 @@ Answer in JSON using this type: A"#
                 name: Name::new("C".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::float(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::float(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3386,9 +3481,9 @@ Answer in JSON using this type: A"#
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("a".to_string()), TypeIR::class("A"), None, false),
-                    (Name::new("b".to_string()), TypeIR::class("B"), None, false),
-                    (Name::new("c".to_string()), TypeIR::class("C"), None, false),
+                    (Name::new("a".to_string()), TypeIR::class("A"), None, false, None),
+                    (Name::new("b".to_string()), TypeIR::class("B"), None, false, None),
+                    (Name::new("c".to_string()), TypeIR::class("C"), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3435,7 +3530,7 @@ Answer in JSON using this schema:
                 name: Name::new("A".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::int(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::int(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3443,7 +3538,7 @@ Answer in JSON using this schema:
                 name: Name::new("B".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::string(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::string(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3451,7 +3546,7 @@ Answer in JSON using this schema:
                 name: Name::new("C".to_string()),
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
-                fields: vec![(Name::new("prop".to_string()), TypeIR::float(), None, false)],
+                fields: vec![(Name::new("prop".to_string()), TypeIR::float(), None, false, None)],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
             },
@@ -3460,9 +3555,9 @@ Answer in JSON using this schema:
                 description: None,
                 namespace: baml_types::StreamingMode::NonStreaming,
                 fields: vec![
-                    (Name::new("a".to_string()), TypeIR::class("A"), None, false),
-                    (Name::new("b".to_string()), TypeIR::class("B"), None, false),
-                    (Name::new("c".to_string()), TypeIR::class("C"), None, false),
+                    (Name::new("a".to_string()), TypeIR::class("A"), None, false, None),
+                    (Name::new("b".to_string()), TypeIR::class("B"), None, false, None),
+                    (Name::new("c".to_string()), TypeIR::class("C"), None, false, None),
                 ],
                 constraints: Vec::new(),
                 streaming_behavior: Default::default(),
@@ -3513,14 +3608,17 @@ Answer in JSON using this schema: Ret"#
                 (
                     Name::new("ONE".to_string()),
                     Some("The first enum.".to_string()),
+                None,
                 ),
                 (
                     Name::new_with_alias("TWO".to_string(), Some("two".to_string())),
                     Some("The second enum.".to_string()),
+                None,
                 ),
                 (
                     Name::new_with_alias("THREE".to_string(), Some("hi".to_string())),
                     Some("three".to_string()),
+                None,
                 ),
             ],
             constraints: Vec::new(),
@@ -3575,14 +3673,17 @@ Answer in JSON using this schema: Ret"#
                 (
                     Name::new("ONE".to_string()),
                     Some("The first enum.".to_string()),
+                None,
                 ),
                 (
                     Name::new_with_alias("TWO".to_string(), Some("two".to_string())),
                     Some("The second enum.".to_string()),
+                None,
                 ),
                 (
                     Name::new_with_alias("THREE".to_string(), Some("hi".to_string())),
                     Some("three".to_string()),
+                None,
                 ),
             ],
             constraints: Vec::new(),

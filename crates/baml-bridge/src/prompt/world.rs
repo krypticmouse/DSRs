@@ -42,10 +42,10 @@ impl TypeDb {
         class
             .fields
             .iter()
-            .find(|(field_name, _, _, _)| {
+            .find(|(field_name, _, _, _, _)| {
                 field_name.real_name() == field || field_name.rendered_name() == field
             })
-            .map(|(_, r#type, _, _)| r#type.clone())
+            .map(|(_, r#type, _, _, _)| r#type.clone())
     }
 
     /// Resolve a recursive type alias.
@@ -108,9 +108,61 @@ impl PromptWorld {
         pv: &super::PromptValue,
         style_override: Option<&str>,
     ) -> RenderResult {
+        // Apply enum variant specs before style resolution
+        let prepared = self.prepare_value_for_render(pv);
+        let pv = prepared.as_ref().unwrap_or(pv);
         let style = self.resolve_style(pv, style_override);
         let rendered = self.try_render_chain(pv, &style)?;
         Ok(self.apply_budget_truncation(rendered, pv))
+    }
+
+    /// Prepare a value for rendering by applying enum variant specs.
+    /// Returns `Some(prepared)` if the value needed modification, `None` otherwise.
+    fn prepare_value_for_render(&self, pv: &super::PromptValue) -> Option<super::PromptValue> {
+        let resolved_ty = pv.resolved_ty();
+
+        // Only applies to enum values
+        let enum_name = match &resolved_ty {
+            TypeIR::Enum { name, .. } => name,
+            _ => return None,
+        };
+
+        // Extract the variant string from the value
+        let variant = match pv.value() {
+            BamlValue::Enum(_, v) => v.as_str(),
+            BamlValue::String(v) => v.as_str(), // Permissive: treat strings as variant candidates
+            _ => return None,
+        };
+
+        // Look up the enum definition
+        let enum_def = self.types.find_enum(enum_name)?;
+
+        // Find the matching variant by real_name or rendered_name
+        let (_, _, variant_render_spec) = enum_def
+            .values
+            .iter()
+            .find(|(name, _, _)| name.real_name() == variant || name.rendered_name() == variant)?;
+
+        // If no render spec, no modification needed
+        let spec = variant_render_spec.as_ref()?;
+
+        // Clone the value and apply the spec
+        let mut derived = pv.clone();
+
+        // Apply settings overrides
+        let mut new_session = (*derived.session).clone();
+        new_session.settings = new_session.settings.with_field_spec(spec);
+        derived.session = std::sync::Arc::new(new_session);
+
+        // Apply renderer override (template takes precedence over style)
+        // This overwrites any existing override ("innermost wins")
+        if let Some(template) = spec.template {
+            derived.override_renderer = Some(RendererOverride::template(template));
+        } else if let Some(style) = spec.style {
+            derived.override_renderer = Some(RendererOverride::style(style));
+        }
+
+        Some(derived)
     }
 
     fn resolve_style(&self, pv: &super::PromptValue, override_style: Option<&str>) -> String {
@@ -139,7 +191,25 @@ impl PromptWorld {
             return Ok(result);
         }
 
-        Ok(self.render_structural(pv))
+        self.render_structural(pv, style)
+    }
+
+    /// Render a child value through the full render chain.
+    /// Unlike render_prompt_value, this does NOT apply max_total_chars truncation.
+    #[allow(clippy::result_large_err)]
+    fn render_child(&self, child: &super::PromptValue, parent_style: &str) -> RenderResult {
+        // Apply enum variant specs before style resolution
+        let prepared = self.prepare_value_for_render(child);
+        let child = prepared.as_ref().unwrap_or(child);
+
+        // If parent style is "default", allow child-specific overrides to select style.
+        // Otherwise, preserve the explicit parent style for consistency.
+        let child_style = if parent_style == "default" {
+            self.resolve_style(child, None)
+        } else {
+            parent_style.to_string()
+        };
+        self.try_render_chain(child, &child_style)
     }
 
     #[allow(clippy::result_large_err)]
@@ -155,23 +225,30 @@ impl PromptWorld {
                 }
                 Ok(None)
             }
-            Some(RendererOverride::Template { compiled_name, .. }) => {
+            Some(RendererOverride::Template {
+                compiled_name,
+                source,
+            }) => {
                 if style != "default" && style != "template" {
+                    // Template overrides only fire for "default" or "template" styles.
+                    // When an explicit style (e.g., "json") is active, templates are skipped.
                     return Ok(None);
                 }
 
-                let template_name = compiled_name.as_deref().ok_or_else(|| {
-                    RenderError::new(
-                        pv.path.to_string(),
-                        pv.ty().diagnostic_repr().to_string(),
-                        style.to_string(),
+                let rendered = match compiled_name.as_deref() {
+                    Some(template_name) => self.render_named_template(
+                        pv,
+                        style,
                         "field_override:template",
-                        "field template not compiled",
-                    )
-                })?;
-
-                let rendered =
-                    self.render_named_template(pv, style, "field_override:template", template_name)?;
+                        template_name,
+                    )?,
+                    None => self.render_inline_template(
+                        pv,
+                        style,
+                        "field_override:inline_template",
+                        source,
+                    )?,
+                };
                 Ok(Some(rendered))
             }
             Some(RendererOverride::Func { f }) => {
@@ -284,31 +361,34 @@ impl PromptWorld {
         }
     }
 
-    fn render_structural(&self, pv: &super::PromptValue) -> String {
+    #[allow(clippy::result_large_err)]
+    fn render_structural(&self, pv: &super::PromptValue, style: &str) -> RenderResult {
         let mut buf = String::new();
         let resolved = pv.resolved_ty();
-        self.render_structural_inner(pv, &resolved, pv.session.depth, &mut buf);
-        buf
+        self.render_structural_inner(pv, &resolved, style, &mut buf)?;
+        Ok(buf)
     }
 
+    #[allow(clippy::result_large_err)]
     fn render_structural_inner(
         &self,
         pv: &super::PromptValue,
         resolved_ty: &TypeIR,
-        depth: usize,
+        style: &str,
         buf: &mut String,
-    ) {
+    ) -> Result<(), RenderError> {
         let settings = &pv.session.settings;
+        let depth = pv.session.depth;
 
         if matches!(pv.ty(), TypeIR::Union(_, _)) && !pv.is_union_resolved() {
             self.render_union_ambiguous(pv, buf);
-            return;
+            return Ok(());
         }
 
         if depth >= settings.max_depth {
             let label = self.type_display_name(resolved_ty);
             buf.push_str(&format!("{label} {{ ... }}"));
-            return;
+            return Ok(());
         }
 
         match pv.value() {
@@ -317,16 +397,17 @@ impl PromptWorld {
             BamlValue::Float(f) => buf.push_str(&f.to_string()),
             BamlValue::Bool(b) => buf.push_str(if *b { "true" } else { "false" }),
             BamlValue::Null => buf.push_str("null"),
-            BamlValue::List(items) => self.render_list_structural(pv, items, depth, buf),
-            BamlValue::Map(map) => self.render_map_structural(pv, map, depth, buf),
+            BamlValue::List(items) => self.render_list_structural(pv, items, style, buf)?,
+            BamlValue::Map(map) => self.render_map_structural(pv, map, style, buf)?,
             BamlValue::Class(name, fields) => {
-                self.render_class_structural(pv, resolved_ty, name, fields, depth, buf)
+                self.render_class_structural(pv, resolved_ty, name, fields, style, buf)?
             }
             BamlValue::Enum(_, variant) => self.render_enum_structural(resolved_ty, variant, buf),
             BamlValue::Media(media) => {
                 buf.push_str(&format!("<media: {}>", media.media_type));
             }
         }
+        Ok(())
     }
 
     fn render_string(&self, s: &str, buf: &mut String, settings: &RenderSettings) {
@@ -340,27 +421,30 @@ impl PromptWorld {
         }
     }
 
+    #[allow(clippy::result_large_err)]
     fn render_list_structural(
         &self,
         pv: &super::PromptValue,
         items: &[BamlValue],
-        depth: usize,
+        style: &str,
         buf: &mut String,
-    ) {
+    ) -> Result<(), RenderError> {
         let settings = &pv.session.settings;
         let capped = items.len().min(settings.max_list_items);
 
         buf.push('[');
-        for (idx, item) in items.iter().take(capped).enumerate() {
+        for idx in 0..capped {
             if idx > 0 {
                 buf.push_str(", ");
             }
-            if let Some(child) = pv.child_index(idx) {
-                let resolved = child.resolved_ty();
-                self.render_structural_inner(&child, &resolved, depth + 1, buf);
-            } else {
-                buf.push_str(&format!("{}", item));
-            }
+            let child = pv.child_index(idx).unwrap_or_else(|| {
+                unreachable!(
+                    "child_index({idx}) failed for list item that exists - \
+                     budget and bounds already checked"
+                )
+            });
+            let rendered = self.render_child(&child, style)?;
+            buf.push_str(&rendered);
         }
 
         if items.len() > capped {
@@ -372,15 +456,17 @@ impl PromptWorld {
         }
 
         buf.push(']');
+        Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     fn render_map_structural(
         &self,
         pv: &super::PromptValue,
         map: &IndexMap<String, BamlValue>,
-        depth: usize,
+        style: &str,
         buf: &mut String,
-    ) {
+    ) -> Result<(), RenderError> {
         let settings = &pv.session.settings;
         let mut keys: Vec<&String> = map.keys().collect();
         keys.sort();
@@ -393,12 +479,14 @@ impl PromptWorld {
             }
             buf.push_str(key);
             buf.push_str(": ");
-            if let Some(child) = pv.child_map_value(key) {
-                let resolved = child.resolved_ty();
-                self.render_structural_inner(&child, &resolved, depth + 1, buf);
-            } else if let Some(value) = map.get(*key) {
-                buf.push_str(&format!("{}", value));
-            }
+            let child = pv.child_map_value(key).unwrap_or_else(|| {
+                unreachable!(
+                    "child_map_value({key:?}) failed for key that exists - \
+                     key came from map.keys()"
+                )
+            });
+            let rendered = self.render_child(&child, style)?;
+            buf.push_str(&rendered);
         }
 
         if keys.len() > capped {
@@ -410,17 +498,19 @@ impl PromptWorld {
         }
 
         buf.push('}');
+        Ok(())
     }
 
+    #[allow(clippy::result_large_err)]
     fn render_class_structural(
         &self,
         pv: &super::PromptValue,
         resolved_ty: &TypeIR,
         class_name: &str,
         fields: &IndexMap<String, BamlValue>,
-        depth: usize,
+        style: &str,
         buf: &mut String,
-    ) {
+    ) -> Result<(), RenderError> {
         let settings = &pv.session.settings;
         let label = match resolved_ty {
             TypeIR::Class { name, .. } => name.as_str(),
@@ -464,12 +554,14 @@ impl PromptWorld {
             }
             buf.push_str(key);
             buf.push_str(": ");
-            if let Some(child) = pv.child_field(key) {
-                let resolved = child.resolved_ty();
-                self.render_structural_inner(&child, &resolved, depth + 1, buf);
-            } else if let Some(value) = fields.get(key) {
-                buf.push_str(&format!("{}", value));
-            }
+            let child = pv.child_field(key).unwrap_or_else(|| {
+                unreachable!(
+                    "child_field({key:?}) failed for field that exists - \
+                     key came from schema or fields.keys()"
+                )
+            });
+            let rendered = self.render_child(&child, style)?;
+            buf.push_str(&rendered);
         }
 
         if ordered.len() > capped {
@@ -481,6 +573,7 @@ impl PromptWorld {
         }
 
         buf.push('}');
+        Ok(())
     }
 
     fn render_enum_structural(&self, resolved_ty: &TypeIR, variant: &str, buf: &mut String) {
@@ -492,11 +585,11 @@ impl PromptWorld {
                     enum_type
                         .values
                         .iter()
-                        .find(|(enum_name, _)| {
+                        .find(|(enum_name, _, _)| {
                             enum_name.real_name() == variant
                                 || enum_name.rendered_name() == variant
                         })
-                        .map(|(enum_name, _)| enum_name.rendered_name().to_string())
+                        .map(|(enum_name, _, _)| enum_name.rendered_name().to_string())
                 })
                 .unwrap_or_else(|| variant.to_string()),
             _ => variant.to_string(),
@@ -585,6 +678,30 @@ impl PromptWorld {
                 style.to_string(),
                 renderer.to_string(),
                 template_name.to_string(),
+                err.line().map(|line| (line, 0)),
+                err.to_string(),
+            )
+            .with_cause(err)
+        })
+    }
+
+    /// Render an inline template (not registered in the environment).
+    #[allow(clippy::result_large_err)]
+    fn render_inline_template(
+        &self,
+        pv: &super::PromptValue,
+        style: &str,
+        renderer: &str,
+        source: &str,
+    ) -> RenderResult {
+        let ctx = self.render_context(pv);
+        self.jinja.render_str(source, ctx).map_err(|err| {
+            RenderError::template_error(
+                pv.path.to_string(),
+                pv.ty().diagnostic_repr().to_string(),
+                style.to_string(),
+                renderer.to_string(),
+                "<inline>".to_string(),
                 err.line().map(|line| (line, 0)),
                 err.to_string(),
             )
@@ -754,7 +871,7 @@ mod tests {
     }
 
     #[test]
-    fn field_override_template_requires_compiled_name() {
+    fn field_override_inline_template_renders() {
         let world = make_world(RendererDb::new(), RenderSettings::default());
         let pv = make_prompt_value(&world, BamlValue::String("hi".to_string()), TypeIR::string())
             .with_override(RendererOverride::Template {
@@ -762,8 +879,8 @@ mod tests {
                 compiled_name: None,
             });
 
-        let err = world.try_field_override(&pv, "default").unwrap_err();
-        assert_eq!(err.message, "field template not compiled");
+        let rendered = world.try_field_override(&pv, "default").unwrap();
+        assert_eq!(rendered, Some("hi".to_string()));
     }
 
     #[test]
@@ -929,7 +1046,7 @@ mod tests {
 
         for (value, ty, expected) in cases {
             let pv = make_prompt_value(&world, value, ty);
-            assert_eq!(world.render_structural(&pv), expected);
+            assert_eq!(world.render_structural(&pv, "default").unwrap(), expected);
         }
     }
 
@@ -951,7 +1068,7 @@ mod tests {
             TypeIR::r#enum("Choice"),
         );
 
-        assert_eq!(world.render_structural(&pv), "y");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "y");
     }
 
     #[test]
@@ -960,7 +1077,7 @@ mod tests {
         let media = BamlMedia::url(BamlMediaType::Image, "http://example.com".to_string(), None);
         let pv = make_prompt_value(&world, BamlValue::Media(media), TypeIR::image());
 
-        assert_eq!(world.render_structural(&pv), "<media: image>");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "<media: image>");
     }
 
     #[test]
@@ -972,7 +1089,7 @@ mod tests {
         let world = make_world(RendererDb::new(), settings);
         let pv = make_prompt_value(&world, BamlValue::String("hello".to_string()), TypeIR::string());
 
-        assert_eq!(world.render_structural(&pv), "hel... (truncated)");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "hel... (truncated)");
     }
 
     #[test]
@@ -992,7 +1109,7 @@ mod tests {
             TypeIR::list(TypeIR::string()),
         );
 
-        assert_eq!(world.render_structural(&pv), "[a, b, ... (+1 more)]");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "[a, b, ... (+1 more)]");
     }
 
     #[test]
@@ -1011,7 +1128,7 @@ mod tests {
             TypeIR::map(TypeIR::string(), TypeIR::int()),
         );
 
-        assert_eq!(world.render_structural(&pv), "{a: 2, ... (+1 more)}");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "{a: 2, ... (+1 more)}");
     }
 
     #[test]
@@ -1041,7 +1158,7 @@ mod tests {
             TypeIR::class("Widget"),
         );
 
-        assert_eq!(world.render_structural(&pv), "Widget {z: 2, a: 1}");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "Widget {z: 2, a: 1}");
     }
 
     #[test]
@@ -1064,7 +1181,7 @@ mod tests {
             TypeIR::class("Widget"),
         );
 
-        assert_eq!(world.render_structural(&pv), "Widget { ... }");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "Widget { ... }");
     }
 
     #[test]
@@ -1083,7 +1200,7 @@ mod tests {
             TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
         );
 
-        assert_eq!(world.render_structural(&pv), "one of: Foo | Bar");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "one of: Foo | Bar");
     }
 
     #[test]
@@ -1117,7 +1234,7 @@ mod tests {
             TypeIR::union(vec![TypeIR::class("Foo"), TypeIR::class("Bar")]),
         );
 
-        assert_eq!(world.render_structural(&pv), "Bar {a: 1, b: 2}");
+        assert_eq!(world.render_structural(&pv, "default").unwrap(), "Bar {a: 1, b: 2}");
     }
 
     fn make_world(renderers: RendererDb, settings: RenderSettings) -> PromptWorld {
@@ -1174,6 +1291,7 @@ mod tests {
                             alias.map(|alias| alias.to_string()),
                         ),
                         None,
+                        None,
                     )
                 })
                 .collect(),
@@ -1194,6 +1312,7 @@ mod tests {
                         field_type,
                         None,
                         false,
+                        None,
                     )
                 })
                 .collect(),

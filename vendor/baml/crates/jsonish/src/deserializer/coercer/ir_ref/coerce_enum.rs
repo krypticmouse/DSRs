@@ -14,7 +14,7 @@ use crate::deserializer::{
 fn enum_match_candidates(enm: &Enum) -> Vec<(&str, Vec<String>)> {
     enm.values
         .iter()
-        .map(|(name, desc)| {
+        .map(|(name, desc, _render_spec)| {
             (
                 name.real_name(),
                 match desc.as_ref().map(|d| d.trim()) {
@@ -44,7 +44,7 @@ impl TypeCoercer for Enum {
 
         // Check if the string exactly matches any enum variant
         let mut result = None;
-        for (variant_name, _) in &self.values {
+        for (variant_name, _, _) in &self.values {
             if variant_name.rendered_name() == s {
                 result = Some(BamlValueWithFlags::Enum(
                     self.name.real_name().to_string(),

@@ -298,3 +298,125 @@ fn internal_names_are_unique() {
     assert_eq!(a_class.name.rendered_name(), "User");
     assert_eq!(b_class.name.rendered_name(), "User");
 }
+
+// Test nested #[render(...)] on fields
+#[derive(Debug, Clone, PartialEq, BamlType)]
+struct TruncatedMessage {
+    /// This field should be truncated to 5 chars.
+    #[render(max_string_chars = 5)]
+    content: String,
+    /// This field uses default settings.
+    title: String,
+}
+
+#[test]
+fn nested_render_spec_truncates_field() {
+    use baml_bridge::prompt::{PromptPath, PromptValue, PromptWorld};
+    use baml_bridge::prompt::renderer::{RenderSession, RenderSettings};
+    use baml_bridge::baml_types::{BamlValue, TypeIR};
+    use baml_bridge::{BamlTypeInternal, Registry};
+    use indexmap::IndexMap;
+    use std::sync::Arc;
+
+    let mut reg = Registry::new();
+    TruncatedMessage::register(&mut reg);
+
+    // Get the internal name (may differ due to module prefixing)
+    let internal_name = <TruncatedMessage as BamlTypeInternal>::baml_internal_name();
+
+    let (output_format, renderer_seed) = reg.build_with_renderers(TypeIR::class(internal_name));
+
+    let world = Arc::new(
+        PromptWorld::from_registry(output_format, renderer_seed, RenderSettings::default())
+            .expect("prompt world"),
+    );
+
+    // Create a value with a long content string
+    let value = BamlValue::Class(
+        internal_name.to_string(),
+        IndexMap::from([
+            ("content".to_string(), BamlValue::String("hello world this is a long message".to_string())),
+            ("title".to_string(), BamlValue::String("Short".to_string())),
+        ]),
+    );
+
+    let pv = PromptValue::new(
+        value,
+        TypeIR::class(internal_name),
+        world.clone(),
+        Arc::new(RenderSession::new(RenderSettings::default())),
+        PromptPath::new(),
+    );
+
+    let rendered = world.render_prompt_value(&pv, None).expect("render");
+
+    // content should be truncated to 5 chars + "... (truncated)"
+    // title should be rendered normally
+    assert!(rendered.contains("hello... (truncated)"), "content should be truncated, got: {}", rendered);
+    assert!(rendered.contains("Short"), "title should be rendered normally, got: {}", rendered);
+}
+
+// Test enum variant #[render(...)] applies everywhere (top-level and in lists)
+#[derive(Debug, Clone, PartialEq, BamlType)]
+enum Mood {
+    /// Excited!
+    #[render(template = "{{ value.raw }}!!!")]
+    Happy,
+    Sad,
+}
+
+#[test]
+fn enum_variant_render_spec_applies_everywhere() {
+    use baml_bridge::prompt::{PromptPath, PromptValue, PromptWorld};
+    use baml_bridge::prompt::renderer::{RenderSession, RenderSettings};
+    use baml_bridge::baml_types::{BamlValue, TypeIR};
+    use baml_bridge::{BamlTypeInternal, Registry};
+    use std::sync::Arc;
+
+    let mut reg = Registry::new();
+    Mood::register(&mut reg);
+
+    let internal_name = <Mood as BamlTypeInternal>::baml_internal_name();
+    let (output_format, renderer_seed) = reg.build_with_renderers(TypeIR::r#enum(internal_name));
+
+    let world = Arc::new(
+        PromptWorld::from_registry(output_format, renderer_seed, RenderSettings::default())
+            .expect("prompt world"),
+    );
+
+    // Test 1: Top-level enum value - Happy variant should get "!!!" appended
+    let happy_value = BamlValue::Enum(internal_name.to_string(), "Happy".to_string());
+    let pv = PromptValue::new(
+        happy_value.clone(),
+        TypeIR::r#enum(internal_name),
+        world.clone(),
+        Arc::new(RenderSession::new(RenderSettings::default())),
+        PromptPath::new(),
+    );
+    let rendered = world.render_prompt_value(&pv, None).expect("render");
+    assert_eq!(rendered, "Happy!!!", "top-level Happy should have template applied, got: {}", rendered);
+
+    // Test 2: Sad variant should NOT have template (no spec)
+    let sad_value = BamlValue::Enum(internal_name.to_string(), "Sad".to_string());
+    let pv = PromptValue::new(
+        sad_value,
+        TypeIR::r#enum(internal_name),
+        world.clone(),
+        Arc::new(RenderSession::new(RenderSettings::default())),
+        PromptPath::new(),
+    );
+    let rendered = world.render_prompt_value(&pv, None).expect("render");
+    assert_eq!(rendered, "Sad", "Sad should render normally, got: {}", rendered);
+
+    // Test 3: Happy inside a list - should ALSO get "!!!" (proves "everywhere")
+    let list_value = BamlValue::List(vec![happy_value]);
+    let pv = PromptValue::new(
+        list_value,
+        TypeIR::list(TypeIR::r#enum(internal_name)),
+        world.clone(),
+        Arc::new(RenderSession::new(RenderSettings::default())),
+        PromptPath::new(),
+    );
+    let rendered = world.render_prompt_value(&pv, None).expect("render");
+    assert_eq!(rendered, "[Happy!!!]", "Happy in list should have template applied, got: {}", rendered);
+}

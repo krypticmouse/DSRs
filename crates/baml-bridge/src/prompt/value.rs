@@ -222,7 +222,7 @@ fn score_enum_value(enum_name: &str, value: &str, world: &PromptWorld) -> usize 
         .types
         .find_enum(enum_name)
         .and_then(|enum_type| {
-            enum_type.values.iter().find(|(name, _)| {
+            enum_type.values.iter().find(|(name, _, _)| {
                 name.real_name() == value || name.rendered_name() == value
             })
         })
@@ -234,7 +234,7 @@ fn score_class_fields(fields: &IndexMap<String, BamlValue>, class: &internal_bam
     fields
         .keys()
         .filter(|key| {
-            class.fields.iter().any(|(name, _, _, _)| {
+            class.fields.iter().any(|(name, _, _, _, _)| {
                 name.real_name() == key.as_str() || name.rendered_name() == key.as_str()
             })
         })
@@ -299,6 +299,7 @@ impl PromptValue {
 
     /// Navigate to a class field by name.
     /// Supports both real_name and rendered_name.
+    /// Applies field-level FieldRenderSpec if present.
     pub fn child_field(&self, field: &str) -> Option<PromptValue> {
         let (class_name, fields) = match self.value() {
             BamlValue::Class(name, fields) => (name.as_str(), fields),
@@ -319,16 +320,20 @@ impl PromptValue {
 
         let mut candidate_keys = vec![field];
         let mut child_type = None;
+        let mut render_spec = None;
 
         if let Some(class) = class {
-            if let Some((field_name, field_type, _, _)) = class.fields.iter().find(|(name, ..)| {
-                name.real_name() == field || name.rendered_name() == field
-            }) {
+            if let Some((field_name, field_type, _, _, field_render_spec)) =
+                class.fields.iter().find(|(name, ..)| {
+                    name.real_name() == field || name.rendered_name() == field
+                })
+            {
                 candidate_keys = vec![field_name.real_name()];
                 if field_name.rendered_name() != field_name.real_name() {
                     candidate_keys.push(field_name.rendered_name());
                 }
                 child_type = Some(field_type.clone());
+                render_spec = field_render_spec.as_ref();
             }
         }
 
@@ -337,13 +342,34 @@ impl PromptValue {
             .find_map(|key| fields.get(key))?;
         let child_type = child_type.unwrap_or_else(|| Self::infer_type_from_value(child_value));
 
-        Some(PromptValue::new(
+        // Build child session with depth increment and optional spec settings
+        let child_session = match render_spec {
+            Some(spec) => {
+                let mut session = self.session.push_depth();
+                session.settings = session.settings.with_field_spec(spec);
+                session
+            }
+            None => self.session.push_depth(),
+        };
+
+        let mut child = PromptValue::new(
             child_value.clone(),
             child_type,
             self.world.clone(),
-            self.session.clone(),
+            Arc::new(child_session),
             self.path.push_field(field),
-        ))
+        );
+
+        // Apply renderer override from spec (template takes precedence over style)
+        if let Some(spec) = render_spec {
+            if let Some(template) = spec.template {
+                child = child.with_override(RendererOverride::template(template));
+            } else if let Some(style) = spec.style {
+                child = child.with_override(RendererOverride::style(style));
+            }
+        }
+
+        Some(child)
     }
 
     /// Navigate to a list element by index.
@@ -369,7 +395,7 @@ impl PromptValue {
             child_value.clone(),
             child_type,
             self.world.clone(),
-            self.session.clone(),
+            Arc::new(self.session.push_depth()),
             self.path.push_index(idx),
         ))
     }
@@ -392,7 +418,7 @@ impl PromptValue {
             child_value.clone(),
             child_type,
             self.world.clone(),
-            self.session.clone(),
+            Arc::new(self.session.push_depth()),
             self.path.push_map_key(key),
         ))
     }
@@ -787,6 +813,7 @@ mod tests {
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     )
                 })
                 .collect(),
@@ -811,6 +838,7 @@ mod tests {
                         TypeIR::string(),
                         None,
                         false,
+                        None,
                     )
                 })
                 .collect(),
@@ -825,7 +853,7 @@ mod tests {
             description: None,
             values: values
                 .iter()
-                .map(|value| (Name::new(value.to_string()), None))
+                .map(|value| (Name::new(value.to_string()), None, None))
                 .collect(),
             constraints: Vec::new(),
         }

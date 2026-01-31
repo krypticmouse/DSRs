@@ -1,0 +1,6 @@
+error: `#[render(...)]` on variants is not supported for data enums (tagged unions); use type-level renderers instead
+ --> tests/ui/nested_variant_render_data_enum.rs:6:5
+  |
+6 | /     #[render(style = "json")]
+7 | |     A { x: String },
+  | |___________________^

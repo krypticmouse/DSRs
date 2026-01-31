@@ -1,0 +1,5 @@
+error: `style` and `template` are mutually exclusive
+ --> tests/ui/nested_style_template_conflict.rs:5:6
+  |
+5 |     #[render(style = "json", template = "{{ value.raw }}")]
+  |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

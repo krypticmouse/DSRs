@@ -194,10 +194,10 @@ fn py_to_baml_value_inner(
             let enum_name = name.clone();
             let enum_def = output_format.enums.get(&enum_name);
             if let Some(enum_def) = enum_def {
-                if let Some((variant, _)) = enum_def
+                if let Some((variant, _, _)) = enum_def
                     .values
                     .iter()
-                    .find(|(name, _)| name.rendered_name() == raw || name.real_name() == raw)
+                    .find(|(name, _, _)| name.rendered_name() == raw || name.real_name() == raw)
                 {
                     return Ok(BamlValue::Enum(
                         enum_name,
@@ -281,7 +281,7 @@ fn py_to_class_value(
     })?;
 
     let mut fields = BamlMap::new();
-    for (name, field_type, _, _) in &class.fields {
+    for (name, field_type, _, _, _) in &class.fields {
         let rendered = name.rendered_name();
         let real = name.real_name();
         let value = dict
