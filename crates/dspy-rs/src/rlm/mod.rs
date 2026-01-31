@@ -7,6 +7,7 @@ pub mod error;
 pub mod history;
 pub mod prompt;
 pub mod signatures;
+pub mod storage;
 pub mod submit;
 pub mod tools;
 #[allow(clippy::module_inception)]
@@ -22,6 +23,7 @@ pub use prompt::{
 };
 pub use history::{REPLEntry, REPLHistory};
 pub use signatures::{RlmActionSig, RlmActionSigInput, RlmExtractInput, RlmExtractSig};
+pub use storage::{StorableFieldMeta, StorableRlmResult};
 pub use tools::LlmTools;
 pub use rlm::{Rlm, RlmBuilder};
 

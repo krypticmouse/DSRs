@@ -55,6 +55,8 @@ regex = "1.11.2"
 reqwest = { version = "0.12.23", features = ["blocking"] }
 kdam = "0.6.3"
 rand = "0.8.5"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
 rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
@@ -79,4 +81,8 @@ required-features = ["rlm"]
 
 [[example]]
 name = "python_types"
+required-features = ["rlm"]
+
+[[example]]
+name = "rlm_storage"
 required-features = ["rlm"]

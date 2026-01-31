@@ -43,7 +43,10 @@ pub mod py;
 pub mod rlm;
 #[cfg(feature = "rlm")]
 #[allow(deprecated)]
-pub use rlm::{Rlm, RlmAdapter, RlmBuilder, RlmConfig, RlmError, RlmResult, TypedRlm};
+pub use rlm::{
+    Rlm, RlmAdapter, RlmBuilder, RlmConfig, RlmError, RlmResult, StorableFieldMeta,
+    StorableRlmResult, TypedRlm,
+};
 
 #[deprecated(
     since = "0.2.0",

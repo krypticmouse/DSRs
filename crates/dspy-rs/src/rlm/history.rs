@@ -1,13 +1,40 @@
 #![cfg(feature = "rlm")]
 
 use baml_bridge::BamlType;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use uuid::Uuid;
+
+// Custom serde modules for fields with dynamic defaults
+mod serde_uuid {
+    use super::*;
+    pub fn serialize<S: Serializer>(id: &Uuid, s: S) -> Result<S::Ok, S::Error> {
+        id.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Uuid, D::Error> {
+        Option::<Uuid>::deserialize(d).map(|opt| opt.unwrap_or_else(Uuid::new_v4))
+    }
+}
+
+mod serde_datetime {
+    use super::*;
+    pub fn serialize<S: Serializer>(dt: &DateTime<Utc>, s: S) -> Result<S::Ok, S::Error> {
+        dt.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<DateTime<Utc>, D::Error> {
+        Option::<DateTime<Utc>>::deserialize(d).map(|opt| opt.unwrap_or_else(Utc::now))
+    }
+}
 
 /// A single entry in the REPL history.
-#[derive(Debug, Clone, BamlType)]
+#[derive(Debug, Clone, Serialize, Deserialize, BamlType)]
 pub struct REPLEntry {
     pub reasoning: String,
     pub code: String,
     pub output: String,
+    #[serde(with = "serde_datetime")]
+    #[baml(skip)]
+    pub timestamp: DateTime<Utc>,
 }
 
 impl REPLEntry {
@@ -17,6 +44,7 @@ impl REPLEntry {
             reasoning: String::new(),
             code,
             output,
+            timestamp: Utc::now(),
         }
     }
 
@@ -26,6 +54,7 @@ impl REPLEntry {
             reasoning,
             code,
             output,
+            timestamp: Utc::now(),
         }
     }
 }
@@ -36,7 +65,7 @@ impl REPLEntry {
 /// This type follows an immutable pattern where `append` returns a new
 /// history instance, preserving the original. This aligns with Python
 /// DSPy's frozen model pattern.
-#[derive(Debug, Clone, Default, BamlType)]
+#[derive(Debug, Clone, Serialize, Deserialize, BamlType)]
 #[render(default = r#"
 {%- if value.entries | length == 0 -%}
 You have not interacted with the REPL environment yet.
@@ -62,6 +91,12 @@ Output ({{ output_len | format_count }} chars):
 {%- endif -%}
 "#)]
 pub struct REPLHistory {
+    #[serde(with = "serde_uuid")]
+    #[baml(skip)]
+    pub id: Uuid,
+    #[serde(with = "serde_datetime")]
+    #[baml(skip)]
+    pub created_at: DateTime<Utc>,
     pub entries: Vec<REPLEntry>,
 }
 
@@ -69,24 +104,34 @@ impl REPLHistory {
     /// Create a new empty REPL history.
     pub fn new() -> Self {
         Self {
+            id: Uuid::new_v4(),
+            created_at: Utc::now(),
             entries: Vec::new(),
         }
     }
 
     /// Immutable append - returns new history with the entry added.
+    ///
+    /// Preserves the original id and created_at since this is the same trajectory.
     pub fn append(&self, code: String, output: String) -> Self {
         let mut entries = self.entries.clone();
         entries.push(REPLEntry::new(code, output));
         Self {
+            id: self.id,
+            created_at: self.created_at,
             entries,
         }
     }
 
     /// Immutable append with reasoning - returns new history with the entry added.
+    ///
+    /// Preserves the original id and created_at since this is the same trajectory.
     pub fn append_with_reasoning(&self, reasoning: String, code: String, output: String) -> Self {
         let mut entries = self.entries.clone();
         entries.push(REPLEntry::with_reasoning(reasoning, code, output));
         Self {
+            id: self.id,
+            created_at: self.created_at,
             entries,
         }
     }
@@ -104,6 +149,12 @@ impl REPLHistory {
     /// Get the entries as a slice.
     pub fn entries(&self) -> &[REPLEntry] {
         &self.entries
+    }
+}
+
+impl Default for REPLHistory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

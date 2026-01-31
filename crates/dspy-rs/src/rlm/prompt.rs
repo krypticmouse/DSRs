@@ -197,7 +197,7 @@ fn format_class_shape(
     lines.push(format!("{name} {{"));
 
     let mut field_iter = class.fields.iter();
-    for (idx, (field_name, field_type, field_desc, _)) in field_iter
+    for (idx, (field_name, field_type, field_desc, _, _)) in field_iter
         .by_ref()
         .take(SHAPE_MAX_FIELDS)
         .enumerate()
@@ -206,8 +206,10 @@ fn format_class_shape(
         let mut field_lines = field_type_string.lines();
         let first = field_lines.next().unwrap_or_default();
         let mut line = format!("  {}: {}", field_name.rendered_name(), first);
-        if let Some(desc) = field_desc && !desc.is_empty() {
-            line.push_str(&format!(" // {desc}"));
+        if let Some(desc) = field_desc {
+            if !desc.is_empty() {
+                line.push_str(&format!(" // {desc}"));
+            }
         }
         lines.push(line);
 
@@ -254,7 +256,7 @@ fn format_type_name(output_format: &OutputFormatContent, type_ir: &TypeIR) -> St
                 let values: Vec<String> = enm
                     .values
                     .iter()
-                    .map(|(value, _)| format!("\"{}\"", value.rendered_name()))
+                    .map(|(value, _, _)| format!("\"{}\"", value.rendered_name()))
                     .collect();
                 values.join(" | ")
             })

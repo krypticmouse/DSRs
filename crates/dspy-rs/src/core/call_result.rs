@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use rig::message::ToolCall;
+use serde::{Deserialize, Serialize};
 
 use crate::{Flag, LmUsage};
 
@@ -13,14 +14,15 @@ pub struct CallResult<O> {
     fields: IndexMap<String, FieldMeta>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldMeta {
     pub raw_text: String,
+    #[serde(skip)]
     pub flags: Vec<Flag>,
     pub checks: Vec<ConstraintResult>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConstraintResult {
     pub label: String,
     pub expression: String,

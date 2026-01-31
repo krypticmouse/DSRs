@@ -1,6 +1,7 @@
 #![cfg(feature = "rlm")]
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 
 use crate::{ConstraintKind, ConstraintResult, FieldMeta, Signature};
 use super::history::REPLHistory;
@@ -36,7 +37,7 @@ impl Default for RlmConfig {
 }
 
 /// Summary of constraint outcomes captured during execution.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct ConstraintSummary {
     pub checks_passed: usize,
     pub checks_failed: usize,
