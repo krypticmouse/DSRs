@@ -497,6 +497,7 @@ dependencies = [
  "minijinja",
  "proptest",
  "pyo3",
+ "rlm-core",
  "serde",
  "serde_json",
  "sha2",
@@ -3442,6 +3443,7 @@ dependencies = [
 name = "rlm-core"
 version = "0.1.0"
 dependencies = [
+ "baml-types",
  "pyo3",
 ]
 

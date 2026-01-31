@@ -71,8 +71,10 @@ pub struct LM {
     pub api_key: Option<String>,
     #[builder(default = "openai:gpt-4o-mini".to_string())]
     pub model: String,
-    #[builder(default = 0.7)]
-    pub temperature: f32,
+    /// Temperature for sampling. Set to `None` for reasoning models (o1, o3, gpt-5.2, etc.)
+    /// which don't support temperature. Typical default is `1.0` for most models.
+    #[builder(into)]
+    pub temperature: Option<f32>,
     #[builder(default = 512)]
     pub max_tokens: u32,
     #[builder(default = 10)]
@@ -289,7 +291,7 @@ impl LM {
                 },
                 documents: Vec::new(),
                 tools: tool_definitions.clone(),
-                temperature: Some(self.temperature as f64),
+                temperature: self.temperature.map(|t| t as f64),
                 max_tokens: Some(self.max_tokens as u64),
                 tool_choice: Some(ToolChoice::Auto),
                 additional_params: self.additional_params.clone(),
@@ -393,7 +395,7 @@ impl LM {
             },
             documents: Vec::new(),
             tools: tool_definitions.clone(),
-            temperature: Some(self.temperature as f64),
+            temperature: self.temperature.map(|t| t as f64),
             max_tokens: Some(self.max_tokens as u64),
             tool_choice: if !tool_definitions.is_empty() {
                 Some(ToolChoice::Auto)

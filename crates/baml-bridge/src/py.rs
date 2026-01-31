@@ -661,3 +661,192 @@ fn orjson_fallback_to_baml(
     let parsed = jsonish::from_str(output_format, r#type, &raw, true).ok()?;
     Some(BamlValue::from(parsed))
 }
+
+// ============================================================================
+// DynamicValue - a newtype wrapper for dynamic/untyped input fields
+// ============================================================================
+
+// TODO: Refine wording - not finalized, please don't commit this yet
+
+/// A dynamic value wrapper for use in signature INPUT fields.
+///
+/// This type wraps `BamlValue` and enables arbitrarily nested structures
+/// (dicts of dicts, lists of dicts, etc.) as signature inputs.
+///
+/// # Usage
+///
+/// ```rust,ignore
+/// #[derive(Signature)]
+/// struct AnalyzeCodebase {
+///     #[input]
+///     codebase: DynamicValue,  // Accepts any nested structure
+///     #[output]
+///     analysis: String,
+/// }
+/// ```
+///
+/// # WARNING
+///
+/// **DO NOT use DynamicValue as an OUTPUT field type.** The jsonish parser
+/// will panic when attempting to parse LLM output against a `Top` type schema.
+/// This type is designed exclusively for INPUT fields.
+#[derive(Debug, Clone)]
+pub struct DynamicValue(pub BamlValue);
+
+impl DynamicValue {
+    /// Create a new DynamicValue from a BamlValue.
+    pub fn new(value: BamlValue) -> Self {
+        Self(value)
+    }
+
+    /// Get a reference to the inner BamlValue.
+    pub fn inner(&self) -> &BamlValue {
+        &self.0
+    }
+
+    /// Consume self and return the inner BamlValue.
+    pub fn into_inner(self) -> BamlValue {
+        self.0
+    }
+}
+
+impl From<BamlValue> for DynamicValue {
+    fn from(value: BamlValue) -> Self {
+        Self(value)
+    }
+}
+
+impl From<DynamicValue> for BamlValue {
+    fn from(value: DynamicValue) -> Self {
+        value.0
+    }
+}
+
+impl<'py> pyo3::IntoPyObject<'py> for DynamicValue {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok(baml_value_to_py(py, &self.0).into_bound(py))
+    }
+}
+
+impl<'py> pyo3::IntoPyObject<'py> for &DynamicValue {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = pyo3::PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        Ok(baml_value_to_py(py, &self.0).into_bound(py))
+    }
+}
+
+// ============================================================================
+// RlmDescribe implementation for DynamicValue (dynamic input support)
+// TODO: Refine wording - not finalized, please don't commit this yet
+// ============================================================================
+
+#[cfg(feature = "rlm")]
+mod rlm_impls {
+    use super::*;
+    use rlm_core::describe::{RlmDescribe, RlmTypeInfo};
+
+    impl RlmTypeInfo for DynamicValue {
+        const TYPE_NAME: &'static str = "DynamicValue";
+        const IS_COLLECTION: bool = false;
+        const IS_DESCRIBABLE: bool = true;
+    }
+
+    impl RlmDescribe for DynamicValue {
+        fn type_name() -> &'static str {
+            "dynamic"
+        }
+
+        fn is_iterable() -> bool {
+            true // Maps and Lists are iterable
+        }
+
+        fn is_indexable() -> bool {
+            true // Maps and Lists are indexable
+        }
+
+        fn describe_value(&self) -> String {
+            describe_baml_value(&self.0)
+        }
+
+        fn describe_type() -> String {
+            "dynamic - a dynamic value that can be any nested structure (dict, list, string, int, etc.)".to_string()
+        }
+    }
+
+    fn describe_baml_value(value: &BamlValue) -> String {
+        match value {
+            BamlValue::String(s) => {
+                if s.len() > 100 {
+                    format!("\"{}...\" ({} chars)", &s[..97], s.len())
+                } else {
+                    format!("\"{}\"", s)
+                }
+            }
+            BamlValue::Int(i) => i.to_string(),
+            BamlValue::Float(f) => format!("{:.6}", f),
+            BamlValue::Bool(b) => b.to_string(),
+            BamlValue::Null => "null".to_string(),
+            BamlValue::List(items) => {
+                if items.is_empty() {
+                    "[] (empty list)".to_string()
+                } else if items.len() <= 3 {
+                    let descs: Vec<_> = items.iter().map(describe_baml_value).collect();
+                    format!("[{}]", descs.join(", "))
+                } else {
+                    format!(
+                        "[{}, {}, ... and {} more]",
+                        describe_baml_value(&items[0]),
+                        describe_baml_value(&items[1]),
+                        items.len() - 2
+                    )
+                }
+            }
+            BamlValue::Map(map) => {
+                if map.is_empty() {
+                    "{} (empty map)".to_string()
+                } else {
+                    let entries: Vec<_> = map
+                        .iter()
+                        .take(3)
+                        .map(|(k, v)| format!("{}: {}", k, describe_baml_value(v)))
+                        .collect();
+                    if map.len() <= 3 {
+                        format!("{{{}}}", entries.join(", "))
+                    } else {
+                        format!(
+                            "{{{}, ... and {} more}}",
+                            entries.join(", "),
+                            map.len() - 3
+                        )
+                    }
+                }
+            }
+            BamlValue::Media(m) => format!("<media: {:?}>", m.media_type),
+            BamlValue::Enum(name, variant) => format!("{}::{}", name, variant),
+            BamlValue::Class(name, fields) => {
+                if fields.is_empty() {
+                    format!("{} {{}}", name)
+                } else {
+                    let field_names: Vec<_> = fields.keys().take(3).cloned().collect();
+                    if fields.len() <= 3 {
+                        format!("{} {{ {} }}", name, field_names.join(", "))
+                    } else {
+                        format!(
+                            "{} {{ {}, ... and {} more }}",
+                            name,
+                            field_names.join(", "),
+                            fields.len() - 3
+                        )
+                    }
+                }
+            }
+        }
+    }
+}

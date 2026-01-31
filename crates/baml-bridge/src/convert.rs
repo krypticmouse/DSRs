@@ -310,3 +310,17 @@ pub fn get_field<'a>(
     map.get(name)
         .or_else(|| alias.and_then(|alias| map.get(alias)))
 }
+
+/// Identity conversion for BamlValue - it's already a BamlValue.
+impl BamlValueConvert for BamlValue {
+    fn try_from_baml_value(value: BamlValue, _path: Vec<String>) -> Result<Self, BamlConvertError> {
+        Ok(value)
+    }
+}
+
+#[cfg(feature = "pyo3")]
+impl BamlValueConvert for crate::py::DynamicValue {
+    fn try_from_baml_value(value: BamlValue, _path: Vec<String>) -> Result<Self, BamlConvertError> {
+        Ok(crate::py::DynamicValue::new(value))
+    }
+}

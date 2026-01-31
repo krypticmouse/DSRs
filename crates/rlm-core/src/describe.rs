@@ -321,9 +321,10 @@ impl<T: RlmTypeInfo> RlmTypeInfo for Vec<T> {
     const IS_DESCRIBABLE: bool = T::IS_DESCRIBABLE;
 }
 
+// TODO: Refine wording - not finalized, please don't commit this yet
 impl<T: RlmDescribe> RlmDescribe for Vec<T> {
     fn type_name() -> &'static str {
-        "Vec"
+        "list"
     }
 
     fn is_iterable() -> bool {
@@ -336,21 +337,21 @@ impl<T: RlmDescribe> RlmDescribe for Vec<T> {
 
     fn describe_value(&self) -> String {
         if self.is_empty() {
-            return format!("Vec<{}> (empty)", T::type_name());
+            return format!("list[{}] (empty)", T::type_name());
         }
 
         let item_descriptions: Vec<String> = self.iter().map(|item| item.describe_value()).collect();
 
         if self.len() <= 3 {
             format!(
-                "Vec<{}> with {} items: [{}]",
+                "list[{}] with {} items: [{}]",
                 T::type_name(),
                 self.len(),
                 item_descriptions.join(", ")
             )
         } else {
             format!(
-                "Vec<{}> with {} items: [{}, {}, ... and {} more]",
+                "list[{}] with {} items: [{}, {}, ... and {} more]",
                 T::type_name(),
                 self.len(),
                 item_descriptions[0],
@@ -362,7 +363,7 @@ impl<T: RlmDescribe> RlmDescribe for Vec<T> {
 
     fn describe_type() -> String {
         format!(
-            "Vec<{}> - a collection of {} items (iterable, indexable)",
+            "list[{}] - a collection of {} items (iterable, indexable)",
             T::type_name(),
             T::type_name()
         )
@@ -485,9 +486,10 @@ impl<K: RlmTypeInfo, V: RlmTypeInfo> RlmTypeInfo for HashMap<K, V> {
     const IS_COLLECTION: bool = true;
 }
 
+// TODO: Refine wording - not finalized, please don't commit this yet
 impl<K: RlmDescribe + std::fmt::Debug, V: RlmDescribe> RlmDescribe for HashMap<K, V> {
     fn type_name() -> &'static str {
-        "HashMap"
+        "dict"
     }
 
     fn is_iterable() -> bool {
@@ -500,7 +502,7 @@ impl<K: RlmDescribe + std::fmt::Debug, V: RlmDescribe> RlmDescribe for HashMap<K
 
     fn describe_value(&self) -> String {
         if self.is_empty() {
-            return format!("HashMap<{}, {}> (empty)", K::type_name(), V::type_name());
+            return format!("dict[{}, {}] (empty)", K::type_name(), V::type_name());
         }
 
         let entries: Vec<String> = self
@@ -511,7 +513,7 @@ impl<K: RlmDescribe + std::fmt::Debug, V: RlmDescribe> RlmDescribe for HashMap<K
 
         if self.len() <= 3 {
             format!(
-                "HashMap<{}, {}> with {} entries: {{{}}}",
+                "dict[{}, {}] with {} entries: {{{}}}",
                 K::type_name(),
                 V::type_name(),
                 self.len(),
@@ -519,7 +521,7 @@ impl<K: RlmDescribe + std::fmt::Debug, V: RlmDescribe> RlmDescribe for HashMap<K
             )
         } else {
             format!(
-                "HashMap<{}, {}> with {} entries: {{{}, ... and {} more}}",
+                "dict[{}, {}] with {} entries: {{{}, ... and {} more}}",
                 K::type_name(),
                 V::type_name(),
                 self.len(),
@@ -531,7 +533,7 @@ impl<K: RlmDescribe + std::fmt::Debug, V: RlmDescribe> RlmDescribe for HashMap<K
 
     fn describe_type() -> String {
         format!(
-            "HashMap<{}, {}> - a key-value mapping (iterable, indexable by key)",
+            "dict[{}, {}] - a key-value mapping (iterable, indexable by key)",
             K::type_name(),
             V::type_name()
         )

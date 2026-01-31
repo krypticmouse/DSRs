@@ -47,6 +47,8 @@ pub use rlm::{
     Rlm, RlmAdapter, RlmBuilder, RlmConfig, RlmError, RlmResult, StorableFieldMeta,
     StorableRlmResult, TypedRlm,
 };
+#[cfg(feature = "rlm")]
+pub use baml_bridge::DynamicValue;
 
 #[deprecated(
     since = "0.2.0",

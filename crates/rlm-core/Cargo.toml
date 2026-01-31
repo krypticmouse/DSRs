@@ -8,9 +8,11 @@ description = "Core traits for RLM type description and introspection"
 
 [dependencies]
 pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
+baml-types = { path = "../../vendor/baml/crates/baml-types", optional = true }
 
 [features]
 default = []
 pyo3 = ["dep:pyo3"]
+baml-types = ["dep:baml-types"]
 
 [dev-dependencies]

@@ -146,6 +146,13 @@ impl<T: ToBamlValue> ToBamlValue for Rc<T> {
     }
 }
 
+#[cfg(feature = "pyo3")]
+impl ToBamlValue for crate::py::DynamicValue {
+    fn to_baml_value(&self) -> BamlValue {
+        self.inner().clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

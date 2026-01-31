@@ -35,11 +35,13 @@ pyo3 = { workspace = true, features = ["auto-initialize"], optional = true }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 
 baml-bridge-derive = { path = "../baml-bridge-derive", optional = true }
+rlm-core = { path = "../rlm-core", optional = true }
 
 [features]
 default = ["derive"]
 derive = ["dep:baml-bridge-derive"]
 pyo3 = ["dep:pyo3"]
+rlm = ["dep:rlm-core", "pyo3"]
 
 [dev-dependencies]
 dspy-rs = { path = "../dspy-rs" }

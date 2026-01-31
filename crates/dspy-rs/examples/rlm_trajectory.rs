@@ -11,7 +11,7 @@ Requires OPENAI_API_KEY in the environment.
 
 use anyhow::Result;
 use dspy_rs::rlm::{Rlm, RlmResult};
-use dspy_rs::{configure, rlm_type, ChatAdapter, RlmType, Signature, LM};
+use dspy_rs::{configure, rlm_type, BamlValue, ChatAdapter, DynamicValue, RlmType, Signature, LM};
 
 /// A trajectory step (simplified; real datasets may include more fields).
 #[rlm_type]
@@ -73,17 +73,25 @@ pub struct PatternExample {
     pub suggested_doc: String,
 }
 
-/// Analyze trajectories to identify documentation patterns that reduce tool calls.
+/// Analyze coding agent trajectories to identify which documents,
+/// if provided, could be reduce exploration the model has to do
+/// before it can do the task.
 #[derive(Signature, Clone, Debug)]
 struct AnalyzeTrajectories {
-    #[input(desc = "Trajectories to analyze - use .user_steps, .steps[i], len()")]
+    /// Trajectories to analyze
+    #[input]
     trajectories: Vec<Trajectory>,
 
-    #[input(desc = "Existing patterns to update or extend")]
+    /// Existing patterns to update or extend
+    #[input]
     existing_patterns: Vec<Pattern>,
 
+    /// Codebase files: arbitrarily nested dict (path -> content or path -> {subpath -> content})
+    #[input]
+    codebase: DynamicValue,
+
+    /// Updated patterns
     #[output]
-    #[check("len(this) >= 1", label = "has_patterns")]
     updated_patterns: Vec<Pattern>,
 }
 
@@ -92,28 +100,115 @@ async fn main() -> Result<()> {
     let trajectories = sample_trajectories();
     let existing_patterns = seed_patterns();
 
+    // Create a nested codebase structure to demonstrate DynamicValue
+    let codebase = create_sample_codebase();
+
     let input = AnalyzeTrajectoriesInput {
         trajectories,
         existing_patterns,
+        codebase,
     };
 
+    // Print the variable descriptions (what the LLM will see)
+    println!("=== VARIABLE DESCRIPTIONS (for RLM prompt) ===\n");
+    use dspy_rs::rlm_core::RlmInputFields;
+    for var in input.rlm_variables() {
+        println!("{}", var.format());
+        println!("---");
+    }
+
     // Configure DSRs with global LM settings
+    // GPT 5.2 is a reasoning model - don't set temperature (reasoning models reject it)
     let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .temperature(0.2)
+        .model("openai:gpt-5.2".to_string())
+        // No temperature for reasoning models
+        .additional_params(serde_json::json!({"reasoning_effort": "low"}))
         .build()
         .await?;
 
     configure(lm, ChatAdapter);
 
+    // Print the Python globals that will be injected
+    println!("\n=== PYTHON GLOBALS (injected into REPL) ===\n");
+    use dspy_rs::pyo3::types::PyDictMethods;
+    dspy_rs::pyo3::Python::attach(|py| {
+        let globals = dspy_rs::pyo3::types::PyDict::new(py);
+        input.inject_into_python(py, &globals).unwrap();
+        println!("Globals:");
+        for (key, value) in globals.iter() {
+            use dspy_rs::pyo3::types::PyAnyMethods;
+            let key_str: String = key.extract().unwrap_or_default();
+            let repr: String = value.repr().map(|r| r.to_string()).unwrap_or_else(|_| "<error>".to_string());
+            // Truncate long reprs
+            let repr = if repr.len() > 300 {
+                format!("{}...", &repr[..300])
+            } else {
+                repr
+            };
+            println!("  {}: {}", key_str, repr);
+        }
+    });
+
     let rlm = Rlm::<AnalyzeTrajectories>::new();
     let result = rlm.call(input).await?;
+
+    // Print the full trajectory
+    println!("\n=== RLM TRAJECTORY ===\n");
+    for (i, entry) in result.trajectory.entries.iter().enumerate() {
+        println!("--- Step {} ---", i + 1);
+        if !entry.reasoning.is_empty() {
+            println!("Reasoning: {}", entry.reasoning);
+        }
+        println!("Code:\n```python\n{}\n```", entry.code);
+        let output = if entry.output.len() > 500 {
+            format!("{}...", &entry.output[..500])
+        } else {
+            entry.output.clone()
+        };
+        println!("Output: {}\n", output);
+    }
 
     print_patterns(&result);
     print_trajectory_history(&result.input.trajectories);
     print_stats(&result);
 
     Ok(())
+}
+
+/// Create a sample nested codebase structure
+fn create_sample_codebase() -> DynamicValue {
+    use dspy_rs::baml_bridge::baml_types::BamlMap;
+
+    // Create nested structure: src/ -> {main.rs, lib.rs, utils/ -> {helpers.rs}}
+    let mut utils = BamlMap::new();
+    utils.insert(
+        "helpers.rs".to_string(),
+        BamlValue::String("pub fn format_error(e: &str) -> String { format!(\"Error: {}\", e) }".to_string()),
+    );
+
+    let mut src = BamlMap::new();
+    src.insert(
+        "main.rs".to_string(),
+        BamlValue::String("fn main() { println!(\"Hello\"); }".to_string()),
+    );
+    src.insert(
+        "lib.rs".to_string(),
+        BamlValue::String("pub mod utils;".to_string()),
+    );
+    src.insert("utils".to_string(), BamlValue::Map(utils));
+
+    let mut root = BamlMap::new();
+    root.insert("src".to_string(), BamlValue::Map(src));
+    root.insert(
+        "Cargo.toml".to_string(),
+        BamlValue::String("[package]\nname = \"example\"\nversion = \"0.1.0\"".to_string()),
+    );
+    root.insert(
+        "README.md".to_string(),
+        BamlValue::String("# Example Project\n\nThis is a sample codebase.".to_string()),
+    );
+
+    DynamicValue::new(BamlValue::Map(root))
 }
 
 fn print_patterns(result: &RlmResult<AnalyzeTrajectories>) {

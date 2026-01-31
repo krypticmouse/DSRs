@@ -69,7 +69,7 @@ rlm = [
   "dep:pyo3",
   "dsrs_macros/rlm",
   "rlm-core/pyo3",
-  "baml-bridge/pyo3",
+  "baml-bridge/rlm",
 ]
 
 [package.metadata.cargo-machete]

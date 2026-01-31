@@ -303,7 +303,7 @@ impl MIPROv2 {
         };
 
         let prediction = if let Some(mut pm) = self.prompt_model.clone() {
-            pm.temperature = 0.7;
+            pm.temperature = Some(1.0);
             description_generator
                 .forward_with_config(input, Arc::new(pm))
                 .await?
@@ -354,7 +354,7 @@ impl MIPROv2 {
             };
 
             let result = if let Some(mut pm) = self.prompt_model.clone() {
-                pm.temperature = self.temperature;
+                pm.temperature = Some(self.temperature);
                 instruction_generator
                     .forward_with_config(input, Arc::new(pm))
                     .await

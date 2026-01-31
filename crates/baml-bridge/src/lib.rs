@@ -9,6 +9,9 @@ pub use baml_bridge_derive::BamlType;
 #[cfg(feature = "pyo3")]
 pub mod py;
 
+#[cfg(feature = "pyo3")]
+pub use py::DynamicValue;
+
 pub mod prompt;
 
 mod convert;
@@ -598,5 +601,27 @@ where
 
     fn register(reg: &mut Registry) {
         V::register(reg);
+    }
+}
+
+/// DynamicValue as a dynamic type - INPUT ONLY.
+///
+/// WARNING: Do NOT use DynamicValue as an output type. The jsonish parser
+/// will panic on TypeIR::Top during schema validation. This impl exists
+/// solely to allow DynamicValue as an input field in signatures.
+#[cfg(feature = "pyo3")]
+impl BamlTypeInternal for py::DynamicValue {
+    fn baml_internal_name() -> &'static str {
+        "DynamicValue"
+    }
+
+    fn baml_type_ir() -> TypeIR {
+        // TypeIR::top() represents the "ANY" type - accepts any value.
+        // This works for inputs (PyO3 conversion) but NOT for outputs (jsonish parsing).
+        TypeIR::top()
+    }
+
+    fn register(_reg: &mut Registry) {
+        // DynamicValue is dynamic - no sub-types to register
     }
 }
