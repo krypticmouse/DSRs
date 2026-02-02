@@ -59,6 +59,8 @@ For **inputs**, docstrings explain why this data matters and any formatting the 
 
 For **outputs**, docstrings specify exactly what you want - not just the shape, but the qualities of a good response.
 
+Only add a docstring if it says something the variable name doesn't. `/// The question` on a field called `question` adds nothing.
+
 ## Using Rust's type system
 
 You get real types, not string parsing:
