@@ -235,12 +235,7 @@ struct Book {
     metadata: HashMap<String, String>,
 }
 
-#[derive(BamlType, Clone, Debug)]
-enum LibraryItem {
-    Book(Book),  // wait, this won't work - tuple variant!
-}
-
-// Do this instead:
+// For enums with data, use struct variants (not tuple variants):
 #[derive(BamlType, Clone, Debug)]
 #[baml(tag = "item_type")]
 enum LibraryItem {

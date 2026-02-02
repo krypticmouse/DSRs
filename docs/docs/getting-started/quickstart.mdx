@@ -4,7 +4,9 @@ description: "Build your first LM pipeline in minutes"
 icon: "rocket"
 ---
 
-This guide walks you through building a typed LM pipeline with DSRs.
+DSRs lets you call language models with typed Rust structs. Define your inputs and outputs as a struct, and the library handles prompt formatting and response parsing.
+
+This guide walks you through building your first typed LM pipeline.
 
 <Steps>
 <Step title="Install DSRs">
@@ -28,7 +30,7 @@ cargo add dspy-rs tokio anyhow
 
 <Step title="Configure the LM">
 
-Set up your language model and adapter:
+Tell DSRs which model to use. This sets a global default that all predictors will use:
 
 ```rust
 use dspy_rs::{configure, ChatAdapter, LM};
@@ -40,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,
+        ChatAdapter,  // handles prompt formatting and response parsing
     );
 
     Ok(())
@@ -48,8 +50,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 <Note>
-The API key is read from `OPENAI_API_KEY` environment variable.
-For other providers, use the appropriate prefix (e.g., `anthropic:claude-3-haiku`).
+Set `OPENAI_API_KEY` in your environment. For other providers, use the appropriate prefix (e.g., `anthropic:claude-3-haiku`).
 </Note>
 
 </Step>
@@ -89,6 +90,7 @@ use dspy_rs::Predict;
 
 let predict = Predict::<QA>::new();
 
+// QAInput is auto-generated from your #[input] fields
 let output = predict.call(QAInput {
     question: "What is the capital of France?".into(),
 }).await?;
@@ -96,7 +98,7 @@ let output = predict.call(QAInput {
 println!("Answer: {}", output.answer);
 ```
 
-That's it - `output.answer` is a typed `String`, not JSON parsing.
+The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields. You get back a `QA` struct with both input and output fields filled in - `output.answer` is a typed `String`.
 
 </Step>
 </Steps>

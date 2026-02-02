@@ -4,35 +4,13 @@ description: 'Compose predictors into multi-step pipelines'
 icon: 'circle-nodes'
 ---
 
-Modules let you compose multiple [predictors](/docs/building-blocks/predictors) and arbitrary Rust logic into reusable units. Any type implementing the `Module` trait is a module.
+Most of the time, you can chain [predictors](/docs/building-blocks/predictors) directly using the typed API. For more complex composition or optimizer integration, you can implement the `Module` trait.
 
-## What is a module?
+## Chaining predictors (the simple way)
 
-- **Purpose:** Encapsulate a multi-step workflow as a single callable unit.
-- **Rust shape:** Any type implementing `Module` with `async fn forward(&self, inputs: Example)`.
-- **Composition:** Typically holds one or more `Predict<S>` fields and sequences their calls.
-
-## Predict is already a Module
-
-For simple cases, you don't need a wrapper - `Predict<S>` implements `Module`:
+Just call one predictor, then use its output as input to the next:
 
 ```rust
-let predict = Predict::<QA>::new();
-
-// Use typed API directly
-let output = predict.call(QAInput { question: "...".into() }).await?;
-
-// Or use Module trait (for optimizers, composition)
-let prediction = predict.forward(example).await?;
-```
-
-## Custom modules
-
-When you need multiple steps or custom logic:
-
-```rust
-use dspy_rs::{Module, Predict, Signature, Example, Prediction};
-
 #[derive(Signature, Clone, Debug)]
 struct Summarize {
     #[input] text: String,
@@ -46,6 +24,28 @@ struct Analyze {
     #[output] key_points: Vec<String>,
 }
 
+// Chain them together
+let summarizer = Predict::<Summarize>::new();
+let analyzer = Predict::<Analyze>::new();
+
+let summary = summarizer.call(SummarizeInput {
+    text: long_document.into()
+}).await?;
+
+let analysis = analyzer.call(AnalyzeInput {
+    summary: summary.summary  // output of first becomes input of second
+}).await?;
+
+println!("Sentiment: {}", analysis.sentiment);
+```
+
+This is fully typed end-to-end.
+
+## Wrapping in a struct
+
+For reusability, wrap predictors in a struct:
+
+```rust
 struct SummarizeAndAnalyze {
     summarizer: Predict<Summarize>,
     analyzer: Predict<Analyze>,
@@ -58,62 +58,25 @@ impl SummarizeAndAnalyze {
             analyzer: Predict::<Analyze>::new(),
         }
     }
-}
 
-impl Module for SummarizeAndAnalyze {
-    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        // Step 1: Summarize
-        let summary_pred = self.summarizer.forward(inputs).await?;
-        let summary = summary_pred.data.get("summary").unwrap().as_str().unwrap();
-
-        // Step 2: Analyze (using typed API inside the module)
+    async fn run(&self, text: String) -> anyhow::Result<Analyze> {
+        let summary = self.summarizer.call(SummarizeInput { text }).await?;
         let analysis = self.analyzer.call(AnalyzeInput {
-            summary: summary.to_string(),
+            summary: summary.summary
         }).await?;
-
-        // Compose result
-        let mut result = Prediction::default();
-        result.data.insert("summary".into(), summary.into());
-        result.data.insert("sentiment".into(), analysis.sentiment.into());
-        result.data.insert("key_points".into(),
-            serde_json::to_value(&analysis.key_points)?);
-
-        Ok(result)
-    }
-}
-```
-
-## Typed access inside modules
-
-Inside `forward()`, you can mix the untyped `Example`/`Prediction` interface (required by the trait) with typed `.call()` for cleaner internal logic:
-
-```rust
-impl Module for MyModule {
-    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        // Extract from Example
-        let question = inputs.data.get("question").unwrap().as_str().unwrap();
-
-        // Use typed call internally
-        let result = self.predictor.call(QAInput {
-            question: question.to_string(),
-        }).await?;
-
-        // Access typed fields
-        println!("{}", result.answer);  // typed!
-
-        // Convert back to Prediction for return
-        // ...
+        Ok(analysis)
     }
 }
 ```
 
 ## The Module trait
 
+`Predict<S>` implements `Module`, which is used by optimizers and batch processing:
+
 ```rust
 pub trait Module: Send + Sync {
     async fn forward(&self, inputs: Example) -> Result<Prediction>;
 
-    // Batch processing with concurrency control
     async fn batch(
         &self,
         inputs: Vec<Example>,
@@ -123,13 +86,9 @@ pub trait Module: Send + Sync {
 }
 ```
 
-The `batch` method is provided automatically - it runs `forward` concurrently with a progress bar.
+The `batch` method runs `forward` concurrently with a progress bar.
 
-## Design notes
-
-- **State:** Keep predictors and config as struct fields. Use builders for complex initialization.
-- **Async:** `forward` is async because it wraps LM calls.
-- **Testability:** Modules work with `DummyLM` for testing without network calls.
+If you need your custom struct to work with optimizers, implement `Module`. Otherwise, the simpler patterns above are usually enough.
 
 ## Current limitations
 

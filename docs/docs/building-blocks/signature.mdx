@@ -4,13 +4,9 @@ description: 'Define task specifications for LM interactions'
 icon: 'pen-to-square'
 ---
 
-Signatures in DSRs work like signatures in DSPy - they define the contract for your LM task: what goes in, what comes out.
+A signature defines the contract for an LM task: what goes in, what comes out, and what instruction to follow.
 
-## What is a signature?
-
-- **Purpose:** Describe a task contract: structured inputs, structured outputs, and an instruction.
-- **Rust shape:** A `struct` with `#[derive(Signature)]` and field attributes (`#[input]`, `#[output]`).
-- **Generated code:** The macro creates a `{Name}Input` struct and implements the `Signature` trait.
+You write a struct with `#[derive(Signature)]`, mark fields as `#[input]` or `#[output]`, and the macro generates everything needed to work with predictors.
 
 ## Basic syntax
 
@@ -32,28 +28,30 @@ struct QA {
 
 That's it. The macro generates `QAInput` which you'll use to call the predictor.
 
-## Where things go
+## Docstrings become instructions
+
+Doc comments on your struct and fields turn into the prompt. This is how you tell the LM what to do:
 
 | Source | Becomes |
 |--------|---------|
-| Struct docstring (`///` above struct) | Instruction for the LM |
-| Field docstrings (`///` above field) | Field descriptions in prompt |
-| `#[input]` fields | Input schema |
-| `#[output]` fields | Output schema (what LM produces) |
+| Struct docstring (`///` above struct) | The main instruction for the LM |
+| Field docstrings (`///` above field) | Field descriptions in the prompt |
 
 ```rust
-/// This becomes the instruction.
+/// This becomes the instruction - tell the LM what to do.
 #[derive(Signature, Clone, Debug)]
 struct MyTask {
-    /// This describes the input field.
+    /// This describes what the input is.
     #[input]
     query: String,
 
-    /// This describes what the LM should output.
+    /// This describes what you want the LM to output.
     #[output]
     result: String,
 }
 ```
+
+Better docstrings = better LM behavior. Be specific about what you want.
 
 ## Using Rust's type system
 
