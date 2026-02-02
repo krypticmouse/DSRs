@@ -1,5 +1,174 @@
 ---
 title: 'Adapter'
-description: 'Wrapper that sits on top of LM and Signature for data orchestration.'
-icon: 
+description: 'Turn signatures into prompts and parse LM responses'
+icon: 'arrows-turn-to-dots'
 ---
+
+An adapter sits between your [signature](/docs/building-blocks/signature) and the LM. It formats typed inputs into prompts and parses LM responses back into typed outputs.
+
+## What adapters do
+
+```
+Signature + Input → Adapter.format() → Prompt for LM
+LM Response → Adapter.parse() → Typed Output
+```
+
+The default adapter is `ChatAdapter`, which handles both formatting and parsing.
+
+## ChatAdapter
+
+### Prompt structure
+
+The system message has four parts:
+
+1. **Field descriptions** - Lists input/output fields with types and descriptions
+2. **Field structure** - Shows the marker format the LM should follow
+3. **Response instructions** - Tells the LM the order of output fields
+4. **Task description** - Your instruction from the signature docstring
+
+Example system message (simplified):
+```
+Your input fields are:
+1. `question` (string): The question to answer
+
+Your output fields are:
+1. `answer` (string): A clear, direct answer
+
+All interactions will be structured in the following way...
+
+[[ ## question ## ]]
+question
+
+[[ ## answer ## ]]
+Output field `answer` should be of type: string
+
+[[ ## completed ## ]]
+
+Respond with the corresponding output fields, starting with `[[ ## answer ## ]]`,
+and then ending with the marker for `[[ ## completed ## ]]`.
+
+In adhering to this structure, your objective is:
+        Answer questions accurately and concisely.
+```
+
+### Marker protocol
+
+Fields are delimited by markers:
+
+```
+[[ ## field_name ## ]]
+value here
+
+[[ ## another_field ## ]]
+another value
+
+[[ ## completed ## ]]
+```
+
+This protocol (inspired by DSPy) allows mixing natural language with structured output.
+
+### Type schemas
+
+For complex types, the adapter renders full schemas using BAML's schema format:
+
+```
+[[ ## analysis ## ]]
+Output field `analysis` should be of type: Analysis
+
+Definitions (used below):
+
+Sentiment
+----
+- Positive
+- Negative
+- Neutral
+
+{
+  "sentiment": Sentiment,
+  "confidence": float,
+  "keywords": string[]
+}
+```
+
+Type names are simplified for readability:
+- Module paths stripped: `my_crate::Sentiment` → `Sentiment`
+- `class`/`enum` prefixes removed
+- `" | "` → `" or "` (more natural)
+
+### Robust parsing with jsonish
+
+Response parsing uses BAML's `jsonish` parser, which handles:
+
+- **Malformed JSON** - Missing quotes, trailing commas
+- **Markdown fences** - Extracts JSON from ```json blocks
+- **Type coercion** - `"42"` → `42`, `"true"` → `true`
+- **Partial recovery** - Returns what it can parse + all errors
+
+```rust
+// Internally:
+jsonish::from_str(output_format, &type_ir, &raw_text, true)
+```
+
+### Constraint evaluation
+
+After parsing, the adapter runs [constraints](/docs/building-blocks/constraints):
+
+- `#[check]` results → stored in metadata
+- `#[assert]` failures → returns `ParseError::AssertFailed`
+
+### Error handling
+
+Parse errors aggregate - you get all problems, not just the first:
+
+```rust
+ParseError::Multiple {
+    errors: vec![...],  // all field errors
+    partial: Some(BamlValue::Map(...)),  // what did parse
+}
+```
+
+## Using the adapter directly
+
+Usually you don't touch the adapter - `Predict` handles it. But for debugging:
+
+```rust
+use dspy_rs::ChatAdapter;
+
+let adapter = ChatAdapter;
+
+// See what prompt would be generated
+let system = adapter.format_system_message_typed::<MySignature>()?;
+let user = adapter.format_user_message_typed::<MySignature>(&input);
+
+println!("System:\n{system}");
+println!("User:\n{user}");
+```
+
+This is useful for understanding what the LM sees.
+
+## Input formatting options
+
+The `#[format]` attribute on input fields controls serialization:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct Search {
+    #[input]
+    query: String,  // plain text
+
+    #[input]
+    #[format("yaml")]
+    filters: Vec<Filter>,  // serialized as YAML
+
+    #[output]
+    results: Vec<Result>,
+}
+```
+
+Options: `"json"` (default for complex types), `"yaml"`, `"toon"`
+
+## Design notes
+
+- **DSPy inspiration:** Marker protocol from DSPy's ChatAdapter
+- **BAML inspiration:** Schema rendering and jsonish parsing from BAML
+- **Separation of concerns:** Adapter doesn't know about LMs - just formatting/parsing

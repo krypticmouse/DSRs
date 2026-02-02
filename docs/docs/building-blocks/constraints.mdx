@@ -1,0 +1,220 @@
+---
+title: 'Constraints'
+description: 'Validate LM outputs with check and assert expressions'
+icon: 'shield-check'
+---
+
+Constraints let you validate LM outputs from your [signatures](/docs/building-blocks/signature) using a Jinja-like expression language. There are two types: **check** (soft) and **assert** (hard).
+
+## Check vs Assert
+
+| Attribute | Purpose | On Failure | Label |
+|-----------|---------|------------|-------|
+| `#[check]` | Soft constraint | Records result in metadata | **Required** |
+| `#[assert]` | Hard constraint | Returns `ParseError` | Optional |
+
+Use `#[check]` when you want to track constraint violations without failing the call. Use `#[assert]` when the output is invalid if the constraint fails.
+
+## Syntax
+
+### Check (soft constraint)
+
+```rust
+#[output]
+#[check("this >= 0.0 and this <= 1.0", label = "valid_range")]
+confidence: f64,
+```
+
+The `label` parameter is **required** for `#[check]`. It identifies the constraint in metadata and error messages.
+
+### Assert (hard constraint)
+
+```rust
+#[output]
+#[assert("this.len() > 0")]
+answer: String,
+```
+
+Label is optional for `#[assert]`:
+
+```rust
+#[output]
+#[assert("this > 0", label = "positive")]
+count: i32,
+```
+
+## Expression Language
+
+Constraints use a Jinja-like expression language. The keyword `this` refers to the field value being validated.
+
+### The `this` keyword
+
+```python
+this              # the field value itself
+this.len()        # length of string or collection
+this[0]           # first element of collection
+this["key"]       # value at key in map
+```
+
+### Comparisons
+
+```python
+this > 0
+this >= 0
+this < 100
+this <= 100
+this == "expected"
+this != "bad"
+```
+
+### Boolean operators
+
+```python
+this > 0 and this < 100    # both must be true
+this == "a" or this == "b" # either can be true
+not this                   # negation
+```
+
+### String methods
+
+```python
+this.len()                 # string length
+this.lower()               # lowercase
+this.upper()               # uppercase
+this.startswith("prefix")  # starts with substring
+this.endswith("suffix")    # ends with substring
+this.contains("sub")       # contains substring
+```
+
+### Numeric operations
+
+```python
+this + 1
+this - 1
+this * 2
+this / 2
+```
+
+### Collection operations
+
+```python
+this.len()      # number of elements
+this[0]         # index access
+this["key"]     # key access
+```
+
+### Ternary expressions
+
+```python
+"yes" if this > 0 else "no"
+```
+
+## Common Patterns
+
+### Range validation
+
+```rust
+#[check("this >= 0.0 and this <= 1.0", label = "probability")]
+confidence: f64,
+```
+
+### Non-empty string
+
+```rust
+#[assert("this.len() > 0")]
+answer: String,
+```
+
+### Length limit
+
+```rust
+#[check("this.len() < 1000", label = "length")]
+summary: String,
+```
+
+### String format
+
+```rust
+#[assert("this.startswith('https://')")]
+url: String,
+```
+
+### Multiple constraints
+
+```rust
+#[output]
+#[check("this.len() > 0", label = "non_empty")]
+#[check("this.len() < 500", label = "max_length")]
+response: String,
+```
+
+## Accessing Constraint Results
+
+### Check results (metadata)
+
+Soft constraint results are available in `CallResult` metadata:
+
+```rust
+let result = predictor.predict(input).await?;
+
+// Get constraint results for a field
+for check in result.field_checks("confidence") {
+    println!("{}: {}", check.label, check.passed);
+}
+```
+
+The `ConstraintResult` struct:
+
+```rust
+pub struct ConstraintResult {
+    pub label: String,
+    pub expression: String,
+    pub passed: bool,
+}
+```
+
+### Assert failures (errors)
+
+Failed asserts return a `ParseError::AssertFailed`:
+
+```rust
+match predictor.predict(input).await {
+    Ok(result) => { /* use result */ }
+    Err(e) => {
+        // e may be ParseError::AssertFailed { field, label, expression }
+    }
+}
+```
+
+## Compile-time Validation
+
+Invalid expressions produce compile-time errors:
+
+```rust
+#[check("this.len() < ")]  // incomplete expression
+```
+
+```
+error: invalid constraint expression
+  --> src/lib.rs:4:13
+   |
+ 4 |     #[check("this.len() < ")]
+   |             ^^^^^^^^^^^^^^^^
+   |
+   = note: unexpected end of expression
+   = help: complete the comparison, e.g., "this.len() < 100"
+```
+
+Missing label on `#[check]`:
+
+```rust
+#[check("this > 0")]  // missing label
+```
+
+```
+error: #[check] requires a label: #[check("expr", label = "name")]
+  --> src/lib.rs:9:5
+   |
+ 9 |     #[check("this > 0")]
+   |     ^^^^^^^^^^^^^^^^^^^^
+```

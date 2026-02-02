@@ -1,39 +1,158 @@
 ---
 title: 'Modules'
-description: 'Building flows for complex LM pipelines'
+description: 'Compose predictors into multi-step pipelines'
 icon: 'circle-nodes'
 ---
 
-Modules let you compose multiple predictors and arbitrary Rust logic into reusable units. In DSRs, a module is any type that implements the `Module` trait.
+Modules let you compose multiple [predictors](/docs/building-blocks/predictors) and arbitrary Rust logic into reusable units. Any type implementing the `Module` trait is a module.
 
 ## What is a module?
 
-- **Purpose:** Encapsulate a multi-step workflow (e.g., analysis then answer) as a single callable unit.
-- **Rust shape:** Any type implementing `Module` with an `async fn forward(&self, inputs: Example)`.
-- **Composition:** Typically holds one or more `Predict` fields and sequences their calls.
+- **Purpose:** Encapsulate a multi-step workflow as a single callable unit.
+- **Rust shape:** Any type implementing `Module` with `async fn forward(&self, inputs: Example)`.
+- **Composition:** Typically holds one or more `Predict<S>` fields and sequences their calls.
 
-## Minimal example
+## Predict is already a Module
+
+For simple cases, you don't need a wrapper - `Predict<S>` implements `Module`:
 
 ```rust
-use dsrs::{Example, Module, Predict, Prediction, Signature};
+let predict = Predict::<QA>::new();
 
-#[Signature]
-struct QA { #[input] question: String, #[output] answer: String }
+// Use typed API directly
+let output = predict.call(QAInput { question: "...".into() }).await?;
 
-struct Answerer { predict: Predict }
+// Or use Module trait (for optimizers, composition)
+let prediction = predict.forward(example).await?;
+```
 
-impl Default for Answerer { fn default() -> Self { Self { predict: Predict::new(QA::new()) } } }
+## Custom modules
 
-#[allow(async_fn_in_trait)]
-impl Module for Answerer {
+When you need multiple steps or custom logic:
+
+```rust
+use dspy_rs::{Module, Predict, Signature, Example, Prediction};
+
+#[derive(Signature, Clone, Debug)]
+struct Summarize {
+    #[input] text: String,
+    #[output] summary: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+struct Analyze {
+    #[input] summary: String,
+    #[output] sentiment: String,
+    #[output] key_points: Vec<String>,
+}
+
+struct SummarizeAndAnalyze {
+    summarizer: Predict<Summarize>,
+    analyzer: Predict<Analyze>,
+}
+
+impl SummarizeAndAnalyze {
+    fn new() -> Self {
+        Self {
+            summarizer: Predict::<Summarize>::new(),
+            analyzer: Predict::<Analyze>::new(),
+        }
+    }
+}
+
+impl Module for SummarizeAndAnalyze {
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        self.predict.forward(inputs).await
+        // Step 1: Summarize
+        let summary_pred = self.summarizer.forward(inputs).await?;
+        let summary = summary_pred.data.get("summary").unwrap().as_str().unwrap();
+
+        // Step 2: Analyze (using typed API inside the module)
+        let analysis = self.analyzer.call(AnalyzeInput {
+            summary: summary.to_string(),
+        }).await?;
+
+        // Compose result
+        let mut result = Prediction::default();
+        result.data.insert("summary".into(), summary.into());
+        result.data.insert("sentiment".into(), analysis.sentiment.into());
+        result.data.insert("key_points".into(),
+            serde_json::to_value(&analysis.key_points)?);
+
+        Ok(result)
     }
 }
 ```
 
+## Typed access inside modules
+
+Inside `forward()`, you can mix the untyped `Example`/`Prediction` interface (required by the trait) with typed `.call()` for cleaner internal logic:
+
+```rust
+impl Module for MyModule {
+    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
+        // Extract from Example
+        let question = inputs.data.get("question").unwrap().as_str().unwrap();
+
+        // Use typed call internally
+        let result = self.predictor.call(QAInput {
+            question: question.to_string(),
+        }).await?;
+
+        // Access typed fields
+        println!("{}", result.answer);  // typed!
+
+        // Convert back to Prediction for return
+        // ...
+    }
+}
+```
+
+## The Module trait
+
+```rust
+pub trait Module: Send + Sync {
+    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+
+    // Batch processing with concurrency control
+    async fn batch(
+        &self,
+        inputs: Vec<Example>,
+        max_concurrency: usize,
+        display_progress: bool,
+    ) -> Result<Vec<Prediction>>;
+}
+```
+
+The `batch` method is provided automatically - it runs `forward` concurrently with a progress bar.
+
 ## Design notes
 
-- **Traits and async:** `Module` is a trait with an async method; implement it where your composition lives.
-- **State:** Keep structured state as fields (other predictors, config, toggles). Prefer builders for complex modules.
-- **Testability:** You can inject a `DummyLM` via `forward_with_config` in tests to avoid network calls.
+- **State:** Keep predictors and config as struct fields. Use builders for complex initialization.
+- **Async:** `forward` is async because it wraps LM calls.
+- **Testability:** Modules work with `DummyLM` for testing without network calls.
+
+## Current limitations
+
+<Warning>
+**Runtime signature modification is not supported.**
+
+Unlike DSPy where you can do `ChainOfThought(signature)` to dynamically add a reasoning field, DSRs signatures are fixed at compile time.
+
+If you want chain-of-thought style reasoning, add the field explicitly:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    reasoning: String,  // add explicitly
+
+    #[output]
+    answer: String,
+}
+```
+
+A more ergonomic pattern for this is being explored.
+</Warning>
