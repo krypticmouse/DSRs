@@ -184,7 +184,7 @@ pub struct InsuranceClaimInfo {
 }
 ```
 
-**Generated system message (condensed):**
+**Generated system message:**
 
 ```
 Your input fields are:
@@ -193,7 +193,7 @@ Your input fields are:
 Your output fields are:
 1. `claim` (InsuranceClaim)
 
-All interactions will be structured in the following way...
+All interactions will be structured in the following way, with the appropriate values filled in.
 
 [[ ## claim_text ## ]]
 claim_text
@@ -203,51 +203,117 @@ Output field `claim` should be of type: InsuranceClaim
 
 Definitions (used below):
 
+// Specific standardized incident type.
+
 IncidentType
 ----
 - RearEndCollision
 - SideImpactCollision
 - HeadOnCollision
-- ... (more variants)
+- ParkingLotCollision
+- HouseFire
+- KitchenFire
+- ElectricalFire
+- BurstPipeFlood
+- StormDamage
+- RoofLeak
+- SlipAndFall
+- PropertyInjury
+- ProductLiability
+- TheftBurglary
+- Vandalism
+
+// Standardized location type where incident occurred.
 
 LocationType
 ----
 - Intersection
 - Highway
 - ParkingLot
-- ... (more variants)
+- Driveway
+- ResidentialStreet
+- ResidenceInterior
+- ResidenceExterior
+- CommercialProperty
+- PublicProperty
 
 {
+  // Top-level insurance claim object aggregating all extracted fields.
+
   // Basic claim information.
   header: {
+    // Basic claim information (metadata about the claim intake).
+
+    // Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
     claim_id: string or null,
+    // Date claim was reported in `YYYY-MM-DD` format.
     report_date: string or null,
+    // Date incident occurred in `YYYY-MM-DD` format.
+    incident_date: string or null,
+    // Full name of person reporting claim.
+    reported_by: string or null,
     // Channel used to report claim.
     channel: 'Email' or 'Phone' or 'Portal' or 'InPerson' or null,
   },
   // Policy information if available.
   policy_details: {
+    // Policy information if available.
+
+    // Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
     policy_number: string or null,
-    coverage_type: 'Property' or 'Auto' or 'Liability' or ... or null,
+    // Full legal name on policy.
+    policyholder_name: string or null,
+    // Type of insurance coverage.
+    coverage_type: 'Property' or 'Auto' or 'Liability' or 'Health' or 'Travel' or 'Other' or null,
+    // Policy effective start date in `YYYY-MM-DD` format.
+    effective_date: string or null,
+    // Policy expiration end date in `YYYY-MM-DD` format.
+    expiration_date: string or null,
   } or null,
-  // List of insured objects involved.
+  // List of insured objects involved, if applicable.
   insured_objects: [
     {
+      // An insured object involved in the claim (vehicle, building, person, etc.).
+
+      // Unique identifier for insured object.
+      //
+      // For vehicles, use VIN format (e.g., `VIN12345678901234567`).
+      // For buildings, use `PROP-XXXXXX` format.
+      // For liability, use `LIAB-XXXXXX` format.
+      // For other objects, use `OBJ-XXXXXX` format,
+      // where `X` is a digit.
+      object_id: string or null,
+      // Type of insured object.
       object_type: 'Vehicle' or 'Building' or 'Person' or 'Other',
+      // Make and model for vehicles (use standardized manufacturer names and models),
+      // or building type for property.
+      make_model: string or null,
+      // Year for vehicles or year built for buildings.
       year: int or null,
+      // Full street address where object is located or originated from.
+      location_address: string or null,
+      // Estimated monetary value in USD without currency symbol.
       estimated_value: int or null,
     }
   ] or null,
+  // Structured incident details.
   incident_description: {
+    // Structured incident details.
+
+    // Specific standardized incident type.
     incident_type: IncidentType,
+    // Standardized location type where incident occurred.
     location_type: LocationType,
+    // Estimated damage in USD without currency symbol.
+    estimated_damage_amount: int or null,
+    // Police report number if applicable.
+    police_report_number: string or null,
   } or null,
 }
 
 [[ ## completed ## ]]
 
-Respond with the corresponding output fields, starting with `[[ ## claim ## ]]`,
-and then ending with the marker for `[[ ## completed ## ]]`.
+Respond with the corresponding output fields, starting with the field `[[ ## claim ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.
 
 In adhering to this structure, your objective is:
         Extract the insurance claim information from the following text.
