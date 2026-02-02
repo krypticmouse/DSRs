@@ -4,61 +4,194 @@ description: 'Define task specifications for LM interactions'
 icon: 'pen-to-square'
 ---
 
-Signatures declare the schema of your LM task: the inputs you provide and the outputs you expect. In Rust terms, a `#[Signature]` macro generates an implementation of the `MetaSignature` trait for your type.
+Signatures in DSRs work like signatures in DSPy - they define the contract for your LM task: what goes in, what comes out.
 
 ## What is a signature?
 
-- **Purpose:** Describe a task contract: structured inputs, structured outputs, and an optional instruction.
-- **Rust shape:** A normal Rust `struct` annotated with `#[Signature]` and field attributes (`#[input]`, `#[output]`).
-- **Trait impl:** The macro implements `MetaSignature` (introspection of input/output fields, instruction, demos).
+- **Purpose:** Describe a task contract: structured inputs, structured outputs, and an instruction.
+- **Rust shape:** A `struct` with `#[derive(Signature)]` and field attributes (`#[input]`, `#[output]`).
+- **Generated code:** The macro creates a `{Name}Input` struct and implements the `Signature` trait.
 
-## Defining a signature
+## Basic syntax
 
 ```rust
-use dsrs::Signature;
+use dspy_rs::Signature;
 
-#[Signature]
+/// Answer questions accurately and concisely.
+#[derive(Signature, Clone, Debug)]
 struct QA {
-    /// Use Renaissance-era English to answer the question.
+    /// The question to answer
     #[input]
     question: String,
 
+    /// A clear, direct answer
     #[output]
     answer: String,
 }
 ```
 
-- **Doc comments:** The `///` above the struct become the signature’s instruction (used by adapters).
-- **Field roles:** Mark inputs vs. outputs with attributes for clear orchestration.
+That's it. The macro generates `QAInput` which you'll use to call the predictor.
 
-## Inline macro alternative
+## Where things go
+
+| Source | Becomes |
+|--------|---------|
+| Struct docstring (`///` above struct) | Instruction for the LM |
+| Field docstrings (`///` above field) | Field descriptions in prompt |
+| `#[input]` fields | Input schema |
+| `#[output]` fields | Output schema (what LM produces) |
 
 ```rust
-use dsrs::sign;
-let sig = sign! { (question: String) -> answer: String };
+/// This becomes the instruction.
+#[derive(Signature, Clone, Debug)]
+struct MyTask {
+    /// This describes the input field.
+    #[input]
+    query: String,
+
+    /// This describes what the LM should output.
+    #[output]
+    result: String,
+}
 ```
+
+## Using Rust's type system
+
+You get real types, not string parsing:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+/// Analyze text for spam detection.
+struct SpamAnalysis {
+    #[input]
+    text: String,
+
+    #[output]
+    is_spam: bool,  // actual bool
+
+    #[output]
+    confidence: f64,  // actual float
+
+    #[output]
+    keywords: Vec<String>,  // actual vec
+
+    #[output]
+    category: Option<String>,  // nullable
+}
+```
+
+**Built-in types** (no extra work needed):
+- `String`, `bool`
+- `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
+- `Option<T>`, `Vec<T>`, `HashMap<String, T>`
+
+## Custom types
+
+When you have a non-standard type in a field, derive `BamlType` on it:
+
+```rust
+use dspy_rs::{Signature, BamlType};
+
+#[derive(BamlType, Clone, Debug)]
+enum Sentiment {
+    Positive,
+    Negative,
+    Neutral,
+}
+
+#[derive(BamlType, Clone, Debug)]
+struct Citation {
+    /// Document ID
+    doc_id: String,
+    /// Relevant quote from the document
+    quote: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Analyze sentiment and find supporting citations.
+struct Analysis {
+    #[input]
+    text: String,
+
+    #[output]
+    sentiment: Sentiment,
+
+    #[output]
+    citations: Vec<Citation>,
+}
+```
+
+See [Custom Types](/docs/building-blocks/types) for the full `BamlType` reference.
 
 ## Demos (few-shot examples)
 
-You can attach examples at runtime for few-shot prompting.
+Attach examples for few-shot prompting via the predictor builder:
 
 ```rust
-use dsrs::{Example, MetaSignature, hashmap};
-
-let mut sig = QA::new();
-sig.set_demos(vec![
-    Example::new(
-        hashmap!{
-            "question".to_string() => "What is gravity?".into(),
-            "answer".to_string() => "A natural power that draweth bodies earthward.".into()
-        },
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
-    )
-])?;
+let predict = Predict::<QA>::builder()
+    .demo(QA {
+        question: "What is 2+2?".into(),
+        answer: "4".into(),
+    })
+    .demo(QA {
+        question: "What color is the sky?".into(),
+        answer: "Blue".into(),
+    })
+    .build();
 ```
+
+Demos are full signature structs with both input and output fields populated.
+
+## Field attributes
+
+Beyond `#[input]` and `#[output]`, you can use:
+
+### `#[alias]` - Rename for LLM
+
+```rust
+#[input]
+#[alias = "user_question"]  // LLM sees "user_question", Rust uses "question"
+question: String,
+```
+
+### `#[format]` - Input serialization
+
+```rust
+#[input]
+#[format("yaml")]  // serialize this input as YAML in the prompt
+context: Vec<Document>,
+```
+
+Options: `"json"`, `"yaml"`, `"toon"`
+
+### `#[check]` - Soft constraint
+
+```rust
+#[output]
+#[check("this >= 0.0 && this <= 1.0", label = "valid_range")]
+confidence: f64,
+```
+
+Recorded in metadata, doesn't fail parsing. Label is required.
+
+### `#[assert]` - Hard constraint
+
+```rust
+#[output]
+#[assert("this.len() > 0")]
+answer: String,
+```
+
+Fails parsing if violated. Label is optional.
+
+See [Constraints](/docs/building-blocks/constraints) for the expression language.
 
 ## Where it fits
 
-- A `Signature` does not call the LM by itself; a `Predictor` uses it, via an `Adapter`, to build a `Chat` and parse a `Prediction`.
-- Keeping the task contract as data (the signature) supports reuse, testing, and optimizer integration later.
+- A `Signature` doesn't call the LM by itself
+- A [`Predict`](/docs/building-blocks/predictors) uses the signature to build prompts and parse responses
+- Signatures are data - this separation supports reuse, testing, and optimizer integration
+
+```
+Signature (schema) + Input → Predict → LM call → Typed Output
+```
