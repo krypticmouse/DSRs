@@ -189,9 +189,10 @@ See [Constraints](/docs/building-blocks/constraints) for the expression language
 ## Where it fits
 
 - A `Signature` doesn't call the LM by itself
-- A [`Predict`](/docs/building-blocks/predictors) uses the signature to build prompts and parse responses
+- An [`Adapter`](/docs/building-blocks/adapter) turns the signature into a prompt and parses LM responses back into typed outputs
+- A [`Predict`](/docs/building-blocks/predictors) orchestrates this: signature + adapter + LM
 - Signatures are data - this separation supports reuse, testing, and optimizer integration
 
 ```
-Signature (schema) + Input → Predict → LM call → Typed Output
+Signature + Input → Adapter (formats prompt) → LM → Adapter (parses response) → Typed Output
 ```
