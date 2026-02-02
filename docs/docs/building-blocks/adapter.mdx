@@ -19,12 +19,12 @@ The default adapter is `ChatAdapter`, which handles both formatting and parsing.
 
 ### Prompt structure
 
-The system message has four parts:
+The system message has four parts (in this order):
 
 1. **Field descriptions** - Lists input/output fields with types and descriptions
-2. **Field structure** - Shows the marker format the LM should follow
-3. **Response instructions** - Tells the LM the order of output fields
-4. **Task description** - Your instruction from the signature docstring
+2. **Field structure** - Shows the marker format + type schemas
+3. **Response instructions** - "Respond with `[[ ## field ## ]]`..."
+4. **Task description** - Your instruction from the signature docstring (at the **end**)
 
 Example system message (simplified):
 ```
@@ -169,7 +169,7 @@ Options: `"json"` (default for complex types), `"yaml"`, `"toon"`
 
 ## Real example: Insurance claim extraction
 
-Here's what a prompt looks like for a complex nested type (from `examples/16-insurance-claim-prompt.rs`):
+Here's what a prompt looks like for a complex nested type (from [`examples/16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)):
 
 ```rust
 #[derive(Signature, Clone, Debug)]
@@ -183,6 +183,154 @@ pub struct InsuranceClaimInfo {
     claim: InsuranceClaim,  // complex nested struct with enums
 }
 ```
+
+<Accordion title="Full type definitions (InsuranceClaim and nested types)">
+```rust
+type NaiveDate = String;  // dates as YYYY-MM-DD strings
+
+/// Basic claim information (metadata about the claim intake).
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct ClaimHeader {
+    /// Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
+    pub claim_id: Option<String>,
+    /// Date claim was reported in `YYYY-MM-DD` format.
+    pub report_date: Option<NaiveDate>,
+    /// Date incident occurred in `YYYY-MM-DD` format.
+    pub incident_date: Option<NaiveDate>,
+    /// Full name of person reporting claim.
+    pub reported_by: Option<String>,
+    /// Channel used to report claim.
+    pub channel: Option<ClaimChannel>,
+}
+
+/// Channel used to report a claim.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum ClaimChannel {
+    Email,
+    Phone,
+    Portal,
+    InPerson,
+}
+
+/// Policy information if available.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct PolicyDetails {
+    /// Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
+    pub policy_number: Option<String>,
+    /// Full legal name on policy.
+    pub policyholder_name: Option<String>,
+    /// Type of insurance coverage.
+    pub coverage_type: Option<CoverageType>,
+    /// Policy effective start date in `YYYY-MM-DD` format.
+    pub effective_date: Option<NaiveDate>,
+    /// Policy expiration end date in `YYYY-MM-DD` format.
+    pub expiration_date: Option<NaiveDate>,
+}
+
+/// Type of insurance coverage.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum CoverageType {
+    Property,
+    Auto,
+    Liability,
+    Health,
+    Travel,
+    Other,
+}
+
+/// An insured object involved in the claim (vehicle, building, person, etc.).
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct InsuredObject {
+    /// Unique identifier for insured object.
+    ///
+    /// For vehicles, use VIN format (e.g., `VIN12345678901234567`).
+    /// For buildings, use `PROP-XXXXXX` format.
+    /// For liability, use `LIAB-XXXXXX` format.
+    /// For other objects, use `OBJ-XXXXXX` format,
+    /// where `X` is a digit.
+    pub object_id: Option<String>,
+    /// Type of insured object.
+    pub object_type: InsuredObjectType,
+    /// Make and model for vehicles, or building type for property.
+    pub make_model: Option<String>,
+    /// Year for vehicles or year built for buildings.
+    pub year: Option<i32>,
+    /// Full street address where object is located or originated from.
+    pub location_address: Option<String>,
+    /// Estimated monetary value in USD without currency symbol.
+    pub estimated_value: Option<i64>,
+}
+
+/// Type of insured object.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum InsuredObjectType {
+    Vehicle,
+    Building,
+    Person,
+    Other,
+}
+
+/// Structured incident details.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct IncidentDescription {
+    /// Specific standardized incident type.
+    pub incident_type: IncidentType,
+    /// Standardized location type where incident occurred.
+    pub location_type: LocationType,
+    /// Estimated damage in USD without currency symbol.
+    pub estimated_damage_amount: Option<i64>,
+    /// Police report number if applicable.
+    pub police_report_number: Option<String>,
+}
+
+/// Specific standardized incident type.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum IncidentType {
+    RearEndCollision,
+    SideImpactCollision,
+    HeadOnCollision,
+    ParkingLotCollision,
+    HouseFire,
+    KitchenFire,
+    ElectricalFire,
+    BurstPipeFlood,
+    StormDamage,
+    RoofLeak,
+    SlipAndFall,
+    PropertyInjury,
+    ProductLiability,
+    TheftBurglary,
+    Vandalism,
+}
+
+/// Standardized location type where incident occurred.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum LocationType {
+    Intersection,
+    Highway,
+    ParkingLot,
+    Driveway,
+    ResidentialStreet,
+    ResidenceInterior,
+    ResidenceExterior,
+    CommercialProperty,
+    PublicProperty,
+}
+
+/// Top-level insurance claim object aggregating all extracted fields.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct InsuranceClaim {
+    /// Basic claim information.
+    pub header: ClaimHeader,
+    /// Policy information if available.
+    pub policy_details: Option<PolicyDetails>,
+    /// List of insured objects involved, if applicable.
+    pub insured_objects: Option<Vec<InsuredObject>>,
+    /// Structured incident details.
+    pub incident_description: Option<IncidentDescription>,
+}
+```
+</Accordion>
 
 **Generated system message:**
 
