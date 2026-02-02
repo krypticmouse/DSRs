@@ -167,6 +167,107 @@ struct Search {
 
 Options: `"json"` (default for complex types), `"yaml"`, `"toon"`
 
+## Real example: Insurance claim extraction
+
+Here's what a prompt looks like for a complex nested type (from `examples/16-insurance-claim-prompt.rs`):
+
+```rust
+#[derive(Signature, Clone, Debug)]
+/// Extract the insurance claim information from the following text.
+/// - If you are unsure about a field, leave it as null.
+pub struct InsuranceClaimInfo {
+    #[input]
+    claim_text: String,
+
+    #[output]
+    claim: InsuranceClaim,  // complex nested struct with enums
+}
+```
+
+**Generated system message (condensed):**
+
+```
+Your input fields are:
+1. `claim_text` (string)
+
+Your output fields are:
+1. `claim` (InsuranceClaim)
+
+All interactions will be structured in the following way...
+
+[[ ## claim_text ## ]]
+claim_text
+
+[[ ## claim ## ]]
+Output field `claim` should be of type: InsuranceClaim
+
+Definitions (used below):
+
+IncidentType
+----
+- RearEndCollision
+- SideImpactCollision
+- HeadOnCollision
+- ... (more variants)
+
+LocationType
+----
+- Intersection
+- Highway
+- ParkingLot
+- ... (more variants)
+
+{
+  // Basic claim information.
+  header: {
+    claim_id: string or null,
+    report_date: string or null,
+    // Channel used to report claim.
+    channel: 'Email' or 'Phone' or 'Portal' or 'InPerson' or null,
+  },
+  // Policy information if available.
+  policy_details: {
+    policy_number: string or null,
+    coverage_type: 'Property' or 'Auto' or 'Liability' or ... or null,
+  } or null,
+  // List of insured objects involved.
+  insured_objects: [
+    {
+      object_type: 'Vehicle' or 'Building' or 'Person' or 'Other',
+      year: int or null,
+      estimated_value: int or null,
+    }
+  ] or null,
+  incident_description: {
+    incident_type: IncidentType,
+    location_type: LocationType,
+  } or null,
+}
+
+[[ ## completed ## ]]
+
+Respond with the corresponding output fields, starting with `[[ ## claim ## ]]`,
+and then ending with the marker for `[[ ## completed ## ]]`.
+
+In adhering to this structure, your objective is:
+        Extract the insurance claim information from the following text.
+        - If you are unsure about a field, leave it as null.
+```
+
+**Generated user message:**
+
+```
+[[ ## claim_text ## ]]
+A raccoon bumped a parked scooter in a driveway. Reported by Taylor P. via phone.
+```
+
+Notice how:
+- Enums with many variants become "Definitions" at the top
+- Doc comments become inline `//` comments in the schema
+- `Option<T>` renders as `T or null`
+- Nested objects show their full structure
+- The instruction comes from the signature docstring
+
 ## Design notes
 
 - **DSPy inspiration:** Marker protocol from DSPy's ChatAdapter
