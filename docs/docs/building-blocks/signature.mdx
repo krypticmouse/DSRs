@@ -28,30 +28,36 @@ struct QA {
 
 That's it. The macro generates `QAInput` which you'll use to call the predictor.
 
-## Docstrings become instructions
+## Docstrings add meaning
 
-Doc comments on your struct and fields turn into the prompt. This is how you tell the LM what to do:
+Doc comments turn into prompt instructions. They add context that the type system can't express:
 
-| Source | Becomes |
-|--------|---------|
-| Struct docstring (`///` above struct) | The main instruction for the LM |
-| Field docstrings (`///` above field) | Field descriptions in the prompt |
+- **Struct docstring** → The main task instruction
+- **Field docstrings** → What each field means and what makes a good one
 
 ```rust
-/// This becomes the instruction - tell the LM what to do.
+/// Extract action items from meeting notes.
+/// Return only concrete, assignable tasks.
 #[derive(Signature, Clone, Debug)]
-struct MyTask {
-    /// This describes what the input is.
+struct ExtractActions {
+    /// Raw meeting transcript or notes
     #[input]
-    query: String,
+    notes: String,
 
-    /// This describes what you want the LM to output.
+    /// Who requested this extraction (for context on relevance)
+    #[input]
+    requester_role: String,
+
+    /// Concrete tasks that can be assigned to a person.
+    /// Each should start with a verb and be completable within a week.
     #[output]
-    result: String,
+    action_items: Vec<String>,
 }
 ```
 
-Better docstrings = better LM behavior. Be specific about what you want.
+For **inputs**, docstrings explain why this data matters and any formatting the LM should expect.
+
+For **outputs**, docstrings specify exactly what you want - not just the shape, but the qualities of a good response.
 
 ## Using Rust's type system
 
