@@ -4,217 +4,184 @@ description: 'Validate LM outputs with check and assert expressions'
 icon: 'shield-check'
 ---
 
-Constraints let you validate LM outputs from your [signatures](/docs/building-blocks/signature) using a Jinja-like expression language. There are two types: **check** (soft) and **assert** (hard).
+Constraints let you validate what the LM returns. Add them to output fields to enforce rules like "confidence must be between 0 and 1" or "answer can't be empty".
 
-## Check vs Assert
+## Two Flavors
 
-| Attribute | Purpose | On Failure | Label |
-|-----------|---------|------------|-------|
-| `#[check]` | Soft constraint | Records result in metadata | **Required** |
-| `#[assert]` | Hard constraint | Returns `ParseError` | Optional |
+**`#[check]`** - Soft constraint. The call succeeds, but you can see if the check passed or failed.
 
-Use `#[check]` when you want to track constraint violations without failing the call. Use `#[assert]` when the output is invalid if the constraint fails.
+**`#[assert]`** - Hard constraint. The call fails if the assertion doesn't hold.
 
-## Syntax
-
-### Check (soft constraint)
+## Check Example
 
 ```rust
-#[output]
-#[check("this >= 0.0 and this <= 1.0", label = "valid_range")]
-confidence: f64,
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+
+    #[output]
+    #[check("this >= 0.0 and this <= 1.0", label = "valid_range")]
+    confidence: f32,
+}
 ```
 
-The `label` parameter is **required** for `#[check]`. It identifies the constraint in metadata and error messages.
+If the LM returns `confidence: 1.5`, the call still succeeds - you just see `passed: false` when you inspect the check result.
 
-### Assert (hard constraint)
+The `label` is required for checks. It's how you identify which constraint passed or failed.
+
+## Assert Example
 
 ```rust
-#[output]
-#[assert("this.len() > 0")]
-answer: String,
+#[derive(Signature, Clone, Debug)]
+struct StrictQA {
+    #[input]
+    question: String,
+
+    #[output]
+    #[assert("this.len() > 0")]
+    answer: String,
+
+    #[output]
+    #[assert("this >= 0.0 and this <= 1.0", label = "confidence_range")]
+    confidence: f32,
+}
 ```
 
-Label is optional for `#[assert]`:
+If confidence is 1.5, the call returns a `PredictError::Parse` error. Label is optional for asserts.
 
-```rust
-#[output]
-#[assert("this > 0", label = "positive")]
-count: i32,
-```
+## Writing Expressions
 
-## Expression Language
-
-Constraints use a Jinja-like expression language. The keyword `this` refers to the field value being validated.
-
-### The `this` keyword
-
-```python
-this              # the field value itself
-this.len()        # length of string or collection
-this[0]           # first element of collection
-this["key"]       # value at key in map
-```
-
-### Comparisons
+Use `this` to refer to the field value:
 
 ```python
 this > 0
-this >= 0
-this < 100
-this <= 100
+this >= 0.0 and this <= 1.0
 this == "expected"
 this != "bad"
 ```
 
-### Boolean operators
+Boolean logic:
 
 ```python
-this > 0 and this < 100    # both must be true
-this == "a" or this == "b" # either can be true
-not this                   # negation
+this > 0 and this < 100
+this == "a" or this == "b"
+not this
 ```
 
-### String methods
+String methods:
 
 ```python
-this.len()                 # string length
-this.lower()               # lowercase
-this.upper()               # uppercase
-this.startswith("prefix")  # starts with substring
-this.endswith("suffix")    # ends with substring
-this.contains("sub")       # contains substring
+this.len() > 0
+this.startswith("https://")
+this.endswith(".com")
+this.contains("@")
 ```
 
-### Numeric operations
+Collections:
 
 ```python
-this + 1
-this - 1
-this * 2
-this / 2
+this.len() < 10      # list has fewer than 10 items
+this[0] == "first"   # first item equals "first"
 ```
 
-### Collection operations
+## Inspecting Check Results
 
-```python
-this.len()      # number of elements
-this[0]         # index access
-this["key"]     # key access
+Use `call_with_meta()` to access constraint results:
+
+```rust
+let predict = Predict::<QA>::new();
+let result = predict.call_with_meta(QAInput {
+    question: "What is the capital of France?".into(),
+}).await?;
+
+// Output is available even if checks failed
+println!("Answer: {}", result.output.answer);
+
+// See what passed/failed
+for check in result.field_checks("confidence") {
+    if !check.passed {
+        println!("Check '{}' failed", check.label);
+    }
+}
+
+// Quick check if anything failed
+if result.has_failed_checks() {
+    // maybe retry, log, or handle differently
+}
 ```
 
-### Ternary expressions
+## Handling Assert Failures
 
-```python
-"yes" if this > 0 else "no"
+When an assert fails, you get a `PredictError`:
+
+```rust
+match predict.call_with_meta(input).await {
+    Ok(result) => {
+        println!("{}", result.output.answer);
+    }
+    Err(PredictError::Parse { source, .. }) => {
+        // The LM returned something that violated an assertion
+        eprintln!("Invalid response: {source}");
+    }
+    Err(e) => {
+        eprintln!("Other error: {e}");
+    }
+}
 ```
 
 ## Common Patterns
 
-### Range validation
-
+**Probability/confidence range:**
 ```rust
-#[check("this >= 0.0 and this <= 1.0", label = "probability")]
+#[check("this >= 0.0 and this <= 1.0", label = "valid_probability")]
 confidence: f64,
 ```
 
-### Non-empty string
-
+**Non-empty output:**
 ```rust
 #[assert("this.len() > 0")]
 answer: String,
 ```
 
-### Length limit
-
+**Length limits:**
 ```rust
-#[check("this.len() < 1000", label = "length")]
+#[check("this.len() < 500", label = "max_length")]
 summary: String,
 ```
 
-### String format
-
+**URL format:**
 ```rust
 #[assert("this.startswith('https://')")]
 url: String,
 ```
 
-### Multiple constraints
-
+**Multiple constraints on one field:**
 ```rust
 #[output]
 #[check("this.len() > 0", label = "non_empty")]
-#[check("this.len() < 500", label = "max_length")]
+#[check("this.len() < 500", label = "not_too_long")]
 response: String,
 ```
 
-## Accessing Constraint Results
+## Compile-time Errors
 
-### Check results (metadata)
-
-Soft constraint results are available in `CallResult` metadata:
+If you forget the label on a check:
 
 ```rust
-let result = predictor.predict(input).await?;
-
-// Get constraint results for a field
-for check in result.field_checks("confidence") {
-    println!("{}: {}", check.label, check.passed);
-}
+#[check("this > 0")]  // oops, no label
+score: i32,
 ```
 
-The `ConstraintResult` struct:
-
-```rust
-pub struct ConstraintResult {
-    pub label: String,
-    pub expression: String,
-    pub passed: bool,
-}
-```
-
-### Assert failures (errors)
-
-Failed asserts return a `ParseError::AssertFailed`:
-
-```rust
-match predictor.predict(input).await {
-    Ok(result) => { /* use result */ }
-    Err(e) => {
-        // e may be ParseError::AssertFailed { field, label, expression }
-    }
-}
-```
-
-## Compile-time Validation
-
-Invalid expressions produce compile-time errors:
-
-```rust
-#[check("this.len() < ")]  // incomplete expression
-```
-
-```
-error: invalid constraint expression
-  --> src/lib.rs:4:13
-   |
- 4 |     #[check("this.len() < ")]
-   |             ^^^^^^^^^^^^^^^^
-   |
-   = note: unexpected end of expression
-   = help: complete the comparison, e.g., "this.len() < 100"
-```
-
-Missing label on `#[check]`:
-
-```rust
-#[check("this > 0")]  // missing label
-```
+You get:
 
 ```
 error: #[check] requires a label: #[check("expr", label = "name")]
-  --> src/lib.rs:9:5
-   |
- 9 |     #[check("this > 0")]
-   |     ^^^^^^^^^^^^^^^^^^^^
+ --> src/lib.rs:9:5
+  |
+9 |     #[check("this > 0")]
+  |     ^^^^^^^^^^^^^^^^^^^^
 ```
