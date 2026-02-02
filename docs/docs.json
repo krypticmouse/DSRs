@@ -25,7 +25,7 @@
             "pages": [
               "docs/building-blocks/signature",
               "docs/building-blocks/predictors",
-              "docs/building-blocks/adapters",
+              "docs/building-blocks/adapter",
               "docs/building-blocks/lm",
               "docs/building-blocks/module",
               "docs/building-blocks/types"
