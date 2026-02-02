@@ -27,8 +27,9 @@
               "docs/building-blocks/predictors",
               "docs/building-blocks/adapter",
               "docs/building-blocks/lm",
-              "docs/building-blocks/module",
-              "docs/building-blocks/types"
+              "docs/building-blocks/types",
+              "docs/building-blocks/constraints",
+              "docs/building-blocks/module"
             ]
           },
           {
