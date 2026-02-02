@@ -1,0 +1,245 @@
+---
+title: 'Custom Types'
+description: 'Define your own types for use in signatures'
+icon: 'shapes'
+---
+
+When your [signature](/docs/building-blocks/signature) fields use types beyond the built-ins, derive `BamlType` to make them work.
+
+## When you need it
+
+**Built-in types** (no derive needed):
+- `String`, `bool`
+- `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
+- `Option<T>`, `Vec<T>`, `HashMap<String, T>`
+- `Box<T>`, `Arc<T>`, `Rc<T>`
+
+**Custom types** (need `#[derive(BamlType)]`):
+- Your own structs
+- Your own enums
+- Nested combinations of the above
+
+## Structs
+
+```rust
+use dspy_rs::BamlType;
+
+/// A citation from a document.
+#[derive(BamlType, Clone, Debug)]
+struct Citation {
+    /// The document identifier
+    doc_id: String,
+
+    /// Relevant quote from the source
+    quote: String,
+
+    /// Page number if available
+    page: Option<i32>,
+}
+```
+
+Doc comments become descriptions in the schema shown to the LLM.
+
+## Enums
+
+### Simple enums
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+enum Sentiment {
+    Positive,
+    Negative,
+    Neutral,
+}
+```
+
+### Enums with descriptions
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+enum Priority {
+    /// Needs immediate attention
+    Critical,
+    /// Should be addressed soon
+    High,
+    /// Normal processing time
+    Medium,
+    /// Can wait
+    Low,
+}
+```
+
+### Data enums (tagged unions)
+
+For enums where variants have different fields:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+#[baml(tag = "type")]
+enum Response {
+    Success { data: String },
+    Error { code: i32, message: String },
+}
+```
+
+The `tag` attribute specifies the discriminator field name. LLM output looks like:
+```json
+{ "type": "Error", "code": 404, "message": "Not found" }
+```
+
+## Field attributes
+
+### `#[baml(alias = "name")]`
+
+Rename a field for the LLM:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct User {
+    #[baml(alias = "userName")]
+    name: String,  // LLM sees "userName", Rust uses "name"
+}
+```
+
+### `#[baml(skip)]`
+
+Exclude a field from the schema entirely:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct Document {
+    content: String,
+
+    #[baml(skip)]
+    internal_id: u64,  // not sent to LLM, uses Default
+}
+```
+
+The field must implement `Default`. It won't appear in prompts or be expected in responses.
+
+### `#[baml(default)]`
+
+Make a field optional with a default:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct Config {
+    name: String,  // required
+
+    #[baml(default)]
+    retries: i32,  // optional, defaults to 0 if missing
+}
+```
+
+Different from `Option<T>`:
+- `Option<T>` - explicitly nullable, LLM can return `null`
+- `#[baml(default)]` - if LLM omits it, use `Default::default()`
+
+### `#[baml(check(...))]` and `#[baml(assert(...))]`
+
+Add constraints at the type level:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct Score {
+    #[baml(check(label = "valid_range", expr = "this >= 0 && this <= 100"))]
+    value: i32,
+
+    #[baml(assert(label = "not_empty", expr = "this.len() > 0"))]
+    explanation: String,
+}
+```
+
+See [Constraints](/docs/building-blocks/constraints) for the expression language.
+
+## Container attributes
+
+### `#[baml(rename_all = "...")]`
+
+Apply a naming convention to all fields:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+#[baml(rename_all = "camelCase")]
+struct ApiResponse {
+    user_name: String,    // becomes "userName"
+    created_at: String,   // becomes "createdAt"
+}
+```
+
+Options: `"camelCase"`, `"snake_case"`, `"PascalCase"`, `"kebab-case"`, `"SCREAMING_SNAKE_CASE"`
+
+### `#[baml(name = "...")]`
+
+Override the type name in the schema:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+#[baml(name = "UserProfile")]
+struct User {
+    name: String,
+}
+```
+
+## Advanced: Large integers
+
+For `u64`, `i128`, `u128` (which exceed JSON number precision):
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct BigIds {
+    #[baml(int_repr = "string")]
+    large_id: u64,  // serialized as "18446744073709551615"
+}
+```
+
+## Advanced: Map key types
+
+For maps with non-string keys:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct Scores {
+    #[baml(map_key_repr = "string")]
+    by_id: HashMap<i32, f64>,  // keys become strings: {"1": 0.5, "2": 0.8}
+}
+```
+
+## What's NOT supported
+
+These will give compile errors:
+
+| Pattern | Why |
+|---------|-----|
+| Tuple structs `struct Foo(A, B)` | Use named fields instead |
+| Unit structs `struct Foo;` | Nothing to serialize |
+| Tuple enum variants `Enum::Var(A)` | Use `Var { field: A }` instead |
+| `serde_json::Value` | Too dynamic, use concrete types |
+| Trait objects `dyn Trait` | Not serializable |
+
+## Nesting
+
+Types compose naturally:
+
+```rust
+#[derive(BamlType, Clone, Debug)]
+struct Author {
+    name: String,
+    email: Option<String>,
+}
+
+#[derive(BamlType, Clone, Debug)]
+struct Book {
+    title: String,
+    authors: Vec<Author>,  // nested custom type in vec
+    metadata: HashMap<String, String>,
+}
+
+// For enums with data, use struct variants (not tuple variants):
+#[derive(BamlType, Clone, Debug)]
+#[baml(tag = "item_type")]
+enum LibraryItem {
+    Book { book: Book },
+    Magazine { title: String, issue: i32 },
+}
+```

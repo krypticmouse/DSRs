@@ -4,61 +4,201 @@ description: 'Define task specifications for LM interactions'
 icon: 'pen-to-square'
 ---
 
-Signatures declare the schema of your LM task: the inputs you provide and the outputs you expect. In Rust terms, a `#[Signature]` macro generates an implementation of the `MetaSignature` trait for your type.
+A signature defines the contract for an LM task: what goes in, what comes out, and what instruction to follow.
 
-## What is a signature?
+You write a struct with `#[derive(Signature)]`, mark fields as `#[input]` or `#[output]`, and the macro generates everything needed to work with predictors.
 
-- **Purpose:** Describe a task contract: structured inputs, structured outputs, and an optional instruction.
-- **Rust shape:** A normal Rust `struct` annotated with `#[Signature]` and field attributes (`#[input]`, `#[output]`).
-- **Trait impl:** The macro implements `MetaSignature` (introspection of input/output fields, instruction, demos).
-
-## Defining a signature
+## Basic syntax
 
 ```rust
-use dsrs::Signature;
+use dspy_rs::Signature;
 
-#[Signature]
+/// Answer questions accurately and concisely.
+#[derive(Signature, Clone, Debug)]
 struct QA {
-    /// Use Renaissance-era English to answer the question.
+    /// The question to answer
     #[input]
     question: String,
 
+    /// A clear, direct answer
     #[output]
     answer: String,
 }
 ```
 
-- **Doc comments:** The `///` above the struct become the signature’s instruction (used by adapters).
-- **Field roles:** Mark inputs vs. outputs with attributes for clear orchestration.
+That's it. The macro generates `QAInput` which you'll use to call the predictor.
 
-## Inline macro alternative
+## Docstrings add meaning
+
+Doc comments turn into prompt instructions. They add context that types and variable names can't express:
+
+- **Struct docstring** → The main task instruction
+- **Field docstrings** → What each field means and what makes a good one
 
 ```rust
-use dsrs::sign;
-let sig = sign! { (question: String) -> answer: String };
+/// Extract action items from meeting notes.
+/// Return only concrete, assignable tasks.
+#[derive(Signature, Clone, Debug)]
+struct ExtractActions {
+    /// Raw meeting transcript or notes
+    #[input]
+    notes: String,
+
+    /// Who requested this extraction (for context on relevance)
+    #[input]
+    requester_role: String,
+
+    /// Concrete tasks that can be assigned to a person.
+    /// Each should start with a verb and be completable within a week.
+    #[output]
+    action_items: Vec<String>,
+}
 ```
+
+For **inputs**, docstrings explain why this data matters and any formatting the LM should expect.
+
+For **outputs**, docstrings specify exactly what you want - not just the shape, but the qualities of a good response.
+
+Only add a docstring if it says something the variable name doesn't. `/// The question` on a field called `question` adds nothing.
+
+## Using Rust's type system
+
+You get real types, not string parsing:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+/// Analyze text for spam detection.
+struct SpamAnalysis {
+    #[input]
+    text: String,
+
+    #[output]
+    is_spam: bool,  // actual bool
+
+    #[output]
+    confidence: f64,  // actual float
+
+    #[output]
+    keywords: Vec<String>,  // actual vec
+
+    #[output]
+    category: Option<String>,  // nullable
+}
+```
+
+**Built-in types** (no extra work needed):
+- `String`, `bool`
+- `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
+- `Option<T>`, `Vec<T>`, `HashMap<String, T>`
+
+## Custom types
+
+When you have a non-standard type in a field, derive `BamlType` on it:
+
+```rust
+use dspy_rs::{Signature, BamlType};
+
+#[derive(BamlType, Clone, Debug)]
+enum Sentiment {
+    Positive,
+    Negative,
+    Neutral,
+}
+
+#[derive(BamlType, Clone, Debug)]
+struct Citation {
+    /// Document ID
+    doc_id: String,
+    /// Relevant quote from the document
+    quote: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Analyze sentiment and find supporting citations.
+struct Analysis {
+    #[input]
+    text: String,
+
+    #[output]
+    sentiment: Sentiment,
+
+    #[output]
+    citations: Vec<Citation>,
+}
+```
+
+See [Custom Types](/docs/building-blocks/types) for the full `BamlType` reference.
 
 ## Demos (few-shot examples)
 
-You can attach examples at runtime for few-shot prompting.
+Attach examples for few-shot prompting via the [predictor](/docs/building-blocks/predictors) builder:
 
 ```rust
-use dsrs::{Example, MetaSignature, hashmap};
-
-let mut sig = QA::new();
-sig.set_demos(vec![
-    Example::new(
-        hashmap!{
-            "question".to_string() => "What is gravity?".into(),
-            "answer".to_string() => "A natural power that draweth bodies earthward.".into()
-        },
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
-    )
-])?;
+let predict = Predict::<QA>::builder()
+    .demo(QA {
+        question: "What is 2+2?".into(),
+        answer: "4".into(),
+    })
+    .demo(QA {
+        question: "What color is the sky?".into(),
+        answer: "Blue".into(),
+    })
+    .build();
 ```
+
+Demos are full signature structs with both input and output fields populated.
+
+## Field attributes
+
+Beyond `#[input]` and `#[output]`, you can use:
+
+### `#[alias]` - Rename for LLM
+
+```rust
+#[input]
+#[alias = "user_question"]  // LLM sees "user_question", Rust uses "question"
+question: String,
+```
+
+### `#[format]` - Input serialization
+
+```rust
+#[input]
+#[format("yaml")]  // serialize this input as YAML in the prompt
+context: Vec<Document>,
+```
+
+Options: `"json"`, `"yaml"`, `"toon"`
+
+### `#[check]` - Soft constraint
+
+```rust
+#[output]
+#[check("this >= 0.0 && this <= 1.0", label = "valid_range")]
+confidence: f64,
+```
+
+Recorded in metadata, doesn't fail parsing. Label is required.
+
+### `#[assert]` - Hard constraint
+
+```rust
+#[output]
+#[assert("this.len() > 0")]
+answer: String,
+```
+
+Fails parsing if violated. Label is optional.
+
+See [Constraints](/docs/building-blocks/constraints) for the expression language.
 
 ## Where it fits
 
-- A `Signature` does not call the LM by itself; a `Predictor` uses it, via an `Adapter`, to build a `Chat` and parse a `Prediction`.
-- Keeping the task contract as data (the signature) supports reuse, testing, and optimizer integration later.
+- A `Signature` doesn't call the LM by itself
+- An [`Adapter`](/docs/building-blocks/adapter) turns the signature into a prompt and parses LM responses back into typed outputs
+- A [`Predict`](/docs/building-blocks/predictors) orchestrates this: signature + adapter + LM
+- Signatures are data - this separation supports reuse, testing, and optimizer integration
+
+```
+Signature + Input → Adapter (formats prompt) → LM → Adapter (parses response) → Typed Output
+```

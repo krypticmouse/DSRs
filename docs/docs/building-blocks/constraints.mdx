@@ -1,0 +1,187 @@
+---
+title: 'Constraints'
+description: 'Validate LM outputs with check and assert expressions'
+icon: 'shield-check'
+---
+
+Constraints let you validate what the LM returns. Add them to output fields to enforce rules like "confidence must be between 0 and 1" or "answer can't be empty".
+
+## Two Flavors
+
+**`#[check]`** - Soft constraint. The call succeeds, but you can see if the check passed or failed.
+
+**`#[assert]`** - Hard constraint. The call fails if the assertion doesn't hold.
+
+## Check Example
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+
+    #[output]
+    #[check("this >= 0.0 and this <= 1.0", label = "valid_range")]
+    confidence: f32,
+}
+```
+
+If the LM returns `confidence: 1.5`, the call still succeeds - you just see `passed: false` when you inspect the check result.
+
+The `label` is required for checks. It's how you identify which constraint passed or failed.
+
+## Assert Example
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct StrictQA {
+    #[input]
+    question: String,
+
+    #[output]
+    #[assert("this.len() > 0")]
+    answer: String,
+
+    #[output]
+    #[assert("this >= 0.0 and this <= 1.0", label = "confidence_range")]
+    confidence: f32,
+}
+```
+
+If confidence is 1.5, the call returns a `PredictError::Parse` error. Label is optional for asserts.
+
+## Writing Expressions
+
+Use `this` to refer to the field value:
+
+```python
+this > 0
+this >= 0.0 and this <= 1.0
+this == "expected"
+this != "bad"
+```
+
+Boolean logic:
+
+```python
+this > 0 and this < 100
+this == "a" or this == "b"
+not this
+```
+
+String methods:
+
+```python
+this.len() > 0
+this.startswith("https://")
+this.endswith(".com")
+this.contains("@")
+```
+
+Collections:
+
+```python
+this.len() < 10      # list has fewer than 10 items
+this[0] == "first"   # first item equals "first"
+```
+
+## Inspecting Check Results
+
+Use `call_with_meta()` to access constraint results:
+
+```rust
+let predict = Predict::<QA>::new();
+let result = predict.call_with_meta(QAInput {
+    question: "What is the capital of France?".into(),
+}).await?;
+
+// Output is available even if checks failed
+println!("Answer: {}", result.output.answer);
+
+// See what passed/failed
+for check in result.field_checks("confidence") {
+    if !check.passed {
+        println!("Check '{}' failed", check.label);
+    }
+}
+
+// Quick check if anything failed
+if result.has_failed_checks() {
+    // maybe retry, log, or handle differently
+}
+```
+
+## Handling Assert Failures
+
+When an assert fails, you get a `PredictError`:
+
+```rust
+match predict.call_with_meta(input).await {
+    Ok(result) => {
+        println!("{}", result.output.answer);
+    }
+    Err(PredictError::Parse { source, .. }) => {
+        // The LM returned something that violated an assertion
+        eprintln!("Invalid response: {source}");
+    }
+    Err(e) => {
+        eprintln!("Other error: {e}");
+    }
+}
+```
+
+## Common Patterns
+
+**Probability/confidence range:**
+```rust
+#[check("this >= 0.0 and this <= 1.0", label = "valid_probability")]
+confidence: f64,
+```
+
+**Non-empty output:**
+```rust
+#[assert("this.len() > 0")]
+answer: String,
+```
+
+**Length limits:**
+```rust
+#[check("this.len() < 500", label = "max_length")]
+summary: String,
+```
+
+**URL format:**
+```rust
+#[assert("this.startswith('https://')")]
+url: String,
+```
+
+**Multiple constraints on one field:**
+```rust
+#[output]
+#[check("this.len() > 0", label = "non_empty")]
+#[check("this.len() < 500", label = "not_too_long")]
+response: String,
+```
+
+## Compile-time Errors
+
+If you forget the label on a check:
+
+```rust
+#[check("this > 0")]  // oops, no label
+score: i32,
+```
+
+You get:
+
+```
+error: #[check] requires a label: #[check("expr", label = "name")]
+ --> src/lib.rs:9:5
+  |
+9 |     #[check("this > 0")]
+  |     ^^^^^^^^^^^^^^^^^^^^
+```

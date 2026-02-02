@@ -1,5 +1,225 @@
 ---
 title: 'Predictors'
-description: 'Learn how to create and use predictors for LM inference'
+description: 'Call LMs with typed signatures'
 icon: 'robot'
 ---
+
+A `Predict` takes a [signature](/docs/building-blocks/signature) and actually calls the LM. It's the bridge between your type definitions and real LLM inference. Under the hood, it uses an [adapter](/docs/building-blocks/adapter) to format prompts and parse responses.
+
+## Basic usage
+
+```rust
+use dspy_rs::{Predict, Signature};
+
+#[derive(Signature, Clone, Debug)]
+/// Answer questions accurately.
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+// Create a predictor for this signature
+let predict = Predict::<QA>::new();
+
+// Call it with typed input
+let output: QA = predict.call(QAInput {
+    question: "What is the capital of France?".into(),
+}).await?;
+
+// Access typed output
+println!("{}", output.answer);  // "Paris"
+```
+
+The turbofish `::<QA>` tells Rust which signature you're using. The macro generates `QAInput` from your `#[input]` fields.
+
+## Creating predictors
+
+### Simple
+
+```rust
+let predict = Predict::<QA>::new();
+```
+
+### With instruction override
+
+```rust
+let predict = Predict::<QA>::builder()
+    .instruction("Answer like a pirate.")
+    .build();
+```
+
+This overrides the docstring instruction on the signature.
+
+### With demos (few-shot)
+
+```rust
+let predict = Predict::<QA>::builder()
+    .demo(QA {
+        question: "What is 2+2?".into(),
+        answer: "4".into(),
+    })
+    .demo(QA {
+        question: "What color is grass?".into(),
+        answer: "Green".into(),
+    })
+    .build();
+```
+
+Demos are full signature structs - both input and output fields populated. They become few-shot examples in the prompt.
+
+### With tools
+
+```rust
+let predict = Predict::<QA>::builder()
+    .add_tool(my_tool)
+    .build();
+```
+
+## Calling predictors
+
+### `.call()` - Simple typed output
+
+```rust
+let output: QA = predict.call(QAInput {
+    question: "Why is the sky blue?".into(),
+}).await?;
+
+println!("{}", output.question);  // input is preserved
+println!("{}", output.answer);    // LLM's response
+```
+
+Returns the full signature struct with inputs + outputs.
+
+### `.call_with_meta()` - Output + metadata
+
+```rust
+let result = predict.call_with_meta(QAInput {
+    question: "Why is the sky blue?".into(),
+}).await?;
+
+// Typed output
+let output: &QA = &result.output;
+println!("{}", output.answer);
+
+// Raw text for a field (before parsing)
+println!("{:?}", result.field_raw("answer"));
+
+// Constraint check results
+for check in result.field_checks("confidence") {
+    println!("{}: {}", check.label, if check.passed { "ok" } else { "failed" });
+}
+
+// Token usage
+println!("Tokens: {} in, {} out",
+    result.lm_usage.prompt_tokens,
+    result.lm_usage.completion_tokens
+);
+```
+
+### `CallResult<S>` fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `output` | `S` | The typed signature with all fields |
+| `raw_response` | `String` | Raw LLM response text |
+| `lm_usage` | `LmUsage` | Token counts |
+| `tool_calls` | `Vec<ToolCall>` | Any tool calls made |
+| `node_id` | `Option<usize>` | Trace node ID if tracing |
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `field_raw(name)` | `Option<&str>` | Raw text for a field |
+| `field_checks(name)` | `&[ConstraintResult]` | Soft constraint results |
+| `field_flags(name)` | `&[Flag]` | Parse flags (coercions, etc.) |
+
+## Error handling
+
+```rust
+use dspy_rs::PredictError;
+
+match predict.call(input).await {
+    Ok(output) => println!("{}", output.answer),
+    Err(PredictError::Lm { source }) => {
+        // LLM call failed (network, rate limit, etc.)
+        eprintln!("LLM error: {}", source);
+    }
+    Err(PredictError::Parse { source, raw_response, .. }) => {
+        // Got a response but couldn't parse it
+        eprintln!("Parse error: {}", source);
+        eprintln!("Raw response was: {}", raw_response);
+    }
+    Err(PredictError::Conversion { source, .. }) => {
+        // Parsed but couldn't convert to Rust types
+        eprintln!("Conversion error: {}", source);
+    }
+}
+```
+
+## Predict implements Module
+
+`Predict<S>` implements the [`Module`](/docs/building-blocks/module) trait, so you can use it in composed pipelines:
+
+```rust
+impl Module for Predict<S> {
+    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+}
+```
+
+This means predictors work with optimizers and can be nested in custom modules.
+
+## Multiple predictors in a pipeline
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct Summarize {
+    #[input] text: String,
+    #[output] summary: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+struct Analyze {
+    #[input] summary: String,
+    #[output] sentiment: String,
+    #[output] key_points: Vec<String>,
+}
+
+// Chain them
+let summarizer = Predict::<Summarize>::new();
+let analyzer = Predict::<Analyze>::new();
+
+let summary = summarizer.call(SummarizeInput {
+    text: long_text.into()
+}).await?;
+
+let analysis = analyzer.call(AnalyzeInput {
+    summary: summary.summary
+}).await?;
+
+println!("Sentiment: {}", analysis.sentiment);
+```
+
+## Current limitations
+
+<Warning>
+**Signature modification at runtime is not supported.**
+
+Unlike DSPy's `ChainOfThought` which dynamically adds a `reasoning` field to any signature, DSRs signatures are fixed at compile time. If you want chain-of-thought, add the reasoning field to your signature:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    reasoning: String,  // add this explicitly
+
+    #[output]
+    answer: String,
+}
+```
+
+A more ergonomic solution for this is being worked on.
+</Warning>

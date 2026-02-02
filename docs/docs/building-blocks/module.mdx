@@ -1,39 +1,117 @@
 ---
 title: 'Modules'
-description: 'Building flows for complex LM pipelines'
+description: 'Compose predictors into multi-step pipelines'
 icon: 'circle-nodes'
 ---
 
-Modules let you compose multiple predictors and arbitrary Rust logic into reusable units. In DSRs, a module is any type that implements the `Module` trait.
+Most of the time, you can chain [predictors](/docs/building-blocks/predictors) directly using the typed API. For more complex composition or optimizer integration, you can implement the `Module` trait.
 
-## What is a module?
+## Chaining predictors (the simple way)
 
-- **Purpose:** Encapsulate a multi-step workflow (e.g., analysis then answer) as a single callable unit.
-- **Rust shape:** Any type implementing `Module` with an `async fn forward(&self, inputs: Example)`.
-- **Composition:** Typically holds one or more `Predict` fields and sequences their calls.
-
-## Minimal example
+Just call one predictor, then use its output as input to the next:
 
 ```rust
-use dsrs::{Example, Module, Predict, Prediction, Signature};
+#[derive(Signature, Clone, Debug)]
+struct Summarize {
+    #[input] text: String,
+    #[output] summary: String,
+}
 
-#[Signature]
-struct QA { #[input] question: String, #[output] answer: String }
+#[derive(Signature, Clone, Debug)]
+struct Analyze {
+    #[input] summary: String,
+    #[output] sentiment: String,
+    #[output] key_points: Vec<String>,
+}
 
-struct Answerer { predict: Predict }
+// Chain them together
+let summarizer = Predict::<Summarize>::new();
+let analyzer = Predict::<Analyze>::new();
 
-impl Default for Answerer { fn default() -> Self { Self { predict: Predict::new(QA::new()) } } }
+let summary = summarizer.call(SummarizeInput {
+    text: long_document.into()
+}).await?;
 
-#[allow(async_fn_in_trait)]
-impl Module for Answerer {
-    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        self.predict.forward(inputs).await
+let analysis = analyzer.call(AnalyzeInput {
+    summary: summary.summary  // output of first becomes input of second
+}).await?;
+
+println!("Sentiment: {}", analysis.sentiment);
+```
+
+This is fully typed end-to-end.
+
+## Wrapping in a struct
+
+For reusability, wrap predictors in a struct:
+
+```rust
+struct SummarizeAndAnalyze {
+    summarizer: Predict<Summarize>,
+    analyzer: Predict<Analyze>,
+}
+
+impl SummarizeAndAnalyze {
+    fn new() -> Self {
+        Self {
+            summarizer: Predict::<Summarize>::new(),
+            analyzer: Predict::<Analyze>::new(),
+        }
+    }
+
+    async fn run(&self, text: String) -> anyhow::Result<Analyze> {
+        let summary = self.summarizer.call(SummarizeInput { text }).await?;
+        let analysis = self.analyzer.call(AnalyzeInput {
+            summary: summary.summary
+        }).await?;
+        Ok(analysis)
     }
 }
 ```
 
-## Design notes
+## The Module trait
 
-- **Traits and async:** `Module` is a trait with an async method; implement it where your composition lives.
-- **State:** Keep structured state as fields (other predictors, config, toggles). Prefer builders for complex modules.
-- **Testability:** You can inject a `DummyLM` via `forward_with_config` in tests to avoid network calls.
+`Predict<S>` implements `Module`, which is used by optimizers and batch processing:
+
+```rust
+pub trait Module: Send + Sync {
+    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+
+    async fn batch(
+        &self,
+        inputs: Vec<Example>,
+        max_concurrency: usize,
+        display_progress: bool,
+    ) -> Result<Vec<Prediction>>;
+}
+```
+
+The `batch` method runs `forward` concurrently with a progress bar.
+
+If you need your custom struct to work with optimizers, implement `Module`. Otherwise, the simpler patterns above are usually enough.
+
+## Current limitations
+
+<Warning>
+**Runtime signature modification is not supported.**
+
+Unlike DSPy where you can do `ChainOfThought(signature)` to dynamically add a reasoning field, DSRs signatures are fixed at compile time.
+
+If you want chain-of-thought style reasoning, add the field explicitly:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    reasoning: String,  // add explicitly
+
+    #[output]
+    answer: String,
+}
+```
+
+A more ergonomic pattern for this is being explored.
+</Warning>

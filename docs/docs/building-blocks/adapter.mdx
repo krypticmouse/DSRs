@@ -1,5 +1,489 @@
 ---
 title: 'Adapter'
-description: 'Wrapper that sits on top of LM and Signature for data orchestration.'
-icon: 
+description: 'Turn signatures into prompts and parse LM responses'
+icon: 'arrows-turn-to-dots'
 ---
+
+An adapter sits between your [signature](/docs/building-blocks/signature) and the LM. It formats typed inputs into prompts and parses LM responses back into typed outputs.
+
+## What adapters do
+
+```
+Signature + Input → Adapter.format() → Prompt for LM
+LM Response → Adapter.parse() → Typed Output
+```
+
+The default adapter is `ChatAdapter`, which handles both formatting and parsing.
+
+## ChatAdapter
+
+### Prompt structure
+
+The system message has four parts (in this order):
+
+1. **Field descriptions** - Lists input/output fields with types and descriptions
+2. **Field structure** - Shows the marker format + type schemas
+3. **Response instructions** - "Respond with `[[ ## field ## ]]`..."
+4. **Task description** - Your instruction from the signature docstring (at the **end**)
+
+Example system message (simplified):
+```
+Your input fields are:
+1. `question` (string): The question to answer
+
+Your output fields are:
+1. `answer` (string): A clear, direct answer
+
+All interactions will be structured in the following way...
+
+[[ ## question ## ]]
+question
+
+[[ ## answer ## ]]
+Output field `answer` should be of type: string
+
+[[ ## completed ## ]]
+
+Respond with the corresponding output fields, starting with `[[ ## answer ## ]]`,
+and then ending with the marker for `[[ ## completed ## ]]`.
+
+In adhering to this structure, your objective is:
+        Answer questions accurately and concisely.
+```
+
+### Marker protocol
+
+Fields are delimited by markers:
+
+```
+[[ ## field_name ## ]]
+value here
+
+[[ ## another_field ## ]]
+another value
+
+[[ ## completed ## ]]
+```
+
+This protocol (inspired by DSPy) allows mixing natural language with structured output.
+
+### Type schemas
+
+For complex types, the adapter renders full schemas using BAML's schema format:
+
+```
+[[ ## analysis ## ]]
+Output field `analysis` should be of type: Analysis
+
+Definitions (used below):
+
+Sentiment
+----
+- Positive
+- Negative
+- Neutral
+
+{
+  "sentiment": Sentiment,
+  "confidence": float,
+  "keywords": string[]
+}
+```
+
+Type names are simplified for readability:
+- Module paths stripped: `my_crate::Sentiment` → `Sentiment`
+- `class`/`enum` prefixes removed
+- `" | "` → `" or "` (more natural)
+
+### Robust parsing with jsonish
+
+Response parsing uses BAML's `jsonish` parser, which handles:
+
+- **Malformed JSON** - Missing quotes, trailing commas
+- **Markdown fences** - Extracts JSON from ```json blocks
+- **Type coercion** - `"42"` → `42`, `"true"` → `true`
+- **Partial recovery** - Returns what it can parse + all errors
+
+```rust
+// Internally:
+jsonish::from_str(output_format, &type_ir, &raw_text, true)
+```
+
+### Constraint evaluation
+
+After parsing, the adapter runs [constraints](/docs/building-blocks/constraints):
+
+- `#[check]` results → stored in metadata
+- `#[assert]` failures → returns `ParseError::AssertFailed`
+
+### Error handling
+
+Parse errors aggregate - you get all problems, not just the first:
+
+```rust
+ParseError::Multiple {
+    errors: vec![...],  // all field errors
+    partial: Some(BamlValue::Map(...)),  // what did parse
+}
+```
+
+## Using the adapter directly
+
+Usually you don't touch the adapter - `Predict` handles it. But for debugging:
+
+```rust
+use dspy_rs::ChatAdapter;
+
+let adapter = ChatAdapter;
+
+// See what prompt would be generated
+let system = adapter.format_system_message_typed::<MySignature>()?;
+let user = adapter.format_user_message_typed::<MySignature>(&input);
+
+println!("System:\n{system}");
+println!("User:\n{user}");
+```
+
+This is useful for understanding what the LM sees.
+
+## Input formatting options
+
+The `#[format]` attribute on input fields controls serialization:
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct Search {
+    #[input]
+    query: String,  // plain text
+
+    #[input]
+    #[format("yaml")]
+    filters: Vec<Filter>,  // serialized as YAML
+
+    #[output]
+    results: Vec<Result>,
+}
+```
+
+Options: `"json"` (default for complex types), `"yaml"`, `"toon"`
+
+## Real example: Insurance claim extraction
+
+Here's what a prompt looks like for a complex nested type (from [`examples/16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)):
+
+```rust
+#[derive(Signature, Clone, Debug)]
+/// Extract the insurance claim information from the following text.
+/// - If you are unsure about a field, leave it as null.
+pub struct InsuranceClaimInfo {
+    #[input]
+    claim_text: String,
+
+    #[output]
+    claim: InsuranceClaim,  // complex nested struct with enums
+}
+```
+
+<Accordion title="Full type definitions (InsuranceClaim and nested types)">
+```rust
+type NaiveDate = String;  // dates as YYYY-MM-DD strings
+
+/// Basic claim information (metadata about the claim intake).
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct ClaimHeader {
+    /// Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
+    pub claim_id: Option<String>,
+    /// Date claim was reported in `YYYY-MM-DD` format.
+    pub report_date: Option<NaiveDate>,
+    /// Date incident occurred in `YYYY-MM-DD` format.
+    pub incident_date: Option<NaiveDate>,
+    /// Full name of person reporting claim.
+    pub reported_by: Option<String>,
+    /// Channel used to report claim.
+    pub channel: Option<ClaimChannel>,
+}
+
+/// Channel used to report a claim.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum ClaimChannel {
+    Email,
+    Phone,
+    Portal,
+    InPerson,
+}
+
+/// Policy information if available.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct PolicyDetails {
+    /// Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
+    pub policy_number: Option<String>,
+    /// Full legal name on policy.
+    pub policyholder_name: Option<String>,
+    /// Type of insurance coverage.
+    pub coverage_type: Option<CoverageType>,
+    /// Policy effective start date in `YYYY-MM-DD` format.
+    pub effective_date: Option<NaiveDate>,
+    /// Policy expiration end date in `YYYY-MM-DD` format.
+    pub expiration_date: Option<NaiveDate>,
+}
+
+/// Type of insurance coverage.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum CoverageType {
+    Property,
+    Auto,
+    Liability,
+    Health,
+    Travel,
+    Other,
+}
+
+/// An insured object involved in the claim (vehicle, building, person, etc.).
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct InsuredObject {
+    /// Unique identifier for insured object.
+    ///
+    /// For vehicles, use VIN format (e.g., `VIN12345678901234567`).
+    /// For buildings, use `PROP-XXXXXX` format.
+    /// For liability, use `LIAB-XXXXXX` format.
+    /// For other objects, use `OBJ-XXXXXX` format,
+    /// where `X` is a digit.
+    pub object_id: Option<String>,
+    /// Type of insured object.
+    pub object_type: InsuredObjectType,
+    /// Make and model for vehicles, or building type for property.
+    pub make_model: Option<String>,
+    /// Year for vehicles or year built for buildings.
+    pub year: Option<i32>,
+    /// Full street address where object is located or originated from.
+    pub location_address: Option<String>,
+    /// Estimated monetary value in USD without currency symbol.
+    pub estimated_value: Option<i64>,
+}
+
+/// Type of insured object.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum InsuredObjectType {
+    Vehicle,
+    Building,
+    Person,
+    Other,
+}
+
+/// Structured incident details.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct IncidentDescription {
+    /// Specific standardized incident type.
+    pub incident_type: IncidentType,
+    /// Standardized location type where incident occurred.
+    pub location_type: LocationType,
+    /// Estimated damage in USD without currency symbol.
+    pub estimated_damage_amount: Option<i64>,
+    /// Police report number if applicable.
+    pub police_report_number: Option<String>,
+}
+
+/// Specific standardized incident type.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum IncidentType {
+    RearEndCollision,
+    SideImpactCollision,
+    HeadOnCollision,
+    ParkingLotCollision,
+    HouseFire,
+    KitchenFire,
+    ElectricalFire,
+    BurstPipeFlood,
+    StormDamage,
+    RoofLeak,
+    SlipAndFall,
+    PropertyInjury,
+    ProductLiability,
+    TheftBurglary,
+    Vandalism,
+}
+
+/// Standardized location type where incident occurred.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub enum LocationType {
+    Intersection,
+    Highway,
+    ParkingLot,
+    Driveway,
+    ResidentialStreet,
+    ResidenceInterior,
+    ResidenceExterior,
+    CommercialProperty,
+    PublicProperty,
+}
+
+/// Top-level insurance claim object aggregating all extracted fields.
+#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+pub struct InsuranceClaim {
+    /// Basic claim information.
+    pub header: ClaimHeader,
+    /// Policy information if available.
+    pub policy_details: Option<PolicyDetails>,
+    /// List of insured objects involved, if applicable.
+    pub insured_objects: Option<Vec<InsuredObject>>,
+    /// Structured incident details.
+    pub incident_description: Option<IncidentDescription>,
+}
+```
+</Accordion>
+
+**Generated system message:**
+
+```
+Your input fields are:
+1. `claim_text` (string)
+
+Your output fields are:
+1. `claim` (InsuranceClaim)
+
+All interactions will be structured in the following way, with the appropriate values filled in.
+
+[[ ## claim_text ## ]]
+claim_text
+
+[[ ## claim ## ]]
+Output field `claim` should be of type: InsuranceClaim
+
+Definitions (used below):
+
+// Specific standardized incident type.
+
+IncidentType
+----
+- RearEndCollision
+- SideImpactCollision
+- HeadOnCollision
+- ParkingLotCollision
+- HouseFire
+- KitchenFire
+- ElectricalFire
+- BurstPipeFlood
+- StormDamage
+- RoofLeak
+- SlipAndFall
+- PropertyInjury
+- ProductLiability
+- TheftBurglary
+- Vandalism
+
+// Standardized location type where incident occurred.
+
+LocationType
+----
+- Intersection
+- Highway
+- ParkingLot
+- Driveway
+- ResidentialStreet
+- ResidenceInterior
+- ResidenceExterior
+- CommercialProperty
+- PublicProperty
+
+{
+  // Top-level insurance claim object aggregating all extracted fields.
+
+  // Basic claim information.
+  header: {
+    // Basic claim information (metadata about the claim intake).
+
+    // Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
+    claim_id: string or null,
+    // Date claim was reported in `YYYY-MM-DD` format.
+    report_date: string or null,
+    // Date incident occurred in `YYYY-MM-DD` format.
+    incident_date: string or null,
+    // Full name of person reporting claim.
+    reported_by: string or null,
+    // Channel used to report claim.
+    channel: 'Email' or 'Phone' or 'Portal' or 'InPerson' or null,
+  },
+  // Policy information if available.
+  policy_details: {
+    // Policy information if available.
+
+    // Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
+    policy_number: string or null,
+    // Full legal name on policy.
+    policyholder_name: string or null,
+    // Type of insurance coverage.
+    coverage_type: 'Property' or 'Auto' or 'Liability' or 'Health' or 'Travel' or 'Other' or null,
+    // Policy effective start date in `YYYY-MM-DD` format.
+    effective_date: string or null,
+    // Policy expiration end date in `YYYY-MM-DD` format.
+    expiration_date: string or null,
+  } or null,
+  // List of insured objects involved, if applicable.
+  insured_objects: [
+    {
+      // An insured object involved in the claim (vehicle, building, person, etc.).
+
+      // Unique identifier for insured object.
+      //
+      // For vehicles, use VIN format (e.g., `VIN12345678901234567`).
+      // For buildings, use `PROP-XXXXXX` format.
+      // For liability, use `LIAB-XXXXXX` format.
+      // For other objects, use `OBJ-XXXXXX` format,
+      // where `X` is a digit.
+      object_id: string or null,
+      // Type of insured object.
+      object_type: 'Vehicle' or 'Building' or 'Person' or 'Other',
+      // Make and model for vehicles (use standardized manufacturer names and models),
+      // or building type for property.
+      make_model: string or null,
+      // Year for vehicles or year built for buildings.
+      year: int or null,
+      // Full street address where object is located or originated from.
+      location_address: string or null,
+      // Estimated monetary value in USD without currency symbol.
+      estimated_value: int or null,
+    }
+  ] or null,
+  // Structured incident details.
+  incident_description: {
+    // Structured incident details.
+
+    // Specific standardized incident type.
+    incident_type: IncidentType,
+    // Standardized location type where incident occurred.
+    location_type: LocationType,
+    // Estimated damage in USD without currency symbol.
+    estimated_damage_amount: int or null,
+    // Police report number if applicable.
+    police_report_number: string or null,
+  } or null,
+}
+
+[[ ## completed ## ]]
+
+Respond with the corresponding output fields, starting with the field `[[ ## claim ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.
+
+In adhering to this structure, your objective is:
+        Extract the insurance claim information from the following text.
+        - If you are unsure about a field, leave it as null.
+```
+
+**Generated user message:**
+
+```
+[[ ## claim_text ## ]]
+A raccoon bumped a parked scooter in a driveway. Reported by Taylor P. via phone.
+```
+
+Notice how:
+- Enums with many variants become "Definitions" at the top
+- Doc comments become inline `//` comments in the schema
+- `Option<T>` renders as `T or null`
+- Nested objects show their full structure
+- The instruction comes from the signature docstring
+
+## Design notes
+
+- **DSPy inspiration:** Marker protocol from DSPy's ChatAdapter
+- **BAML inspiration:** Schema rendering and jsonish parsing from BAML
+- **Separation of concerns:** Adapter doesn't know about LMs - just formatting/parsing
