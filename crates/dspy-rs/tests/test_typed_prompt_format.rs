@@ -1,6 +1,7 @@
 use dspy_rs::{BamlType, ChatAdapter, Signature};
 
-#[derive(Clone, Debug, BamlType)]
+#[derive(Clone, Debug)]
+#[BamlType]
 /// A citation reference.
 struct Citation {
     /// Document identifier
@@ -9,7 +10,8 @@ struct Citation {
     quote: String,
 }
 
-#[derive(Clone, Debug, BamlType)]
+#[derive(Clone, Debug)]
+#[BamlType]
 /// Sentiment classification.
 enum Sentiment {
     Positive,

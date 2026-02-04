@@ -320,8 +320,8 @@ impl LMClient {
         let (provider, model_id) = model_str.split_once(':').ok_or(anyhow::anyhow!(
             "Model string must be in format 'provider:model_name'"
         ))?;
-        tracing::Span::current().record("provider", &tracing::field::display(provider));
-        tracing::Span::current().record("model_id", &tracing::field::display(model_id));
+        tracing::Span::current().record("provider", tracing::field::display(provider));
+        tracing::Span::current().record("model_id", tracing::field::display(model_id));
 
         match provider {
             "openai" => {

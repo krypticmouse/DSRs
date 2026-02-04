@@ -93,19 +93,21 @@ struct SpamAnalysis {
 
 ## Custom types
 
-When you have a non-standard type in a field, derive `BamlType` on it:
+When you have a non-standard type in a field, add `#[BamlType]` on it:
 
 ```rust
 use dspy_rs::{Signature, BamlType};
 
-#[derive(BamlType, Clone, Debug)]
+#[BamlType]
+#[derive(Clone, Debug)]
 enum Sentiment {
     Positive,
     Negative,
     Neutral,
 }
 
-#[derive(BamlType, Clone, Debug)]
+#[BamlType]
+#[derive(Clone, Debug)]
 struct Citation {
     /// Document ID
     doc_id: String,
@@ -174,11 +176,12 @@ Options: `"json"`, `"yaml"`, `"toon"`
 
 ```rust
 #[output]
-#[check("this >= 0.0 && this <= 1.0", label = "valid_range")]
+#[check("this >= 0.0 and this <= 1.0", label = "valid_range")]
 confidence: f64,
 ```
 
 Recorded in metadata, doesn't fail parsing. Label is required.
+Use Jinja boolean operators (`and`, `or`) in expressions.
 
 ### `#[assert]` - Hard constraint
 

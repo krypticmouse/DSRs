@@ -11,7 +11,8 @@ use dspy_rs::{BamlType, ChatAdapter, Signature, init_tracing};
 type NaiveDate = String;
 
 /// Basic claim information (metadata about the claim intake).
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub struct ClaimHeader {
     /// Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
     pub claim_id: Option<String>,
@@ -30,7 +31,8 @@ pub struct ClaimHeader {
 }
 
 /// Channel used to report a claim.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub enum ClaimChannel {
     Email,
     Phone,
@@ -39,7 +41,8 @@ pub enum ClaimChannel {
 }
 
 /// Policy information if available.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub struct PolicyDetails {
     /// Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
     pub policy_number: Option<String>,
@@ -58,7 +61,8 @@ pub struct PolicyDetails {
 }
 
 /// Type of insurance coverage.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub enum CoverageType {
     Property,
     Auto,
@@ -69,7 +73,8 @@ pub enum CoverageType {
 }
 
 /// An insured object involved in the claim (vehicle, building, person, etc.).
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub struct InsuredObject {
     /// Unique identifier for insured object.
     ///
@@ -98,7 +103,8 @@ pub struct InsuredObject {
 }
 
 /// Type of insured object.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub enum InsuredObjectType {
     Vehicle,
     Building,
@@ -107,7 +113,8 @@ pub enum InsuredObjectType {
 }
 
 /// Structured incident details.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub struct IncidentDescription {
     /// Specific standardized incident type.
     pub incident_type: IncidentType,
@@ -123,7 +130,8 @@ pub struct IncidentDescription {
 }
 
 /// Specific standardized incident type.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub enum IncidentType {
     RearEndCollision,
     SideImpactCollision,
@@ -143,7 +151,8 @@ pub enum IncidentType {
 }
 
 /// Standardized location type where incident occurred.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub enum LocationType {
     Intersection,
     Highway,
@@ -157,7 +166,8 @@ pub enum LocationType {
 }
 
 /// Top-level insurance claim object aggregating all extracted fields.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[BamlType]
 pub struct InsuranceClaim {
     /// Basic claim information.
     pub header: ClaimHeader,

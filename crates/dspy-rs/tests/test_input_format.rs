@@ -1,9 +1,9 @@
-use dspy_rs::baml_bridge::ToBamlValue;
-use dspy_rs::{BamlType, BamlValue, ChatAdapter, Signature};
+use dspy_rs::bamltype::compat::ToBamlValue;
+use dspy_rs::{BamlType, BamlTypeTrait, BamlValue, ChatAdapter, Signature};
 
-#[derive(BamlType, Clone, Debug)]
+#[derive(Clone, Debug)]
+#[BamlType]
 struct Document {
-    #[baml(alias = "docText")]
     text: String,
 }
 
@@ -83,7 +83,7 @@ fn extract_baml_field<'a>(value: &'a BamlValue, field_name: &str) -> &'a BamlVal
 }
 
 #[test]
-fn typed_input_format_yaml_preserves_aliases() {
+fn typed_input_format_yaml_renders_field_names() {
     let adapter = ChatAdapter;
     let input = FormatSigInput {
         question: "What is YAML?".to_string(),
@@ -96,12 +96,12 @@ fn typed_input_format_yaml_preserves_aliases() {
     let context_value = extract_field(&message, "context");
     let question_value = extract_field(&message, "question");
 
-    assert!(context_value.contains("docText: Hello"));
+    assert!(context_value.contains("text: Hello"));
     assert_eq!(question_value, "What is YAML?");
 }
 
 #[test]
-fn typed_input_format_json_is_parsable_with_aliases() {
+fn typed_input_format_json_is_parsable() {
     let adapter = ChatAdapter;
     let input = FormatJsonSigInput {
         question: "What is JSON?".to_string(),
@@ -119,7 +119,7 @@ fn typed_input_format_json_is_parsable_with_aliases() {
         .and_then(|items| items.first())
         .and_then(|value| value.as_object())
         .expect("expected array with object");
-    assert_eq!(first.get("docText").and_then(|v| v.as_str()), Some("Hello"));
+    assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
 }
 
 #[test]
@@ -137,8 +137,8 @@ fn typed_input_format_toon_matches_formatter() {
 
     let baml_value = input.to_baml_value();
     let context_baml = extract_baml_field(&baml_value, "context");
-    let output_format = <FormatToonSigInput as BamlType>::baml_output_format();
-    let expected = dspy_rs::baml_bridge::internal_baml_jinja::format_baml_value(
+    let output_format = <FormatToonSigInput as BamlTypeTrait>::baml_output_format();
+    let expected = dspy_rs::bamltype::internal_baml_jinja::format_baml_value(
         context_baml,
         output_format,
         "toon",
@@ -182,5 +182,5 @@ fn typed_input_default_non_string_is_json() {
         .and_then(|items| items.first())
         .and_then(|value| value.as_object())
         .expect("expected array with object");
-    assert_eq!(first.get("docText").and_then(|v| v.as_str()), Some("Hello"));
+    assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
 }

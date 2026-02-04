@@ -1,0 +1,5 @@
+error: serde_json::Value is not supported without a #[baml(with = "...")] adapter; hint: use a concrete type or provide a custom adapter
+ --> tests/ui/serde_json_value.rs:5:12
+  |
+5 |     value: serde_json::Value,
+  |            ^^^^^^^^^^^^^^^^^

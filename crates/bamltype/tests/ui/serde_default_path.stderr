@@ -1,0 +1,5 @@
+error: serde(default = "path") is not supported; hint: use #[baml(default)] or Default::default
+ --> tests/ui/serde_default_path.rs:5:13
+  |
+5 |     #[serde(default = "default_age")]
+  |             ^^^^^^^^^^^^^^^^^^^^^^^

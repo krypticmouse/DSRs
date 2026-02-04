@@ -1,0 +1,5 @@
+error: unsupported arguments for #[output(...)]; only desc = "..." is allowed
+ --> tests/ui/output_unknown_arg.rs:8:5
+  |
+8 |     #[output(bad = "x")]
+  |     ^^^^^^^^^^^^^^^^^^^^

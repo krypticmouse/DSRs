@@ -575,6 +575,28 @@ impl OutputFormatContent {
         .to_string(options)
     }
 
+    fn rendered_class_name(
+        &self,
+        class_name: &str,
+        preferred_mode: Option<baml_types::StreamingMode>,
+    ) -> String {
+        let preferred =
+            preferred_mode.and_then(|mode| self.classes.get(&(class_name.to_string(), mode)));
+        preferred
+            .or_else(|| {
+                self.classes.get(&(
+                    class_name.to_string(),
+                    baml_types::StreamingMode::NonStreaming,
+                ))
+            })
+            .or_else(|| {
+                self.classes
+                    .get(&(class_name.to_string(), baml_types::StreamingMode::Streaming))
+            })
+            .map(|class| class.name.rendered_name().to_string())
+            .unwrap_or_else(|| class_name.to_string())
+    }
+
     /// Renders either the schema or the name of a type.
     ///
     /// Prompt rendering is somewhat confusing because of hoisted types, so
@@ -699,8 +721,13 @@ impl OutputFormatContent {
     ) -> Result<String, minijinja::Error> {
         match field_type {
             TypeIR::Class {
-                name: nested_class, ..
-            } if render_ctx.hoisted_classes.contains(nested_class) => Ok(nested_class.to_owned()),
+                name: nested_class,
+                mode,
+                ..
+            } if render_ctx.hoisted_classes.contains(nested_class) => {
+                // Use rendered name (alias) for hoisted class references.
+                Ok(self.rendered_class_name(nested_class, Some(*mode)))
+            }
 
             _ => self.inner_type_render(options, field_type, render_ctx),
         }
@@ -936,9 +963,13 @@ impl OutputFormatContent {
 
         // Top level recursive classes will just use their name instead of the
         // entire schema which should already be hoisted.
-        if let TypeIR::Class { name: class, .. } = &self.target {
+        if let TypeIR::Class {
+            name: class, mode, ..
+        } = &self.target
+        {
             if render_ctx.hoisted_classes.contains(class) {
-                message = Some(class.to_owned());
+                // Use rendered name (alias) for the target message.
+                message = Some(self.rendered_class_name(class, Some(*mode)));
             }
         }
 
@@ -985,11 +1016,14 @@ impl OutputFormatContent {
                 (Vec::new(), schema)
             };
 
+            // Use rendered name (alias) for hoisted class headers.
+            let displayed_name = self.rendered_class_name(class_name, None);
+
             let class_def = match &options.hoisted_class_prefix {
                 RenderSetting::Always(prefix) if !prefix.is_empty() => {
-                    format!("{prefix} {class_name} {schema_body}")
+                    format!("{prefix} {displayed_name} {schema_body}")
                 }
-                _ => format!("{class_name} {schema_body}"),
+                _ => format!("{displayed_name} {schema_body}"),
             };
 
             // Prepend description if present

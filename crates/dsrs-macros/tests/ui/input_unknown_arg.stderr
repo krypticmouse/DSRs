@@ -1,0 +1,5 @@
+error: unsupported arguments for #[input(...)]; only desc = "..." is allowed
+ --> tests/ui/input_unknown_arg.rs:5:5
+  |
+5 |     #[input(foo = "bar")]
+  |     ^^^^^^^^^^^^^^^^^^^^^

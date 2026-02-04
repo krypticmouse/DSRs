@@ -1,0 +1,5 @@
+error: unsupported #[baml(...)] attribute; hint: check the supported keys in the bridge docs
+ --> tests/ui/unsupported_baml_attr.rs:4:8
+  |
+4 | #[baml(unknown = "x")]
+  |        ^^^^^^^^^^^^^

@@ -1,6 +1,5 @@
 #![allow(deprecated)]
 
-use crate as dspy_rs;
 /// MIPROv2 Optimizer Implementation
 ///
 /// Multi-prompt Instruction Proposal Optimizer (MIPROv2) is an advanced optimizer

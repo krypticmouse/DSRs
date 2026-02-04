@@ -45,19 +45,19 @@ fn schema_snapshot_shape_hoisted() {
         .expect("render failed")
         .unwrap_or_default();
 
-    expect![[r#"golden::GoldenShape__Circle {
+    expect![[r#"GoldenShape_Circle {
   // A circle.
 
   kind: "Circle",
   radius: float,
 }
 
-golden::GoldenShape__Square {
+GoldenShape_Square {
   kind: "Square",
   side: float,
 }
 
 Answer in JSON using any of these schemas:
-golden::GoldenShape__Circle or golden::GoldenShape__Square"#]]
+GoldenShape_Circle or GoldenShape_Square"#]]
     .assert_eq(&schema);
 }

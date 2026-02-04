@@ -166,12 +166,13 @@ Compose multi-step pipelines
 
 ### Custom types
 
-When you need more than primitives, derive [`BamlType`](/docs/building-blocks/types):
+When you need more than primitives, add [`#[BamlType]`](/docs/building-blocks/types):
 
 ```rust
 use dspy_rs::{Signature, BamlType};
 
-#[derive(BamlType, Clone, Debug)]
+#[BamlType]
+#[derive(Clone, Debug)]
 enum Sentiment {
     Positive,
     Negative,

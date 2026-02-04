@@ -1,5 +1,3 @@
-extern crate self as dsrs_macros;
-
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use serde_json::{Value, json};
@@ -12,6 +10,9 @@ use syn::{
 };
 
 mod optim;
+mod runtime_path;
+
+use runtime_path::resolve_dspy_rs_path;
 
 #[proc_macro_derive(Optimizable, attributes(parameter))]
 pub fn derive_optimizable(input: TokenStream) -> TokenStream {
@@ -21,13 +22,21 @@ pub fn derive_optimizable(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format))]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    match expand_signature(&input) {
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match expand_signature(&input, &runtime) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
 }
 
-fn expand_signature(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+fn expand_signature(
+    input: &DeriveInput,
+    runtime: &syn::Path,
+) -> syn::Result<proc_macro2::TokenStream> {
     let data = match &input.data {
         Data::Struct(data) => data,
         _ => {
@@ -49,7 +58,7 @@ fn expand_signature(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream
     };
 
     let parsed = parse_signature_fields(fields, &input.attrs)?;
-    generate_signature_code(input, &parsed)
+    generate_signature_code(input, &parsed, runtime)
 }
 
 #[derive(Clone)]
@@ -189,12 +198,12 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     for attr in &field.attrs {
         if attr.path().is_ident("input") {
             is_input = true;
-            if let Some(desc) = parse_desc_from_attr(attr) {
+            if let Some(desc) = parse_desc_from_attr(attr, "input")? {
                 desc_override = Some(desc);
             }
         } else if attr.path().is_ident("output") {
             is_output = true;
-            if let Some(desc) = parse_desc_from_attr(attr) {
+            if let Some(desc) = parse_desc_from_attr(attr, "output")? {
                 desc_override = Some(desc);
             }
         } else if attr.path().is_ident("alias") {
@@ -248,10 +257,37 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     })
 }
 
-fn parse_desc_from_attr(attr: &Attribute) -> Option<String> {
-    let list = attr.meta.require_list().ok()?;
-    let desc = parse_desc_from_tokens(list.tokens.clone());
-    if desc.is_empty() { None } else { Some(desc) }
+fn parse_desc_from_attr(attr: &Attribute, attr_name: &str) -> syn::Result<Option<String>> {
+    match &attr.meta {
+        Meta::Path(_) => Ok(None),
+        Meta::List(list) => {
+            let metas = list.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            )?;
+
+            if metas.is_empty() {
+                return Ok(None);
+            }
+
+            if metas.len() == 1
+                && let Some(Meta::NameValue(meta)) = metas.first()
+                && meta.path.is_ident("desc")
+            {
+                return Ok(Some(parse_string_expr(&meta.value, meta.span())?));
+            }
+
+            Err(syn::Error::new_spanned(
+                attr,
+                format!(
+                    "unsupported arguments for #[{attr_name}(...)]; only desc = \"...\" is allowed"
+                ),
+            ))
+        }
+        _ => Err(syn::Error::new_spanned(
+            attr,
+            format!("expected #[{attr_name}] or #[{attr_name}(desc = \"...\")]"),
+        )),
+    }
 }
 
 fn parse_string_attr(attr: &Attribute, attr_name: &str) -> syn::Result<String> {
@@ -272,7 +308,8 @@ fn parse_constraint_attr(
     attr: &Attribute,
     kind: ParsedConstraintKind,
 ) -> syn::Result<ParsedConstraint> {
-    let args: ConstraintArgs = attr.parse_args()?;
+    let mut args: ConstraintArgs = attr.parse_args()?;
+    normalize_constraint_expression(&mut args.expression);
     if kind == ParsedConstraintKind::Check && args.label.is_none() {
         return Err(syn::Error::new_spanned(
             attr,
@@ -285,6 +322,17 @@ fn parse_constraint_attr(
         expression: args.expression,
         label: args.label,
     })
+}
+
+fn normalize_constraint_expression(expression: &mut String) {
+    // Accept common Rust-style logical operators in docs/examples and normalize
+    // to the Jinja expression syntax expected by downstream evaluation.
+    let normalized = expression
+        .replace(" && ", " and ")
+        .replace(" || ", " or ")
+        .replace("&&", " and ")
+        .replace("||", " or ");
+    *expression = normalized;
 }
 
 fn collect_doc_comment(attrs: &[Attribute]) -> String {
@@ -320,15 +368,16 @@ fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String
 fn generate_signature_code(
     input: &DeriveInput,
     parsed: &ParsedSignature,
+    runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
 
-    let helper_structs = generate_helper_structs(name, parsed, vis)?;
-    let input_fields = generate_field_specs(name, &parsed.input_fields, "INPUT")?;
-    let output_fields = generate_field_specs(name, &parsed.output_fields, "OUTPUT")?;
-    let baml_delegation = generate_baml_delegation(name, parsed);
-    let signature_impl = generate_signature_impl(name, parsed);
+    let helper_structs = generate_helper_structs(name, parsed, vis, runtime)?;
+    let input_fields = generate_field_specs(name, &parsed.input_fields, "INPUT", runtime)?;
+    let output_fields = generate_field_specs(name, &parsed.output_fields, "OUTPUT", runtime)?;
+    let baml_delegation = generate_baml_delegation(name, parsed, runtime);
+    let signature_impl = generate_signature_impl(name, parsed, runtime);
 
     Ok(quote! {
         #helper_structs
@@ -343,6 +392,7 @@ fn generate_helper_structs(
     name: &Ident,
     parsed: &ParsedSignature,
     vis: &Visibility,
+    runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("__{}Output", name);
@@ -353,17 +403,18 @@ fn generate_helper_structs(
     let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
 
     Ok(quote! {
-        #[derive(Debug, Clone, ::dspy_rs::BamlType)]
+        #[#runtime::BamlType]
+        #[derive(Debug, Clone)]
         #vis struct #input_name {
             #(#input_fields),*
         }
 
-        #[derive(Debug, Clone, ::dspy_rs::BamlType)]
+        #[#runtime::BamlType]
         pub struct #output_name {
             #(#output_fields),*
         }
 
-        #[derive(Debug, Clone, ::dspy_rs::BamlType)]
+        #[#runtime::BamlType]
         pub struct #all_name {
             #(#all_fields),*
         }
@@ -380,24 +431,9 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         attrs.push(quote! { #[doc = #doc] });
     }
 
-    if let Some(alias) = &field.alias {
-        let alias = LitStr::new(alias, proc_macro2::Span::call_site());
-        attrs.push(quote! { #[baml(alias = #alias)] });
-    }
-
-    for constraint in &field.constraints {
-        let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
-        let label = constraint.label.as_deref().unwrap_or("");
-        let label = LitStr::new(label, proc_macro2::Span::call_site());
-        match constraint.kind {
-            ParsedConstraintKind::Check => {
-                attrs.push(quote! { #[baml(check(label = #label, expr = #expr))] });
-            }
-            ParsedConstraintKind::Assert => {
-                attrs.push(quote! { #[baml(assert(label = #label, expr = #expr))] });
-            }
-        }
-    }
+    // Note: aliases and constraints are handled at the FieldSpec level in
+    // generate_field_specs, not via struct attributes. The adapter layer uses
+    // FieldSpec metadata for LLM name mapping and constraint enforcement.
 
     quote! {
         #(#attrs)*
@@ -409,6 +445,7 @@ fn generate_field_specs(
     name: &Ident,
     fields: &[ParsedField],
     kind: &str,
+    runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let prefix = name.to_string().to_lowercase();
     let array_name = format_ident!("__{}_{}_FIELDS", name.to_string().to_uppercase(), kind);
@@ -438,8 +475,8 @@ fn generate_field_specs(
 
         if field.constraints.is_empty() {
             type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> ::dspy_rs::TypeIR {
-                    <#ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir()
+                fn #type_ir_fn_name() -> #runtime::TypeIR {
+                    <#ty as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir()
                 }
             });
         } else {
@@ -452,19 +489,19 @@ fn generate_field_specs(
                     let label = LitStr::new(label, proc_macro2::Span::call_site());
                     match constraint.kind {
                         ParsedConstraintKind::Check => {
-                            quote! { ::dspy_rs::Constraint::new_check(#label, #expr) }
+                            quote! { #runtime::Constraint::new_check(#label, #expr) }
                         }
                         ParsedConstraintKind::Assert => {
-                            quote! { ::dspy_rs::Constraint::new_assert(#label, #expr) }
+                            quote! { #runtime::Constraint::new_assert(#label, #expr) }
                         }
                     }
                 })
                 .collect();
 
             type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> ::dspy_rs::TypeIR {
-                    let base = <#ty as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir();
-                    ::dspy_rs::baml_bridge::with_constraints(base, vec![#(#constraint_tokens),*])
+                fn #type_ir_fn_name() -> #runtime::TypeIR {
+                    let base = <#ty as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir();
+                    #runtime::bamltype::compat::with_constraints(base, vec![#(#constraint_tokens),*])
                 }
             });
         }
@@ -477,7 +514,7 @@ fn generate_field_specs(
 
         if field.constraints.is_empty() {
             constraint_arrays.push(quote! {
-                const #constraints_name: &[::dspy_rs::ConstraintSpec] = &[];
+                const #constraints_name: &[#runtime::ConstraintSpec] = &[];
             });
         } else {
             let constraint_specs: Vec<_> = field
@@ -485,16 +522,16 @@ fn generate_field_specs(
                 .iter()
                 .map(|constraint| {
                     let kind = match constraint.kind {
-                        ParsedConstraintKind::Check => quote! { ::dspy_rs::ConstraintKind::Check },
+                        ParsedConstraintKind::Check => quote! { #runtime::ConstraintKind::Check },
                         ParsedConstraintKind::Assert => {
-                            quote! { ::dspy_rs::ConstraintKind::Assert }
+                            quote! { #runtime::ConstraintKind::Assert }
                         }
                     };
                     let label = constraint.label.as_deref().unwrap_or("");
                     let label = LitStr::new(label, proc_macro2::Span::call_site());
                     let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
                     quote! {
-                        ::dspy_rs::ConstraintSpec {
+                        #runtime::ConstraintSpec {
                             kind: #kind,
                             label: #label,
                             expression: #expr,
@@ -504,14 +541,14 @@ fn generate_field_specs(
                 .collect();
 
             constraint_arrays.push(quote! {
-                const #constraints_name: &[::dspy_rs::ConstraintSpec] = &[
+                const #constraints_name: &[#runtime::ConstraintSpec] = &[
                     #(#constraint_specs),*
                 ];
             });
         }
 
         field_specs.push(quote! {
-            ::dspy_rs::FieldSpec {
+            #runtime::FieldSpec {
                 name: #llm_name,
                 rust_name: #rust_name,
                 description: #description,
@@ -526,13 +563,17 @@ fn generate_field_specs(
         #(#type_ir_fns)*
         #(#constraint_arrays)*
 
-        static #array_name: &[::dspy_rs::FieldSpec] = &[
+        static #array_name: &[#runtime::FieldSpec] = &[
             #(#field_specs),*
         ];
     })
 }
 
-fn generate_baml_delegation(name: &Ident, parsed: &ParsedSignature) -> proc_macro2::TokenStream {
+fn generate_baml_delegation(
+    name: &Ident,
+    parsed: &ParsedSignature,
+    runtime: &syn::Path,
+) -> proc_macro2::TokenStream {
     let all_name = format_ident!("__{}All", name);
     let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
 
@@ -543,32 +584,32 @@ fn generate_baml_delegation(name: &Ident, parsed: &ParsedSignature) -> proc_macr
         to_value_inserts.push(quote! {
             fields.insert(
                 #field_name.to_string(),
-                ::dspy_rs::baml_bridge::ToBamlValue::to_baml_value(&self.#ident),
+                #runtime::bamltype::compat::ToBamlValue::to_baml_value(&self.#ident),
             );
         });
     }
 
     quote! {
-        impl ::dspy_rs::baml_bridge::BamlTypeInternal for #name {
+        impl #runtime::bamltype::compat::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
-                <#all_name as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name()
+                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::baml_internal_name()
             }
 
-            fn baml_type_ir() -> ::dspy_rs::TypeIR {
-                <#all_name as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir()
+            fn baml_type_ir() -> #runtime::TypeIR {
+                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir()
             }
 
-            fn register(reg: &mut ::dspy_rs::baml_bridge::Registry) {
-                <#all_name as ::dspy_rs::baml_bridge::BamlTypeInternal>::register(reg)
+            fn register(reg: &mut #runtime::bamltype::compat::Registry) {
+                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::register(reg)
             }
         }
 
-        impl ::dspy_rs::baml_bridge::BamlValueConvert for #name {
+        impl #runtime::bamltype::compat::BamlValueConvert for #name {
             fn try_from_baml_value(
-                value: ::dspy_rs::BamlValue,
+                value: #runtime::BamlValue,
                 path: Vec<String>,
-            ) -> Result<Self, ::dspy_rs::BamlConvertError> {
-                let all = <#all_name as ::dspy_rs::baml_bridge::BamlValueConvert>
+            ) -> Result<Self, #runtime::BamlConvertError> {
+                let all = <#all_name as #runtime::bamltype::compat::BamlValueConvert>
                     ::try_from_baml_value(value, path)?;
                 Ok(Self {
                     #(#field_names: all.#field_names),*
@@ -576,18 +617,19 @@ fn generate_baml_delegation(name: &Ident, parsed: &ParsedSignature) -> proc_macr
             }
         }
 
-        impl ::dspy_rs::baml_bridge::BamlType for #name {
-            fn baml_output_format() -> &'static ::dspy_rs::OutputFormatContent {
-                <#all_name as ::dspy_rs::baml_bridge::BamlType>::baml_output_format()
+        impl #runtime::bamltype::compat::BamlTypeTrait for #name {
+            fn baml_output_format() -> &'static #runtime::OutputFormatContent {
+                <#all_name as #runtime::bamltype::compat::BamlTypeTrait>::baml_output_format()
             }
         }
 
-        impl ::dspy_rs::baml_bridge::ToBamlValue for #name {
-            fn to_baml_value(&self) -> ::dspy_rs::BamlValue {
-                let mut fields = ::dspy_rs::baml_bridge::baml_types::BamlMap::new();
+        impl #runtime::bamltype::compat::ToBamlValue for #name {
+            fn to_baml_value(&self) -> #runtime::BamlValue {
+                let mut fields = #runtime::bamltype::baml_types::BamlMap::new();
                 #(#to_value_inserts)*
-                ::dspy_rs::baml_bridge::baml_types::BamlValue::Class(
-                    <Self as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_internal_name().to_string(),
+                #runtime::bamltype::baml_types::BamlValue::Class(
+                    <Self as #runtime::bamltype::compat::BamlTypeInternal>::baml_internal_name()
+                        .to_string(),
                     fields,
                 )
             }
@@ -595,7 +637,11 @@ fn generate_baml_delegation(name: &Ident, parsed: &ParsedSignature) -> proc_macr
     }
 }
 
-fn generate_signature_impl(name: &Ident, parsed: &ParsedSignature) -> proc_macro2::TokenStream {
+fn generate_signature_impl(
+    name: &Ident,
+    parsed: &ParsedSignature,
+    runtime: &syn::Path,
+) -> proc_macro2::TokenStream {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("__{}Output", name);
 
@@ -616,7 +662,7 @@ fn generate_signature_impl(name: &Ident, parsed: &ParsedSignature) -> proc_macro
     let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
 
     quote! {
-        impl ::dspy_rs::Signature for #name {
+        impl #runtime::Signature for #name {
             type Input = #input_name;
             type Output = #output_name;
 
@@ -624,16 +670,16 @@ fn generate_signature_impl(name: &Ident, parsed: &ParsedSignature) -> proc_macro
                 #instruction
             }
 
-            fn input_fields() -> &'static [::dspy_rs::FieldSpec] {
+            fn input_fields() -> &'static [#runtime::FieldSpec] {
                 &#input_fields_static
             }
 
-            fn output_fields() -> &'static [::dspy_rs::FieldSpec] {
+            fn output_fields() -> &'static [#runtime::FieldSpec] {
                 &#output_fields_static
             }
 
-            fn output_format_content() -> &'static ::dspy_rs::OutputFormatContent {
-                <#output_name as ::dspy_rs::baml_bridge::BamlType>::baml_output_format()
+            fn output_format_content() -> &'static #runtime::OutputFormatContent {
+                <#output_name as #runtime::bamltype::compat::BamlTypeTrait>::baml_output_format()
             }
 
             fn from_parts(input: Self::Input, output: Self::Output) -> Self {
@@ -661,6 +707,10 @@ fn generate_signature_impl(name: &Ident, parsed: &ParsedSignature) -> proc_macro
 #[proc_macro_attribute]
 pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     // Parse the attributes (cot, hint, etc.)
     let attr_str = attr.to_string();
@@ -693,21 +743,41 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let mut found_first_input = false;
 
                 for field in &named.named {
-                    let field_name = field.ident.as_ref().unwrap().clone();
+                    let field_name = match field.ident.as_ref() {
+                        Some(name) => name.clone(),
+                        None => {
+                            return syn::Error::new_spanned(
+                                field,
+                                "LegacySignature requires named fields",
+                            )
+                            .to_compile_error()
+                            .into();
+                        }
+                    };
                     let field_type = field.ty.clone();
 
                     // Check for #[input] or #[output] attributes
-                    let (is_input, desc) = has_in_attribute(&field.attrs);
-                    let (is_output, desc2) = has_out_attribute(&field.attrs);
+                    let (is_input, desc) = has_io_attribute(&field.attrs, "input");
+                    let (is_output, desc2) = has_io_attribute(&field.attrs, "output");
 
                     if is_input && is_output {
-                        panic!("Field {field_name} cannot be both input and output");
+                        return syn::Error::new_spanned(
+                            field,
+                            format!("Field `{field_name}` cannot be both input and output"),
+                        )
+                        .to_compile_error()
+                        .into();
                     }
 
                     if !is_input && !is_output {
-                        panic!(
-                            "Field {field_name} must have either #[input] or #[output] attribute"
-                        );
+                        return syn::Error::new_spanned(
+                            field,
+                            format!(
+                                "Field `{field_name}` must have either #[input] or #[output] attribute"
+                            ),
+                        )
+                        .to_compile_error()
+                        .into();
                     }
 
                     let field_desc = if is_input { desc } else { desc2 };
@@ -751,8 +821,8 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                             let field_name_str = field_name.to_string();
                             schema_updates.push(quote! {
                                 {
-                                    let schema = schemars::schema_for!(#field_type);
-                                    let schema_json = serde_json::to_value(schema).unwrap();
+                                    let schema = #runtime::schemars::schema_for!(#field_type);
+                                    let schema_json = #runtime::serde_json::to_value(schema).unwrap();
                                     // Extract just the properties if it's an object schema
                                     if let Some(obj) = schema_json.as_object() {
                                         if obj.contains_key("properties") {
@@ -773,8 +843,8 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                             let field_name_str = field_name.to_string();
                             schema_updates.push(quote! {
                                 {
-                                    let schema = schemars::schema_for!(#field_type);
-                                    let schema_json = serde_json::to_value(schema).unwrap();
+                                    let schema = #runtime::schemars::schema_for!(#field_type);
+                                    let schema_json = #runtime::serde_json::to_value(schema).unwrap();
                                     // Extract just the properties if it's an object schema
                                     if let Some(obj) = schema_json.as_object() {
                                         if obj.contains_key("properties") {
@@ -792,7 +862,14 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 }
             }
         }
-        _ => panic!("Signature can only be applied to structs"),
+        _ => {
+            return syn::Error::new_spanned(
+                &input,
+                "LegacySignature can only be applied to structs with named fields",
+            )
+            .to_compile_error()
+            .into();
+        }
     }
 
     if has_hint {
@@ -809,18 +886,18 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_schema_str = serde_json::to_string(&output_schema).unwrap();
 
     let generated = quote! {
-        #[derive(Default, Debug, Clone, serde::Serialize, serde::Deserialize)]
+        #[derive(Default, Debug, Clone, #runtime::serde::Serialize, #runtime::serde::Deserialize)]
         struct #struct_name {
             instruction: String,
-            input_fields: serde_json::Value,
-            output_fields: serde_json::Value,
-            demos: Vec<dspy_rs::Example>,
+            input_fields: #runtime::serde_json::Value,
+            output_fields: #runtime::serde_json::Value,
+            demos: Vec<#runtime::Example>,
         }
 
         impl #struct_name {
             pub fn new() -> Self {
-                let mut input_fields: serde_json::Value = serde_json::from_str(#input_schema_str).unwrap();
-                let mut output_fields: serde_json::Value = serde_json::from_str(#output_schema_str).unwrap();
+                let mut input_fields: #runtime::serde_json::Value = #runtime::serde_json::from_str(#input_schema_str).unwrap();
+                let mut output_fields: #runtime::serde_json::Value = #runtime::serde_json::from_str(#output_schema_str).unwrap();
 
                 // Update schemas for complex types
                 #(#schema_updates)*
@@ -842,12 +919,12 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
             }
         }
 
-        impl dspy_rs::core::MetaSignature for #struct_name {
-            fn demos(&self) -> Vec<dspy_rs::Example> {
+        impl #runtime::core::MetaSignature for #struct_name {
+            fn demos(&self) -> Vec<#runtime::Example> {
                 self.demos.clone()
             }
 
-            fn set_demos(&mut self, demos: Vec<dspy_rs::Example>) -> anyhow::Result<()> {
+            fn set_demos(&mut self, demos: Vec<#runtime::Example>) -> #runtime::anyhow::Result<()> {
                 self.demos = demos;
                 Ok(())
             }
@@ -856,20 +933,20 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 self.instruction.clone()
             }
 
-            fn input_fields(&self) -> serde_json::Value {
+            fn input_fields(&self) -> #runtime::serde_json::Value {
                 self.input_fields.clone()
             }
 
-            fn output_fields(&self) -> serde_json::Value {
+            fn output_fields(&self) -> #runtime::serde_json::Value {
                 self.output_fields.clone()
             }
 
-            fn update_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
+            fn update_instruction(&mut self, instruction: String) -> #runtime::anyhow::Result<()> {
                 self.instruction = instruction;
                 Ok(())
             }
 
-            fn append(&mut self, name: &str, field_value: serde_json::Value) -> anyhow::Result<()> {
+            fn append(&mut self, name: &str, field_value: #runtime::serde_json::Value) -> #runtime::anyhow::Result<()> {
                 match field_value["__dsrs_field_type"].as_str() {
                     Some("input") => {
                         self.input_fields[name] = field_value;
@@ -878,7 +955,7 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                         self.output_fields[name] = field_value;
                     }
                     _ => {
-                        return Err(anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
+                        return Err(#runtime::anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
                     }
                 }
                 Ok(())
@@ -889,33 +966,17 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
     generated.into()
 }
 
-fn has_in_attribute(attrs: &[Attribute]) -> (bool, String) {
+fn has_io_attribute(attrs: &[Attribute], attr_name: &str) -> (bool, String) {
     for attr in attrs {
-        if attr.path().is_ident("input") {
+        if attr.path().is_ident(attr_name) {
             // Try to parse desc parameter
             if let Ok(list) = attr.meta.require_list() {
                 let desc = parse_desc_from_tokens(list.tokens.clone());
                 return (true, desc);
-            } else {
-                // Just #[input] without parameters
-                return (true, String::new());
             }
-        }
-    }
-    (false, String::new())
-}
 
-fn has_out_attribute(attrs: &[Attribute]) -> (bool, String) {
-    for attr in attrs {
-        if attr.path().is_ident("output") {
-            // Try to parse desc parameter
-            if let Ok(list) = attr.meta.require_list() {
-                let desc = parse_desc_from_tokens(list.tokens.clone());
-                return (true, desc);
-            } else {
-                // Just #[output] without parameters
-                return (true, String::new());
-            }
+            // Just #[input] or #[output] without parameters.
+            return (true, String::new());
         }
     }
     (false, String::new())
