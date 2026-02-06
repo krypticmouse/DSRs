@@ -15,6 +15,7 @@ cargo run --example 11-custom-client
 use anyhow::Result;
 use dspy_rs::{
     ChatAdapter, LM, LMClient, LegacyPredict, LegacySignature, Predictor, configure, example,
+    init_tracing,
 };
 use rig::providers::*;
 use std::env;
@@ -30,6 +31,8 @@ struct QASignature {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     // Create a custom Azure OpenAI completion model directly
     let api_key = env::var("AZURE_OPENAI_API_KEY").unwrap_or_else(|_| "dummy-key".to_string());
     let endpoint = env::var("AZURE_OPENAI_ENDPOINT")

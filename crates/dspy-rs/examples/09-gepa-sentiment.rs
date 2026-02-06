@@ -116,6 +116,8 @@ impl FeedbackEvaluator for SentimentAnalyzer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     println!("GEPA Sentiment Analysis Optimization Example\n");
 
     // Setup LM

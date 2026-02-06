@@ -48,10 +48,12 @@ The `LM::builder()` must be awaited with `.build().await` because client initial
 ### Basic usage
 
 ```rust
-use dspy_rs::LM;
+use dspy_rs::{init_tracing, LM};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     // OpenAI - API key automatically read from OPENAI_API_KEY env var
     let lm = LM::builder()
         .model("gpt-4o-mini".to_string())
@@ -116,8 +118,12 @@ You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-
   <Tab title="Async (Tokio)">
 
 ```rust
+use dspy_rs::{init_tracing, LM};
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     let lm = LM::builder()
         .model("gpt-4o-mini".to_string())
         .build()
@@ -131,6 +137,8 @@ async fn main() -> anyhow::Result<()> {
 
 ```rust
 fn main() -> anyhow::Result<()> {
+    dspy_rs::init_tracing()?;
+
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let lm = LM::builder()

@@ -8,19 +8,31 @@ use reqwest;
 use std::fs;
 use std::io::Cursor;
 use std::{collections::HashMap, path::Path};
+use tracing::{Span, debug};
 
 use crate::{Example, is_url, string_record_to_example};
 
 pub struct DataLoader;
 
 impl DataLoader {
+    #[tracing::instrument(
+        name = "dsrs.data.load_json",
+        level = "debug",
+        skip(input_keys, output_keys),
+        fields(
+            is_url = is_url(path),
+            input_keys = input_keys.len(),
+            output_keys = output_keys.len()
+        )
+    )]
     pub fn load_json(
         path: &str,
         lines: bool,
         input_keys: Vec<String>,
         output_keys: Vec<String>,
     ) -> Result<Vec<Example>> {
-        let data = if is_url(path) {
+        let source_is_url = is_url(path);
+        let data = if source_is_url {
             let response = reqwest::blocking::get(path)?;
             response.text()?
         } else {
@@ -29,15 +41,19 @@ impl DataLoader {
 
         let examples: Vec<Example> = if lines {
             let lines = data.lines().collect::<Vec<&str>>();
+            let span = Span::current();
 
             lines
                 .par_iter()
                 .map(|line| {
-                    Example::new(
-                        serde_json::from_str(line).unwrap(),
-                        input_keys.clone(),
-                        output_keys.clone(),
-                    )
+                    let span = span.clone();
+                    span.in_scope(|| {
+                        Example::new(
+                            serde_json::from_str(line).unwrap(),
+                            input_keys.clone(),
+                            output_keys.clone(),
+                        )
+                    })
                 })
                 .collect()
         } else {
@@ -47,9 +63,16 @@ impl DataLoader {
                 output_keys.clone(),
             )]
         };
+        debug!(examples_loaded = examples.len(), "json examples loaded");
         Ok(examples)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.data.save_json",
+        level = "debug",
+        skip(examples),
+        fields(examples = examples.len())
+    )]
     pub fn save_json(path: &str, examples: Vec<Example>, lines: bool) -> Result<()> {
         let data = if lines {
             examples
@@ -61,9 +84,20 @@ impl DataLoader {
             serde_json::to_string(&examples).unwrap()
         };
         fs::write(path, data)?;
+        debug!("json examples saved");
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "dsrs.data.load_csv",
+        level = "debug",
+        skip(input_keys, output_keys),
+        fields(
+            is_url = is_url(path),
+            input_keys = input_keys.len(),
+            output_keys = output_keys.len()
+        )
+    )]
     pub fn load_csv(
         path: &str,
         delimiter: char,
@@ -71,7 +105,8 @@ impl DataLoader {
         output_keys: Vec<String>,
         has_headers: bool,
     ) -> Result<Vec<Example>> {
-        let records = if is_url(path) {
+        let source_is_url = is_url(path);
+        let records = if source_is_url {
             let response = reqwest::blocking::get(path)?.bytes()?.to_vec();
             let cursor = Cursor::new(response);
 
@@ -93,17 +128,28 @@ impl DataLoader {
 
             records
         };
+        let span = Span::current();
 
-        let examples = records
+        let examples: Vec<Example> = records
             .par_iter()
             .map(|row| {
-                string_record_to_example(row.clone(), input_keys.clone(), output_keys.clone())
+                let span = span.clone();
+                span.in_scope(|| {
+                    string_record_to_example(row.clone(), input_keys.clone(), output_keys.clone())
+                })
             })
             .collect();
 
+        debug!(examples_loaded = examples.len(), "csv examples loaded");
         Ok(examples)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.data.save_csv",
+        level = "debug",
+        skip(examples),
+        fields(examples = examples.len())
+    )]
     pub fn save_csv(path: &str, examples: Vec<Example>, delimiter: char) -> Result<()> {
         let mut writer = WriterBuilder::new()
             .delimiter(delimiter as u8)
@@ -119,10 +165,17 @@ impl DataLoader {
                     .collect::<Vec<String>>(),
             )?;
         }
+        debug!("csv examples saved");
         Ok(())
     }
 
     #[allow(clippy::while_let_on_iterator)]
+    #[tracing::instrument(
+        name = "dsrs.data.load_parquet",
+        level = "debug",
+        skip(input_keys, output_keys),
+        fields(input_keys = input_keys.len(), output_keys = output_keys.len())
+    )]
     pub fn load_parquet(
         path: &str,
         input_keys: Vec<String>,
@@ -161,9 +214,16 @@ impl DataLoader {
                 }
             }
         }
+        debug!(examples_loaded = examples.len(), "parquet examples loaded");
         Ok(examples)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.data.load_hf",
+        level = "debug",
+        skip(input_keys, output_keys),
+        fields(input_keys = input_keys.len(), output_keys = output_keys.len())
+    )]
     pub fn load_hf(
         dataset_id: &str,
         input_keys: Vec<String>,
@@ -182,50 +242,70 @@ impl DataLoader {
             .iter()
             .map(|sib| sib.rfilename.as_str())
             .collect();
+        debug!(files = files.len(), "hf dataset files discovered");
+        let span = Span::current();
 
         let examples: Vec<_> = files
             .par_iter()
             .filter_map(|file: &&str| {
-                let extension = file.split(".").last().unwrap();
-                if !file.ends_with(".parquet")
-                    && !extension.ends_with("json")
-                    && !extension.ends_with("jsonl")
-                    && !extension.ends_with("csv")
-                {
-                    if verbose {
-                        println!("Skipping file by extension: {file}");
+                let span = span.clone();
+                span.in_scope(|| {
+                    let extension = file.split(".").last().unwrap();
+                    if !file.ends_with(".parquet")
+                        && !extension.ends_with("json")
+                        && !extension.ends_with("jsonl")
+                        && !extension.ends_with("csv")
+                    {
+                        if verbose {
+                            println!("Skipping file by extension: {file}");
+                            debug!(file = *file, "skipping hf file by extension");
+                        }
+                        return None;
                     }
-                    return None;
-                }
 
-                if (!subset.is_empty() && !file.contains(subset))
-                    || (!split.is_empty() && !file.contains(split))
-                {
-                    if verbose {
-                        println!("Skipping file by subset or split: {file}");
+                    if (!subset.is_empty() && !file.contains(subset))
+                        || (!split.is_empty() && !file.contains(split))
+                    {
+                        if verbose {
+                            println!("Skipping file by subset or split: {file}");
+                            debug!(file = *file, "skipping hf file by subset/split");
+                        }
+                        return None;
                     }
-                    return None;
-                }
 
-                let file_path = repo.get(file).unwrap();
-                let os_str = file_path.as_os_str().to_str().unwrap();
+                    let file_path = repo.get(file).unwrap();
+                    let os_str = file_path.as_os_str().to_str().unwrap();
 
-                if verbose {
-                    println!("Loading file: {os_str}");
-                }
+                    if verbose {
+                        println!("Loading file: {os_str}");
+                        debug!(path = os_str, "loading hf file");
+                    }
 
-                if os_str.ends_with(".parquet") {
-                    DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone()).ok()
-                } else if os_str.ends_with(".json") || os_str.ends_with(".jsonl") {
-                    let is_jsonl = os_str.ends_with(".jsonl");
-                    DataLoader::load_json(os_str, is_jsonl, input_keys.clone(), output_keys.clone())
+                    if os_str.ends_with(".parquet") {
+                        DataLoader::load_parquet(os_str, input_keys.clone(), output_keys.clone())
+                            .ok()
+                    } else if os_str.ends_with(".json") || os_str.ends_with(".jsonl") {
+                        let is_jsonl = os_str.ends_with(".jsonl");
+                        DataLoader::load_json(
+                            os_str,
+                            is_jsonl,
+                            input_keys.clone(),
+                            output_keys.clone(),
+                        )
                         .ok()
-                } else if os_str.ends_with(".csv") {
-                    DataLoader::load_csv(os_str, ',', input_keys.clone(), output_keys.clone(), true)
+                    } else if os_str.ends_with(".csv") {
+                        DataLoader::load_csv(
+                            os_str,
+                            ',',
+                            input_keys.clone(),
+                            output_keys.clone(),
+                            true,
+                        )
                         .ok()
-                } else {
-                    None
-                }
+                    } else {
+                        None
+                    }
+                })
             })
             .flatten()
             .collect();
@@ -233,6 +313,7 @@ impl DataLoader {
         if verbose {
             println!("Loaded {} examples", examples.len());
         }
+        debug!(examples_loaded = examples.len(), "hf examples loaded");
         Ok(examples)
     }
 }

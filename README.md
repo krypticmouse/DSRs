@@ -49,7 +49,7 @@ Here's a simple example to get you started:
 
 ```rust
 use anyhow::Result;
-use dspy_rs::{configure, ChatAdapter, LM, Predict, Signature};
+use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
 
 #[derive(Signature, Clone)]
 struct SentimentAnalyzer {
@@ -64,6 +64,8 @@ struct SentimentAnalyzer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     // API key automatically read from OPENAI_API_KEY env var
     configure(
         LM::builder()

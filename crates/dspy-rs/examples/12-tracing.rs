@@ -4,7 +4,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor, configure,
-    example, prediction,
+    example, init_tracing, prediction,
     trace::{self, IntoTracked},
 };
 
@@ -63,6 +63,8 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     // Configure with a dummy model string
     configure(
         LM::builder()

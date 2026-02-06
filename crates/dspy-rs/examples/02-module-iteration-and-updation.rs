@@ -13,7 +13,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     Example, LegacyPredict, LegacySignature, Module, Optimizable, Prediction, Predictor, hashmap,
-    prediction,
+    init_tracing, prediction,
 };
 
 #[LegacySignature(cot)]
@@ -92,6 +92,8 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() {
+    init_tracing().expect("failed to initialize tracing");
+
     // Single module test
     let mut qa_rater = QARater::builder().build();
     for (name, param) in qa_rater.parameters() {

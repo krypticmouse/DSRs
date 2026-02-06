@@ -9,7 +9,9 @@ cargo run --example 05-heterogenous-examples
 
 #![allow(deprecated)]
 
-use dspy_rs::{ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example};
+use dspy_rs::{
+    ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example, init_tracing,
+};
 
 #[LegacySignature]
 struct NumberSignature {
@@ -23,6 +25,8 @@ struct NumberSignature {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())

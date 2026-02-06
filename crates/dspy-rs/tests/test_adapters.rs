@@ -17,6 +17,14 @@ struct BasicSignature {
     pub answer: String,
 }
 
+#[LegacySignature]
+struct NumericSignature {
+    #[input]
+    pub problem: String,
+    #[output]
+    pub answer: i32,
+}
+
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_chat_adapter() {
@@ -584,4 +592,25 @@ async fn test_chat_adapter_cache_disabled() {
 
     // Verify cache handler is None when cache is disabled
     assert!(dummy_lm.cache_handler.is_none());
+}
+
+#[test]
+#[should_panic(expected = "legacy parse failed")]
+fn test_chat_adapter_parse_response_panics_on_invalid_json_for_non_string_output() {
+    let signature = NumericSignature::new();
+    let adapter = ChatAdapter;
+
+    let response =
+        Message::assistant("[[ ## answer ## ]]\nnot-a-json-number\n\n[[ ## completed ## ]]");
+    let _ = adapter.parse_response(&signature, response);
+}
+
+#[test]
+#[should_panic(expected = "legacy parse failed")]
+fn test_chat_adapter_parse_response_panics_on_missing_required_field() {
+    let signature = BasicSignature::new();
+    let adapter = ChatAdapter;
+
+    let response = Message::assistant("[[ ## completed ## ]]");
+    let _ = adapter.parse_response(&signature, response);
 }

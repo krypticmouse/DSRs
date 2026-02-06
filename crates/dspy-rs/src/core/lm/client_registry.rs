@@ -12,6 +12,7 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
+use tracing::{debug, trace, warn};
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
@@ -250,6 +251,12 @@ impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
 }
 
 impl LMClient {
+    #[tracing::instrument(
+        name = "dsrs.lm.client.get_api_key",
+        level = "trace",
+        skip(provided, env_var),
+        fields(env_var, provided = provided.is_some())
+    )]
     fn get_api_key<'a>(provided: Option<&'a str>, env_var: &str) -> Result<Cow<'a, str>> {
         match provided {
             Some(k) => Ok(Cow::Borrowed(k)),
@@ -260,15 +267,19 @@ impl LMClient {
     }
 
     /// Build case 1: OpenAI-compatible API from base_url + api_key
+    #[tracing::instrument(
+        name = "dsrs.lm.client.from_openai_compatible",
+        level = "debug",
+        skip(base_url, api_key, model),
+        fields(model, base_url_present = true, api_key_present = true)
+    )]
     pub fn from_openai_compatible(base_url: &str, api_key: &str, model: &str) -> Result<Self> {
-        println!(
-            "Building OpenAI-compatible model from base_url: {} and api_key: {} and model: {}",
-            base_url, api_key, model
-        );
+        trace!(base_url, "creating openai-compatible client");
         let client = openai::CompletionsClient::builder()
             .api_key(api_key)
             .base_url(base_url)
             .build()?;
+        debug!("openai-compatible client ready");
         Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
             client, model,
         )))
@@ -276,28 +287,45 @@ impl LMClient {
 
     /// Build case 2: Local OpenAI-compatible model from base_url (vLLM, etc.)
     /// Uses a dummy API key since local servers don't require authentication
+    #[tracing::instrument(
+        name = "dsrs.lm.client.from_local",
+        level = "debug",
+        skip(base_url, model),
+        fields(model, base_url_present = true)
+    )]
     pub fn from_local(base_url: &str, model: &str) -> Result<Self> {
-        println!(
-            "Building local OpenAI-compatible model from base_url: {} and model: {}",
-            base_url, model
-        );
+        trace!(base_url, "creating local openai-compatible client");
         let client = openai::CompletionsClient::builder()
             .api_key("dummy-key-for-local-server")
             .base_url(base_url)
             .build()?;
+        debug!("local openai-compatible client ready");
         Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
             client, model,
         )))
     }
 
     /// Build case 3: From provider via model name (provider:model format)
+    #[tracing::instrument(
+        name = "dsrs.lm.client.from_model_string",
+        level = "debug",
+        skip(model_str, api_key),
+        fields(
+            provider = tracing::field::Empty,
+            model_id = tracing::field::Empty,
+            api_key_present = api_key.is_some()
+        )
+    )]
     pub fn from_model_string(model_str: &str, api_key: Option<&str>) -> Result<Self> {
         let (provider, model_id) = model_str.split_once(':').ok_or(anyhow::anyhow!(
             "Model string must be in format 'provider:model_name'"
         ))?;
+        tracing::Span::current().record("provider", &tracing::field::display(provider));
+        tracing::Span::current().record("model_id", &tracing::field::display(model_id));
 
         match provider {
             "openai" => {
+                debug!("selecting openai provider");
                 let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
                 let client = openai::CompletionsClient::builder()
                     .api_key(key.as_ref())
@@ -307,6 +335,7 @@ impl LMClient {
                 )))
             }
             "anthropic" => {
+                debug!("selecting anthropic provider");
                 let key = Self::get_api_key(api_key, "ANTHROPIC_API_KEY")?;
                 let client = anthropic::Client::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::Anthropic(
@@ -314,6 +343,7 @@ impl LMClient {
                 ))
             }
             "gemini" => {
+                debug!("selecting gemini provider");
                 let key = Self::get_api_key(api_key, "GEMINI_API_KEY")?;
                 let client = gemini::Client::<reqwest::Client>::builder()
                     .api_key(key.as_ref())
@@ -323,12 +353,14 @@ impl LMClient {
                 )))
             }
             "ollama" => {
+                debug!("selecting ollama provider");
                 let client = ollama::Client::builder().api_key(Nothing).build()?;
                 Ok(LMClient::Ollama(ollama::CompletionModel::new(
                     client, model_id,
                 )))
             }
             "openrouter" => {
+                debug!("selecting openrouter provider");
                 let key = Self::get_api_key(api_key, "OPENROUTER_API_KEY")?;
                 let client = openrouter::Client::builder()
                     .api_key(key.as_ref())
@@ -338,11 +370,13 @@ impl LMClient {
                 ))
             }
             "groq" => {
+                debug!("selecting groq provider");
                 let key = Self::get_api_key(api_key, "GROQ_API_KEY")?;
                 let client = groq::Client::builder().api_key(key.as_ref()).build()?;
                 Ok(LMClient::Groq(groq::CompletionModel::new(client, model_id)))
             }
             _ => {
+                warn!(provider, "unsupported provider");
                 anyhow::bail!(
                     "Unsupported provider: {}. Supported providers are: openai, anthropic, gemini, groq, openrouter, ollama",
                     provider

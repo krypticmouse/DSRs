@@ -15,7 +15,7 @@ cargo run --example 01-simple
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{ChatAdapter, Example, LM, Module, Predict, Prediction, configure};
+use dspy_rs::{ChatAdapter, Example, LM, Module, Predict, Prediction, configure, init_tracing};
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
@@ -93,6 +93,8 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())

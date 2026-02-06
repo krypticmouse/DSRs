@@ -7,6 +7,7 @@ icon: "rocket"
 DSRs lets you call language models with typed Rust structs. Define your inputs and outputs as a struct, and the library handles prompt formatting and response parsing.
 
 This guide walks you through building your first typed LM pipeline.
+Call `init_tracing()` once at startup in your app examples.
 
 <Steps>
 <Step title="Install DSRs">
@@ -33,10 +34,12 @@ cargo add dspy-rs tokio anyhow
 Tell DSRs which model to use. This sets a global default that all predictors will use:
 
 ```rust
-use dspy_rs::{configure, ChatAdapter, LM};
+use dspy_rs::{configure, init_tracing, ChatAdapter, LM};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())
@@ -106,7 +109,7 @@ The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields
 ## Complete example
 
 ```rust
-use dspy_rs::{configure, ChatAdapter, LM, Predict, Signature};
+use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -120,6 +123,8 @@ struct QA {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())

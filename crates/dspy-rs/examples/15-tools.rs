@@ -18,7 +18,9 @@ cargo run --example 15-tools
 #![allow(deprecated)]
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example};
+use dspy_rs::{
+    ChatAdapter, LM, LegacyPredict, LegacySignature, Predictor, configure, example, init_tracing,
+};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -137,6 +139,8 @@ struct MathQuestionSignature {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     // Setup LM
     let lm = LM::builder()
         .model("groq:openai/gpt-oss-120b".to_string())

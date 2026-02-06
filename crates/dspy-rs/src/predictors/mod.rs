@@ -6,6 +6,7 @@ use crate::{Example, LM, LmUsage, Prediction};
 use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
+use tracing::debug;
 
 #[allow(async_fn_in_trait)]
 pub trait Predictor: Send + Sync {
@@ -13,6 +14,12 @@ pub trait Predictor: Send + Sync {
     async fn forward_with_config(&self, inputs: Example, lm: Arc<LM>)
     -> anyhow::Result<Prediction>;
 
+    #[tracing::instrument(
+        name = "dsrs.predictor.batch",
+        level = "debug",
+        skip(self, inputs),
+        fields(total_inputs = inputs.len(), max_concurrency = 32)
+    )]
     async fn batch(&self, inputs: Vec<Example>) -> Result<Vec<Prediction>> {
         let indexed_results: Vec<(usize, Result<Prediction>)> =
             stream::iter(inputs.into_iter().enumerate())
@@ -30,12 +37,25 @@ pub trait Predictor: Send + Sync {
 
         // Collect predictions and handle errors
         let mut predictions = Vec::with_capacity(indexed_results.len());
-        for (_, result) in indexed_results {
-            predictions.push(result?);
+        for (idx, result) in indexed_results {
+            match result {
+                Ok(prediction) => predictions.push(prediction),
+                Err(err) => {
+                    debug!(idx, error = %err, "predictor batch item failed");
+                    return Err(err);
+                }
+            }
         }
+        debug!(predictions = predictions.len(), "predictor batch completed");
         Ok(predictions)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.predictor.batch_with_config",
+        level = "debug",
+        skip(self, inputs, lm),
+        fields(total_inputs = inputs.len(), max_concurrency = 32)
+    )]
     async fn batch_with_config(
         &self,
         inputs: Vec<Example>,
@@ -61,9 +81,19 @@ pub trait Predictor: Send + Sync {
 
         // Collect predictions and handle errors
         let mut predictions = Vec::with_capacity(indexed_results.len());
-        for (_, result) in indexed_results {
-            predictions.push(result?);
+        for (idx, result) in indexed_results {
+            match result {
+                Ok(prediction) => predictions.push(prediction),
+                Err(err) => {
+                    debug!(idx, error = %err, "predictor batch_with_config item failed");
+                    return Err(err);
+                }
+            }
         }
+        debug!(
+            predictions = predictions.len(),
+            "predictor batch_with_config completed"
+        );
         Ok(predictions)
     }
 }

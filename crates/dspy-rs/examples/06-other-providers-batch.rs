@@ -13,7 +13,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
-    configure, example, hashmap, prediction,
+    configure, example, hashmap, init_tracing, prediction,
 };
 
 #[LegacySignature(cot)]
@@ -77,6 +77,8 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() {
+    init_tracing().expect("failed to initialize tracing");
+
     // Anthropic
     configure(
         LM::builder()
