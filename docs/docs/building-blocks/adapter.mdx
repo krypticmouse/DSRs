@@ -148,7 +148,7 @@ This is useful for understanding what the LM sees.
 
 ## Input formatting options
 
-The `#[format]` attribute on input fields controls serialization:
+Input fields support two rendering paths:
 
 ```rust
 #[derive(Signature, Clone, Debug)]
@@ -160,12 +160,27 @@ struct Search {
     #[format("yaml")]
     filters: Vec<Filter>,  // serialized as YAML
 
+    #[input]
+    #[render(jinja = "{{ this.text }}\nQuestion: {{ input.query }}")]
+    context: Context,  // custom Jinja rendering
+
     #[output]
     results: Vec<Result>,
 }
 ```
 
-Options: `"json"` (default for complex types), `"yaml"`, `"toon"`
+- `#[format("json" | "yaml" | "toon")]`: serialize a field using that format.
+- `#[render(jinja = "...")]`: render a field with a MiniJinja template.
+- `#[format]` and `#[render]` are mutually exclusive on the same field.
+
+`#[render]` context in `ChatAdapter`:
+- `this`: current field value
+- `input`: full input object (rust names and aliases)
+- `field`: `{ name, rust_name, type }`
+- `vars`: adapter/surface vars (currently `{}` in `ChatAdapter`)
+
+`ChatAdapter` configures MiniJinja with strict undefined behavior.
+If template rendering fails at runtime (for example, missing variables), the field renders as `<error>` so prompt construction still completes.
 
 ## Real example: Insurance claim extraction
 

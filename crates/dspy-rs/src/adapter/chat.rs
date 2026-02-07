@@ -1,5 +1,6 @@
 use anyhow::Result;
 use indexmap::IndexMap;
+use minijinja::UndefinedBehavior;
 use regex::Regex;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
@@ -17,8 +18,8 @@ use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
     BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature, TypeIR,
+    InputRenderSpec, JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError,
+    Prediction, RenderOptions, Signature, TypeIR,
 };
 
 #[derive(Default, Clone)]
@@ -526,15 +527,19 @@ impl ChatAdapter {
             return String::new();
         };
         let input_output_format = <S::Input as BamlTypeTrait>::baml_output_format();
+        let input_json = build_input_context_value(fields, S::input_fields(), input_output_format);
+        let vars = Value::Object(serde_json::Map::new());
 
         let mut result = String::new();
         for field_spec in S::input_fields() {
             if let Some(value) = fields.get(field_spec.rust_name) {
                 result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
-                result.push_str(&format_baml_value_for_prompt_typed(
+                result.push_str(&render_input_field(
+                    field_spec,
                     value,
+                    &input_json,
                     input_output_format,
-                    field_spec.format,
+                    &vars,
                 ));
                 result.push_str("\n\n");
             }
@@ -880,23 +885,92 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
     }
 }
 
-fn format_baml_value_for_prompt_typed(
+fn render_input_field(
+    field_spec: &crate::FieldSpec,
     value: &BamlValue,
+    input: &Value,
     output_format: &OutputFormatContent,
-    format: Option<&str>,
+    vars: &Value,
 ) -> String {
-    let format = match format {
-        Some(format) => format,
-        None => {
-            if let BamlValue::String(s) = value {
-                return s.clone();
-            }
-            "json"
+    match field_spec.input_render {
+        InputRenderSpec::Default => match value {
+            BamlValue::String(s) => s.clone(),
+            _ => crate::bamltype::internal_baml_jinja::format_baml_value(
+                value,
+                output_format,
+                "json",
+            )
+            .unwrap_or_else(|_| "<error>".to_string()),
+        },
+        InputRenderSpec::Format(format) => {
+            crate::bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
+                .unwrap_or_else(|_| "<error>".to_string())
         }
+        InputRenderSpec::Jinja(template) => {
+            render_input_field_jinja(template, field_spec, value, input, output_format, vars)
+                .unwrap_or_else(|_| "<error>".to_string())
+        }
+    }
+}
+
+fn render_input_field_jinja(
+    template: &str,
+    field_spec: &crate::FieldSpec,
+    value: &BamlValue,
+    input: &Value,
+    output_format: &OutputFormatContent,
+    vars: &Value,
+) -> Result<String, minijinja::Error> {
+    let mut env = minijinja::Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.add_template("__input_field__", template)?;
+    let template = env.get_template("__input_field__")?;
+
+    let this = baml_value_to_render_json(value, output_format);
+    let field = json!({
+        "name": field_spec.name,
+        "rust_name": field_spec.rust_name,
+        "type": (field_spec.type_ir)().diagnostic_repr().to_string(),
+    });
+    let context = json!({
+        "this": this,
+        "input": input,
+        "field": field,
+        "vars": vars,
+    });
+
+    template.render(minijinja::Value::from_serialize(context))
+}
+
+fn build_input_context_value(
+    fields: &crate::bamltype::baml_types::BamlMap<String, BamlValue>,
+    field_specs: &[crate::FieldSpec],
+    output_format: &OutputFormatContent,
+) -> Value {
+    let mut map = serde_json::Map::new();
+
+    for field_spec in field_specs {
+        let Some(value) = fields.get(field_spec.rust_name) else {
+            continue;
+        };
+        let value_json = baml_value_to_render_json(value, output_format);
+        map.insert(field_spec.rust_name.to_string(), value_json.clone());
+        if field_spec.name != field_spec.rust_name {
+            map.entry(field_spec.name.to_string()).or_insert(value_json);
+        }
+    }
+
+    Value::Object(map)
+}
+
+fn baml_value_to_render_json(value: &BamlValue, output_format: &OutputFormatContent) -> Value {
+    let Ok(rendered_json) =
+        crate::bamltype::internal_baml_jinja::format_baml_value(value, output_format, "json")
+    else {
+        return serde_json::to_value(value).unwrap_or(Value::Null);
     };
 
-    crate::bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
-        .unwrap_or_else(|_| "<error>".to_string())
+    serde_json::from_str(&rendered_json).unwrap_or(Value::Null)
 }
 
 fn collect_flags_recursive(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {

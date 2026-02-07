@@ -1,0 +1,5 @@
+error: expected string literal; hint: wrap the value in quotes
+ --> tests/ui/render_non_literal.rs:8:14
+  |
+8 |     #[render(jinja = TEMPLATE)]
+  |              ^^^^^^^^^^^^^^^^

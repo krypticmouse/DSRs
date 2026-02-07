@@ -10,7 +10,7 @@ use tracing::{debug, trace};
 use crate::adapter::Adapter;
 use crate::bamltype::baml_types::BamlMap;
 use crate::bamltype::compat::{BamlValueConvert, ToBamlValue};
-use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
+use crate::core::{FieldSpec, InputRenderSpec, MetaSignature, Module, Optimizable, Signature};
 use crate::{
     BamlValue, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM, LmError, LmUsage,
     PredictError, Prediction,
@@ -258,8 +258,14 @@ fn field_specs_to_value(fields: &[FieldSpec], field_type: &'static str) -> Value
         meta.insert("desc".to_string(), json!(field.description));
         meta.insert("schema".to_string(), json!(""));
         meta.insert("__dsrs_field_type".to_string(), json!(field_type));
-        if let Some(format) = field.format {
-            meta.insert("format".to_string(), json!(format));
+        match field.input_render {
+            InputRenderSpec::Default => {}
+            InputRenderSpec::Format(format) => {
+                meta.insert("format".to_string(), json!(format));
+            }
+            InputRenderSpec::Jinja(template) => {
+                meta.insert("render".to_string(), json!({ "jinja": template }));
+            }
         }
         result.insert(field.rust_name.to_string(), Value::Object(meta));
     }

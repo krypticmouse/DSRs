@@ -1,4 +1,4 @@
-use dspy_rs::Signature as SignatureTrait;
+use dspy_rs::{InputRenderSpec, Signature as SignatureTrait};
 
 /// Test instruction
 #[derive(dsrs_macros::Signature)]
@@ -21,6 +21,20 @@ struct NormalizedConstraintSig {
     #[output]
     #[check("this >= 0.0 && this <= 1.0", label = "valid_range")]
     score: f64,
+}
+
+#[derive(dsrs_macros::Signature)]
+struct RenderSpecSig {
+    #[input]
+    #[render(jinja = "{{ this }}")]
+    template_input: String,
+
+    #[input]
+    #[format("yaml")]
+    yaml_input: String,
+
+    #[output]
+    answer: String,
 }
 
 #[test]
@@ -79,5 +93,27 @@ fn test_constraint_operator_normalization() {
     assert_eq!(
         output_fields[0].constraints[0].expression,
         "this >= 0.0 and this <= 1.0"
+    );
+}
+
+#[test]
+fn test_input_render_spec_generation() {
+    let input_fields = <RenderSpecSig as SignatureTrait>::input_fields();
+    assert_eq!(input_fields.len(), 2);
+
+    assert_eq!(
+        input_fields
+            .iter()
+            .find(|field| field.rust_name == "template_input")
+            .map(|field| field.input_render),
+        Some(InputRenderSpec::Jinja("{{ this }}"))
+    );
+
+    assert_eq!(
+        input_fields
+            .iter()
+            .find(|field| field.rust_name == "yaml_input")
+            .map(|field| field.input_render),
+        Some(InputRenderSpec::Format("yaml"))
     );
 }

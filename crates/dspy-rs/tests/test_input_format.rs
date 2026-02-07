@@ -62,6 +62,48 @@ struct DefaultFormatSig {
     answer: String,
 }
 
+#[derive(Signature, Clone, Debug)]
+/// Render a context field using Jinja.
+struct RenderJinjaSig {
+    #[input]
+    question: String,
+
+    #[input]
+    #[alias("ctx")]
+    #[render(
+        jinja = "{{ this.text }} | {{ input.question }} | {{ input.ctx.text }} | {{ input.context.text }} | {{ field.name }} | {{ field.rust_name }}"
+    )]
+    context: Document,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render with strict undefined vars.
+struct RenderJinjaStrictSig {
+    #[input]
+    #[render(jinja = "{{ missing_var }}")]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render using field metadata and vars context.
+struct RenderJinjaFieldMetaSig {
+    #[input]
+    #[alias("ctx")]
+    #[render(
+        jinja = "{{ field.name }}|{{ field.rust_name }}|{{ field.type }}|{{ vars is defined }}"
+    )]
+    context: Document,
+
+    #[output]
+    answer: String,
+}
+
 fn extract_field(message: &str, field_name: &str) -> String {
     let start_marker = format!("[[ ## {field_name} ## ]]");
     let start_pos = message
@@ -183,4 +225,56 @@ fn typed_input_default_non_string_is_json() {
         .and_then(|value| value.as_object())
         .expect("expected array with object");
     assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
+}
+
+#[test]
+fn typed_input_render_jinja_uses_context_values() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaSigInput {
+        question: "Question".to_string(),
+        context: Document {
+            text: "Hello".to_string(),
+        },
+    };
+
+    let message = adapter.format_user_message_typed::<RenderJinjaSig>(&input);
+    let context_value = extract_field(&message, "ctx");
+
+    assert_eq!(
+        context_value,
+        "Hello | Question | Hello | Hello | ctx | context"
+    );
+}
+
+#[test]
+fn typed_input_render_jinja_strict_undefined_returns_error_sentinel() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaStrictSigInput {
+        question: "Question".to_string(),
+    };
+
+    let message = adapter.format_user_message_typed::<RenderJinjaStrictSig>(&input);
+    let question_value = extract_field(&message, "question");
+
+    assert_eq!(question_value, "<error>");
+}
+
+#[test]
+fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaFieldMetaSigInput {
+        context: Document {
+            text: "Hello".to_string(),
+        },
+    };
+
+    let message = adapter.format_user_message_typed::<RenderJinjaFieldMetaSig>(&input);
+    let context_value = extract_field(&message, "ctx");
+    let parts: Vec<&str> = context_value.split('|').collect();
+
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "ctx");
+    assert_eq!(parts[1], "context");
+    assert!(parts[2].contains("Document"));
+    assert_eq!(parts[3].to_ascii_lowercase(), "true");
 }

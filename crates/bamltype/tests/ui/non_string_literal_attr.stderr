@@ -2,4 +2,4 @@ error: expected string literal; hint: wrap the value in quotes
  --> tests/ui/non_string_literal_attr.rs:4:8
   |
 4 | #[baml(name = 123)]
-  |        ^^^^
+  |        ^^^^^^^^^^

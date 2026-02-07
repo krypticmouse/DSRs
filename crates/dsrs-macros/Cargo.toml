@@ -19,6 +19,7 @@ quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3.2"
 serde_json = { version = "1.0.143", features = ["preserve_order"] }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["serde"] }
 
 [dev-dependencies]
 dspy-rs = { path = "../dspy-rs" }
