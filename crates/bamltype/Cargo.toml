@@ -1,0 +1,50 @@
+[package]
+name = "bamltype"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Facet-based BAML type generation"
+
+[dependencies]
+# Facet for reflection
+facet = { version = "0.43.2", default-features = false, features = ["std", "doc"] }
+facet-reflect = { version = "0.43.2", default-features = false, features = ["std"] }
+
+# BAML crates for schema/parsing
+anyhow = "1.0"
+baml-types = { path = "../../vendor/baml/crates/baml-types" }
+internal-baml-jinja = { path = "../../vendor/baml/crates/internal-baml-jinja" }
+jsonish = { path = "../../vendor/baml/crates/jsonish" }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = [
+  "macros",
+  "builtins",
+  "debug",
+  "preserve_order",
+  "adjacent_loop_items",
+  "unicode",
+  "json",
+  "unstable_machinery",
+  "unstable_machinery_serde",
+  "custom_syntax",
+  "internal_debug",
+  "deserialization",
+  "serde",
+] }
+
+# Attribute macro (re-exported)
+bamltype-derive = { path = "../bamltype-derive" }
+
+# Utils
+indexmap = "2.1"
+sha2 = "0.10.9"
+thiserror = "2.0"
+
+[features]
+default = ["derive"]
+derive = []
+
+[dev-dependencies]
+baml-bridge = { path = "../baml-bridge" }
+trybuild = "1.0.96"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }

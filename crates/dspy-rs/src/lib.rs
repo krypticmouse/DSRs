@@ -1,3 +1,5 @@
+extern crate self as dspy_rs;
+
 pub mod adapter;
 pub mod core;
 pub mod data;
@@ -8,25 +10,31 @@ pub mod trace;
 pub mod utils;
 
 pub use adapter::chat::*;
+pub use anyhow;
 pub use core::*;
-pub use core::{
-    CallResult, ConstraintKind, ConstraintResult, ConstraintSpec, ConversionError, ErrorClass,
-    FieldMeta, FieldSpec, JsonishError, LmError, ParseError, PredictError, Signature,
-};
 pub use data::*;
 pub use evaluate::*;
+pub use indexmap;
 pub use optimizer::*;
 pub use predictors::*;
+pub use schemars;
+pub use serde;
+pub use serde_json;
 pub use utils::*;
 
-pub use baml_bridge;
-pub use baml_bridge::BamlConvertError;
-pub use baml_bridge::BamlType;
-pub use baml_bridge::baml_types::{
+pub use bamltype;
+pub use bamltype::BamlType; // attribute macro
+pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };
-pub use baml_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
-pub use baml_bridge::jsonish::deserializer::deserialize_flags::Flag;
+pub use bamltype::compat::BamlConvertError;
+pub use bamltype::compat::{
+    BamlAdapter, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, Registry, ToBamlValue,
+    with_constraints,
+};
+pub use bamltype::facet;
+pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
+pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
 
 #[deprecated(
@@ -38,8 +46,8 @@ macro_rules! example {
     // Pattern: { "key": <__dsrs_field_type>: "value", ... }
     { $($key:literal : $field_type:literal => $value:expr),* $(,)? } => {{
         use std::collections::HashMap;
-        use dspy_rs::data::example::Example;
-        use dspy_rs::trace::{NodeType, record_node};
+        use $crate::data::example::Example;
+        use $crate::trace::{NodeType, record_node};
 
         let mut input_keys = vec![];
         let mut output_keys = vec![];
@@ -55,7 +63,7 @@ macro_rules! example {
             }
 
             let tracked = {
-                use dspy_rs::trace::IntoTracked;
+                use $crate::trace::IntoTracked;
                 $value.into_tracked()
             };
 
@@ -108,11 +116,11 @@ macro_rules! example {
 macro_rules! prediction {
     { $($key:literal => $value:expr),* $(,)? } => {{
         use std::collections::HashMap;
-        use dspy_rs::{Prediction, LmUsage};
+        use $crate::{Prediction, LmUsage};
 
         let mut fields = HashMap::new();
         $(
-            fields.insert($key.to_string(), serde_json::to_value($value).unwrap());
+            fields.insert($key.to_string(), $crate::serde_json::to_value($value).unwrap());
         )*
 
         Prediction::new(fields, LmUsage::default())
@@ -138,15 +146,15 @@ macro_rules! field {
 
     // Pattern for field definitions with descriptions
     { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use serde_json::json;
+        use $crate::serde_json::json;
 
-        let mut result = serde_json::Map::new();
+        let mut result = $crate::serde_json::Map::new();
 
         $(
             let type_str = stringify!($field_ty);
             let schema = {
-                let schema = schemars::schema_for!($field_ty);
-                let schema_json = serde_json::to_value(schema).unwrap();
+                let schema = $crate::schemars::schema_for!($field_ty);
+                let schema_json = $crate::serde_json::to_value(schema).unwrap();
                 // Extract just the properties if it's an object schema
                 if let Some(obj) = schema_json.as_object() {
                     if obj.contains_key("properties") {
@@ -169,20 +177,20 @@ macro_rules! field {
             );
         )*
 
-        serde_json::Value::Object(result)
+        $crate::serde_json::Value::Object(result)
     }};
 
     // Pattern for field definitions without descriptions
     { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use serde_json::json;
+        use $crate::serde_json::json;
 
-        let mut result = serde_json::Map::new();
+        let mut result = $crate::serde_json::Map::new();
 
         $(
             let type_str = stringify!($field_ty);
             let schema = {
-                let schema = schemars::schema_for!($field_ty);
-                let schema_json = serde_json::to_value(schema).unwrap();
+                let schema = $crate::schemars::schema_for!($field_ty);
+                let schema_json = $crate::serde_json::to_value(schema).unwrap();
                 // Extract just the properties if it's an object schema
                 if let Some(obj) = schema_json.as_object() {
                     if obj.contains_key("properties") {
@@ -205,7 +213,7 @@ macro_rules! field {
             );
         )*
 
-        serde_json::Value::Object(result)
+        $crate::serde_json::Value::Object(result)
     }};
 }
 
@@ -231,7 +239,7 @@ macro_rules! sign {
 
     // Pattern: input fields -> output fields
     { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        #[derive(::dspy_rs::Signature, Clone)]
+        #[derive($crate::Signature, Clone)]
         struct __InlineSignature {
             $(
                 #[input]
@@ -243,7 +251,7 @@ macro_rules! sign {
             )*
         }
 
-        ::dspy_rs::Predict::<__InlineSignature>::new()
+        $crate::Predict::<__InlineSignature>::new()
     }};
 }
 

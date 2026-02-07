@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use anyhow::Result;
 use baml_types::{BamlMap, Constraint, TypeIR};
 use internal_baml_jinja::types::{Class, Name};
@@ -65,24 +63,28 @@ impl TypeCoercer for Class {
         #[derive(Debug)]
         enum Triple {
             Pending,
-            NotPresent,
             Present(Box<BamlValueWithFlags>),
         }
 
-        let mut fill_result = self
+        // Build field states indexed by field position
+        let mut field_states: Vec<(&Name, &TypeIR, Triple)> = self
             .fields
             .iter()
-            .map(|(name, field_type, _, streaming_needed)| {
-                (
-                    name.rendered_name(),
-                    (name, field_type, *streaming_needed, Triple::Pending),
-                )
-            })
-            .collect::<BamlMap<_, _>>();
+            .map(|(name, field_type, _, _)| (name, field_type, Triple::Pending))
+            .collect();
+
+        // Build key-to-index map accepting both real and rendered names
+        let mut key_to_idx: std::collections::HashMap<&str, usize> =
+            std::collections::HashMap::new();
+        for (idx, (name, ..)) in self.fields.iter().enumerate() {
+            key_to_idx.insert(name.real_name(), idx);
+            key_to_idx.insert(name.rendered_name(), idx);
+        }
 
         let flags = DeserializerConditions::new();
         for (k, v) in obj.iter() {
-            if let Some((_, field_type, streaming_needed, val)) = fill_result.get_mut(k.as_str()) {
+            if let Some(&idx) = key_to_idx.get(k.as_str()) {
+                let (_, field_type, ref mut val) = &mut field_states[idx];
                 if matches!(val, Triple::Present(_)) {
                     continue;
                 }
@@ -98,7 +100,7 @@ impl TypeCoercer for Class {
         }
 
         let mut result = BamlMap::new();
-        for (_, (name, field_type, streaming_needed, val)) in fill_result.into_iter() {
+        for (name, field_type, val) in field_states.into_iter() {
             if let Triple::Present(ref val_ref) = val {
                 // Check if field is required (non-optional) and is incomplete in streaming mode
                 if !field_type.is_optional()
@@ -206,11 +208,11 @@ impl TypeCoercer for Class {
                 let mut extra_keys = vec![];
                 let mut found_keys = false;
                 obj.iter().for_each(|(key, v)| {
-                    if let Some(field) = self
-                        .fields
-                        .iter()
-                        .find(|(name, ..)| matches_string_to_string(ctx, key, name.rendered_name()))
-                    {
+                    // Accept both real and rendered field names
+                    if let Some(field) = self.fields.iter().find(|(name, ..)| {
+                        matches_string_to_string(ctx, key, name.rendered_name())
+                            || matches_string_to_string(ctx, key, name.real_name())
+                    }) {
                         let scope = ctx.enter_scope(field.0.real_name());
                         let parsed = field.1.coerce(&scope, &field.1, Some(v));
                         update_map(&mut required_values, &mut optional_values, field, parsed);

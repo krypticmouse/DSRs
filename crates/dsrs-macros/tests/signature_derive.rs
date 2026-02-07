@@ -12,6 +12,17 @@ struct TestSig {
     answer: String,
 }
 
+/// Test logical operators are normalized to Jinja syntax.
+#[derive(dsrs_macros::Signature)]
+struct NormalizedConstraintSig {
+    #[input]
+    question: String,
+
+    #[output]
+    #[check("this >= 0.0 && this <= 1.0", label = "valid_range")]
+    score: f64,
+}
+
 #[test]
 fn test_generates_input_struct() {
     let input = TestSigInput {
@@ -46,7 +57,7 @@ fn test_from_parts_into_parts() {
         answer: "a".to_string(),
     };
 
-    let full = TestSig::from_parts(input.clone(), output.clone());
+    let full = TestSig::from_parts(input, output);
     assert_eq!(full.question, "q");
     assert_eq!(full.answer, "a");
 
@@ -57,5 +68,16 @@ fn test_from_parts_into_parts() {
 
 #[test]
 fn test_baml_type_impl() {
-    let _ = <TestSig as dspy_rs::baml_bridge::BamlType>::baml_output_format();
+    let _ = <TestSig as dspy_rs::bamltype::compat::BamlTypeTrait>::baml_output_format();
+}
+
+#[test]
+fn test_constraint_operator_normalization() {
+    let output_fields = <NormalizedConstraintSig as SignatureTrait>::output_fields();
+    assert_eq!(output_fields.len(), 1);
+    assert_eq!(output_fields[0].constraints.len(), 1);
+    assert_eq!(
+        output_fields[0].constraints[0].expression,
+        "this >= 0.0 and this <= 1.0"
+    );
 }

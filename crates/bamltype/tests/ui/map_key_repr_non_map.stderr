@@ -1,0 +1,5 @@
+error: map_key_repr only applies to map fields (HashMap/BTreeMap), optionally wrapped in Option/Vec/Box/Arc/Rc; hint: remove the attribute or change the field type
+ --> tests/ui/map_key_repr_non_map.rs:6:16
+  |
+6 |     value: Vec<String>,
+  |                ^^^^^^

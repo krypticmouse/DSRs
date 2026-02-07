@@ -8,13 +8,11 @@ use std::sync::{Arc, LazyLock};
 use tracing::{Instrument, debug, trace};
 
 use super::Adapter;
-use crate::baml_bridge::BamlType;
-use crate::baml_bridge::BamlValueConvert;
-use crate::baml_bridge::ToBamlValue;
-use crate::baml_bridge::jsonish;
-use crate::baml_bridge::jsonish::BamlValueWithFlags;
-use crate::baml_bridge::jsonish::deserializer::coercer::run_user_checks;
-use crate::baml_bridge::jsonish::deserializer::deserialize_flags::DeserializerConditions;
+use crate::bamltype::compat::{BamlTypeTrait, BamlValueConvert, ToBamlValue};
+use crate::bamltype::jsonish;
+use crate::bamltype::jsonish::BamlValueWithFlags;
+use crate::bamltype::jsonish::deserializer::coercer::run_user_checks;
+use crate::bamltype::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
@@ -28,10 +26,6 @@ pub struct ChatAdapter;
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[ ## (\w+) ## \]\]").unwrap());
-
-fn get_type_hint(_field: &Value) -> String {
-    String::new()
-}
 
 fn render_field_type_schema(
     parent_format: &OutputFormatContent,
@@ -52,7 +46,25 @@ fn render_field_type_schema(
     Ok(schema)
 }
 
-fn simplify_type_name(raw: &str) -> String {
+fn resolve_rendered_type_token(token: &str, output_format: Option<&OutputFormatContent>) -> String {
+    if let Some(output_format) = output_format {
+        if let Some(class) = output_format
+            .classes
+            .iter()
+            .find_map(|((name, _), class)| (name == token).then_some(class))
+        {
+            return class.name.rendered_name().to_string();
+        }
+
+        if let Some(enm) = output_format.enums.get(token) {
+            return enm.name.rendered_name().to_string();
+        }
+    }
+
+    token.rsplit("::").next().unwrap_or(token).to_string()
+}
+
+fn simplify_type_name(raw: &str, output_format: Option<&OutputFormatContent>) -> String {
     let mut result = String::with_capacity(raw.len());
     let mut chars = raw.chars();
     while let Some(ch) = chars.next() {
@@ -64,8 +76,8 @@ fn simplify_type_name(raw: &str) -> String {
                 }
                 token.push(next);
             }
-            let simplified = token.rsplit("::").next().unwrap_or(&token);
-            result.push_str(simplified);
+            let rendered = resolve_rendered_type_token(&token, output_format);
+            result.push_str(&rendered);
         } else {
             result.push(ch);
         }
@@ -73,9 +85,12 @@ fn simplify_type_name(raw: &str) -> String {
     result
 }
 
-fn render_type_name_for_prompt(type_ir: &TypeIR) -> String {
+fn render_type_name_for_prompt(
+    type_ir: &TypeIR,
+    output_format: Option<&OutputFormatContent>,
+) -> String {
     let raw = type_ir.diagnostic_repr().to_string();
-    let simplified = simplify_type_name(&raw);
+    let simplified = simplify_type_name(&raw, output_format);
     simplified
         .replace("class ", "")
         .replace("enum ", "")
@@ -366,23 +381,11 @@ impl ChatAdapter {
             .next()
             .unwrap()
             .clone();
-        let first_output_field_value = signature
-            .output_fields()
-            .as_object()
-            .unwrap()
-            .get(&first_output_field)
-            .unwrap()
-            .clone();
-
-        let type_hint = get_type_hint(&first_output_field_value);
-
         let mut user_message = format!(
-            "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`{type_hint},"
+            "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`,"
         );
-        for (field_name, field) in get_iter_from_value(&signature.output_fields()).skip(1) {
-            user_message.push_str(
-                format!(" then `[[ ## {field_name} ## ]]`{},", get_type_hint(&field)).as_str(),
-            );
+        for (field_name, _) in get_iter_from_value(&signature.output_fields()).skip(1) {
+            user_message.push_str(format!(" then `[[ ## {field_name} ## ]]`,").as_str());
         }
         user_message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
@@ -450,10 +453,13 @@ impl ChatAdapter {
     }
 
     fn format_field_descriptions_typed<S: Signature>(&self) -> String {
+        let input_format = <S::Input as BamlTypeTrait>::baml_output_format();
+        let output_format = S::output_format_content();
+
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
         for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)());
+            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(input_format));
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -465,7 +471,7 @@ impl ChatAdapter {
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
         for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)());
+            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(output_format));
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
             if !field.description.is_empty() {
                 line.push_str(": ");
@@ -492,7 +498,7 @@ impl ChatAdapter {
         let parent_format = S::output_format_content();
         for field in S::output_fields() {
             let type_ir = (field.type_ir)();
-            let type_name = render_type_name_for_prompt(&type_ir);
+            let type_name = render_type_name_for_prompt(&type_ir, Some(parent_format));
             let schema = render_field_type_schema(parent_format, &type_ir)?;
             lines.push(format!("[[ ## {} ## ]]", field.name));
             lines.push(format!(
@@ -519,7 +525,7 @@ impl ChatAdapter {
         let Some(fields) = baml_value_fields(&baml_value) else {
             return String::new();
         };
-        let input_output_format = <S::Input as BamlType>::baml_output_format();
+        let input_output_format = <S::Input as BamlTypeTrait>::baml_output_format();
 
         let mut result = String::new();
         for field_spec in S::input_fields() {
@@ -593,7 +599,7 @@ impl ChatAdapter {
 
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
-        let mut output_map = crate::baml_bridge::baml_types::BamlMap::new();
+        let mut output_map = crate::bamltype::baml_types::BamlMap::new();
         let mut checks_total = 0usize;
         let mut checks_failed = 0usize;
         let mut asserts_failed = 0usize;
@@ -642,7 +648,7 @@ impl ChatAdapter {
             let baml_value: BamlValue = parsed.clone().into();
 
             let mut flags = Vec::new();
-            collect_flags(&parsed, &mut flags);
+            collect_flags_recursive(&parsed, &mut flags);
 
             let mut checks = Vec::new();
             match run_user_checks(&baml_value, &type_ir) {
@@ -723,13 +729,19 @@ impl ChatAdapter {
             let partial = if output_map.is_empty() {
                 None
             } else {
-                Some(BamlValue::Map(output_map))
+                Some(BamlValue::Class(
+                    <S::Output as BamlTypeTrait>::baml_internal_name().to_string(),
+                    output_map,
+                ))
             };
             return Err(ParseError::Multiple { errors, partial });
         }
 
         let typed_output = <S::Output as BamlValueConvert>::try_from_baml_value(
-            BamlValue::Map(output_map),
+            BamlValue::Class(
+                <S::Output as BamlTypeTrait>::baml_internal_name().to_string(),
+                output_map,
+            ),
             Vec::new(),
         )
         .map_err(|err| ParseError::ExtractionFailed {
@@ -852,7 +864,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
 
 fn baml_value_fields(
     value: &BamlValue,
-) -> Option<&crate::baml_bridge::baml_types::BamlMap<String, BamlValue>> {
+) -> Option<&crate::bamltype::baml_types::BamlMap<String, BamlValue>> {
     match value {
         BamlValue::Class(_, fields) => Some(fields),
         BamlValue::Map(fields) => Some(fields),
@@ -883,12 +895,8 @@ fn format_baml_value_for_prompt_typed(
         }
     };
 
-    crate::baml_bridge::internal_baml_jinja::format_baml_value(value, output_format, format)
+    crate::bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
         .unwrap_or_else(|_| "<error>".to_string())
-}
-
-fn collect_flags(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {
-    collect_flags_recursive(value, flags);
 }
 
 fn collect_flags_recursive(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {

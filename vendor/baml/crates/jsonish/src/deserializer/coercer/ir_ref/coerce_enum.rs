@@ -18,12 +18,25 @@ fn enum_match_candidates(enm: &Enum) -> Vec<(&str, Vec<String>)> {
             (
                 name.real_name(),
                 match desc.as_ref().map(|d| d.trim()) {
-                    Some(d) if !d.is_empty() => vec![
-                        name.rendered_name().into(),
-                        d.into(),
-                        format!("{}: {}", name.rendered_name(), d),
-                    ],
-                    _ => vec![name.rendered_name().into()],
+                    Some(d) if !d.is_empty() => {
+                        let mut candidates = vec![
+                            name.rendered_name().into(),
+                            name.real_name().into(), // Also accept real name
+                            d.into(),
+                            format!("{}: {}", name.rendered_name(), d),
+                        ];
+                        // Dedupe if real == rendered
+                        candidates.dedup();
+                        candidates
+                    }
+                    _ => {
+                        let mut candidates = vec![
+                            name.rendered_name().into(),
+                            name.real_name().into(), // Also accept real name
+                        ];
+                        candidates.dedup();
+                        candidates
+                    }
                 },
             )
         })
@@ -38,14 +51,14 @@ impl TypeCoercer for Enum {
         value: Option<&crate::jsonish::Value>,
     ) -> Option<BamlValueWithFlags> {
         // Enums can only be cast from string values
-        let Some(crate::jsonish::Value::String(s, _)) = value else {
+        let Some(crate::jsonish::Value::String(s, completion_state)) = value else {
             return None;
         };
 
-        // Check if the string exactly matches any enum variant
+        // Check if the string exactly matches any enum variant (accept both real and rendered names)
         let mut result = None;
         for (variant_name, _) in &self.values {
-            if variant_name.rendered_name() == s {
+            if variant_name.rendered_name() == s || variant_name.real_name() == s {
                 result = Some(BamlValueWithFlags::Enum(
                     self.name.real_name().to_string(),
                     target.clone(),
@@ -55,17 +68,15 @@ impl TypeCoercer for Enum {
             }
         }
 
-        // Check completion state
-        if let Some(v) = value {
-            if let Some(ref mut res) = result {
-                match v.completion_state() {
-                    baml_types::CompletionState::Complete => {}
-                    baml_types::CompletionState::Incomplete => {
-                        res.add_flag(crate::deserializer::deserialize_flags::Flag::Incomplete);
-                    }
-                    baml_types::CompletionState::Pending => {
-                        unreachable!("jsonish::Value may never be in a Pending state.")
-                    }
+        // Check completion state.
+        if let Some(ref mut res) = result {
+            match completion_state {
+                baml_types::CompletionState::Complete => {}
+                baml_types::CompletionState::Incomplete => {
+                    res.add_flag(crate::deserializer::deserialize_flags::Flag::Incomplete);
+                }
+                baml_types::CompletionState::Pending => {
+                    unreachable!("jsonish::Value may never be in a Pending state.")
                 }
             }
         }

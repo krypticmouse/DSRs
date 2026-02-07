@@ -15,7 +15,6 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate as dspy_rs;
 use crate::{
     Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
     evaluate::FeedbackEvaluator, example,

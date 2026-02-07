@@ -1,51 +1,183 @@
 ---
 title: 'Custom Types'
-description: 'Define your own types for use in signatures'
+description: 'Define your own types and see exactly how they change the model-facing schema'
 icon: 'shapes'
 ---
 
-When your [signature](/docs/building-blocks/signature) fields use types beyond the built-ins, derive `BamlType` to make them work.
+Types are not just Rust structure. They directly change what the model sees in the system prompt and what the parser accepts in responses.
 
-## When you need it
+If docs only say "use this attribute" without showing prompt impact, they are not useful. This page is written in user-visible terms.
 
-**Built-in types** (no derive needed):
+## Mental model
+
+When you add `#[BamlType]` to a type used in a `#[derive(Signature)]` output field:
+
+1. The type is rendered into the schema/instructions sent to the model.
+2. The parser uses the same shape and attributes to parse the model response.
+3. Attributes like `alias`, `skip`, and `default` affect both rendering and parse behavior.
+
+## When you need `#[BamlType]`
+
+Built-in types work without extra annotations:
 - `String`, `bool`
 - `i8`, `i16`, `i32`, `i64`, `f32`, `f64`
 - `Option<T>`, `Vec<T>`, `HashMap<String, T>`
 - `Box<T>`, `Arc<T>`, `Rc<T>`
 
-**Custom types** (need `#[derive(BamlType)]`):
-- Your own structs
-- Your own enums
-- Nested combinations of the above
+Custom types need `#[BamlType]`:
+- Your structs
+- Your enums
+- Nested custom types
 
-## Structs
+## What the model sees
+
+Example:
 
 ```rust
-use dspy_rs::BamlType;
+use dspy_rs::{BamlType, Signature};
 
-/// A citation from a document.
-#[derive(BamlType, Clone, Debug)]
-struct Citation {
-    /// The document identifier
-    doc_id: String,
+#[derive(Clone, Debug)]
+#[BamlType]
+#[baml(rename_all = "camelCase")]
+struct UserSummary {
+    user_name: String,
+    created_at: String,
+}
 
-    /// Relevant quote from the source
-    quote: String,
+#[derive(Signature, Clone, Debug)]
+/// Summarize the user.
+struct SummarizeUser {
+    #[input]
+    question: String,
 
-    /// Page number if available
-    page: Option<i32>,
+    #[output]
+    summary: UserSummary,
 }
 ```
 
-Doc comments become descriptions in the schema shown to the LLM.
+Prompt-visible effect:
+- Model sees `userName` and `createdAt`.
+- Model does not see `user_name` or `created_at`.
+
+## Attribute impact (visible behavior)
+
+### `#[baml(alias = "...")]`
+
+```rust
+#[BamlType]
+struct User {
+    #[baml(alias = "fullName")]
+    full_name: String,
+}
+```
+
+Visible effect:
+- Prompt/schema uses `fullName`.
+- Parser accepts model output keyed by `fullName`.
+
+### `#[baml(rename_all = "...")]`
+
+```rust
+#[BamlType]
+#[baml(rename_all = "camelCase")]
+struct ApiResponse {
+    user_name: String,
+    created_at: String,
+}
+```
+
+Visible effect:
+- Prompt/schema keys follow that naming convention.
+
+Options: `camelCase`, `snake_case`, `PascalCase`, `kebab-case`, `SCREAMING_SNAKE_CASE`.
+
+### `#[baml(skip)]`
+
+```rust
+#[BamlType]
+struct Doc {
+    content: String,
+    #[baml(skip)]
+    internal_id: u64,
+}
+```
+
+Visible effect:
+- `internal_id` is omitted from the model-facing schema.
+
+Parse effect:
+- Field is filled via `Default` on parse.
+
+### `#[baml(default)]`
+
+```rust
+#[BamlType]
+struct Config {
+    name: String,
+    #[baml(default)]
+    retries: i32,
+}
+```
+
+Visible effect:
+- Field is rendered as optional in schema output.
+
+Parse effect:
+- Missing `retries` parses as `Default::default()`.
+
+### `#[baml(name = "...")]`
+
+```rust
+#[BamlType]
+#[baml(name = "UserProfile")]
+struct User {
+    name: String,
+}
+```
+
+Visible effect:
+- Typed prompt type labels use `UserProfile`.
+- Hoisted schema rendering also uses `UserProfile`.
+
+Important:
+- Default rendering may inline objects, so class headers can be less visible.
+- If you want class headers to be explicit, render with class hoisting enabled.
+
+### `#[baml(int_repr = "string")]`
+
+```rust
+#[BamlType]
+struct BigIds {
+    #[baml(int_repr = "string")]
+    large_id: u64,
+}
+```
+
+Visible effect:
+- Prompt/schema shows `large_id` as string-like instead of int-like.
+
+Why:
+- Helps with integer widths that exceed JSON number precision.
+
+### `#[baml(map_key_repr = "string" | "pairs")]`
+
+```rust
+#[BamlType]
+struct Scores {
+    #[baml(map_key_repr = "string")]
+    by_id: std::collections::HashMap<i32, f64>,
+}
+```
+
+Visible effect:
+- Controls how non-string map keys are represented to the model.
 
 ## Enums
 
 ### Simple enums
 
 ```rust
-#[derive(BamlType, Clone, Debug)]
+#[BamlType]
 enum Sentiment {
     Positive,
     Negative,
@@ -53,28 +185,13 @@ enum Sentiment {
 }
 ```
 
-### Enums with descriptions
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-enum Priority {
-    /// Needs immediate attention
-    Critical,
-    /// Should be addressed soon
-    High,
-    /// Normal processing time
-    Medium,
-    /// Can wait
-    Low,
-}
-```
+Visible effect:
+- Prompt/schema presents the allowed literal values.
 
 ### Data enums (tagged unions)
 
-For enums where variants have different fields:
-
 ```rust
-#[derive(BamlType, Clone, Debug)]
+#[BamlType]
 #[baml(tag = "type")]
 enum Response {
     Success { data: String },
@@ -82,164 +199,22 @@ enum Response {
 }
 ```
 
-The `tag` attribute specifies the discriminator field name. LLM output looks like:
-```json
-{ "type": "Error", "code": 404, "message": "Not found" }
-```
+Visible effect:
+- Prompt/schema uses `type` discriminator and variant-specific fields.
 
-## Field attributes
+## Unsupported patterns (compile-time errors)
 
-### `#[baml(alias = "name")]`
+- Tuple structs: `struct Foo(A, B)`
+- Unit structs: `struct Foo;`
+- Tuple enum variants: `Enum::Var(A)`
+- `serde_json::Value`
+- Trait objects (`dyn Trait`)
 
-Rename a field for the LLM:
+## Contract tests for these docs
 
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct User {
-    #[baml(alias = "userName")]
-    name: String,  // LLM sees "userName", Rust uses "name"
-}
-```
+The user-visible claims on this page are locked by tests:
 
-### `#[baml(skip)]`
-
-Exclude a field from the schema entirely:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct Document {
-    content: String,
-
-    #[baml(skip)]
-    internal_id: u64,  // not sent to LLM, uses Default
-}
-```
-
-The field must implement `Default`. It won't appear in prompts or be expected in responses.
-
-### `#[baml(default)]`
-
-Make a field optional with a default:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct Config {
-    name: String,  // required
-
-    #[baml(default)]
-    retries: i32,  // optional, defaults to 0 if missing
-}
-```
-
-Different from `Option<T>`:
-- `Option<T>` - explicitly nullable, LLM can return `null`
-- `#[baml(default)]` - if LLM omits it, use `Default::default()`
-
-### `#[baml(check(...))]` and `#[baml(assert(...))]`
-
-Add constraints at the type level:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct Score {
-    #[baml(check(label = "valid_range", expr = "this >= 0 && this <= 100"))]
-    value: i32,
-
-    #[baml(assert(label = "not_empty", expr = "this.len() > 0"))]
-    explanation: String,
-}
-```
-
-See [Constraints](/docs/building-blocks/constraints) for the expression language.
-
-## Container attributes
-
-### `#[baml(rename_all = "...")]`
-
-Apply a naming convention to all fields:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-#[baml(rename_all = "camelCase")]
-struct ApiResponse {
-    user_name: String,    // becomes "userName"
-    created_at: String,   // becomes "createdAt"
-}
-```
-
-Options: `"camelCase"`, `"snake_case"`, `"PascalCase"`, `"kebab-case"`, `"SCREAMING_SNAKE_CASE"`
-
-### `#[baml(name = "...")]`
-
-Override the type name in the schema:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-#[baml(name = "UserProfile")]
-struct User {
-    name: String,
-}
-```
-
-## Advanced: Large integers
-
-For `u64`, `i128`, `u128` (which exceed JSON number precision):
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct BigIds {
-    #[baml(int_repr = "string")]
-    large_id: u64,  // serialized as "18446744073709551615"
-}
-```
-
-## Advanced: Map key types
-
-For maps with non-string keys:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct Scores {
-    #[baml(map_key_repr = "string")]
-    by_id: HashMap<i32, f64>,  // keys become strings: {"1": 0.5, "2": 0.8}
-}
-```
-
-## What's NOT supported
-
-These will give compile errors:
-
-| Pattern | Why |
-|---------|-----|
-| Tuple structs `struct Foo(A, B)` | Use named fields instead |
-| Unit structs `struct Foo;` | Nothing to serialize |
-| Tuple enum variants `Enum::Var(A)` | Use `Var { field: A }` instead |
-| `serde_json::Value` | Too dynamic, use concrete types |
-| Trait objects `dyn Trait` | Not serializable |
-
-## Nesting
-
-Types compose naturally:
-
-```rust
-#[derive(BamlType, Clone, Debug)]
-struct Author {
-    name: String,
-    email: Option<String>,
-}
-
-#[derive(BamlType, Clone, Debug)]
-struct Book {
-    title: String,
-    authors: Vec<Author>,  // nested custom type in vec
-    metadata: HashMap<String, String>,
-}
-
-// For enums with data, use struct variants (not tuple variants):
-#[derive(BamlType, Clone, Debug)]
-#[baml(tag = "item_type")]
-enum LibraryItem {
-    Book { book: Book },
-    Magazine { title: String, issue: i32 },
-}
-```
+- Prompt/render effects: `crates/dspy-rs/tests/test_bamltype_docs_contract.rs`
+- Basic `#[BamlType]` end-user contract: `crates/dspy-rs/tests/test_bamltype_attr_contract.rs`
+- Unsupported/compile-fail type shapes: `crates/bamltype/tests/ui.rs`
+- Signature macro compile-fail coverage: `crates/dsrs-macros/tests/ui.rs`

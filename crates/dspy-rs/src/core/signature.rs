@@ -37,8 +37,8 @@ pub trait MetaSignature: Send + Sync {
 }
 
 pub trait Signature: Send + Sync + 'static {
-    type Input: baml_bridge::BamlType + Send + Sync;
-    type Output: baml_bridge::BamlType + Send + Sync;
+    type Input: bamltype::compat::BamlTypeTrait + Send + Sync;
+    type Output: bamltype::compat::BamlTypeTrait + Send + Sync;
 
     fn instruction() -> &'static str;
     fn input_fields() -> &'static [FieldSpec];

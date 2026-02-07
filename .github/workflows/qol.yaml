@@ -8,7 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
       - run: cargo build
 
   test:
@@ -16,7 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
       - run: cargo test --all-features
   
   miri-test:
@@ -26,9 +30,10 @@ jobs:
       MIRIFLAGS: -Zmiri-disable-isolation
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@miri
+      - uses: dtolnay/rust-toolchain@nightly
         with:
-          toolchain: nightly-2025-05-16  # https://github.com/rust-lang/miri/issues/4323
+          toolchain: nightly-2026-01-25
+          components: miri
       - run: cargo miri setup
       - run: cargo miri test --all-features
 
@@ -39,8 +44,9 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.90.0
           components: rustfmt, clippy
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features

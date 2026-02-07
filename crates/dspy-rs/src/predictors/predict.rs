@@ -8,8 +8,8 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::adapter::Adapter;
-use crate::baml_bridge::baml_types::BamlMap;
-use crate::baml_bridge::{BamlValueConvert, ToBamlValue};
+use crate::bamltype::baml_types::BamlMap;
+use crate::bamltype::compat::{BamlValueConvert, ToBamlValue};
 use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
 use crate::{
     BamlValue, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM, LmError, LmUsage,

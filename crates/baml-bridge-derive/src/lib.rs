@@ -1517,8 +1517,7 @@ fn type_ir_for_field(
     attrs: &FieldAttrs,
     map_entry: Option<&MapEntryInfo>,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    if attrs.with.is_some() {
-        let adapter = attrs.with.as_ref().unwrap();
+    if let Some(adapter) = attrs.with.as_ref() {
         return Ok(quote! { <#adapter as ::baml_bridge::BamlAdapter<#ty>>::type_ir() });
     }
 
