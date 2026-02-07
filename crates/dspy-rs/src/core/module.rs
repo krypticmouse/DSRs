@@ -2,6 +2,7 @@ use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
+use tracing::debug;
 
 use crate::{BamlValue, ConversionError, Example, PredictError, Prediction, core::MetaSignature};
 
@@ -19,6 +20,16 @@ pub trait Module: Send + Sync {
         })
     }
 
+    #[tracing::instrument(
+        name = "dsrs.batch",
+        level = "debug",
+        skip(self, inputs),
+        fields(
+            total_inputs = inputs.len(),
+            max_concurrency,
+            display_progress
+        )
+    )]
     async fn batch(
         &self,
         inputs: Vec<Example>,
@@ -54,9 +65,16 @@ pub trait Module: Send + Sync {
 
         // Collect predictions and handle errors
         let mut predictions = Vec::with_capacity(total);
-        for (_, result) in indexed_results {
-            predictions.push(result?);
+        for (idx, result) in indexed_results {
+            match result {
+                Ok(prediction) => predictions.push(prediction),
+                Err(err) => {
+                    debug!(idx, error = %err, "batch item failed");
+                    return Err(err);
+                }
+            }
         }
+        debug!(predictions = predictions.len(), "batch completed");
 
         Ok(predictions)
     }

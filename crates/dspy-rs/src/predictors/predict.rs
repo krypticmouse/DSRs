@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use tracing::{debug, trace};
 
 use crate::adapter::Adapter;
 use crate::baml_bridge::baml_types::BamlMap;
@@ -45,6 +46,18 @@ impl<S: Signature> Predict<S> {
         Ok(self.call_with_meta(input).await?.output)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.predict.call_with_meta",
+        level = "debug",
+        skip(self, input),
+        fields(
+            signature = std::any::type_name::<S>(),
+            demo_count = self.demos.len(),
+            tool_count = self.tools.len(),
+            instruction_override = self.instruction_override.is_some(),
+            tracing_graph = crate::trace::is_tracing()
+        )
+    )]
     pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
     where
         S: Clone,
@@ -68,6 +81,11 @@ impl<S: Signature> Predict<S> {
                 },
             })?;
         let user = chat_adapter.format_user_message_typed::<S>(&input);
+        trace!(
+            system_len = system.len(),
+            user_len = user.len(),
+            "typed prompt formatted"
+        );
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
@@ -77,6 +95,7 @@ impl<S: Signature> Predict<S> {
             chat.push("assistant", &demo_assistant);
         }
         chat.push("user", &user);
+        trace!(message_count = chat.len(), "chat constructed");
 
         let response = lm
             .call(chat, self.tools.clone())
@@ -88,18 +107,51 @@ impl<S: Signature> Predict<S> {
                     source: None,
                 },
             })?;
+        debug!(
+            prompt_tokens = response.usage.prompt_tokens,
+            completion_tokens = response.usage.completion_tokens,
+            total_tokens = response.usage.total_tokens,
+            tool_calls = response.tool_calls.len(),
+            "lm response received"
+        );
 
         let raw_response = response.output.content().to_string();
         let lm_usage = response.usage.clone();
-        let (typed_output, field_metas) = chat_adapter
-            .parse_response_typed::<S>(&response.output)
-            .map_err(|err| PredictError::Parse {
-                source: err,
-                raw_response: raw_response.clone(),
-                lm_usage: lm_usage.clone(),
-            })?;
-
-        let output = S::from_parts(input, typed_output);
+        let (typed_output, field_metas) =
+            match chat_adapter.parse_response_typed::<S>(&response.output) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    let fields = err.fields();
+                    debug!(
+                        failed_fields = fields.len(),
+                        fields = ?fields,
+                        raw_response_len = raw_response.len(),
+                        "typed parse failed"
+                    );
+                    return Err(PredictError::Parse {
+                        source: err,
+                        raw_response: raw_response.clone(),
+                        lm_usage: lm_usage.clone(),
+                    });
+                }
+            };
+        let checks_total = field_metas
+            .values()
+            .map(|meta| meta.checks.len())
+            .sum::<usize>();
+        let checks_failed = field_metas
+            .values()
+            .flat_map(|meta| meta.checks.iter())
+            .filter(|check| !check.passed)
+            .count();
+        let flagged_fields = field_metas
+            .values()
+            .filter(|meta| !meta.flags.is_empty())
+            .count();
+        debug!(
+            output_fields = field_metas.len(),
+            checks_total, checks_failed, flagged_fields, "typed parse completed"
+        );
 
         let node_id = if crate::trace::is_tracing() {
             crate::trace::record_node(
@@ -112,6 +164,20 @@ impl<S: Signature> Predict<S> {
         } else {
             None
         };
+
+        if let Some(id) = node_id {
+            match prediction_from_output::<S>(&typed_output, lm_usage.clone(), Some(id)) {
+                Ok(prediction) => {
+                    crate::trace::record_output(id, prediction);
+                    trace!(node_id = id, "recorded typed predictor output");
+                }
+                Err(err) => {
+                    debug!(error = %err, "failed to build typed prediction for trace output");
+                }
+            }
+        }
+
+        let output = S::from_parts(input, typed_output);
 
         Ok(CallResult::new(
             output,
@@ -296,7 +362,7 @@ where
 }
 
 fn prediction_from_output<S: Signature>(
-    output: S::Output,
+    output: &S::Output,
     lm_usage: LmUsage,
     node_id: Option<usize>,
 ) -> Result<Prediction>
@@ -323,28 +389,55 @@ where
     S::Input: ToBamlValue + BamlValueConvert,
     S::Output: ToBamlValue + BamlValueConvert,
 {
+    #[tracing::instrument(
+        name = "dsrs.module.forward",
+        level = "debug",
+        skip(self, inputs),
+        fields(
+            signature = std::any::type_name::<S>(),
+            input_keys = inputs.input_keys.len(),
+            output_keys = inputs.output_keys.len()
+        )
+    )]
     async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        let typed_input = input_from_example::<S>(&inputs)?;
-        let call_result = self
-            .call_with_meta(typed_input)
-            .await
-            .map_err(|err| anyhow::anyhow!(err))?;
+        let typed_input = input_from_example::<S>(&inputs).map_err(|err| {
+            debug!(error = %err, "typed input conversion failed");
+            err
+        })?;
+        let call_result = self.call_with_meta(typed_input).await.map_err(|err| {
+            debug!(error = %err, "predict call_with_meta failed");
+            anyhow::anyhow!(err)
+        })?;
         let (_, output) = call_result.output.into_parts();
-        prediction_from_output::<S>(output, call_result.lm_usage, call_result.node_id)
+        let prediction =
+            prediction_from_output::<S>(&output, call_result.lm_usage, call_result.node_id)?;
+        debug!(
+            output_fields = prediction.data.len(),
+            "typed module forward complete"
+        );
+        Ok(prediction)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.module.forward_untyped",
+        level = "debug",
+        skip(self, input),
+        fields(signature = std::any::type_name::<S>())
+    )]
     async fn forward_untyped(
         &self,
         input: BamlValue,
     ) -> std::result::Result<BamlValue, PredictError> {
         let typed_input =
             S::Input::try_from_baml_value(input.clone(), Vec::new()).map_err(|err| {
+                debug!(error = %err, "untyped input conversion failed");
                 PredictError::Conversion {
                     source: err.into(),
                     parsed: input,
                 }
             })?;
         let output = self.call(typed_input).await?;
+        debug!("typed module forward_untyped complete");
         Ok(output.to_baml_value())
     }
 }
@@ -454,6 +547,15 @@ impl LegacyPredict {
 }
 
 impl super::Predictor for LegacyPredict {
+    #[tracing::instrument(
+        name = "dsrs.legacy_predict.forward",
+        level = "debug",
+        skip(self, inputs),
+        fields(
+            tool_count = self.tools.len(),
+            tracing_graph = crate::trace::is_tracing()
+        )
+    )]
     async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
         let trace_node_id = if crate::trace::is_tracing() {
             let input_id = if let Some(id) = inputs.node_id {
@@ -486,15 +588,31 @@ impl super::Predictor for LegacyPredict {
         let mut prediction = adapter
             .call(lm, self.signature.as_ref(), inputs, self.tools.clone())
             .await?;
+        debug!(
+            prompt_tokens = prediction.lm_usage.prompt_tokens,
+            completion_tokens = prediction.lm_usage.completion_tokens,
+            total_tokens = prediction.lm_usage.total_tokens,
+            "legacy predictor call complete"
+        );
 
         if let Some(id) = trace_node_id {
             prediction.node_id = Some(id);
             crate::trace::record_output(id, prediction.clone());
+            trace!(node_id = id, "recorded legacy predictor output");
         }
 
         Ok(prediction)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.legacy_predict.forward_with_config",
+        level = "debug",
+        skip(self, inputs, lm),
+        fields(
+            tool_count = self.tools.len(),
+            tracing_graph = crate::trace::is_tracing()
+        )
+    )]
     async fn forward_with_config(
         &self,
         inputs: Example,
@@ -526,10 +644,17 @@ impl super::Predictor for LegacyPredict {
         let mut prediction = ChatAdapter
             .call(lm, self.signature.as_ref(), inputs, self.tools.clone())
             .await?;
+        debug!(
+            prompt_tokens = prediction.lm_usage.prompt_tokens,
+            completion_tokens = prediction.lm_usage.completion_tokens,
+            total_tokens = prediction.lm_usage.total_tokens,
+            "legacy predictor call_with_config complete"
+        );
 
         if let Some(id) = trace_node_id {
             prediction.node_id = Some(id);
             crate::trace::record_output(id, prediction.clone());
+            trace!(node_id = id, "recorded legacy predictor output");
         }
 
         Ok(prediction)

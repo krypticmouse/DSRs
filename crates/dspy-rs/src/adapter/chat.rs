@@ -5,6 +5,7 @@ use rig::tool::ToolDyn;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
+use tracing::{Instrument, debug, trace};
 
 use super::Adapter;
 use crate::baml_bridge::BamlType;
@@ -423,6 +424,15 @@ impl ChatAdapter {
         self.format_system_message_typed_with_instruction::<S>(None)
     }
 
+    #[tracing::instrument(
+        name = "dsrs.adapter.chat.format_system_typed",
+        level = "trace",
+        skip(self),
+        fields(
+            signature = std::any::type_name::<S>(),
+            instruction_override = instruction_override.is_some()
+        )
+    )]
     pub fn format_system_message_typed_with_instruction<S: Signature>(
         &self,
         instruction_override: Option<&str>,
@@ -434,7 +444,9 @@ impl ChatAdapter {
             self.format_task_description_typed::<S>(instruction_override),
         ];
 
-        Ok(parts.join("\n\n"))
+        let system = parts.join("\n\n");
+        trace!(system_len = system.len(), "formatted typed system prompt");
+        Ok(system)
     }
 
     fn format_field_descriptions_typed<S: Signature>(&self) -> String {
@@ -562,6 +574,15 @@ impl ChatAdapter {
     }
 
     #[allow(clippy::result_large_err)]
+    #[tracing::instrument(
+        name = "dsrs.adapter.chat.parse_typed",
+        level = "debug",
+        skip(self, response),
+        fields(
+            signature = std::any::type_name::<S>(),
+            output_field_count = S::output_fields().len()
+        )
+    )]
     pub fn parse_response_typed<S: Signature>(
         &self,
         response: &Message,
@@ -573,6 +594,9 @@ impl ChatAdapter {
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
         let mut output_map = crate::baml_bridge::baml_types::BamlMap::new();
+        let mut checks_total = 0usize;
+        let mut checks_failed = 0usize;
+        let mut asserts_failed = 0usize;
 
         for field in S::output_fields() {
             let rust_name = field.rust_name.to_string();
@@ -581,6 +605,7 @@ impl ChatAdapter {
             let raw_text = match sections.get(field.name) {
                 Some(text) => text.clone(),
                 None => {
+                    debug!(field = %rust_name, "missing output field in response");
                     errors.push(ParseError::MissingField {
                         field: rust_name.clone(),
                         raw_response: content.to_string(),
@@ -593,6 +618,17 @@ impl ChatAdapter {
                 match jsonish::from_str(output_format, &type_ir, &raw_text, true) {
                     Ok(value) => value,
                     Err(err) => {
+                        debug!(
+                            field = %rust_name,
+                            expected_type = %type_ir.diagnostic_repr(),
+                            raw_text_len = raw_text.len(),
+                            "typed coercion failed"
+                        );
+                        trace!(
+                            field = %rust_name,
+                            raw_preview = %crate::truncate(&raw_text, 160),
+                            "typed coercion failed preview"
+                        );
                         errors.push(ParseError::CoercionFailed {
                             field: rust_name.clone(),
                             expected_type: type_ir.diagnostic_repr().to_string(),
@@ -621,6 +657,12 @@ impl ChatAdapter {
                         });
                         let expression = constraint.expression.to_string();
                         if constraint.level == ConstraintLevel::Assert && !passed {
+                            asserts_failed += 1;
+                            debug!(
+                                field = %rust_name,
+                                label,
+                                "typed assert constraint failed"
+                            );
                             errors.push(ParseError::AssertFailed {
                                 field: rust_name.clone(),
                                 label: label.to_string(),
@@ -629,6 +671,15 @@ impl ChatAdapter {
                             });
                         }
                         if constraint.level == ConstraintLevel::Check {
+                            checks_total += 1;
+                            if !passed {
+                                checks_failed += 1;
+                                trace!(
+                                    field = %rust_name,
+                                    label,
+                                    "typed check constraint failed"
+                                );
+                            }
                             checks.push(ConstraintResult {
                                 label: label.to_string(),
                                 expression,
@@ -638,6 +689,11 @@ impl ChatAdapter {
                     }
                 }
                 Err(err) => {
+                    debug!(
+                        field = %rust_name,
+                        reason = %err,
+                        "typed extraction failed while running checks"
+                    );
                     errors.push(ParseError::ExtractionFailed {
                         field: rust_name.clone(),
                         raw_response: content.to_string(),
@@ -660,6 +716,10 @@ impl ChatAdapter {
         }
 
         if !errors.is_empty() {
+            debug!(
+                errors = errors.len(),
+                checks_total, checks_failed, asserts_failed, "typed parse returned errors"
+            );
             let partial = if output_map.is_empty() {
                 None
             } else {
@@ -677,8 +737,82 @@ impl ChatAdapter {
             raw_response: content.to_string(),
             reason: err.to_string(),
         })?;
+        debug!(
+            parsed_fields = metas.len(),
+            checks_total, checks_failed, asserts_failed, "typed parse completed"
+        );
 
         Ok((typed_output, metas))
+    }
+
+    #[tracing::instrument(
+        name = "dsrs.adapter.chat.parse",
+        level = "debug",
+        skip(self, signature, response),
+        fields(
+            output_field_count = signature
+                .output_fields()
+                .as_object()
+                .map(|fields| fields.len())
+                .unwrap_or_default()
+        )
+    )]
+    fn parse_response_strict(
+        &self,
+        signature: &dyn MetaSignature,
+        response: Message,
+    ) -> Result<HashMap<String, Value>> {
+        let mut output = HashMap::new();
+
+        let response_content = response.content();
+        let sections = parse_sections(&response_content);
+
+        for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
+            let Some(field_value) = sections.get(&field_name) else {
+                debug!(
+                    field = %field_name,
+                    "legacy parse missing required output field"
+                );
+                return Err(anyhow::anyhow!(
+                    "missing required field `{}` in model output",
+                    field_name
+                ));
+            };
+            let extracted_field = field_value.as_str();
+            let data_type = field["type"].as_str().unwrap();
+            let schema = &field["schema"];
+
+            // Check if schema exists (as string or object)
+            let has_schema = if let Some(s) = schema.as_str() {
+                !s.is_empty()
+            } else {
+                schema.is_object() || schema.is_array()
+            };
+
+            if !has_schema && data_type == "String" {
+                output.insert(field_name.clone(), json!(extracted_field));
+            } else {
+                let value = serde_json::from_str(extracted_field).map_err(|err| {
+                    debug!(
+                        field = %field_name,
+                        data_type,
+                        raw_text_len = extracted_field.len(),
+                        error = %err,
+                        "legacy parse json coercion failed"
+                    );
+                    anyhow::anyhow!(
+                        "failed to parse field `{}` as {} from model output: {}",
+                        field_name,
+                        data_type,
+                        err
+                    )
+                })?;
+                output.insert(field_name.clone(), value);
+            }
+        }
+
+        debug!(parsed_fields = output.len(), "legacy parse completed");
+        Ok(output)
     }
 }
 
@@ -808,17 +942,34 @@ fn collect_from_conditions(conditions: &DeserializerConditions, flags: &mut Vec<
 
 #[async_trait::async_trait]
 impl Adapter for ChatAdapter {
+    #[tracing::instrument(
+        name = "dsrs.adapter.chat.format",
+        level = "trace",
+        skip(self, signature, inputs),
+        fields(
+            input_fields = inputs.input_keys.len(),
+            output_fields = inputs.output_keys.len()
+        )
+    )]
     fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat {
         let system_message = self.format_system_message(signature);
         let user_message = self.format_user_message(signature, &inputs);
 
-        let demos = signature.demos();
-        let demos = self.format_demos(signature, &demos);
+        let demo_examples = signature.demos();
+        let demos = self.format_demos(signature, &demo_examples);
 
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system_message);
         chat.push_all(&demos);
         chat.push("user", &user_message);
+
+        trace!(
+            demo_count = demo_examples.len(),
+            system_len = system_message.len(),
+            user_len = user_message.len(),
+            message_count = chat.len(),
+            "legacy prompt formatted"
+        );
 
         chat
     }
@@ -828,39 +979,20 @@ impl Adapter for ChatAdapter {
         signature: &dyn MetaSignature,
         response: Message,
     ) -> HashMap<String, Value> {
-        let mut output = HashMap::new();
-
-        let response_content = response.content();
-        let sections = parse_sections(&response_content);
-
-        for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
-            let Some(field_value) = sections.get(&field_name) else {
-                continue; // Skip field if not found in response
-            };
-            let extracted_field = field_value.as_str();
-            let data_type = field["type"].as_str().unwrap();
-            let schema = &field["schema"];
-
-            // Check if schema exists (as string or object)
-            let has_schema = if let Some(s) = schema.as_str() {
-                !s.is_empty()
-            } else {
-                schema.is_object() || schema.is_array()
-            };
-
-            if !has_schema && data_type == "String" {
-                output.insert(field_name.clone(), json!(extracted_field));
-            } else {
-                output.insert(
-                    field_name.clone(),
-                    serde_json::from_str(extracted_field).unwrap(),
-                );
-            }
-        }
-
-        output
+        self.parse_response_strict(signature, response)
+            .unwrap_or_else(|err| panic!("legacy parse failed: {err}"))
     }
 
+    #[tracing::instrument(
+        name = "dsrs.adapter.chat.call",
+        level = "debug",
+        skip(self, lm, signature, inputs, tools),
+        fields(
+            cache_enabled = lm.cache,
+            tool_count = tools.len(),
+            input_field_count = inputs.data.len()
+        )
+    )]
     async fn call(
         &self,
         lm: Arc<LM>,
@@ -874,15 +1006,28 @@ impl Adapter for ChatAdapter {
         {
             let cache_key = inputs.clone();
             if let Some(cached) = cache.lock().await.get(cache_key).await? {
+                debug!(
+                    cache_hit = true,
+                    output_fields = cached.data.len(),
+                    "adapter cache hit"
+                );
                 return Ok(cached);
             }
+            debug!(cache_hit = false, "adapter cache miss");
         }
-
         let messages = self.format(signature, inputs.clone());
+        trace!(message_count = messages.len(), "adapter formatted chat");
         let response = lm.call(messages, tools).await?;
+        debug!(
+            prompt_tokens = response.usage.prompt_tokens,
+            completion_tokens = response.usage.completion_tokens,
+            total_tokens = response.usage.total_tokens,
+            tool_calls = response.tool_calls.len(),
+            "adapter lm call complete"
+        );
         let prompt_str = response.chat.to_json().to_string();
 
-        let mut output = self.parse_response(signature, response.output);
+        let mut output = self.parse_response_strict(signature, response.output)?;
         if !response.tool_calls.is_empty() {
             output.insert(
                 "tool_calls".to_string(),
@@ -901,6 +1046,7 @@ impl Adapter for ChatAdapter {
                     .collect::<Value>(),
             );
         }
+        debug!(output_fields = output.len(), "adapter parsed output");
 
         let prediction = Prediction {
             data: output,
@@ -917,9 +1063,13 @@ impl Adapter for ChatAdapter {
             let inputs_clone = inputs.clone();
 
             // Spawn the cache insert operation to avoid deadlock
-            tokio::spawn(async move {
-                let _ = cache_clone.lock().await.insert(inputs_clone, rx).await;
-            });
+            tokio::spawn(
+                async move {
+                    let _ = cache_clone.lock().await.insert(inputs_clone, rx).await;
+                }
+                .instrument(tracing::Span::current()),
+            );
+            trace!("spawned async cache insert");
 
             // Send the result to the cache
             tx.send(CacheEntry {
@@ -928,6 +1078,7 @@ impl Adapter for ChatAdapter {
             })
             .await
             .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
+            trace!("sent prediction to cache insert task");
         }
 
         Ok(prediction)

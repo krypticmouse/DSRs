@@ -29,7 +29,7 @@ let copro = COPRO::builder()
 ## Usage Example
 
 ```rust
-use dspy_rs::{COPRO, Optimizer};
+use dspy_rs::{COPRO, Optimizer, init_tracing};
 
 #[derive(Builder, Optimizable)]
 struct MyModule {
@@ -56,6 +56,8 @@ impl Evaluator for MyModule {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     // API key automatically read from OPENAI_API_KEY env var
     configure(
         LM::builder()

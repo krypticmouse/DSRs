@@ -219,6 +219,8 @@ impl FeedbackEvaluator for MathSolver {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing()?;
+
     println!("GEPA with LLM-as-a-Judge Example\n");
     println!("This example shows how to use an LLM judge to automatically");
     println!("generate rich feedback for optimizing a math solver.\n");

@@ -40,6 +40,8 @@ foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
 rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
 enum_dispatch = "0.3.13"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]

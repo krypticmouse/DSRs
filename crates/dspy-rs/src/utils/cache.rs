@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tempfile;
 use tokio::sync::mpsc;
+use tracing::{debug, trace, warn};
 
 use crate::{Example, Prediction};
 
@@ -33,6 +34,7 @@ pub struct ResponseCache {
 
 #[async_trait]
 impl Cache for ResponseCache {
+    #[tracing::instrument(name = "dsrs.cache.new", level = "debug")]
     async fn new() -> Self {
         let dir = tempfile::tempdir().unwrap();
 
@@ -48,36 +50,69 @@ impl Cache for ResponseCache {
             .build()
             .await
             .unwrap();
-        Self {
+        let cache = Self {
             handler: hybrid,
             window_size: 100,
             history_window: Vec::new(),
-        }
+        };
+        debug!(
+            window_size = cache.window_size,
+            "response cache initialized"
+        );
+        cache
     }
 
+    #[tracing::instrument(
+        name = "dsrs.cache.get",
+        level = "trace",
+        skip(self, key),
+        fields(key_fields = key.data.len())
+    )]
     async fn get(&self, key: Example) -> Result<Option<Prediction>> {
         let key = key.into_iter().collect::<CacheKey>();
 
         let value = self.handler.get(&key).await?.map(|v| v.value().clone());
+        trace!(hit = value.is_some(), "cache lookup complete");
 
         Ok(value.map(|entry| entry.prediction))
     }
 
+    #[tracing::instrument(
+        name = "dsrs.cache.insert",
+        level = "trace",
+        skip(self, key, rx),
+        fields(key_fields = key.data.len(), window_size = self.window_size)
+    )]
     async fn insert(&mut self, key: Example, mut rx: mpsc::Receiver<CacheEntry>) -> Result<()> {
         let key = key.into_iter().collect::<CacheKey>();
-        let value = rx.recv().await.unwrap();
+        let Some(value) = rx.recv().await else {
+            warn!("cache insert channel closed before receiving entry");
+            return Ok(());
+        };
 
         self.history_window.insert(0, value.clone());
         if self.history_window.len() > self.window_size {
             self.history_window.pop();
         }
         self.handler.insert(key, value.clone());
+        trace!(
+            history_len = self.history_window.len(),
+            prompt_len = value.prompt.len(),
+            "cache entry inserted"
+        );
 
         Ok(())
     }
 
+    #[tracing::instrument(
+        name = "dsrs.cache.get_history",
+        level = "trace",
+        skip(self),
+        fields(n = n)
+    )]
     async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>> {
         let actual_n = n.min(self.history_window.len());
+        trace!(actual_n, "cache history fetched");
         Ok(self.history_window[..actual_n].to_vec())
     }
 }

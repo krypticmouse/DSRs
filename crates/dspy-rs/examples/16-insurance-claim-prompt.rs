@@ -5,7 +5,7 @@ Run with:
 cargo run --example 16-insurance-claim-prompt
 */
 
-use dspy_rs::{BamlType, ChatAdapter, Signature};
+use dspy_rs::{BamlType, ChatAdapter, Signature, init_tracing};
 
 // Keep the example self-contained; dates are represented as YYYY-MM-DD strings.
 type NaiveDate = String;
@@ -184,6 +184,8 @@ pub struct InsuranceClaimInfo {
 }
 
 fn main() {
+    init_tracing().expect("failed to initialize tracing");
+
     let adapter = ChatAdapter;
     let system = adapter
         .format_system_message_typed::<InsuranceClaimInfo>()

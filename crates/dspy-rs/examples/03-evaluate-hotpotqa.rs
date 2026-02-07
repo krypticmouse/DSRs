@@ -13,7 +13,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, Evaluator, Example, LM, LegacyPredict, LegacySignature, Module, Optimizable,
-    Prediction, Predictor, configure,
+    Prediction, Predictor, configure, init_tracing,
 };
 
 use dspy_rs::DataLoader;
@@ -62,6 +62,8 @@ impl Evaluator for QARater {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    init_tracing()?;
+
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())

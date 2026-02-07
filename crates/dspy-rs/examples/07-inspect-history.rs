@@ -13,7 +13,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
     ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
-    configure, example, get_lm,
+    configure, example, get_lm, init_tracing,
 };
 
 #[LegacySignature]
@@ -38,6 +38,8 @@ impl Module for QARater {
 
 #[tokio::main]
 async fn main() {
+    init_tracing().expect("failed to initialize tracing");
+
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
         .build()
