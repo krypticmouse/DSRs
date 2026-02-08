@@ -524,15 +524,17 @@ name = "bamltype"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "baml-bridge",
  "baml-types",
  "bamltype-derive",
+ "expect-test",
  "facet",
  "facet-reflect",
  "indexmap",
  "internal-baml-jinja",
  "jsonish",
  "minijinja",
+ "proptest",
+ "serde",
  "serde_json",
  "sha2",
  "thiserror",

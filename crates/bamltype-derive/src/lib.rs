@@ -840,7 +840,7 @@ fn parse_baml_container_meta(attr: &Attribute, out: &mut ContainerCompatAttrs) -
     for meta in parse_meta_list(attr)? {
         match meta {
             Meta::NameValue(meta) if meta.path.is_ident("name") => {
-                out.rename = Some(parse_string_expr(&meta.value, meta.span())?);
+                out.rename = Some(parse_string_expr(&meta.value, meta.path.span())?);
             }
             Meta::NameValue(meta) if meta.path.is_ident("rename_all") => {
                 out.rename_all = Some(parse_rename_rule(&meta.value, meta.span())?);
