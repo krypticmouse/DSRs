@@ -2,6 +2,13 @@ use crate::{Example, OutputFormatContent, TypeIR};
 use anyhow::Result;
 use serde_json::Value;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRenderSpec {
+    Default,
+    Format(&'static str),
+    Jinja(&'static str),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FieldSpec {
     pub name: &'static str,
@@ -9,7 +16,7 @@ pub struct FieldSpec {
     pub description: &'static str,
     pub type_ir: fn() -> TypeIR,
     pub constraints: &'static [ConstraintSpec],
-    pub format: Option<&'static str>,
+    pub input_render: InputRenderSpec,
 }
 
 #[derive(Debug, Clone, Copy)]

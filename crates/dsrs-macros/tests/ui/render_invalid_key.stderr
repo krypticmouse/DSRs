@@ -1,0 +1,5 @@
+error: expected #[render(jinja = "...")]
+ --> tests/ui/render_invalid_key.rs:6:5
+  |
+6 |     #[render(template = "{{ this }}")]
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

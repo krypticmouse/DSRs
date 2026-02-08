@@ -43,6 +43,7 @@ rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
 enum_dispatch = "0.3.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["builtins", "serde"] }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]

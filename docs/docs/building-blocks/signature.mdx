@@ -172,6 +172,28 @@ context: Vec<Document>,
 
 Options: `"json"`, `"yaml"`, `"toon"`
 
+### `#[render]` - Custom input rendering (Jinja)
+
+```rust
+#[input]
+#[render(jinja = "{{ this.title }}\n{{ this.body | truncate(300) }}")]
+ticket: Ticket,
+```
+
+Use this when you need custom text rendering for an input field.
+
+- Only valid on `#[input]` fields
+- Template must be a string literal
+- Jinja syntax is validated at compile time
+- Cannot be combined with `#[format]` on the same field
+- Runtime uses strict undefined behavior; missing variables render as `<error>`
+
+Template context:
+- `this` - Current field value as JSON-like data
+- `input` - Full input object (available via rust field names and aliases)
+- `field` - Metadata object with `name`, `rust_name`, and `type`
+- `vars` - Adapter/surface variables (currently empty in `ChatAdapter`)
+
 ### `#[check]` - Soft constraint
 
 ```rust
