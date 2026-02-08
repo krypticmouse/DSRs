@@ -8,7 +8,6 @@ use std::sync::{Arc, LazyLock};
 use tracing::{Instrument, debug, trace};
 
 use super::Adapter;
-use crate::bamltype::compat::{BamlTypeTrait, BamlValueConvert, ToBamlValue};
 use crate::bamltype::jsonish;
 use crate::bamltype::jsonish::BamlValueWithFlags;
 use crate::bamltype::jsonish::deserializer::coercer::run_user_checks;
@@ -16,9 +15,9 @@ use crate::bamltype::jsonish::deserializer::deserialize_flags::DeserializerCondi
 use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
-    BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature, TypeIR,
+    BamlTypeTrait, BamlValue, BamlValueConvert, Cache, Chat, ConstraintLevel, ConstraintResult,
+    Example, FieldMeta, Flag, JsonishError, LM, Message, MetaSignature, OutputFormatContent,
+    ParseError, Prediction, RenderOptions, Signature, ToBamlValue, TypeIR,
 };
 
 #[derive(Default, Clone)]

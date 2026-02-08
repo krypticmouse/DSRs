@@ -27,14 +27,12 @@ pub use bamltype::BamlType; // attribute macro
 pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };
-pub use bamltype::compat::BamlConvertError;
-pub use bamltype::compat::{
-    BamlAdapter, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, Registry, ToBamlValue,
-    with_constraints,
-};
 pub use bamltype::facet;
 pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
+pub use bamltype::{
+    BamlConvertError, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, ToBamlValue,
+};
 pub use dsrs_macros::*;
 
 #[deprecated(

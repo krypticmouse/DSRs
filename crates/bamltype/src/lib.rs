@@ -55,12 +55,16 @@ pub use schema_builder::*;
 mod convert;
 pub use convert::{ConvertError, from_baml_value, from_baml_value_with_flags, to_baml_value};
 
-pub mod compat;
-pub mod facet_ext;
-pub use compat::{
-    BamlAdapter, BamlConvertError, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, Registry,
-    ToBamlValue, default_streaming_behavior, get_field, with_constraints,
+mod runtime;
+pub use runtime::{
+    BamlConvertError, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, ToBamlValue,
+    default_streaming_behavior, get_field,
 };
+
+pub mod adapters;
+mod schema_registry;
+
+pub mod facet_ext;
 
 /// A bundle containing everything needed to render schemas and parse LLM output.
 #[derive(Debug, Clone)]
@@ -91,10 +95,7 @@ pub trait BamlSchema: for<'a> facet::Facet<'a> {
     fn baml_schema() -> &'static SchemaBundle;
 }
 
-/// Back-compat trait mirroring legacy bridge's `BamlType`.
-///
-/// This sits alongside the `#[BamlType]` attribute macro and offers the same
-/// runtime trait entry points users expect from the old API.
+/// Runtime trait for types that expose BAML schema + conversion entry points.
 pub trait BamlType: BamlTypeInternal + BamlValueConvert + Sized + 'static {
     fn baml_output_format() -> &'static OutputFormatContent;
 

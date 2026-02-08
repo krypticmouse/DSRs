@@ -724,12 +724,12 @@ fn normalize_field_attrs(
     if let Some(adapter) = compat.with_adapter {
         let with_expr = quote! {
             &#runtime_crate::facet_ext::WithAdapterFns {
-                type_ir: || <#adapter as #runtime_crate::compat::BamlAdapter<#field_ty>>::type_ir(),
-                register: |reg| <#adapter as #runtime_crate::compat::BamlAdapter<#field_ty>>::register(reg),
+                type_ir: || <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::type_ir(),
+                register: |reg| <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::register(reg),
                 apply: |partial, value, path| {
-                    let converted = <#adapter as #runtime_crate::compat::BamlAdapter<#field_ty>>::try_from_baml(value, path)?;
+                    let converted = <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::try_from_baml(value, path)?;
                     partial.set(converted).map_err(|err| {
-                        #runtime_crate::compat::BamlConvertError::new(
+                        #runtime_crate::BamlConvertError::new(
                             ::std::vec::Vec::new(),
                             "compatible type",
                             err.to_string(),

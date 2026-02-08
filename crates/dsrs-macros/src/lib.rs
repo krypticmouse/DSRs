@@ -476,7 +476,7 @@ fn generate_field_specs(
         if field.constraints.is_empty() {
             type_ir_fns.push(quote! {
                 fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    <#ty as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir()
+                    <#ty as #runtime::BamlTypeInternal>::baml_type_ir()
                 }
             });
         } else {
@@ -500,8 +500,9 @@ fn generate_field_specs(
 
             type_ir_fns.push(quote! {
                 fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    let base = <#ty as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir();
-                    #runtime::bamltype::compat::with_constraints(base, vec![#(#constraint_tokens),*])
+                    let mut base = <#ty as #runtime::BamlTypeInternal>::baml_type_ir();
+                    base.meta_mut().constraints.extend(vec![#(#constraint_tokens),*]);
+                    base
                 }
             });
         }
@@ -584,32 +585,28 @@ fn generate_baml_delegation(
         to_value_inserts.push(quote! {
             fields.insert(
                 #field_name.to_string(),
-                #runtime::bamltype::compat::ToBamlValue::to_baml_value(&self.#ident),
+                #runtime::ToBamlValue::to_baml_value(&self.#ident),
             );
         });
     }
 
     quote! {
-        impl #runtime::bamltype::compat::BamlTypeInternal for #name {
+        impl #runtime::BamlTypeInternal for #name {
             fn baml_internal_name() -> &'static str {
-                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::baml_internal_name()
+                <#all_name as #runtime::BamlTypeInternal>::baml_internal_name()
             }
 
             fn baml_type_ir() -> #runtime::TypeIR {
-                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::baml_type_ir()
-            }
-
-            fn register(reg: &mut #runtime::bamltype::compat::Registry) {
-                <#all_name as #runtime::bamltype::compat::BamlTypeInternal>::register(reg)
+                <#all_name as #runtime::BamlTypeInternal>::baml_type_ir()
             }
         }
 
-        impl #runtime::bamltype::compat::BamlValueConvert for #name {
+        impl #runtime::BamlValueConvert for #name {
             fn try_from_baml_value(
                 value: #runtime::BamlValue,
                 path: Vec<String>,
             ) -> Result<Self, #runtime::BamlConvertError> {
-                let all = <#all_name as #runtime::bamltype::compat::BamlValueConvert>
+                let all = <#all_name as #runtime::BamlValueConvert>
                     ::try_from_baml_value(value, path)?;
                 Ok(Self {
                     #(#field_names: all.#field_names),*
@@ -617,18 +614,18 @@ fn generate_baml_delegation(
             }
         }
 
-        impl #runtime::bamltype::compat::BamlTypeTrait for #name {
+        impl #runtime::BamlTypeTrait for #name {
             fn baml_output_format() -> &'static #runtime::OutputFormatContent {
-                <#all_name as #runtime::bamltype::compat::BamlTypeTrait>::baml_output_format()
+                <#all_name as #runtime::BamlTypeTrait>::baml_output_format()
             }
         }
 
-        impl #runtime::bamltype::compat::ToBamlValue for #name {
+        impl #runtime::ToBamlValue for #name {
             fn to_baml_value(&self) -> #runtime::BamlValue {
                 let mut fields = #runtime::bamltype::baml_types::BamlMap::new();
                 #(#to_value_inserts)*
                 #runtime::bamltype::baml_types::BamlValue::Class(
-                    <Self as #runtime::bamltype::compat::BamlTypeInternal>::baml_internal_name()
+                    <Self as #runtime::BamlTypeInternal>::baml_internal_name()
                         .to_string(),
                     fields,
                 )
@@ -679,7 +676,7 @@ fn generate_signature_impl(
             }
 
             fn output_format_content() -> &'static #runtime::OutputFormatContent {
-                <#output_name as #runtime::bamltype::compat::BamlTypeTrait>::baml_output_format()
+                <#output_name as #runtime::BamlTypeTrait>::baml_output_format()
             }
 
             fn from_parts(input: Self::Input, output: Self::Output) -> Self {

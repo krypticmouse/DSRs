@@ -4,10 +4,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use baml_types::{BamlValue, ConstraintLevel, LiteralValue, StreamingMode, TypeIR};
+use bamltype::adapters::{AdapterSchemaRegistry, FieldCodec};
 use bamltype::{
-    BamlSchema,
-    compat::{BamlAdapter, BamlTypeInternal, Registry},
-    from_baml_value, from_baml_value_with_flags, parse, render_schema_default, to_baml_value,
+    BamlSchema, BamlTypeInternal, from_baml_value, from_baml_value_with_flags, parse,
+    render_schema_default, to_baml_value,
 };
 use indexmap::IndexMap;
 
@@ -830,12 +830,12 @@ struct RenameAllParity {
 
 struct U64ObjectAdapter;
 
-impl BamlAdapter<u64> for U64ObjectAdapter {
+impl FieldCodec<u64> for U64ObjectAdapter {
     fn type_ir() -> TypeIR {
         TypeIR::class("AdapterU64Wrapper")
     }
 
-    fn register(reg: &mut Registry) {
+    fn register(reg: &mut AdapterSchemaRegistry) {
         use bamltype::internal_baml_jinja::types::{Class, Name};
 
         if !reg.mark_type("AdapterU64Wrapper") {
@@ -860,11 +860,11 @@ impl BamlAdapter<u64> for U64ObjectAdapter {
     fn try_from_baml(
         value: BamlValue,
         path: Vec<String>,
-    ) -> Result<u64, bamltype::compat::BamlConvertError> {
+    ) -> Result<u64, bamltype::BamlConvertError> {
         let map = match value {
             BamlValue::Class(_, map) | BamlValue::Map(map) => map,
             other => {
-                return Err(bamltype::compat::BamlConvertError::new(
+                return Err(bamltype::BamlConvertError::new(
                     path,
                     "object",
                     format!("{other:?}"),
@@ -873,8 +873,8 @@ impl BamlAdapter<u64> for U64ObjectAdapter {
             }
         };
 
-        let value = bamltype::compat::get_field(&map, "value", None).ok_or_else(|| {
-            bamltype::compat::BamlConvertError::new(
+        let value = bamltype::get_field(&map, "value", None).ok_or_else(|| {
+            bamltype::BamlConvertError::new(
                 path,
                 "value",
                 "<missing>",
@@ -884,14 +884,14 @@ impl BamlAdapter<u64> for U64ObjectAdapter {
 
         match value {
             BamlValue::String(raw) => raw.parse::<u64>().map_err(|err| {
-                bamltype::compat::BamlConvertError::new(
+                bamltype::BamlConvertError::new(
                     Vec::new(),
                     "u64",
                     raw.clone(),
                     format!("invalid integer string: {err}"),
                 )
             }),
-            other => Err(bamltype::compat::BamlConvertError::new(
+            other => Err(bamltype::BamlConvertError::new(
                 Vec::new(),
                 "string",
                 format!("{other:?}"),

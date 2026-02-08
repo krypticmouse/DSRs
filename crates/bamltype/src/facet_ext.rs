@@ -2,7 +2,8 @@
 
 use baml_types::{BamlValue, TypeIR};
 
-use crate::compat::{BamlConvertError, Registry};
+use crate::adapters::AdapterSchemaRegistry;
+use crate::runtime::BamlConvertError;
 
 /// Field-level adapter application function.
 pub type AdapterApplyFn = fn(
@@ -18,7 +19,7 @@ pub struct WithAdapterFns {
     /// Schema type representation callback.
     pub type_ir: fn() -> TypeIR,
     /// Schema registration callback.
-    pub register: fn(&mut Registry),
+    pub register: fn(&mut AdapterSchemaRegistry),
     /// Value conversion callback.
     pub apply: AdapterApplyFn,
 }
