@@ -1,4 +1,4 @@
-use crate::{BamlTypeTrait, Example, OutputFormatContent, TypeIR};
+use crate::{BamlType, Example, OutputFormatContent, TypeIR};
 use anyhow::Result;
 use serde_json::Value;
 
@@ -37,8 +37,8 @@ pub trait MetaSignature: Send + Sync {
 }
 
 pub trait Signature: Send + Sync + 'static {
-    type Input: BamlTypeTrait + Send + Sync;
-    type Output: BamlTypeTrait + Send + Sync;
+    type Input: BamlType + Send + Sync;
+    type Output: BamlType + Send + Sync;
 
     fn instruction() -> &'static str;
     fn input_fields() -> &'static [FieldSpec];

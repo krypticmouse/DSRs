@@ -1,4 +1,8 @@
 use anyhow::Result;
+use bamltype::jsonish;
+use bamltype::jsonish::BamlValueWithFlags;
+use bamltype::jsonish::deserializer::coercer::run_user_checks;
+use bamltype::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use indexmap::IndexMap;
 use regex::Regex;
 use rig::tool::ToolDyn;
@@ -8,16 +12,12 @@ use std::sync::{Arc, LazyLock};
 use tracing::{Instrument, debug, trace};
 
 use super::Adapter;
-use crate::bamltype::jsonish;
-use crate::bamltype::jsonish::BamlValueWithFlags;
-use crate::bamltype::jsonish::deserializer::coercer::run_user_checks;
-use crate::bamltype::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
-    BamlTypeTrait, BamlValue, BamlValueConvert, Cache, Chat, ConstraintLevel, ConstraintResult,
-    Example, FieldMeta, Flag, JsonishError, LM, Message, MetaSignature, OutputFormatContent,
-    ParseError, Prediction, RenderOptions, Signature, ToBamlValue, TypeIR,
+    BamlType, BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
+    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
+    RenderOptions, Signature, TypeIR,
 };
 
 #[derive(Default, Clone)]
@@ -452,7 +452,7 @@ impl ChatAdapter {
     }
 
     fn format_field_descriptions_typed<S: Signature>(&self) -> String {
-        let input_format = <S::Input as BamlTypeTrait>::baml_output_format();
+        let input_format = <S::Input as BamlType>::baml_output_format();
         let output_format = S::output_format_content();
 
         let mut lines = Vec::new();
@@ -518,13 +518,13 @@ impl ChatAdapter {
 
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
     where
-        S::Input: ToBamlValue,
+        S::Input: BamlType,
     {
         let baml_value = input.to_baml_value();
         let Some(fields) = baml_value_fields(&baml_value) else {
             return String::new();
         };
-        let input_output_format = <S::Input as BamlTypeTrait>::baml_output_format();
+        let input_output_format = <S::Input as BamlType>::baml_output_format();
 
         let mut result = String::new();
         for field_spec in S::input_fields() {
@@ -544,7 +544,7 @@ impl ChatAdapter {
 
     pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
     where
-        S::Output: ToBamlValue,
+        S::Output: BamlType,
     {
         let baml_value = output.to_baml_value();
         let Some(fields) = baml_value_fields(&baml_value) else {
@@ -569,8 +569,8 @@ impl ChatAdapter {
 
     pub fn format_demo_typed<S: Signature>(&self, demo: S) -> (String, String)
     where
-        S::Input: ToBamlValue,
-        S::Output: ToBamlValue,
+        S::Input: BamlType,
+        S::Output: BamlType,
     {
         let (input, output) = demo.into_parts();
         let user_msg = self.format_user_message_typed::<S>(&input);
@@ -598,7 +598,7 @@ impl ChatAdapter {
 
         let mut metas = IndexMap::new();
         let mut errors = Vec::new();
-        let mut output_map = crate::bamltype::baml_types::BamlMap::new();
+        let mut output_map = bamltype::baml_types::BamlMap::new();
         let mut checks_total = 0usize;
         let mut checks_failed = 0usize;
         let mut asserts_failed = 0usize;
@@ -729,20 +729,17 @@ impl ChatAdapter {
                 None
             } else {
                 Some(BamlValue::Class(
-                    <S::Output as BamlTypeTrait>::baml_internal_name().to_string(),
+                    <S::Output as BamlType>::baml_internal_name().to_string(),
                     output_map,
                 ))
             };
             return Err(ParseError::Multiple { errors, partial });
         }
 
-        let typed_output = <S::Output as BamlValueConvert>::try_from_baml_value(
-            BamlValue::Class(
-                <S::Output as BamlTypeTrait>::baml_internal_name().to_string(),
-                output_map,
-            ),
-            Vec::new(),
-        )
+        let typed_output = <S::Output as BamlType>::try_from_baml_value(BamlValue::Class(
+            <S::Output as BamlType>::baml_internal_name().to_string(),
+            output_map,
+        ))
         .map_err(|err| ParseError::ExtractionFailed {
             field: "<all>".to_string(),
             raw_response: content.to_string(),
@@ -863,7 +860,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
 
 fn baml_value_fields(
     value: &BamlValue,
-) -> Option<&crate::bamltype::baml_types::BamlMap<String, BamlValue>> {
+) -> Option<&bamltype::baml_types::BamlMap<String, BamlValue>> {
     match value {
         BamlValue::Class(_, fields) => Some(fields),
         BamlValue::Map(fields) => Some(fields),
@@ -894,7 +891,7 @@ fn format_baml_value_for_prompt_typed(
         }
     };
 
-    crate::bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
+    bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
         .unwrap_or_else(|_| "<error>".to_string())
 }
 

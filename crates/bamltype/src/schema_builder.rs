@@ -9,6 +9,7 @@ use facet::{Attr, ConstTypeId, Def, Field, Shape, Type, UserType};
 use internal_baml_jinja::types::{Class, Enum, Name, OutputFormatContent};
 
 use crate::SchemaBundle;
+use crate::adapters::FieldCodecRegisterContext;
 use crate::facet_ext;
 use crate::schema_registry::SchemaRegistry;
 
@@ -25,8 +26,7 @@ pub fn build_schema_bundle(shape: &'static Shape) -> SchemaBundle {
 
 /// Build a TypeIR from a facet Shape (without building full schema).
 ///
-/// Used by runtime trait implementations to provide `BamlTypeInternal::baml_type_ir()`
-/// for any `Facet` type.
+/// Used by runtime helpers to provide `baml_type_ir::<T>()` for any `Facet` type.
 pub fn build_type_ir_from_shape(shape: &'static Shape) -> TypeIR {
     let mut builder = SchemaBuilder::new();
     builder.build_type_ir(shape)
@@ -388,7 +388,14 @@ impl SchemaBuilder {
         variant_rendered: Option<&str>,
     ) -> TypeIR {
         if let Some(with) = facet_ext::with_adapter_fns(field.attributes) {
-            (with.register)(&mut self.registry);
+            (with.register)(FieldCodecRegisterContext {
+                registry: &mut self.registry,
+                owner_internal_name: Some(owner_internal_name),
+                field_name: Some(field.name),
+                rendered_field_name: Some(field.effective_name()),
+                variant_name,
+                rendered_variant_name: variant_rendered,
+            });
             return (with.type_ir)();
         }
 

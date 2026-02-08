@@ -1,4 +1,5 @@
 use anyhow::Result;
+use bamltype::baml_types::BamlMap;
 use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Value, json};
@@ -8,11 +9,10 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::adapter::Adapter;
-use crate::bamltype::baml_types::BamlMap;
 use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
 use crate::{
-    BamlValue, BamlValueConvert, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM,
-    LmError, LmUsage, PredictError, Prediction, ToBamlValue,
+    BamlType, BamlValue, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM, LmError,
+    LmUsage, PredictError, Prediction,
 };
 
 pub struct Predict<S: Signature> {
@@ -39,8 +39,8 @@ impl<S: Signature> Predict<S> {
     pub async fn call(&self, input: S::Input) -> Result<S, PredictError>
     where
         S: Clone,
-        S::Input: ToBamlValue,
-        S::Output: ToBamlValue,
+        S::Input: BamlType,
+        S::Output: BamlType,
     {
         Ok(self.call_with_meta(input).await?.output)
     }
@@ -60,8 +60,8 @@ impl<S: Signature> Predict<S> {
     pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
     where
         S: Clone,
-        S::Input: ToBamlValue,
-        S::Output: ToBamlValue,
+        S::Input: BamlType,
+        S::Output: BamlType,
     {
         let lm = {
             let guard = GLOBAL_SETTINGS.read().unwrap();
@@ -304,28 +304,28 @@ fn output_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
 
 fn input_from_example<S: Signature>(example: &Example) -> Result<S::Input>
 where
-    S::Input: BamlValueConvert,
+    S::Input: BamlType,
 {
     let keys = input_keys_for_signature::<S>(example);
     let map = baml_map_from_example_keys(&example.data, &keys)?;
     let baml_value = BamlValue::Map(map);
-    S::Input::try_from_baml_value(baml_value, Vec::new()).map_err(|err| anyhow::anyhow!(err))
+    S::Input::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
 fn output_from_example<S: Signature>(example: &Example) -> Result<S::Output>
 where
-    S::Output: BamlValueConvert,
+    S::Output: BamlType,
 {
     let keys = output_keys_for_signature::<S>(example);
     let map = baml_map_from_example_keys(&example.data, &keys)?;
     let baml_value = BamlValue::Map(map);
-    S::Output::try_from_baml_value(baml_value, Vec::new()).map_err(|err| anyhow::anyhow!(err))
+    S::Output::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
 fn signature_from_example<S: Signature>(example: Example) -> Result<S>
 where
-    S::Input: BamlValueConvert,
-    S::Output: BamlValueConvert,
+    S::Input: BamlType,
+    S::Output: BamlType,
 {
     let input = input_from_example::<S>(&example)?;
     let output = output_from_example::<S>(&example)?;
@@ -334,8 +334,8 @@ where
 
 fn example_from_signature<S: Signature>(signature: S) -> Result<Example>
 where
-    S::Input: ToBamlValue,
-    S::Output: ToBamlValue,
+    S::Input: BamlType,
+    S::Output: BamlType,
 {
     let (input, output) = signature.into_parts();
     let input_value = serde_json::to_value(input.to_baml_value())?;
@@ -366,7 +366,7 @@ fn prediction_from_output<S: Signature>(
     node_id: Option<usize>,
 ) -> Result<Prediction>
 where
-    S::Output: ToBamlValue,
+    S::Output: BamlType,
 {
     let output_value = serde_json::to_value(output.to_baml_value())?;
     let output_map = output_value
@@ -384,9 +384,9 @@ where
 
 impl<S> Module for Predict<S>
 where
-    S: Signature + Clone + ToBamlValue,
-    S::Input: ToBamlValue + BamlValueConvert,
-    S::Output: ToBamlValue + BamlValueConvert,
+    S: Signature + Clone + BamlType,
+    S::Input: BamlType,
+    S::Output: BamlType,
 {
     #[tracing::instrument(
         name = "dsrs.module.forward",
@@ -427,14 +427,13 @@ where
         &self,
         input: BamlValue,
     ) -> std::result::Result<BamlValue, PredictError> {
-        let typed_input =
-            S::Input::try_from_baml_value(input.clone(), Vec::new()).map_err(|err| {
-                debug!(error = %err, "untyped input conversion failed");
-                PredictError::Conversion {
-                    source: err.into(),
-                    parsed: input,
-                }
-            })?;
+        let typed_input = S::Input::try_from_baml_value(input.clone()).map_err(|err| {
+            debug!(error = %err, "untyped input conversion failed");
+            PredictError::Conversion {
+                source: err.into(),
+                parsed: input,
+            }
+        })?;
         let output = self.call(typed_input).await?;
         debug!("typed module forward_untyped complete");
         Ok(output.to_baml_value())
@@ -444,8 +443,8 @@ where
 impl<S> MetaSignature for Predict<S>
 where
     S: Signature + Clone,
-    S::Input: BamlValueConvert + ToBamlValue,
-    S::Output: BamlValueConvert + ToBamlValue,
+    S::Input: BamlType,
+    S::Output: BamlType,
 {
     fn demos(&self) -> Vec<Example> {
         self.demos
@@ -494,8 +493,8 @@ where
 impl<S> Optimizable for Predict<S>
 where
     S: Signature + Clone,
-    S::Input: BamlValueConvert + ToBamlValue,
-    S::Output: BamlValueConvert + ToBamlValue,
+    S::Input: BamlType,
+    S::Output: BamlType,
 {
     fn get_signature(&self) -> &dyn MetaSignature {
         self

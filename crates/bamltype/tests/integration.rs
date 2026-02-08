@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use baml_types::{BamlValue, ConstraintLevel, LiteralValue, StreamingMode, TypeIR};
-use bamltype::adapters::{AdapterSchemaRegistry, FieldCodec};
+use bamltype::adapters::{FieldCodec, FieldCodecRegisterContext};
 use bamltype::{
-    BamlSchema, BamlTypeInternal, from_baml_value, from_baml_value_with_flags, parse,
+    BamlSchema, BamlType, from_baml_value, from_baml_value_with_flags, parse,
     render_schema_default, to_baml_value,
 };
 use indexmap::IndexMap;
@@ -333,7 +333,7 @@ fn test_round_trip_box() {
     let baml = to_baml_value(&boxed).unwrap();
     match &baml {
         BamlValue::Class(name, fields) => {
-            assert_eq!(name, <Response as BamlTypeInternal>::baml_internal_name());
+            assert_eq!(name, <Response as BamlType>::baml_internal_name());
             assert_eq!(fields.get("name"), Some(&BamlValue::String("Boxed".into())));
             assert_eq!(fields.get("age"), Some(&BamlValue::Int(33)));
             assert_eq!(fields.get("active"), Some(&BamlValue::Bool(false)));
@@ -531,7 +531,7 @@ fn test_to_baml_enum() {
     assert_eq!(
         baml,
         BamlValue::Enum(
-            <Color as BamlTypeInternal>::baml_internal_name().into(),
+            <Color as BamlType>::baml_internal_name().into(),
             "Green".into()
         )
     );
@@ -587,7 +587,7 @@ fn test_empty_struct() {
     let baml = to_baml_value(&val).unwrap();
     match baml {
         BamlValue::Class(name, fields) => {
-            assert_eq!(name, <Empty as BamlTypeInternal>::baml_internal_name());
+            assert_eq!(name, <Empty as BamlType>::baml_internal_name());
             assert!(fields.is_empty());
         }
         other => panic!("Expected Class, got {:?}", other),
@@ -681,7 +681,7 @@ fn test_baml_enum_alias_round_trip() {
     assert_eq!(
         as_baml,
         BamlValue::Enum(
-            <CompatEnum as BamlTypeInternal>::baml_internal_name().into(),
+            <CompatEnum as BamlType>::baml_internal_name().into(),
             "go".into()
         )
     );
@@ -835,8 +835,9 @@ impl FieldCodec<u64> for U64ObjectAdapter {
         TypeIR::class("AdapterU64Wrapper")
     }
 
-    fn register(reg: &mut AdapterSchemaRegistry) {
+    fn register(ctx: FieldCodecRegisterContext<'_>) {
         use bamltype::internal_baml_jinja::types::{Class, Name};
+        let reg = ctx.registry;
 
         if !reg.mark_type("AdapterU64Wrapper") {
             return;
@@ -934,7 +935,7 @@ fn data_enum_tagged_parses() {
 
 #[test]
 fn as_union_unit_enum_type_ir_is_literal_union() {
-    let type_ir = <UnitAsUnionParity as BamlTypeInternal>::baml_type_ir();
+    let type_ir = <UnitAsUnionParity as BamlType>::baml_type_ir();
     let TypeIR::Union(union, _) = type_ir else {
         panic!("expected union type IR");
     };
@@ -1058,7 +1059,7 @@ fn map_key_repr_pairs_parses() {
 fn map_key_repr_pairs_registers_entry_class() {
     let entry_name = format!(
         "{}::values__Entry",
-        <MapKeysPairsParity as BamlTypeInternal>::baml_internal_name()
+        <MapKeysPairsParity as BamlType>::baml_internal_name()
     );
     let of = &MapKeysPairsParity::baml_schema().output_format;
     let class = of
@@ -1074,7 +1075,7 @@ fn recursion_is_detected() {
     let of = &RecursiveNodeParity::baml_schema().output_format;
     assert!(
         of.recursive_classes
-            .contains(<RecursiveNodeParity as BamlTypeInternal>::baml_internal_name())
+            .contains(<RecursiveNodeParity as BamlType>::baml_internal_name())
     );
 }
 
@@ -1089,7 +1090,7 @@ fn rename_all_applies() {
 #[test]
 fn field_constraints_are_registered() {
     let of = &CheckedValueParity::baml_schema().output_format;
-    let internal_name = <CheckedValueParity as BamlTypeInternal>::baml_internal_name().to_string();
+    let internal_name = <CheckedValueParity as BamlType>::baml_internal_name().to_string();
     let class = of
         .classes
         .get(&(internal_name, StreamingMode::NonStreaming))
@@ -1110,7 +1111,7 @@ fn field_constraints_are_registered() {
 #[test]
 fn field_assert_constraints_are_registered() {
     let of = &AssertedValueParity::baml_schema().output_format;
-    let internal_name = <AssertedValueParity as BamlTypeInternal>::baml_internal_name().to_string();
+    let internal_name = <AssertedValueParity as BamlType>::baml_internal_name().to_string();
     let class = of
         .classes
         .get(&(internal_name, StreamingMode::NonStreaming))
@@ -1130,8 +1131,8 @@ fn field_assert_constraints_are_registered() {
 
 #[test]
 fn internal_names_are_unique() {
-    let a_name = <parity_collision_a::User as BamlTypeInternal>::baml_internal_name();
-    let b_name = <parity_collision_b::User as BamlTypeInternal>::baml_internal_name();
+    let a_name = <parity_collision_a::User as BamlType>::baml_internal_name();
+    let b_name = <parity_collision_b::User as BamlType>::baml_internal_name();
     assert_ne!(a_name, b_name);
 
     let a_class = parity_collision_a::User::baml_schema()
@@ -1165,7 +1166,7 @@ fn with_adapter_schema_and_registration_are_used() {
             .any(|(name, _, _, _)| name.real_name() == "value")
     );
 
-    let owner_name = <WithAdapterParity as BamlTypeInternal>::baml_internal_name().to_string();
+    let owner_name = <WithAdapterParity as BamlType>::baml_internal_name().to_string();
     let owner = of
         .classes
         .get(&(owner_name, StreamingMode::NonStreaming))

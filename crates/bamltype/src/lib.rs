@@ -57,8 +57,8 @@ pub use convert::{ConvertError, from_baml_value, from_baml_value_with_flags, to_
 
 mod runtime;
 pub use runtime::{
-    BamlConvertError, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, ToBamlValue,
-    default_streaming_behavior, get_field,
+    BamlConvertError, baml_internal_name, baml_type_ir, default_streaming_behavior, get_field,
+    to_baml_value_lossy, try_from_baml_value,
 };
 
 pub mod adapters;
@@ -96,25 +96,33 @@ pub trait BamlSchema: for<'a> facet::Facet<'a> {
 }
 
 /// Runtime trait for types that expose BAML schema + conversion entry points.
-pub trait BamlType: BamlTypeInternal + BamlValueConvert + Sized + 'static {
+pub trait BamlType: Sized + 'static {
     fn baml_output_format() -> &'static OutputFormatContent;
+    fn baml_internal_name() -> &'static str;
+    fn baml_type_ir() -> TypeIR;
+    fn try_from_baml_value(value: BamlValue) -> Result<Self, BamlConvertError>;
+    fn to_baml_value(&self) -> BamlValue;
+}
+
+impl<T: BamlSchema> BamlType for T {
+    fn baml_output_format() -> &'static OutputFormatContent {
+        &T::baml_schema().output_format
+    }
 
     fn baml_internal_name() -> &'static str {
-        <Self as BamlTypeInternal>::baml_internal_name()
+        runtime::baml_internal_name::<T>()
     }
 
     fn baml_type_ir() -> TypeIR {
-        <Self as BamlTypeInternal>::baml_type_ir()
+        runtime::baml_type_ir::<T>()
     }
 
     fn try_from_baml_value(value: BamlValue) -> Result<Self, BamlConvertError> {
-        <Self as BamlValueConvert>::try_from_baml_value(value, Vec::new())
+        runtime::try_from_baml_value(value)
     }
-}
 
-impl<T: BamlTypeTrait> BamlType for T {
-    fn baml_output_format() -> &'static OutputFormatContent {
-        <T as BamlTypeTrait>::baml_output_format()
+    fn to_baml_value(&self) -> BamlValue {
+        runtime::to_baml_value_lossy(self)
     }
 }
 

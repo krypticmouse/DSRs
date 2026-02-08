@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, BamlTypeTrait, RenderOptions};
+use dspy_rs::{BamlType, RenderOptions};
 
 #[derive(Debug, Clone, PartialEq)]
 #[BamlType]
@@ -11,14 +11,14 @@ struct DsrsUser {
 
 #[test]
 fn bamltype_attribute_macro_works_from_dspy_rs() {
-    let schema = <DsrsUser as BamlTypeTrait>::baml_output_format()
+    let schema = <DsrsUser as BamlType>::baml_output_format()
         .render(RenderOptions::default())
         .expect("render schema")
         .unwrap_or_default();
     assert!(schema.contains("fullName"));
 
     let raw = r#"{ "fullName": "Ada", "age": 36 }"#;
-    let parsed = dspy_rs::bamltype::parse_llm_output::<DsrsUser>(raw, true).expect("parse");
+    let parsed = bamltype::parse_llm_output::<DsrsUser>(raw, true).expect("parse");
     assert_eq!(parsed.value.name, "Ada");
     assert_eq!(parsed.value.age, 36);
 }

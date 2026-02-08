@@ -10,30 +10,31 @@ pub mod trace;
 pub mod utils;
 
 pub use adapter::chat::*;
-pub use anyhow;
 pub use core::*;
 pub use data::*;
 pub use evaluate::*;
-pub use indexmap;
 pub use optimizer::*;
 pub use predictors::*;
-pub use schemars;
-pub use serde;
-pub use serde_json;
 pub use utils::*;
 
-pub use bamltype;
+pub use bamltype::BamlConvertError;
 pub use bamltype::BamlType; // attribute macro
 pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };
-pub use bamltype::facet;
 pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
-pub use bamltype::{
-    BamlConvertError, BamlTypeInternal, BamlTypeTrait, BamlValueConvert, ToBamlValue,
-};
 pub use dsrs_macros::*;
+
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use anyhow;
+    pub use bamltype;
+    pub use indexmap;
+    pub use schemars;
+    pub use serde;
+    pub use serde_json;
+}
 
 #[deprecated(
     since = "0.2.0",
@@ -118,7 +119,10 @@ macro_rules! prediction {
 
         let mut fields = HashMap::new();
         $(
-            fields.insert($key.to_string(), $crate::serde_json::to_value($value).unwrap());
+            fields.insert(
+                $key.to_string(),
+                $crate::__macro_support::serde_json::to_value($value).unwrap()
+            );
         )*
 
         Prediction::new(fields, LmUsage::default())
@@ -144,15 +148,15 @@ macro_rules! field {
 
     // Pattern for field definitions with descriptions
     { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::serde_json::json;
+        use $crate::__macro_support::serde_json::json;
 
-        let mut result = $crate::serde_json::Map::new();
+        let mut result = $crate::__macro_support::serde_json::Map::new();
 
         $(
             let type_str = stringify!($field_ty);
             let schema = {
-                let schema = $crate::schemars::schema_for!($field_ty);
-                let schema_json = $crate::serde_json::to_value(schema).unwrap();
+                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
+                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
                 // Extract just the properties if it's an object schema
                 if let Some(obj) = schema_json.as_object() {
                     if obj.contains_key("properties") {
@@ -175,20 +179,20 @@ macro_rules! field {
             );
         )*
 
-        $crate::serde_json::Value::Object(result)
+        $crate::__macro_support::serde_json::Value::Object(result)
     }};
 
     // Pattern for field definitions without descriptions
     { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::serde_json::json;
+        use $crate::__macro_support::serde_json::json;
 
-        let mut result = $crate::serde_json::Map::new();
+        let mut result = $crate::__macro_support::serde_json::Map::new();
 
         $(
             let type_str = stringify!($field_ty);
             let schema = {
-                let schema = $crate::schemars::schema_for!($field_ty);
-                let schema_json = $crate::serde_json::to_value(schema).unwrap();
+                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
+                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
                 // Extract just the properties if it's an object schema
                 if let Some(obj) = schema_json.as_object() {
                     if obj.contains_key("properties") {
@@ -211,7 +215,7 @@ macro_rules! field {
             );
         )*
 
-        $crate::serde_json::Value::Object(result)
+        $crate::__macro_support::serde_json::Value::Object(result)
     }};
 }
 

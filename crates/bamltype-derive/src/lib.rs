@@ -169,7 +169,7 @@ fn resolve_runtime_crate() -> syn::Result<Path> {
     }
 
     if let Some(dspy_path) = find_crate_path("dspy-rs") {
-        return Ok(syn::parse_quote!(#dspy_path::bamltype));
+        return Ok(syn::parse_quote!(#dspy_path::__macro_support::bamltype));
     }
 
     Err(syn::Error::new(
@@ -725,7 +725,7 @@ fn normalize_field_attrs(
         let with_expr = quote! {
             &#runtime_crate::facet_ext::WithAdapterFns {
                 type_ir: || <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::type_ir(),
-                register: |reg| <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::register(reg),
+                register: |ctx| <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::register(ctx),
                 apply: |partial, value, path| {
                     let converted = <#adapter as #runtime_crate::adapters::FieldCodec<#field_ty>>::try_from_baml(value, path)?;
                     partial.set(converted).map_err(|err| {
