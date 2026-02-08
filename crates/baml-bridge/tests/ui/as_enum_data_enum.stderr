@@ -1,8 +1,0 @@
-error: as_enum is only valid for unit enums; hint: remove #[baml(as_enum)] or convert variants to unit
- --> tests/ui/as_enum_data_enum.rs:4:1
-  |
-4 | / #[baml(as_enum)]
-5 | | enum Bad {
-6 | |     A { value: i64 },
-7 | | }
-  | |_^

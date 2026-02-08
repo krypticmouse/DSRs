@@ -459,36 +459,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 
 [[package]]
-name = "baml-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "baml-bridge-derive",
- "baml-types",
- "expect-test",
- "indexmap",
- "internal-baml-jinja",
- "jsonish",
- "minijinja",
- "proptest",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "trybuild",
-]
-
-[[package]]
-name = "baml-bridge-derive"
-version = "0.1.0"
-dependencies = [
- "convert_case",
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
 name = "baml-ids"
 version = "0.0.1"
 dependencies = [

@@ -1,5 +1,0 @@
-error: serde(untagged) is not supported; hint: use #[baml(tag = "...")] for data enums
- --> tests/ui/serde_untagged.rs:4:9
-  |
-4 | #[serde(untagged)]
-  |         ^^^^^^^^

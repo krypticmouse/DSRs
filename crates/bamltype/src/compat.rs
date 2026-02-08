@@ -1,4 +1,4 @@
-//! Compatibility layer providing baml-bridge-compatible traits and helpers.
+//! Compatibility layer providing legacy bridge-compatible traits and helpers.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,7 +11,7 @@ use crate::BamlSchema;
 use crate::convert;
 use crate::schema_builder::build_type_ir_from_shape;
 
-/// Error during BamlValue ↔ Rust conversion (baml-bridge compatible).
+/// Error during BamlValue ↔ Rust conversion (legacy bridge compatible).
 #[derive(Debug, Clone)]
 pub struct BamlConvertError {
     pub path: Vec<String>,
@@ -78,7 +78,7 @@ impl From<convert::ConvertError> for BamlConvertError {
     }
 }
 
-/// Registry for schema elements (baml-bridge compatible).
+/// Registry for schema elements (legacy bridge compatible).
 #[derive(Debug, Default)]
 pub struct Registry {
     enums: IndexMap<String, Enum>,
@@ -149,19 +149,19 @@ impl Registry {
     }
 }
 
-/// Internal type metadata (baml-bridge compatible).
+/// Internal type metadata (legacy bridge compatible).
 pub trait BamlTypeInternal {
     fn baml_internal_name() -> &'static str;
     fn baml_type_ir() -> TypeIR;
     fn register(_reg: &mut Registry) {}
 }
 
-/// Convert from BamlValue to Rust (baml-bridge compatible).
+/// Convert from BamlValue to Rust (legacy bridge compatible).
 pub trait BamlValueConvert: Sized {
     fn try_from_baml_value(value: BamlValue, path: Vec<String>) -> Result<Self, BamlConvertError>;
 }
 
-/// Convert from Rust to BamlValue (baml-bridge compatible).
+/// Convert from Rust to BamlValue (legacy bridge compatible).
 pub trait ToBamlValue {
     fn to_baml_value(&self) -> BamlValue;
 }
@@ -173,7 +173,7 @@ pub trait BamlAdapter<T> {
     fn try_from_baml(value: BamlValue, path: Vec<String>) -> Result<T, BamlConvertError>;
 }
 
-/// Full BamlType trait (baml-bridge compatible).
+/// Full BamlType trait (legacy bridge compatible).
 ///
 /// Named `BamlTypeTrait` to avoid collision with the `#[BamlType]` attribute macro.
 pub trait BamlTypeTrait: BamlTypeInternal + BamlValueConvert + Sized + 'static {
@@ -230,18 +230,18 @@ impl<T: BamlSchema> BamlTypeTrait for T {
     }
 }
 
-/// Add constraints to a TypeIR (baml-bridge compatible).
+/// Add constraints to a TypeIR (legacy bridge compatible).
 pub fn with_constraints(mut type_ir: TypeIR, constraints: Vec<Constraint>) -> TypeIR {
     type_ir.meta_mut().constraints.extend(constraints);
     type_ir
 }
 
-/// Default streaming behavior helper (baml-bridge compatible).
+/// Default streaming behavior helper (legacy bridge compatible).
 pub fn default_streaming_behavior() -> type_meta::base::StreamingBehavior {
     type_meta::base::StreamingBehavior::default()
 }
 
-/// Lookup helper matching baml-bridge semantics (`name` then optional alias).
+/// Lookup helper matching legacy bridge semantics (`name` then optional alias).
 pub fn get_field<'a>(
     map: &'a BamlMap<String, BamlValue>,
     name: &str,

@@ -33,7 +33,7 @@ use jsonish::deserializer::{
 };
 use sha2::{Digest, Sha256};
 
-// Re-export underlying crates for consumers (replaces baml-bridge re-exports)
+// Re-export underlying crates for consumers (replaces legacy bridge re-exports)
 pub use baml_types;
 pub use internal_baml_jinja;
 pub use internal_baml_jinja::types::{HoistClasses, MapStyle, RenderOptions};
@@ -91,7 +91,7 @@ pub trait BamlSchema: for<'a> facet::Facet<'a> {
     fn baml_schema() -> &'static SchemaBundle;
 }
 
-/// Back-compat trait mirroring baml-bridge's `BamlType`.
+/// Back-compat trait mirroring legacy bridge's `BamlType`.
 ///
 /// This sits alongside the `#[BamlType]` attribute macro and offers the same
 /// runtime trait entry points users expect from the old API.
@@ -117,7 +117,7 @@ impl<T: BamlTypeTrait> BamlType for T {
     }
 }
 
-/// Parsed output bundle matching baml-bridge behavior.
+/// Parsed output bundle matching legacy bridge behavior.
 #[derive(Debug, Clone)]
 pub struct Parsed<T> {
     pub value: T,
@@ -153,7 +153,7 @@ pub enum ParseError {
     CoercionError(String),
 }
 
-/// Render the BAML schema for a type, matching baml-bridge signature.
+/// Render the BAML schema for a type, matching legacy bridge signature.
 pub fn render_schema<T: BamlType>(
     options: RenderOptions,
 ) -> Result<Option<String>, minijinja::Error> {

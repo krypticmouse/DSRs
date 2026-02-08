@@ -4,6 +4,11 @@
 **Status:** Draft  
 **Last Updated:** 2026-01-08
 
+> Status Update (2026-02-08):
+> Legacy bridge crates are removed from the workspace.
+> Current typed and optimizer contracts remain unchanged in Phase 1.
+> Phase 2 next: compat-trait removal from typed paths plus signature/optimizer API redesign for facet-native runtime.
+
 ---
 
 ## 1. Overview
@@ -1555,7 +1560,7 @@ Context:
 
 ### 13.3 Crate Structure
 
-- Fold baml-bridge crates into dsrs?
+- Fold legacy bridge crates into dsrs?
 - Keep as dependency?
 - Public API surface considerations?
 
@@ -1570,7 +1575,7 @@ Context:
 ## 14. Implementation Order
 
 ### Phase 1: Foundation
-1. Add baml-bridge crates as dependencies (or vendor)
+1. Add legacy bridge crates as dependencies (or vendor)
 2. Implement `BamlType` trait and primitive impls
 3. Implement `#[derive(BamlType)]` macro
 

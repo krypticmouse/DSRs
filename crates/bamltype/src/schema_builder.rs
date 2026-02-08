@@ -51,7 +51,7 @@ pub fn internal_name_for_shape(shape: &'static Shape) -> String {
 ///
 /// Facet currently stores container rename in `Shape::rename` for some type kinds,
 /// but for others it may only be present in builtin attrs. Prefer the explicit
-/// shape field, then fall back to builtin attr lookup for parity with baml-bridge.
+/// shape field, then fall back to builtin attr lookup for parity with legacy bridge.
 fn rendered_name_for_shape(shape: &'static Shape) -> String {
     if shape.rename.is_some() {
         return shape.effective_name().to_string();
