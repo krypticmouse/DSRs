@@ -222,12 +222,12 @@ enum FacetAsUnionColor {
 
 struct FacetI64ObjectAdapter;
 
-impl facet_runtime::BamlAdapter<i64> for FacetI64ObjectAdapter {
+impl facet_runtime::adapters::FieldCodec<i64> for FacetI64ObjectAdapter {
     fn type_ir() -> TypeIR {
         TypeIR::class("AdapterI64Wrapper")
     }
 
-    fn register(reg: &mut facet_runtime::Registry) {
+    fn register(reg: &mut facet_runtime::adapters::AdapterSchemaRegistry) {
         use facet_runtime::internal_baml_jinja::types::{Class, Name};
 
         if !reg.mark_type("AdapterI64Wrapper") {
@@ -1040,13 +1040,12 @@ where
     T: Clone
         + std::fmt::Debug
         + PartialEq
-        + facet_runtime::compat::ToBamlValue
-        + facet_runtime::compat::BamlValueConvert,
+        + facet_runtime::ToBamlValue
+        + facet_runtime::BamlValueConvert,
 {
-    let baml = facet_runtime::compat::ToBamlValue::to_baml_value(&value);
-    let back =
-        <T as facet_runtime::compat::BamlValueConvert>::try_from_baml_value(baml, Vec::new())
-            .expect("roundtrip");
+    let baml = facet_runtime::ToBamlValue::to_baml_value(&value);
+    let back = <T as facet_runtime::BamlValueConvert>::try_from_baml_value(baml, Vec::new())
+        .expect("roundtrip");
     assert_eq!(back, value);
 }
 
@@ -1102,7 +1101,7 @@ fn contract_default_adapter_error_shape_fixture() {
             .collect(),
     );
 
-    let err = <FacetUnsigned32 as facet_runtime::compat::BamlValueConvert>::try_from_baml_value(
+    let err = <FacetUnsigned32 as facet_runtime::BamlValueConvert>::try_from_baml_value(
         invalid,
         Vec::new(),
     )
@@ -1128,7 +1127,7 @@ fn contract_default_adapter_error_shape_fixture() {
 
 #[test]
 fn contract_direct_integer_string_conversion_error_fixture() {
-    let err = <i64 as facet_runtime::compat::BamlValueConvert>::try_from_baml_value(
+    let err = <i64 as facet_runtime::BamlValueConvert>::try_from_baml_value(
         BamlValue::String("123".into()),
         Vec::new(),
     )
@@ -1162,12 +1161,11 @@ fn contract_direct_map_pairs_conversion_error_fixture() {
     );
     let raw = BamlValue::List(vec![pair_entry]);
 
-    let err =
-        <HashMap<String, i64> as facet_runtime::compat::BamlValueConvert>::try_from_baml_value(
-            raw,
-            Vec::new(),
-        )
-        .expect_err("should reject");
+    let err = <HashMap<String, i64> as facet_runtime::BamlValueConvert>::try_from_baml_value(
+        raw,
+        Vec::new(),
+    )
+    .expect_err("should reject");
 
     let snapshot = serde_json::to_string_pretty(&json!({
         "expected": err.expected,

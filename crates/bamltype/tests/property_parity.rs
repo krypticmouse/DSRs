@@ -39,12 +39,12 @@ struct RecursiveNode {
 
 struct PropertyI64Adapter;
 
-impl facet_runtime::BamlAdapter<i64> for PropertyI64Adapter {
+impl facet_runtime::adapters::FieldCodec<i64> for PropertyI64Adapter {
     fn type_ir() -> TypeIR {
         TypeIR::class("PropertyAdapterI64Wrapper")
     }
 
-    fn register(reg: &mut facet_runtime::Registry) {
+    fn register(reg: &mut facet_runtime::adapters::AdapterSchemaRegistry) {
         use facet_runtime::internal_baml_jinja::types::{Class, Name};
 
         if !reg.mark_type("PropertyAdapterI64Wrapper") {

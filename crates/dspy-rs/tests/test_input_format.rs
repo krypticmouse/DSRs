@@ -1,5 +1,4 @@
-use dspy_rs::bamltype::compat::ToBamlValue;
-use dspy_rs::{BamlType, BamlTypeTrait, BamlValue, ChatAdapter, Signature};
+use dspy_rs::{BamlType, BamlTypeTrait, BamlValue, ChatAdapter, Signature, ToBamlValue};
 
 #[derive(Clone, Debug)]
 #[BamlType]

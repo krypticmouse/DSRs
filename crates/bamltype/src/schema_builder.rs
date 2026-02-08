@@ -9,8 +9,8 @@ use facet::{Attr, ConstTypeId, Def, Field, Shape, Type, UserType};
 use internal_baml_jinja::types::{Class, Enum, Name, OutputFormatContent};
 
 use crate::SchemaBundle;
-use crate::compat::Registry;
 use crate::facet_ext;
+use crate::schema_registry::SchemaRegistry;
 
 /// Build a SchemaBundle from a facet Shape.
 pub fn build_schema_bundle(shape: &'static Shape) -> SchemaBundle {
@@ -25,7 +25,7 @@ pub fn build_schema_bundle(shape: &'static Shape) -> SchemaBundle {
 
 /// Build a TypeIR from a facet Shape (without building full schema).
 ///
-/// Used by the compat layer to provide `BamlTypeInternal::baml_type_ir()`
+/// Used by runtime trait implementations to provide `BamlTypeInternal::baml_type_ir()`
 /// for any `Facet` type.
 pub fn build_type_ir_from_shape(shape: &'static Shape) -> TypeIR {
     let mut builder = SchemaBuilder::new();
@@ -70,7 +70,7 @@ struct SchemaBuilder {
     visited: HashMap<ConstTypeId, (String, TypeIR)>,
 
     /// Collected schema elements.
-    registry: Registry,
+    registry: SchemaRegistry,
 
     /// Track which internal names are already used (for collision handling)
     used_internal_names: HashMap<String, ConstTypeId>,
@@ -104,7 +104,7 @@ impl SchemaBuilder {
     fn new() -> Self {
         Self {
             visited: HashMap::new(),
-            registry: Registry::new(),
+            registry: SchemaRegistry::new(),
             used_internal_names: HashMap::new(),
             name_counter: 0,
         }

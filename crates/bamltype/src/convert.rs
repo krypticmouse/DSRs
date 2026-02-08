@@ -10,7 +10,7 @@ use facet_reflect::{HasFields, HeapValue, Partial, Peek, ReflectError, ScalarTyp
 use indexmap::IndexMap;
 
 use crate::BamlValueWithFlags;
-use crate::compat::BamlConvertError;
+use crate::runtime::BamlConvertError;
 use crate::schema_builder::internal_name_for_shape;
 
 /// Error during BamlValue conversion.
