@@ -1,3 +1,10 @@
+> Status Update (2026-02-08): **Superseded historical plan**.
+>
+> Phase 1 (Bridge Root Excision) is now the active baseline: legacy bridge crates are removed from the workspace.
+> The current runtime intentionally keeps `bamltype::compat`, `LegacySignature`, `LegacyPredict`, `MetaSignature`, and optimizer APIs unchanged.
+>
+> Phase 2 is next: remove remaining compat-trait coupling in typed paths and redesign signature/optimizer APIs to be facet-native.
+
 Below is a “walk the codebase” integration plan that’s detailed enough to be used as a checklist while you implement. I’m going to treat `CURRENT_SPEC.md` as the source of truth, and I’ll point out the few places where the spec implies machinery you don’t currently have (notably: serializing typed demo values and prompting inputs without `serde_json::Value`).
 
 I’ll organize this into phases, but each phase is still broken down by file, exact insertion points, and what each piece does.
@@ -24,20 +31,20 @@ I’ll organize this into phases, but each phase is still broken down by file, e
 
 ## Phase 0: Add dependencies and decide compatibility mode
 
-### 0.1 Add baml-bridge dependency to dspy-rs
+### 0.1 Add legacy bridge dependency to dspy-rs
 
 **File:** `crates/dspy-rs/Cargo.toml`
 
 Add:
 
-* A path dependency to the bridge crate (crate name is likely `baml-bridge` in Cargo, imported as `baml_bridge` in code).
+* A path dependency to the bridge crate (crate name is likely `legacy bridge` in Cargo, imported as `legacy_bridge` in code).
 * Enable the derive feature so users can `#[derive(BamlType)]`.
 
 Example:
 
 ```toml
 [dependencies]
-baml-bridge = { path = "../baml-bridge", features = ["derive"] }
+legacy bridge = { path = "../legacy bridge", features = ["derive"] }
 indexmap = "..." # already present
 ```
 
@@ -45,7 +52,7 @@ indexmap = "..." # already present
 
 **Side effects / gotchas**
 
-* You’ll pull in `minijinja` and related crates through baml-bridge. This should be fine, but expect compile times to rise.
+* You’ll pull in `minijinja` and related crates through legacy bridge. This should be fine, but expect compile times to rise.
 
 ### 0.2 Decide whether to keep the legacy API during migration
 
@@ -77,20 +84,20 @@ This phase is purely internal scaffolding: new traits, new errors, new result ty
 
 Add re-exports near the existing `pub use ...` block.
 
-You want dsrs-macros to generate code that references `dspy_rs::TypeIR`, `dspy_rs::Constraint`, etc without depending on the baml-bridge crate directly.
+You want dsrs-macros to generate code that references `dspy_rs::TypeIR`, `dspy_rs::Constraint`, etc without depending on the legacy bridge crate directly.
 
 Recommended re-exports:
 
 ```rust
-pub use baml_bridge; // optional: re-export the crate for power-users
+pub use legacy_bridge; // optional: re-export the crate for power-users
 
-pub use baml_bridge::BamlType; // derive macro (when feature derive enabled)
-pub use baml_bridge::baml_types::{
+pub use legacy_bridge::BamlType; // derive macro (when feature derive enabled)
+pub use legacy_bridge::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, TypeIR, StreamingMode, TypeValue,
 };
-pub use baml_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
-pub use baml_bridge::jsonish::deserializer::deserialize_flags::Flag;
-pub use baml_bridge::convert::BamlConvertError; // if not already public via bridge
+pub use legacy_bridge::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
+pub use legacy_bridge::jsonish::deserializer::deserialize_flags::Flag;
+pub use legacy_bridge::convert::BamlConvertError; // if not already public via bridge
 ```
 
 **Why:** your new `#[derive(Signature)]` macro will generate code that constructs `Constraint`, `TypeIR`, etc. Having them in `dspy_rs` avoids fragile cross-crate paths.
@@ -141,8 +148,8 @@ So you want:
 
 ```rust
 pub trait Signature: Send + Sync + 'static {
-    type Input: baml_bridge::BamlType;   // from baml-bridge
-    type Output: baml_bridge::BamlType;  // output-only internal struct
+    type Input: legacy_bridge::BamlType;   // from legacy bridge
+    type Output: legacy_bridge::BamlType;  // output-only internal struct
 
     fn instruction() -> &'static str;
 
@@ -223,7 +230,7 @@ Match the spec variants; you’ll be creating these in `ChatAdapter::parse_typed
 
 #### `ConversionError`
 
-Map cleanly from baml-bridge’s `BamlConvertError`:
+Map cleanly from legacy bridge’s `BamlConvertError`:
 
 * type mismatch
 * missing field
@@ -277,9 +284,9 @@ And implement:
 
 This is the one spec-implied piece you don’t currently have: you need to format typed inputs and typed demos without relying on `serde_json::Value` in user code.
 
-### 2.1 Add `ToBamlValue` to baml-bridge (bridge crate)
+### 2.1 Add `ToBamlValue` to legacy bridge (bridge crate)
 
-**File:** `crates/baml-bridge/src/lib.rs`
+**File:** `crates/legacy bridge/src/lib.rs`
 
 Add a new trait:
 
@@ -291,27 +298,27 @@ pub trait ToBamlValue {
 
 Implement it for:
 
-* `String`, `bool`, numeric primitives already supported by baml-bridge
+* `String`, `bool`, numeric primitives already supported by legacy bridge
 * `Option<T: ToBamlValue>`
 * `Vec<T: ToBamlValue>`
 * `HashMap<String, T: ToBamlValue>`, `BTreeMap<String, T: ToBamlValue>`
 
-**Why here:** This keeps “BAML interop” in the BAML bridge crate, and it’s accessible from `dspy-rs`.
+**Why here:** This keeps “BAML interop” in the Legacy bridge (removed) crate, and it’s accessible from `dspy-rs`.
 
 ### 2.2 Extend `#[derive(BamlType)]` to also implement `ToBamlValue`
 
-**File:** `crates/baml-bridge-derive/src/lib.rs`
+**File:** `crates/legacy bridge derive/src/lib.rs`
 
 You will:
 
 * For structs: implement `ToBamlValue` by converting each field into a `BamlValue` and returning a `BamlValue::Class(name, map)`
-* For enums: mirror how baml-bridge expects enums to be represented in `BamlValue` (likely `BamlValue::Enum` for unit enums, and for tagged unions either `Class` with tag field or whatever its conversion expects)
+* For enums: mirror how legacy bridge expects enums to be represented in `BamlValue` (likely `BamlValue::Enum` for unit enums, and for tagged unions either `Class` with tag field or whatever its conversion expects)
 
-This is the most sensitive part of baml-bridge changes because you must align with how `BamlValueConvert` expects values to look.
+This is the most sensitive part of legacy bridge changes because you must align with how `BamlValueConvert` expects values to look.
 
 **Implementation strategy to reduce risk:**
 
-* Look at how baml-bridge derive currently generates conversion *from* `BamlValue`.
+* Look at how legacy bridge derive currently generates conversion *from* `BamlValue`.
 * Implement the exact inverse representation.
 * Keep unit enums as `BamlValue::Enum(enum_name, variant_string)` if that’s how parsing returns them.
 
@@ -432,10 +439,10 @@ struct __QAAll {
 
 In generated code:
 
-* `impl ::dspy_rs::baml_bridge::BamlTypeInternal for QA { ... }`
-* `impl ::dspy_rs::baml_bridge::BamlValueConvert for QA { ... }`
-* `impl ::dspy_rs::baml_bridge::BamlType for QA { ... }`
-* `impl ::dspy_rs::baml_bridge::ToBamlValue for QA { ... }` (optional but useful)
+* `impl ::dspy_rs::legacy_bridge::BamlTypeInternal for QA { ... }`
+* `impl ::dspy_rs::legacy_bridge::BamlValueConvert for QA { ... }`
+* `impl ::dspy_rs::legacy_bridge::BamlType for QA { ... }`
+* `impl ::dspy_rs::legacy_bridge::ToBamlValue for QA { ... }` (optional but useful)
 
 Each impl can be “convert to/from __QAAll”.
 
@@ -479,8 +486,8 @@ Example for confidence:
 
 ```rust
 fn __qa_confidence_type_ir() -> ::dspy_rs::TypeIR {
-    let ty = <f32 as ::dspy_rs::baml_bridge::BamlTypeInternal>::baml_type_ir();
-    ::dspy_rs::baml_bridge::with_constraints(ty, vec![
+    let ty = <f32 as ::dspy_rs::legacy_bridge::BamlTypeInternal>::baml_type_ir();
+    ::dspy_rs::legacy_bridge::with_constraints(ty, vec![
         ::dspy_rs::Constraint::new_check("range", "this >= 0.0 && this <= 1.0"),
     ])
 }
@@ -706,24 +713,24 @@ Algorithm:
    * Parse via jsonish:
 
 ```rust
-let parsed: baml_bridge::jsonish::BamlValueWithFlags =
-    baml_bridge::jsonish::from_str(S::output_format_content(), &ty, &raw_text, true)
+let parsed: legacy_bridge::jsonish::BamlValueWithFlags =
+    legacy_bridge::jsonish::from_str(S::output_format_content(), &ty, &raw_text, true)
         .map_err(|e| ParseError::CoercionFailed { ... })?;
 ```
 
 * Collect flags:
 
-  * Copy the recursion logic from `crates/baml-bridge/src/lib.rs` (`collect_flags_recursive`) but operate on this one field node.
+  * Copy the recursion logic from `crates/legacy bridge/src/lib.rs` (`collect_flags_recursive`) but operate on this one field node.
   * Store into `Vec<Flag>`.
 
 * Convert parsed value into `BamlValue`:
 
-  * In baml-bridge they do `let baml_value_with_meta: BamlValueWithMeta<TypeIR> = parsed.clone().into(); let baml_value: BamlValue = baml_value_with_meta.into();`
+  * In legacy bridge they do `let baml_value_with_meta: BamlValueWithMeta<TypeIR> = parsed.clone().into(); let baml_value: BamlValue = baml_value_with_meta.into();`
   * Use same conversion.
 
 * Run constraints:
 
-  * Call `run_user_checks(&baml_value, &ty)` (import it from baml-bridge’s `jsonish::deserializer::coercer::run_user_checks` as bridge does).
+  * Call `run_user_checks(&baml_value, &ty)` (import it from legacy bridge’s `jsonish::deserializer::coercer::run_user_checks` as bridge does).
   * For each result:
 
     * If `Check`: push `ConstraintResult` into `FieldMeta.checks`
@@ -748,9 +755,9 @@ let parsed: baml_bridge::jsonish::BamlValueWithFlags =
    * Construct a full `BamlValue` for the output struct:
 
      * `BamlValue::Class("__QAOutput", map)`
-   * Convert to `S::Output` using baml-bridge conversion:
+   * Convert to `S::Output` using legacy bridge conversion:
 
-     * `<S::Output as baml_bridge::BamlValueConvert>::try_from_baml_value(...)`
+     * `<S::Output as legacy_bridge::BamlValueConvert>::try_from_baml_value(...)`
    * Return `(typed_output, metas)`
 
 **Why parse per-field:** matches spec and preserves partial success.
@@ -1081,7 +1088,7 @@ Here’s the tightest “touch list” to keep you oriented.
 
 * `crates/dspy-rs/Cargo.toml`
 
-  * add `baml-bridge` dependency
+  * add `legacy bridge` dependency
 
 * `crates/dspy-rs/src/lib.rs`
 
@@ -1132,13 +1139,13 @@ Here’s the tightest “touch list” to keep you oriented.
   * rename/gate/remove old `#[Signature]` attribute macro
   * generate `QAInput`, `__QAOutput`, `__QAAll`, `FieldSpec` arrays, and impls described above
 
-### baml-bridge
+### legacy bridge
 
-* `crates/baml-bridge/src/lib.rs`
+* `crates/legacy bridge/src/lib.rs`
 
   * add `ToBamlValue` trait and primitive/container impls
 
-* `crates/baml-bridge-derive/src/lib.rs`
+* `crates/legacy bridge derive/src/lib.rs`
 
   * extend derive(BamlType) to implement `ToBamlValue` for structs/enums
 

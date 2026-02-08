@@ -717,7 +717,7 @@ fn normalize_field_attrs(
     if compat.skip {
         out.push(syn::parse_quote!(#[facet(skip)]));
     }
-    // Keep baml-bridge compatibility: skipped fields deserialize from Default.
+    // Keep legacy bridge compatibility: skipped fields deserialize from Default.
     if compat.default || compat.skip {
         out.push(syn::parse_quote!(#[facet(default)]));
     }

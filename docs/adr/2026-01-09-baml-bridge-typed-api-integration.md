@@ -1,11 +1,15 @@
-# ADR-001: BAML-Bridge Typed DSPy-RS Integration Decisions
+# ADR-001: legacy bridge Typed DSPy-RS Integration Decisions
 
 Status: Accepted
 Date: 2026-01-09
 
+Update (2026-02-08): The legacy bridge crates referenced in this ADR are removed from the workspace.
+This ADR remains historical context for prior migration decisions.
+Phase 2 follow-up is planned: remove remaining compat-trait coupling and redesign signature/optimizer APIs around facet-native paths.
+
 ## Context
 DSPy-RS is migrating from an untyped HashMap-based API to a typed Rust API backed by
-BAML-Bridge. The integration required a set of architectural decisions to balance
+legacy bridge. The integration required a set of architectural decisions to balance
 macro ergonomics, runtime behavior, and backward compatibility with existing modules
 and optimizers.
 
@@ -112,7 +116,7 @@ Context: Spec suggested adding `to_baml_value()` to `BamlType`.
 Decision: Keep `ToBamlValue` as a standalone trait.
 
 Rationale:
-- Avoids modifying baml-bridge core traits.
+- Avoids modifying legacy bridge core traits.
 - Maintains clear separation of "to" vs "from" conversions.
 
 ### 9) No PromptParts Trait
