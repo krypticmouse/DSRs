@@ -45,6 +45,8 @@ default = ["derive"]
 derive = []
 
 [dev-dependencies]
-baml-bridge = { path = "../baml-bridge" }
 trybuild = "1.0.96"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
+expect-test = "1.5.0"
+proptest = "1.5.0"
+serde = { version = "1", features = ["alloc", "derive", "rc"] }
