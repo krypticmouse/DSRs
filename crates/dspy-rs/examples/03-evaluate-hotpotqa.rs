@@ -9,11 +9,11 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 Note: The `dataloaders` feature is required for loading datasets.
 */
 
-use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Evaluator, Example, LM, LegacyPredict, LegacySignature, Module, Optimizable,
-    Prediction, Predictor, configure, init_tracing,
+    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, Evaluator, Example, LM,
+    LegacyPredict, LegacySignature, LmError, Module, Optimizable, Prediction, Predictor, configure,
+    init_tracing,
 };
 
 use dspy_rs::DataLoader;
@@ -37,10 +37,21 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+    type Input = Example;
+    type Output = Prediction;
 
-        Ok(answerer_prediction)
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+        match self.answerer.forward(inputs).await {
+            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
+            Err(err) => CallOutcome::err(
+                CallOutcomeErrorKind::Lm(LmError::Provider {
+                    provider: "legacy_predict".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                }),
+                CallMetadata::default(),
+            ),
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use crate::augmentation::Augmented;
 use crate::Augmentation;
 use crate::core::{MetaSignature, Module, Optimizable, Signature};
 use crate::predictors::{Demo, Predict, PredictBuilder};
-use crate::{BamlType, CallOutcome, Example, Prediction};
+use crate::{BamlType, CallOutcome, Example};
 
 #[derive(Augmentation, Clone, Debug)]
 #[augment(output, prepend)]
@@ -12,6 +12,8 @@ pub struct Reasoning {
     #[output]
     pub reasoning: String,
 }
+
+pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 
 #[derive(Default)]
 pub struct ChainOfThought<S: Signature> {
@@ -48,15 +50,11 @@ where
     S::Input: BamlType,
     S::Output: BamlType,
 {
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
-        self.predictor.forward(inputs).await
-    }
+    type Input = S::Input;
+    type Output = WithReasoning<S::Output>;
 
-    async fn forward_untyped(
-        &self,
-        input: crate::BamlValue,
-    ) -> CallOutcome<crate::BamlValue> {
-        self.predictor.forward_untyped(input).await
+    async fn forward(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>> {
+        self.predictor.call(input).await
     }
 }
 

@@ -1,10 +1,10 @@
-use crate::core::Module;
+use crate::core::{Module, forward_all_with_progress};
 use crate::data::{example::Example, prediction::Prediction};
 use futures::stream::{self, StreamExt};
 use tracing::{debug, warn};
 
 #[allow(async_fn_in_trait)]
-pub trait Evaluator: Module {
+pub trait Evaluator: Module<Input = Example, Output = Prediction> {
     const MAX_CONCURRENCY: usize = 32;
     const DISPLAY_PROGRESS: bool = true;
 
@@ -21,20 +21,23 @@ pub trait Evaluator: Module {
         )
     )]
     async fn evaluate(&self, examples: Vec<Example>) -> f32 {
-        let predictions = match self
-            .batch(
-                examples.clone(),
-                Self::MAX_CONCURRENCY,
-                Self::DISPLAY_PROGRESS,
-            )
-            .await
-        {
-            Ok(predictions) => predictions,
-            Err(err) => {
-                warn!(error = %err, "evaluation failed while generating predictions");
-                panic!("evaluation failed: {err}");
+        let outcomes = forward_all_with_progress(
+            self,
+            examples.clone(),
+            Self::MAX_CONCURRENCY,
+            Self::DISPLAY_PROGRESS,
+        )
+        .await;
+        let mut predictions = Vec::with_capacity(outcomes.len());
+        for (idx, outcome) in outcomes.into_iter().enumerate() {
+            match outcome.into_result() {
+                Ok(prediction) => predictions.push(prediction),
+                Err(err) => {
+                    warn!(idx, error = %err, "evaluation failed while generating predictions");
+                    panic!("evaluation failed: {err}");
+                }
             }
-        };
+        }
 
         let total = examples.len();
 

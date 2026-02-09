@@ -9,11 +9,11 @@ cargo run --example 07-inspect-history
 
 #![allow(deprecated)]
 
-use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
-    configure, example, get_lm, init_tracing,
+    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, Example, LM, LegacyPredict,
+    LegacySignature, LmError, Module, Prediction, Predictor, configure, example, get_lm,
+    init_tracing,
 };
 
 #[LegacySignature]
@@ -31,8 +31,21 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        return self.answerer.forward(inputs.clone()).await;
+    type Input = Example;
+    type Output = Prediction;
+
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+        match self.answerer.forward(inputs).await {
+            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
+            Err(err) => CallOutcome::err(
+                CallOutcomeErrorKind::Lm(LmError::Provider {
+                    provider: "legacy_predict".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                }),
+                CallMetadata::default(),
+            ),
+        }
     }
 }
 
@@ -52,7 +65,7 @@ async fn main() {
     };
 
     let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.forward(example.clone()).await.unwrap();
+    let prediction = qa_rater.forward(example.clone()).await.into_result().unwrap();
     println!("Prediction: {prediction:?}");
 
     let history = get_lm().inspect_history(1).await;

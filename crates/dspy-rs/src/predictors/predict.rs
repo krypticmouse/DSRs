@@ -416,75 +416,36 @@ where
     S::Input: BamlType,
     S::Output: BamlType,
 {
+    type Input = S::Input;
+    type Output = S::Output;
+
     #[tracing::instrument(
         name = "dsrs.module.forward",
         level = "debug",
-        skip(self, inputs),
+        skip(self, input),
         fields(
             signature = std::any::type_name::<S>(),
-            input_keys = inputs.input_keys.len(),
-            output_keys = inputs.output_keys.len()
+            typed = true
         )
     )]
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
-        let typed_input = input_from_example::<S>(&inputs).map_err(|err| {
-            debug!(error = %err, "typed input conversion failed");
-            err
-        });
-        let typed_input = match typed_input {
-            Ok(input) => input,
-            Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Conversion(
-                        crate::ConversionError::TypeMismatch {
-                            expected: "typed input",
-                            actual: err.to_string(),
-                        },
-                        BamlValue::Map(BamlMap::new()),
-                    ),
-                    CallMetadata::default(),
-                );
-            }
-        };
-
-        let (result, metadata) = self.call(typed_input).await.into_parts();
-        let output = match result {
-            Ok(output) => output,
-            Err(kind) => return CallOutcome::err(kind, metadata),
-        };
-        let prediction = match prediction_from_output::<S>(
-            &output,
-            metadata.lm_usage.clone(),
-            metadata.node_id,
-        ) {
-            Ok(prediction) => prediction,
-            Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Conversion(
-                        crate::ConversionError::TypeMismatch {
-                            expected: "prediction",
-                            actual: err.to_string(),
-                        },
-                        output.to_baml_value(),
-                    ),
-                    metadata,
-                );
-            }
-        };
-        debug!(
-            output_fields = prediction.data.len(),
-            "typed module forward complete"
-        );
-        CallOutcome::ok(prediction, metadata)
+    async fn forward(&self, input: S::Input) -> CallOutcome<S::Output> {
+        self.call(input).await
     }
+}
 
+impl<S> Predict<S>
+where
+    S: Signature + Clone,
+    S::Input: BamlType,
+    S::Output: BamlType,
+{
     #[tracing::instrument(
-        name = "dsrs.module.forward_untyped",
+        name = "dsrs.predict.forward_untyped",
         level = "debug",
         skip(self, input),
         fields(signature = std::any::type_name::<S>())
     )]
-    async fn forward_untyped(
+    pub async fn forward_untyped(
         &self,
         input: BamlValue,
     ) -> CallOutcome<BamlValue> {
@@ -503,7 +464,7 @@ where
             Ok(output) => output,
             Err(kind) => return CallOutcome::err(kind, metadata),
         };
-        debug!("typed module forward_untyped complete");
+        debug!("typed predict forward_untyped complete");
         CallOutcome::ok(output.to_baml_value(), metadata)
     }
 }

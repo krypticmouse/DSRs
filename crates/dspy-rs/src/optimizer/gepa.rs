@@ -226,7 +226,7 @@ impl GEPA {
         trainset: &[Example],
     ) -> Result<ParetoFrontier>
     where
-        M: Module + Optimizable + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + Optimizable + FeedbackEvaluator,
     {
         let mut frontier = ParetoFrontier::new();
 
@@ -258,7 +258,7 @@ impl GEPA {
         _candidate: &GEPACandidate,
     ) -> Result<Vec<f32>>
     where
-        M: Module + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + FeedbackEvaluator,
     {
         use futures::future::join_all;
 
@@ -286,7 +286,7 @@ impl GEPA {
         minibatch: &[Example],
     ) -> Result<Vec<(Example, Prediction, String)>>
     where
-        M: Module + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + FeedbackEvaluator,
     {
         let mut traces = Vec::with_capacity(minibatch.len());
 
@@ -378,7 +378,7 @@ impl GEPA {
 impl Optimizer for GEPA {
     async fn compile<M>(&self, _module: &mut M, _trainset: Vec<Example>) -> Result<()>
     where
-        M: Module + Optimizable + crate::Evaluator,
+        M: Module<Input = Example, Output = Prediction> + Optimizable + crate::Evaluator,
     {
         // GEPA requires FeedbackEvaluator, not just Evaluator
         // This is a compilation error that guides users to implement the right trait
@@ -397,7 +397,7 @@ impl GEPA {
         trainset: Vec<Example>,
     ) -> Result<GEPAResult>
     where
-        M: Module + Optimizable + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + Optimizable + FeedbackEvaluator,
     {
         println!("GEPA: Starting reflective prompt optimization");
         println!("  Iterations: {}", self.num_iterations);

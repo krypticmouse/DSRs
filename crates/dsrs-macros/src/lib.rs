@@ -1,12 +1,14 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use serde_json::{Value, json};
+use std::collections::HashSet;
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitStr, Meta, MetaNameValue,
     Token, Visibility,
     parse::{Parse, ParseStream},
     parse_macro_input,
     spanned::Spanned,
+    visit::Visit,
 };
 
 mod optim;
@@ -209,6 +211,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let mut is_input = false;
     let mut is_output = false;
     let mut is_flatten = false;
+    let mut saw_flatten = false;
     let mut alias = None;
     let mut format = None;
     let mut constraints = Vec::new();
@@ -236,6 +239,13 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
             }
             format = Some(parse_string_attr(attr, "format")?);
         } else if attr.path().is_ident("flatten") {
+            if saw_flatten {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[flatten] can only be specified once per field",
+                ));
+            }
+            saw_flatten = true;
             is_flatten = true;
         } else if attr.path().is_ident("check") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Check)?);
@@ -261,6 +271,13 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
         }
+    }
+
+    if is_flatten && (alias.is_some() || format.is_some() || !constraints.is_empty()) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[flatten] cannot be combined with #[alias], #[format], #[check], or #[assert]",
+        ));
     }
 
     let doc_comment = collect_doc_comment(&field.attrs);
@@ -394,17 +411,19 @@ fn generate_signature_code(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
+    let generics = &input.generics;
 
-    let helper_structs = generate_helper_structs(name, parsed, vis, runtime)?;
-    let input_fields = generate_field_specs(name, &parsed.input_fields, "INPUT", runtime)?;
-    let output_fields = generate_field_specs(name, &parsed.output_fields, "OUTPUT", runtime)?;
-    let baml_delegation = generate_baml_delegation(name, parsed, runtime);
-    let signature_impl = generate_signature_impl(name, parsed, runtime);
+    let helper_structs = generate_helper_structs(name, generics, parsed, vis, runtime)?;
+    let input_metadata = generate_field_metadata(name, &parsed.input_fields, "INPUT", runtime)?;
+    let output_metadata =
+        generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
+    let baml_delegation = generate_baml_delegation(name, generics, parsed, runtime);
+    let signature_impl = generate_signature_impl(name, generics, parsed, runtime);
 
     Ok(quote! {
         #helper_structs
-        #input_fields
-        #output_fields
+        #input_metadata
+        #output_metadata
         #baml_delegation
         #signature_impl
     })
@@ -412,6 +431,7 @@ fn generate_signature_code(
 
 fn generate_helper_structs(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     vis: &Visibility,
     runtime: &syn::Path,
@@ -420,27 +440,162 @@ fn generate_helper_structs(
     let output_name = format_ident!("__{}Output", name);
     let all_name = format_ident!("__{}All", name);
 
-    let input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
-    let output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
-    let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
+    let helper_generics = unconstrained_generics(generics);
+    let (helper_impl_generics, helper_ty_generics, _helper_where_clause) =
+        helper_generics.split_for_impl();
+
+    let mut input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
+    if let Some(marker) = generic_marker_field(generics, &parsed.input_fields) {
+        input_fields.push(marker);
+    }
+
+    let mut output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
+    if let Some(marker) = generic_marker_field(generics, &parsed.output_fields) {
+        output_fields.push(marker);
+    }
+
+    let mut all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
+    if let Some(marker) = generic_marker_field(generics, &parsed.all_fields) {
+        all_fields.push(marker);
+    }
+
+    let facet = quote! { #runtime::__macro_support::bamltype::facet };
+    let schema_bundle = quote! { #runtime::__macro_support::bamltype::SchemaBundle };
 
     Ok(quote! {
-        #[#runtime::BamlType]
-        #[derive(Debug, Clone)]
-        #vis struct #input_name {
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        #vis struct #input_name #helper_generics {
             #(#input_fields),*
         }
 
-        #[#runtime::BamlType]
-        pub struct #output_name {
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #input_name #helper_ty_generics
+        where
+            #input_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
+
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        pub struct #output_name #helper_generics {
             #(#output_fields),*
         }
 
-        #[#runtime::BamlType]
-        pub struct #all_name {
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #output_name #helper_ty_generics
+        where
+            #output_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
+
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        pub struct #all_name #helper_generics {
             #(#all_fields),*
         }
+
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #all_name #helper_ty_generics
+        where
+            #all_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
     })
+}
+
+fn unconstrained_generics(generics: &syn::Generics) -> syn::Generics {
+    let mut helper_generics = generics.clone();
+
+    for param in helper_generics.type_params_mut() {
+        param.bounds.clear();
+        param.bounds.push(syn::parse_quote!('static));
+        param.eq_token = None;
+        param.default = None;
+    }
+
+    helper_generics.where_clause = None;
+    helper_generics
+}
+
+fn generic_marker_field(
+    generics: &syn::Generics,
+    fields: &[ParsedField],
+) -> Option<proc_macro2::TokenStream> {
+    let missing = missing_type_params_for_fields(generics, fields);
+    if missing.is_empty() {
+        return None;
+    }
+
+    Some(quote! {
+        #[doc(hidden)]
+        #[facet(skip)]
+        __phantom: ::std::marker::PhantomData<(#(#missing),*)>
+    })
+}
+
+fn missing_type_params_for_fields(
+    generics: &syn::Generics,
+    fields: &[ParsedField],
+) -> Vec<Ident> {
+    let type_params: Vec<Ident> = generics
+        .type_params()
+        .map(|param| param.ident.clone())
+        .collect();
+
+    if type_params.is_empty() {
+        return Vec::new();
+    }
+
+    let mut collector = TypeParamUsageCollector {
+        tracked: type_params
+            .iter()
+            .map(|ident| ident.to_string())
+            .collect::<HashSet<_>>(),
+        used: HashSet::new(),
+    };
+
+    for field in fields {
+        collector.visit_type(&field.ty);
+    }
+
+    type_params
+        .into_iter()
+        .filter(|ident| !collector.used.contains(&ident.to_string()))
+        .collect()
+}
+
+struct TypeParamUsageCollector {
+    tracked: HashSet<String>,
+    used: HashSet<String>,
+}
+
+impl<'ast> Visit<'ast> for TypeParamUsageCollector {
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        if path.qself.is_none() && path.path.segments.len() == 1 {
+            let ident = path.path.segments[0].ident.to_string();
+            if self.tracked.contains(&ident) {
+                self.used.insert(ident);
+            }
+        }
+
+        syn::visit::visit_type_path(self, path);
+    }
 }
 
 fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
@@ -457,9 +612,8 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         attrs.push(quote! { #[facet(flatten)] });
     }
 
-    // Note: aliases and constraints are handled at the FieldSpec level in
-    // generate_field_specs, not via struct attributes. The adapter layer uses
-    // FieldSpec metadata for LLM name mapping and constraint enforcement.
+    // Note: aliases, formats, and constraints are emitted in
+    // generate_field_metadata(), not as struct attributes.
 
     quote! {
         #(#attrs)*
@@ -467,31 +621,21 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
     }
 }
 
-fn generate_field_specs(
+fn generate_field_metadata(
     name: &Ident,
     fields: &[ParsedField],
     kind: &str,
     runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let prefix = name.to_string().to_lowercase();
-    let array_name = format_ident!("__{}_{}_FIELDS", name.to_string().to_uppercase(), kind);
     let metadata_array_name =
         format_ident!("__{}_{}_METADATA", name.to_string().to_uppercase(), kind);
 
-    let mut type_ir_fns = Vec::new();
     let mut constraint_arrays = Vec::new();
-    let mut field_specs = Vec::new();
     let mut metadata_specs = Vec::new();
 
     for field in fields {
         let field_name = field.ident.to_string();
-        let field_name_ident = &field.ident;
-        let ty = &field.ty;
-
-        let llm_name = field.alias.as_ref().unwrap_or(&field_name);
-        let llm_name = LitStr::new(llm_name, proc_macro2::Span::call_site());
         let rust_name = LitStr::new(&field_name, proc_macro2::Span::call_site());
-        let description = LitStr::new(&field.description, proc_macro2::Span::call_site());
         let alias = match &field.alias {
             Some(value) => {
                 let lit = LitStr::new(value, proc_macro2::Span::call_site());
@@ -506,42 +650,6 @@ fn generate_field_specs(
             }
             None => quote! { None },
         };
-
-        let type_ir_fn_name = format_ident!("__{}_{}_type_ir", prefix, field_name_ident);
-
-        if field.constraints.is_empty() {
-            type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    #runtime::__macro_support::bamltype::baml_type_ir::<#ty>()
-                }
-            });
-        } else {
-            let constraint_tokens: Vec<_> = field
-                .constraints
-                .iter()
-                .map(|constraint| {
-                    let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
-                    let label = constraint.label.as_deref().unwrap_or("");
-                    let label = LitStr::new(label, proc_macro2::Span::call_site());
-                    match constraint.kind {
-                        ParsedConstraintKind::Check => {
-                            quote! { #runtime::Constraint::new_check(#label, #expr) }
-                        }
-                        ParsedConstraintKind::Assert => {
-                            quote! { #runtime::Constraint::new_assert(#label, #expr) }
-                        }
-                    }
-                })
-                .collect();
-
-            type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    let mut base = #runtime::__macro_support::bamltype::baml_type_ir::<#ty>();
-                    base.meta_mut().constraints.extend(vec![#(#constraint_tokens),*]);
-                    base
-                }
-            });
-        }
 
         let constraints_name = format_ident!(
             "__{}_{}_CONSTRAINTS",
@@ -584,17 +692,6 @@ fn generate_field_specs(
             });
         }
 
-        field_specs.push(quote! {
-            #runtime::FieldSpec {
-                name: #llm_name,
-                rust_name: #rust_name,
-                description: #description,
-                type_ir: #type_ir_fn_name,
-                constraints: #constraints_name,
-                format: #format,
-            }
-        });
-
         metadata_specs.push(quote! {
             #runtime::FieldMetadataSpec {
                 rust_name: #rust_name,
@@ -606,12 +703,7 @@ fn generate_field_specs(
     }
 
     Ok(quote! {
-        #(#type_ir_fns)*
         #(#constraint_arrays)*
-
-        static #array_name: &[#runtime::FieldSpec] = &[
-            #(#field_specs),*
-        ];
 
         static #metadata_array_name: &[#runtime::FieldMetadataSpec] = &[
             #(#metadata_specs),*
@@ -621,11 +713,13 @@ fn generate_field_specs(
 
 fn generate_baml_delegation(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let all_name = format_ident!("__{}All", name);
     let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let mut to_value_inserts = Vec::new();
     for field in &parsed.all_fields {
@@ -640,21 +734,21 @@ fn generate_baml_delegation(
     }
 
     quote! {
-        impl #runtime::BamlType for #name {
+        impl #impl_generics #runtime::BamlType for #name #ty_generics #where_clause {
             fn baml_output_format() -> &'static #runtime::OutputFormatContent {
-                <#all_name as #runtime::BamlType>::baml_output_format()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_output_format()
             }
 
             fn baml_internal_name() -> &'static str {
-                <#all_name as #runtime::BamlType>::baml_internal_name()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_internal_name()
             }
 
             fn baml_type_ir() -> #runtime::TypeIR {
-                <#all_name as #runtime::BamlType>::baml_type_ir()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_type_ir()
             }
 
             fn try_from_baml_value(value: #runtime::BamlValue) -> Result<Self, #runtime::BamlConvertError> {
-                let all = <#all_name as #runtime::BamlType>::try_from_baml_value(value)?;
+                let all = <#all_name #ty_generics as #runtime::BamlType>::try_from_baml_value(value)?;
                 Ok(Self {
                     #(#field_names: all.#field_names),*
                 })
@@ -675,36 +769,36 @@ fn generate_baml_delegation(
 
 fn generate_signature_impl(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("__{}Output", name);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let instruction = LitStr::new(&parsed.instruction, proc_macro2::Span::call_site());
 
-    let input_fields_static = format_ident!("__{}_INPUT_FIELDS", name.to_string().to_uppercase());
-    let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
     let input_metadata_static =
         format_ident!("__{}_INPUT_METADATA", name.to_string().to_uppercase());
     let output_metadata_static =
         format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
     quote! {
-        impl #runtime::Signature for #name {
-            type Input = #input_name;
-            type Output = #output_name;
+        impl #impl_generics #runtime::Signature for #name #ty_generics #where_clause {
+            type Input = #input_name #ty_generics;
+            type Output = #output_name #ty_generics;
 
             fn instruction() -> &'static str {
                 #instruction
             }
 
             fn input_shape() -> &'static #runtime::Shape {
-                <#input_name as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+                <#input_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
             }
 
             fn output_shape() -> &'static #runtime::Shape {
-                <#output_name as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+                <#output_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
             }
 
             fn input_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
@@ -715,16 +809,8 @@ fn generate_signature_impl(
                 &#output_metadata_static
             }
 
-            fn input_fields() -> &'static [#runtime::FieldSpec] {
-                &#input_fields_static
-            }
-
-            fn output_fields() -> &'static [#runtime::FieldSpec] {
-                &#output_fields_static
-            }
-
             fn output_format_content() -> &'static #runtime::OutputFormatContent {
-                <#output_name as #runtime::BamlType>::baml_output_format()
+                <#output_name #ty_generics as #runtime::BamlType>::baml_output_format()
             }
         }
     }

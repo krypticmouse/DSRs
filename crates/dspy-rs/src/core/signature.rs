@@ -8,20 +8,6 @@ use crate::{BamlType, Example, OutputFormatContent};
 use super::{FieldMetadataSpec, SignatureSchema};
 
 #[derive(Debug, Clone, Copy)]
-#[deprecated(
-    since = "0.7.4",
-    note = "Use SignatureSchema::input_fields()/output_fields() instead"
-)]
-pub struct FieldSpec {
-    pub name: &'static str,
-    pub rust_name: &'static str,
-    pub description: &'static str,
-    pub type_ir: fn() -> crate::TypeIR,
-    pub constraints: &'static [ConstraintSpec],
-    pub format: Option<&'static str>,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct ConstraintSpec {
     pub kind: ConstraintKind,
     pub label: &'static str,
@@ -63,12 +49,6 @@ pub trait Signature: Send + Sync + 'static {
 
     fn input_field_metadata() -> &'static [FieldMetadataSpec];
     fn output_field_metadata() -> &'static [FieldMetadataSpec];
-
-    #[allow(deprecated)]
-    fn input_fields() -> &'static [FieldSpec];
-
-    #[allow(deprecated)]
-    fn output_fields() -> &'static [FieldSpec];
 
     fn output_format_content() -> &'static OutputFormatContent
     where

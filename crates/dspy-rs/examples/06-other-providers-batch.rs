@@ -12,8 +12,9 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
-    configure, example, hashmap, init_tracing, prediction,
+    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, Example, LM, LegacyPredict,
+    LegacySignature, LmError, Module, Prediction, Predictor, configure, example, forward_all,
+    hashmap, init_tracing, prediction,
 };
 
 #[LegacySignature(cot)]
@@ -48,8 +49,23 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+    type Input = Example;
+    type Output = Prediction;
+
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+        let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
+            Ok(prediction) => prediction,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: "legacy_predict".to_string(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    CallMetadata::default(),
+                );
+            }
+        };
 
         let question = inputs.data.get("question").unwrap().clone();
         let answer = answerer_prediction.data.get("answer").unwrap().clone();
@@ -63,15 +79,30 @@ impl Module for QARater {
             vec!["answer".to_string(), "question".to_string()],
             vec![],
         );
-        let rating_prediction = self.rater.forward(inputs).await?;
+        let rating_prediction = match self.rater.forward(inputs).await {
+            Ok(prediction) => prediction,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: "legacy_predict".to_string(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    CallMetadata::default(),
+                );
+            }
+        };
         let rating_lm_usage = rating_prediction.lm_usage;
 
-        Ok(prediction! {
+        CallOutcome::ok(
+            prediction! {
             "answer"=> answer,
             "question"=> question,
             "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
         }
-        .set_lm_usage(answer_lm_usage + rating_lm_usage))
+            .set_lm_usage(answer_lm_usage + rating_lm_usage),
+            CallMetadata::default(),
+        )
     }
 }
 
@@ -102,7 +133,12 @@ async fn main() {
     ];
 
     let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.batch(example.clone(), 2, true).await.unwrap();
+    let prediction = forward_all(&qa_rater, example.clone(), 2)
+        .await
+        .into_iter()
+        .map(|outcome| outcome.into_result())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     println!("Anthropic: {prediction:?}");
 
     // Gemini
@@ -115,6 +151,11 @@ async fn main() {
         ChatAdapter,
     );
 
-    let prediction = qa_rater.batch(example, 2, true).await.unwrap();
+    let prediction = forward_all(&qa_rater, example, 2)
+        .await
+        .into_iter()
+        .map(|outcome| outcome.into_result())
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     println!("Gemini: {prediction:?}");
 }

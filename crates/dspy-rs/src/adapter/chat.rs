@@ -192,11 +192,11 @@ fn format_schema_for_prompt(schema: &str) -> String {
 }
 
 impl ChatAdapter {
-    fn format_task_description_typed<S: Signature>(
+    fn format_task_description_schema(
         &self,
+        schema: &crate::SignatureSchema,
         instruction_override: Option<&str>,
     ) -> String {
-        let schema = S::schema();
         let instruction = instruction_override.unwrap_or(schema.instruction());
         let instruction = if instruction.is_empty() {
             let input_fields = schema
@@ -226,8 +226,17 @@ impl ChatAdapter {
         format!("In adhering to this structure, your objective is: {indented}")
     }
 
-    fn format_response_instructions_typed<S: Signature>(&self) -> String {
-        let schema = S::schema();
+    fn format_task_description_typed<S: Signature>(
+        &self,
+        instruction_override: Option<&str>,
+    ) -> String {
+        self.format_task_description_schema(S::schema(), instruction_override)
+    }
+
+    fn format_response_instructions_schema(
+        &self,
+        schema: &crate::SignatureSchema,
+    ) -> String {
         let mut output_fields = schema.output_fields().iter();
         let Some(first_field) = output_fields.next() else {
             return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
@@ -243,6 +252,10 @@ impl ChatAdapter {
         message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
         message
+    }
+
+    fn format_response_instructions_typed<S: Signature>(&self) -> String {
+        self.format_response_instructions_schema(S::schema())
     }
 
     fn get_field_attribute_list(
@@ -444,27 +457,36 @@ impl ChatAdapter {
         &self,
         instruction_override: Option<&str>,
     ) -> Result<String> {
+        self.build_system(S::schema(), instruction_override)
+    }
+
+    pub fn build_system(
+        &self,
+        schema: &crate::SignatureSchema,
+        instruction_override: Option<&str>,
+    ) -> Result<String> {
         let parts = [
-            self.format_field_descriptions_typed::<S>(),
-            self.format_field_structure_typed::<S>()?,
-            self.format_response_instructions_typed::<S>(),
-            self.format_task_description_typed::<S>(instruction_override),
+            self.format_field_descriptions_schema(schema),
+            self.format_field_structure_schema(schema)?,
+            self.format_response_instructions_schema(schema),
+            self.format_task_description_schema(schema, instruction_override),
         ];
 
         let system = parts.join("\n\n");
-        trace!(system_len = system.len(), "formatted typed system prompt");
+        trace!(system_len = system.len(), "formatted schema system prompt");
         Ok(system)
     }
 
-    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
-        let schema = S::schema();
-        let input_format = <S::Input as BamlType>::baml_output_format();
+    fn format_field_descriptions_schema(
+        &self,
+        schema: &crate::SignatureSchema,
+    ) -> String {
         let output_format = schema.output_format();
 
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
         for (i, field) in schema.input_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&field.type_ir, Some(input_format));
+            let type_name = render_type_name_for_prompt(&field.type_ir, None);
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
             if !field.docs.is_empty() {
                 line.push_str(": ");
@@ -488,8 +510,14 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
-        let schema = S::schema();
+    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
+        self.format_field_descriptions_schema(S::schema())
+    }
+
+    fn format_field_structure_schema(
+        &self,
+        schema: &crate::SignatureSchema,
+    ) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
@@ -518,17 +546,30 @@ impl ChatAdapter {
         }
 
         lines.push("[[ ## completed ## ]]".to_string());
-
         Ok(lines.join("\n"))
+    }
+
+    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
+        self.format_field_structure_schema(S::schema())
     }
 
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
     where
         S::Input: BamlType,
     {
-        let schema = S::schema();
+        self.format_input(S::schema(), input)
+    }
+
+    pub fn format_input<I>(
+        &self,
+        schema: &crate::SignatureSchema,
+        input: &I,
+    ) -> String
+    where
+        I: BamlType + for<'a> facet::Facet<'a>,
+    {
         let baml_value = input.to_baml_value();
-        let input_output_format = <S::Input as BamlType>::baml_output_format();
+        let input_output_format = <I as BamlType>::baml_output_format();
 
         let mut result = String::new();
         for field_spec in schema.input_fields() {
@@ -550,7 +591,17 @@ impl ChatAdapter {
     where
         S::Output: BamlType,
     {
-        let schema = S::schema();
+        self.format_output(S::schema(), output)
+    }
+
+    pub fn format_output<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        output: &O,
+    ) -> String
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
         let baml_value = output.to_baml_value();
 
         let mut sections = Vec::new();
@@ -596,7 +647,18 @@ impl ChatAdapter {
         &self,
         response: &Message,
     ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
-        let schema = S::schema();
+        self.parse_output_with_meta::<S::Output>(S::schema(), response)
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn parse_output_with_meta<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<(O, IndexMap<String, FieldMeta>), ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
         let content = response.content();
         let output_format = schema.output_format();
         let sections = parse_sections(&content);
@@ -734,15 +796,15 @@ impl ChatAdapter {
                 None
             } else {
                 Some(BamlValue::Class(
-                    <S::Output as BamlType>::baml_internal_name().to_string(),
+                    <O as BamlType>::baml_internal_name().to_string(),
                     output_map,
                 ))
             };
             return Err(ParseError::Multiple { errors, partial });
         }
 
-        let typed_output = <S::Output as BamlType>::try_from_baml_value(BamlValue::Class(
-            <S::Output as BamlType>::baml_internal_name().to_string(),
+        let typed_output = <O as BamlType>::try_from_baml_value(BamlValue::Class(
+            <O as BamlType>::baml_internal_name().to_string(),
             output_map,
         ))
         .map_err(|err| ParseError::ExtractionFailed {
@@ -756,6 +818,23 @@ impl ChatAdapter {
         );
 
         Ok((typed_output, metas))
+    }
+
+    #[allow(clippy::result_large_err)]
+    pub fn parse_output<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<O, ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
+        let (output, _) = self.parse_output_with_meta::<O>(schema, response)?;
+        Ok(output)
+    }
+
+    pub fn parse_sections(content: &str) -> IndexMap<String, String> {
+        crate::adapter::chat::parse_sections(content)
     }
 
     pub fn parse_response_with_schema<S: Signature>(

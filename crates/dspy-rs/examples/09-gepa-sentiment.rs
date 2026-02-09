@@ -37,8 +37,21 @@ struct SentimentAnalyzer {
 }
 
 impl Module for SentimentAnalyzer {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        self.predictor.forward(inputs).await
+    type Input = Example;
+    type Output = Prediction;
+
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+        match self.predictor.forward(inputs).await {
+            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
+            Err(err) => CallOutcome::err(
+                CallOutcomeErrorKind::Lm(LmError::Provider {
+                    provider: "legacy_predict".to_string(),
+                    message: err.to_string(),
+                    source: None,
+                }),
+                CallMetadata::default(),
+            ),
+        }
     }
 }
 
@@ -221,7 +234,7 @@ async fn main() -> Result<()> {
         "expected_sentiment": "input" => "positive"
     };
 
-    let test_prediction = module.forward(test_example.clone()).await?;
+    let test_prediction = module.forward(test_example.clone()).await.into_result()?;
     let test_feedback = module
         .feedback_metric(&test_example, &test_prediction)
         .await;

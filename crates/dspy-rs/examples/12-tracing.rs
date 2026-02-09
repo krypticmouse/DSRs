@@ -3,8 +3,9 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor, configure,
-    example, init_tracing, prediction,
+    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, LM, LegacyPredict,
+    LegacySignature, LmError, Module, Prediction, Predictor, configure, example, init_tracing,
+    prediction,
     trace::{self, IntoTracked},
 };
 
@@ -35,8 +36,23 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    async fn forward(&self, inputs: dspy_rs::Example) -> Result<Prediction> {
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+    type Input = dspy_rs::Example;
+    type Output = Prediction;
+
+    async fn forward(&self, inputs: dspy_rs::Example) -> CallOutcome<Prediction> {
+        let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
+            Ok(prediction) => prediction,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: "legacy_predict".to_string(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    CallMetadata::default(),
+                );
+            }
+        };
 
         // We use .get_tracked() to preserve lineage info
         let question = inputs.data.get("question").unwrap().clone().into_tracked(); // Input passed through
@@ -49,15 +65,30 @@ impl Module for QARater {
             "answer": "input" => answer.clone()
         };
 
-        let rating_prediction = self.rater.forward(inputs).await?;
+        let rating_prediction = match self.rater.forward(inputs).await {
+            Ok(prediction) => prediction,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: "legacy_predict".to_string(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    CallMetadata::default(),
+                );
+            }
+        };
 
         // Final output
-        Ok(prediction! {
+        CallOutcome::ok(
+            prediction! {
             "answer"=> answer.value,
             "question"=> question.value,
             "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
         }
-        .set_lm_usage(rating_prediction.lm_usage))
+            .set_lm_usage(rating_prediction.lm_usage),
+            CallMetadata::default(),
+        )
     }
 }
 
@@ -83,7 +114,7 @@ async fn main() -> Result<()> {
     println!("Starting trace...");
     let (result, graph) = trace::trace(|| async { module.forward(example).await }).await;
 
-    match result {
+    match result.into_result() {
         Ok(pred) => println!("Prediction keys: {:?}", pred.data.keys()),
         Err(e) => println!("Error (expected if no API key/network): {}", e),
     }

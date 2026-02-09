@@ -11,6 +11,7 @@ pub use pareto::*;
 use crate::{
     core::{Module, Optimizable},
     data::example::Example,
+    data::prediction::Prediction,
     evaluate::Evaluator,
 };
 use anyhow::Result;
@@ -19,5 +20,5 @@ use anyhow::Result;
 pub trait Optimizer {
     async fn compile<M>(&self, module: &mut M, trainset: Vec<Example>) -> Result<()>
     where
-        M: Module + Optimizable + Evaluator;
+        M: Module<Input = Example, Output = Prediction> + Optimizable + Evaluator;
 }

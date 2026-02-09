@@ -37,16 +37,6 @@ impl<S: Signature, A: Augmentation> Signature for Augmented<S, A> {
     fn output_field_metadata() -> &'static [crate::FieldMetadataSpec] {
         S::output_field_metadata()
     }
-
-    #[allow(deprecated)]
-    fn input_fields() -> &'static [crate::FieldSpec] {
-        S::input_fields()
-    }
-
-    #[allow(deprecated)]
-    fn output_fields() -> &'static [crate::FieldSpec] {
-        S::output_fields()
-    }
 }
 
 impl<A: Augmentation, B: Augmentation> Augmentation for (A, B) {
