@@ -1,7 +1,7 @@
 # Implementation Tracker
 
 ## Current State
-- **Slice**: 2
+- **Slice**: 4
 - **Phase**: Commit
 
 ## Active Subagents
@@ -25,9 +25,28 @@
 | `019c43be-fa6e-7080-97d8-08ceaab8c4db` | Implement Slice 2 plan in code/tests | 2 | Implement | Partial; macro conflicts required manual completion and additional adapter/schema adjustments to align flattened augmentation fields |
 | `019c43e9-045c-7693-bc73-2e13531c3b28` | Adversarial review against ground truth | 2 | Adversarial Review | Completed; produced `slice_2_review.md` with three findings (missing Facet on `ChainOfThought`, untyped `Module::forward` mismatch against design example, and empty legacy `parameters()` visibility) |
 | `019c4412-6e17-7fb2-8abf-321f4e4d415e` | Apply agreed Slice 2 arbitration fix (legacy optimizer visibility) | 2 | Arbitrate | Completed; updated `ChainOfThought::parameters()` to expose `predictor` and added regression test `chain_of_thought_parameters_expose_predictor_for_legacy_optimizers` |
+| `019c4415-5851-70e3-8e74-bc49d59c9f86` | Research brief for Slice 3 (module authoring) | 3 | Research | Failed; no output | Subagent rejected by prompt-policy guard before execution; replacing with narrower prompt |
+| `019c4415-ba6f-7b91-a931-e09e979b47b7` | Research brief for Slice 3 (module authoring) | 3 | Research | Completed; produced `slice_3_research.md` covering V3/F4/F12 requirements, current code references, and migration gaps | Reviewed and accepted with added caution on trait migration blast radius |
+| `019c441e-01f4-75f1-9905-3da3bf970159` | Stupidly implementable plan for Slice 3 (module authoring) | 3 | Plan | Completed; produced `slice_3.md` with sequencing/tests for V3 migration | Initial review found directional correctness but concrete API/name mismatches requiring refinery correction |
+| `019c441f-07b6-7d00-a7cd-7c47d3714b5b` | Plan refinery against ground truth for Slice 3 | 3 | Plan Refinery | Completed; produced `slice_3_refinery.md` and updated `slice_3.md` with coverage notes, including explicit test comprehensiveness check | No unresolved `NEEDS ARBITRATION` markers remained; final arbitration moved to direct code-grounded implementation due stale/non-existent API names still present in the plan text |
+| `019c4439-b9ac-7721-885e-6147e96f8d40` | Adversarial review against ground truth for Slice 3 | 3 | Adversarial Review | Completed; produced `slice_3_review.md` with 2 high, 2 medium, 1 low finding | Findings reviewed during Arbitrate; no additional fix subagent required for this slice pass |
+| `manual` | Closure audit and bookkeeping pass for slices 1–3 | 3 | Closure Audit | Completed; created `slices_1_3_closure_audit.md`, removed stale unresolved marker from `slice_2_refinery.md`, and mapped all non-implemented items to explicit follow-up phases | Closure audit introduces explicit post-commit phase `Closure Audit` for future slices as well |
+| `019c4458-b5c5-7bd3-9c7e-82b427d6ca36` | Research brief for Slice 4 (ReAct + operational affordances) | 4 | Research | Completed; produced `slice_4_research.md` with V4 requirement inventory and repo-grounded gap analysis | Amended post-review to mark `U48` as `[MODIFY]` because current `forward_all` requires a fourth `display_progress` arg versus spec’s 3-arg ergonomic surface |
+| `019c445d-861f-7d93-b2af-28bdcfb3e3da` | Stupidly implementable plan for Slice 4 (ReAct + operational affordances) | 4 | Plan | Failed/no output | Subagent prompt was blocked by policy guard before execution; replacing with narrower prompt |
+| `019c4461-f155-7233-8244-25d9491d2957` | Replacement planning brief for Slice 4 (ReAct + operational affordances) | 4 | Plan | Completed; generated `slice_4.md` with implementation/test steps for U14/U48/U51 | Initial review accepted direction; flagged speculative details (`#[facet(skip)]` closure handling and ReAct tool-wrapper API shape) for plan refinery arbitration |
+| `019c4467-1e16-7b82-a306-2989dd593944` | Plan refinery against ground truth for Slice 4 | 4 | Plan Refinery | Completed; produced `slice_4_refinery.md` and updated `slice_4.md` with spec/shape consistency checks | One ambiguity surfaced (`and_then` metadata semantics) and was resolved during arbitration in the approved plan |
+| `019c4475-b295-75b0-8b03-ecfd11932e5f` | Adversarial review against ground truth for Slice 4 | 4 | Adversarial Review | Completed; produced `slice_4_review.md` with one high and one medium finding | High: ReAct missing `Facet` derivation/discoverability. Medium: ReAct loop prompt formatting bypasses adapter building blocks |
+| `019c4478-d3ef-76b1-98e9-cbf5f4d127ec` | Apply agreed Slice 4 arbitrate fix (ReAct Facet discoverability) | 4 | Arbitrate | Completed; added `facet::Facet` derive on `ReAct` and skipped non-discoverable fields (`tools`, `max_steps`) while keeping predictor fields discoverable | Verified by `cargo check -p dspy-rs`, then re-ran targeted tests and Slice 4 smoke successfully |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
+- **State normalization (2026-02-09):** Tracker advanced from stale `Slice 3 / Done` to `Slice 4 / Research` per closure-audit transition rule (slice < 4 advances to next slice research).
+- **Slice 4 research arbitration (2026-02-09):** Reclassified `U48` from `[EXISTS]` to `[MODIFY]` in `slice_4_research.md`; batching semantics are present, but API shape currently requires `display_progress` and does not match breadboard’s 3-arg `forward_all(&module, inputs, concurrency)`.
+- **Slice 4 plan review (2026-02-09):** Accepted high-level sequencing (U48 surface alignment → U51 combinators → U14 ReAct + tests), but flagged two areas for refinery against code/spec: (1) exact Facet strategy for closure-bearing wrappers (`Map`/`AndThen`), and (2) concrete plain-function tool adapter surface for ReAct builder.
+- **Slice 4 refinery arbitration (2026-02-09):** Resolved `and_then` metadata ambiguity by locking `ModuleExt::and_then` to a fallible transform signature `Fn(Output) -> Result<T, CallOutcomeErrorKind>` that preserves inner call metadata; removed stale `NEEDS ARBITRATION` marker from `slice_4.md`.
+- **Slice 4 smoke test (2026-02-09):** Real LM call passed end-to-end via `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` (loaded `.env`, model `openai:gpt-5.2`), returning `answer: smoke-ok`.
+- **Slice 4 arbitrate (2026-02-09):** Agreed with high finding on ReAct Facet discoverability and fixed in `modules/react.rs`. Re-ran compile/tests and smoke after fix; smoke now reports `tool_executions: 1`, `answer: smoke-ok`.
+- **Slice 4 arbitrate (2026-02-09):** Disagreed with medium finding (“ReAct bypasses adapter building blocks”) for this slice: both action/extract calls execute through `Predict::call` → `ChatAdapter` pipeline (`N8/F7`). The hand-built `trajectory` string is module orchestration state, not a replacement parsing/formatting pipeline; no immediate correctness gap observed in tests/smoke.
 - Slice definitions for this execution are V1-V3 from `/Users/darin/src/personal/DSRs/docs/specs/modules/breadboard.md` (V1 Typed call, V2 Augmentation + CoT, V3 Module authoring).
 - Ground truth hierarchy for arbitration is: breadboard + shapes + design_reference + spikes S1-S8.
 - **Locked (2026-02-09):** N8/typed call default return is `CallOutcome<O>` (metadata-first). `call_with_meta` is folded into `call`; there is no separate convenience path like `forward_result`.
@@ -48,18 +67,33 @@
 - **Slice 2 smoke test (2026-02-09):** Real LM calls passed end-to-end against `openai:gpt-5.2` via named examples: `cargo run -p dspy-rs --example 90-smoke-slice1-typed-predict` (`answer = smoke-ok`) and `cargo run -p dspy-rs --example 91-smoke-slice2-chain-of-thought` (`answer = smoke-ok`, reasoning populated).
 - **Slice 2 arbitrate (2026-02-09):** Accepted finding on legacy optimizer visibility and fixed by exposing `predictor` through `ChainOfThought::parameters()`. Re-ran Slice 2 smoke test after fix; still passes (`answer = smoke-ok`).
 - **Slice 2 arbitrate (2026-02-09):** Deferred review findings on `Facet` derivation and typed `Module::forward` as cross-slice architectural alignment work; current Slice 2 deliverable remains consistent with the existing `Module` trait contract introduced in Slice 1.
+- **Slice 2 commit (2026-02-09):** `owmrznzo` / `748368c8` — "slice2: implement augmentation + chain-of-thought module".
+- **Slice 3 research (2026-02-09):** Accepted recommendation that V3 requires completing F4/F12 (typed `Module` surface + generic/flatten signature authoring) and exposing schema-driven adapter building blocks; this is a high-blast-radius migration that must preserve `CallOutcome` metadata semantics.
+- **Slice 3 plan review (2026-02-09):** Accepted high-level sequencing (schema/derive → trait migration → adapter surface → module updates → tests), but flagged concrete type/API drift in the draft plan (non-existent symbols like `ChatMessage`/`schema_from_signature`, incorrect import ownership for `BamlType`). Refine against ground truth before implementation.
+- **Slice 3 refinery arbitration (2026-02-09):** Refined plan passed fidelity/shape/breadboard/sequencing/API/over-engineering checks and explicit test-comprehensiveness review, but implementation will use in-repo symbols as source of truth where plan text still references speculative names.
+- **Process note (2026-02-09):** Planning subagent prompts must explicitly require grounding in the repository (current code paths/patterns), in addition to the research doc and tracker decisions, to avoid speculative API names.
+- **Slice 3 implementation (2026-02-09):** Completed typed module-authoring migration across core and examples: `Module` now uses associated `Input`/`Output`, `forward_all` free helper is used for batching, generic signature derive supports flatten with generated helper structs + Facet/BamlSchema plumbing, and schema-first adapter helpers are exposed for system/input/output formatting and parse paths.
+- **Slice 3 implementation (2026-02-09):** Migrated examples to the new authoring syntax (`CallOutcome` handling, removed `call_with_meta`, replaced member `.batch(...)` with `forward_all(...)`) and added labeled smoke example `crates/dspy-rs/examples/92-smoke-slice3-module-authoring.rs`.
+- **Slice 3 validation (2026-02-09):** `cargo check -p dspy-rs -p dsrs_macros`, `cargo test -p dsrs_macros --tests`, `cargo test -p dspy-rs --lib --tests`, and `cargo check -p dspy-rs --examples` all pass.
+- **Slice 3 smoke test (2026-02-09):** Loaded `.env` and ran labeled real-model smokes against `openai:gpt-5.2`: `90-smoke-slice1-typed-predict`, `91-smoke-slice2-chain-of-thought`, and `92-smoke-slice3-module-authoring`; all returned `answer: smoke-ok`.
+- **Slice 3 arbitration (2026-02-09):** Review finding on `__phantom` public leakage is stale after current implementation (`__phantom` is private). Other findings (Option-C full legacy removal, strict typed bounds on `Module`, and `build_system` fallibility) are recorded as intentional scope/compatibility tradeoffs for Slice 3 and deferred for explicit future architectural decision.
+- **Slice 3 commit (2026-02-09):** Change `strkwqpy` — "slice3: implement module authoring syntax and schema helpers".
+- **Process decision (2026-02-09):** Add explicit phase `Closure Audit` after `Commit` and before `Done` for slices that complete implementation. The phase output is a requirements ledger that marks each in-scope item as Implemented / Partially Implemented / Deferred with evidence and a named follow-up phase.
+- **Closure audit result (2026-02-09):** `docs/plans/modules/slices_1_3_closure_audit.md` is the source of truth for slices 1–3 accounting. Summary: V1 implemented; V2 partially implemented (U29 deferred); V3 partially implemented (typed-bound/generic-hardening + legacy-cutover deferrals).
+- **Deferral mapping (2026-02-09):** Assigned explicit follow-up phases: `Phase 4.5 Cleanup / API Surface Pass` (typed module bounds + generic helper contract + phantom ergonomics + `build_system` API/spec reconciliation + legacy cutover prep/removal) and `V5 Implement` (Facet walker discoverability for module wrappers).
+- **Planning update (2026-02-09):** Consolidated deferred cleanup items into an explicit **Phase 4.5: Cleanup / API Surface Pass**. This phase is now the canonical destination for strict typed module bounds, macro helper generic/ergonomic cleanup, adapter surface reconciliation, and legacy API cutover prep/removal.
 
 ## Stumbling Blocks
 <!-- Things that were confusing, ambiguous, or required judgment calls -->
 - Existing tracker lacked `Current State` fields from the required template; normalized before continuing to avoid ambiguous phase transitions.
 - Initial research draft mixed Slice 1 scope with Slice 2/5 artifacts (augmentation and DynPredictor migration). Corrected to keep Slice 1 deliverables focused on V1 call path while preserving cross-slice constraints.
 - Implementation subagent introduced unexpected edits outside assigned ownership (`optimizer/gepa.rs`, `optimizer/mipro.rs`) while attempting to satisfy compile ripple effects from `Module` return type changes.
-- `cargo check -p dspy-rs -p dsrs_macros` and both test suites now pass, but `cargo check -p dspy-rs --examples` still fails because examples have not yet been migrated to the new `Module::forward` / `CallOutcome` interfaces.
+- `cargo check -p dspy-rs --examples` initially failed after the module trait migration due stale example syntax (`call_with_meta`, untyped `Module` impls, member `.batch(...)`). Resolved by updating all impacted examples and adding a Slice 3 smoke example.
 - Slice 2 planning subagent produced no deliverable (`slice_2.md` missing) and had to be replaced.
 - Slice 2 adversarial review subagent took longer than expected; waited through multiple polls before completion.
+- Slice 3 research confirms V3 is not incremental polish: it requires trait-shape migration across core module/predictor surfaces and may ripple into optimizer and examples.
 
 ## Open Questions
 <!-- Unresolved issues to revisit -->
-- If nightly `try_trait_v2` introduces instability during implementation, decide whether to keep `Try` behind cfg while preserving `into_result()` as non-divergent baseline.
-- Whether Slice 1 should include an explicit follow-up example migration pass (`--examples` currently failing on old `Result`-based module signatures and removed `call_with_meta` usage).
-- Aligning `ChainOfThought` with eventual F6/F10 Facet-walker discovery and the typed module trait story from `design_reference.md` is still open and should be re-evaluated in the slice that introduces the new walker/typed module boundary.
+- `Phase 4.5 Cleanup / API Surface Pass`: execute strict typed `Module` bounds, generic-helper/`__phantom` cleanup, `build_system` API/spec reconciliation, and legacy-surface cutover.
+- `V5 Implement`: wire Facet walker discoverability for wrapper modules (`ChainOfThought` and future combinators) as the canonical replacement for legacy `Optimizable` traversal.

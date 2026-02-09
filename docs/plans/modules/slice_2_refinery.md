@@ -23,5 +23,5 @@
 - The plan currently adds a dedicated test for `ChainOfThought` swapping, flatten round-trips, and Deref ergonomics. Those are high-signal verification points for Slice 2, so they are appropriate; the risk of over-engineering would arise if we added unrelated tooling or extra layering beyond the spec, which the plan avoids.
 - The only quibble is the `augmentation.rs` snippet, which tries to make `Augmented` also implement `Augmentation`. That duplication increases cognitive load for reviewers without changing behavior. Reframing `Augmented` as the signature combinator eliminates the extra indirection.
 
-## Unresolved points
-- <!-- NEEDS ARBITRATION: confirm whether the `ChainOfThought` builder should expose the full `PredictBuilder` DSL (demos/instructions/tools) or just a simplified `new`/`builder` API, given the plan already plans to delegate to `PredictBuilder` internally. -->
+## Arbitration outcomes
+- Resolved in arbitration (2026-02-09): `ChainOfThoughtBuilder` exposes the delegated `PredictBuilder` DSL (`demo`, `with_demos`, `instruction`, `add_tool`, `with_tools`) in addition to `ChainOfThought::new()` so both ergonomic entry points are supported without API bifurcation.
