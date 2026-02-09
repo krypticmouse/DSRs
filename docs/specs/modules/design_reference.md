@@ -364,9 +364,11 @@ pub trait Module: Send + Sync {
     type Input: BamlType + Facet + Send + Sync;
     type Output: BamlType + Facet + Send + Sync;
 
-    async fn forward(&self, input: Self::Input) -> Result<Self::Output, PredictError>;
+    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output>;
 }
 ```
+
+`CallOutcome<O>` is the default return surface for N8. It carries both outcome (`Result<O, PredictError>`) and call metadata (raw response, usage, tool calls, field parse metadata). There is no separate convenience API (for example `forward_result()`); ergonomics come from trait impls on `CallOutcome` itself (`Try` when available on toolchain, otherwise at least `Deref<Target = Result<...>>` + `into_result()`).
 
 Every prompting strategy implements this. The associated types make composition type-safe:
 
@@ -437,7 +439,7 @@ let predict = Predict::<QA>::builder()
 
 ```rust
 impl<S: Signature> Predict<S> {
-    pub async fn call(&self, input: S::Input) -> Result<S::Output, PredictError> {
+    pub async fn call(&self, input: S::Input) -> CallOutcome<S::Output> {
         let schema = SignatureSchema::of::<S>();  // F2: Facet-derived, cached
         let lm = get_global_lm();
         let adapter = ChatAdapter;
@@ -459,12 +461,21 @@ impl<S: Signature> Predict<S> {
         chat.push_message(Message::user(user));
 
         // Call LM
-        let response = lm.call(chat, self.tools.clone()).await?;
+        let response = match lm.call(chat, self.tools.clone()).await {
+            Ok(response) => response,
+            Err(err) => return CallOutcome::from_error(PredictError::Lm { source: err }),
+        };
 
         // Parse response
-        let output = adapter.parse_output::<S::Output>(schema, &response)?;
+        let output = adapter.parse_output::<S::Output>(schema, &response);
 
-        Ok(output)
+        CallOutcome::from_parts(
+            output,
+            response.output.content().to_string(),
+            response.usage.clone(),
+            response.tool_calls,
+            response.tool_executions,
+        )
     }
 }
 ```
@@ -685,7 +696,7 @@ pub trait DynPredictor: Send + Sync {
     fn load_state(&mut self, state: PredictState) -> Result<()>;
 
     /// Untyped forward (for dynamic graph execution)
-    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError>;
+    async fn forward_untyped(&self, input: BamlValue) -> CallOutcome<BamlValue>;
 }
 ```
 
@@ -714,10 +725,14 @@ where S::Input: BamlType, S::Output: BamlType
         Ok(())
     }
 
-    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError> {
-        let typed_input = S::Input::try_from_baml_value(input)?;
-        let output = self.call(typed_input).await?;
-        Ok(output.to_baml_value())
+    async fn forward_untyped(&self, input: BamlValue) -> CallOutcome<BamlValue> {
+        let typed_input = match S::Input::try_from_baml_value(input) {
+            Ok(v) => v,
+            Err(err) => return CallOutcome::from_error(PredictError::Conversion { source: err.into() }),
+        };
+        self.call(typed_input)
+            .await
+            .map(|output| output.to_baml_value())  // map/into_result helper on CallOutcome
     }
 }
 ```
@@ -863,7 +878,7 @@ impl<S: Signature> Module for ChainOfThought<S> {
     type Input = S::Input;
     type Output = WithReasoning<S::Output>;
 
-    async fn forward(&self, input: S::Input) -> Result<WithReasoning<S::Output>, PredictError> {
+    async fn forward(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>> {
         self.predict.call(input).await
     }
 }
@@ -887,16 +902,16 @@ where M::Input: Clone
     type Input = M::Input;
     type Output = M::Output;
 
-    async fn forward(&self, input: M::Input) -> Result<M::Output, PredictError> {
+    async fn forward(&self, input: M::Input) -> CallOutcome<M::Output> {
         let mut best = None;
         let mut best_score = f64::NEG_INFINITY;
         for _ in 0..self.n {
             let output = self.module.forward(input.clone()).await?;
             let score = (self.reward_fn)(&input, &output);
-            if score >= self.threshold { return Ok(output); }
+            if score >= self.threshold { return CallOutcome::ok(output); }
             if score > best_score { best_score = score; best = Some(output); }
         }
-        best.ok_or(PredictError::AllAttemptsFailed)
+        CallOutcome::from_error(PredictError::AllAttemptsFailed)
     }
 }
 ```
