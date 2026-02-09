@@ -3,12 +3,12 @@ use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
 use tracing::debug;
 
-use crate::{CallOutcome, core::MetaSignature};
+use crate::{BamlType, CallOutcome, Facet, core::MetaSignature};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
-    type Input: Send + Sync + 'static;
-    type Output: Send + Sync + 'static;
+    type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
+    type Output: BamlType + for<'a> Facet<'a> + Send + Sync;
 
     async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output>;
 }

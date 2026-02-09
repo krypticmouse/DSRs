@@ -8,6 +8,13 @@
 > Legacy bridge crates are removed from the workspace.
 > Current typed and optimizer contracts remain unchanged in Phase 1.
 > Phase 2 next: compat-trait removal from typed paths plus signature/optimizer API redesign for facet-native runtime.
+>
+> Planning note:
+> The “Implementation Order” section in this document is historical rollout guidance.
+> Current execution status and cleanup-phase decision tracking are maintained in:
+> - `docs/plans/modules/tracker.md`
+> - `docs/plans/modules/slices_closure_audit.md`
+> - `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 
 ---
 

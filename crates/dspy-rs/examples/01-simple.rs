@@ -190,7 +190,7 @@ async fn main() -> Result<()> {
             QAInput {
                 question: "What is 2+2?".to_string(),
             },
-            __QAOutput {
+            QAOutput {
                 reasoning:
                     "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4.".to_string(),
                 answer: "4".to_string(),
@@ -200,7 +200,7 @@ async fn main() -> Result<()> {
             QAInput {
                 question: "What color is grass?".to_string(),
             },
-            __QAOutput {
+            QAOutput {
                 reasoning: "Grass contains chlorophyll which reflects green light.".to_string(),
                 answer: "Green".to_string(),
             },

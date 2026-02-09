@@ -9,8 +9,6 @@ struct QA {
     answer: String,
 }
 
-type QAOutput = __QAOutput;
-
 #[test]
 fn with_reasoning_deref_exposes_inner_fields() {
     let output = WithReasoning {

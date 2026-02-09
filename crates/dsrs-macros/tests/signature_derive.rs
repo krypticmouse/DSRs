@@ -41,14 +41,10 @@ struct GenericFlattenSig<T: BamlType + for<'a> Facet<'a> + Clone + Send + Sync> 
 
 #[test]
 fn generates_typed_input_and_output_helpers() {
-    let input = TestSigInput {
-        question: "test".to_string(),
-    };
+    let input = TestSigInput::new("test".to_string());
     assert_eq!(input.question, "test");
 
-    let _output = __TestSigOutput {
-        answer: "ok".to_string(),
-    };
+    let _output = TestSigOutput::new("ok".to_string());
 }
 
 #[test]
@@ -88,10 +84,7 @@ fn derives_generic_helpers_and_flatten_paths() {
             question: "Where?".to_string(),
         },
     };
-    let _typed_output = __GenericFlattenSigOutput::<GenericCtx> {
-        answer: "Here".to_string(),
-        __phantom: std::marker::PhantomData,
-    };
+    let _typed_output = GenericFlattenSigOutput::<GenericCtx>::new("Here".to_string());
 
     let schema = SignatureSchema::of::<GenericFlattenSig<GenericCtx>>();
     let input_paths: Vec<Vec<&str>> = schema

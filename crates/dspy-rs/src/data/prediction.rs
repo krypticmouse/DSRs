@@ -4,12 +4,23 @@ use std::{collections::HashMap, ops::Index};
 
 use crate::LmUsage;
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, facet::Facet)]
+#[facet(crate = facet)]
 pub struct Prediction {
+    #[facet(skip, opaque)]
     pub data: HashMap<String, serde_json::Value>,
+    #[facet(skip, opaque)]
     pub lm_usage: LmUsage,
     #[serde(skip)]
+    #[facet(skip)]
     pub node_id: Option<usize>,
+}
+
+impl bamltype::BamlSchema for Prediction {
+    fn baml_schema() -> &'static bamltype::SchemaBundle {
+        static SCHEMA: std::sync::OnceLock<bamltype::SchemaBundle> = std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| bamltype::SchemaBundle::from_shape(<Self as facet::Facet<'_>>::SHAPE))
+    }
 }
 
 impl Prediction {

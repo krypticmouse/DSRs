@@ -30,8 +30,6 @@ struct ReActActionStep {
     action_input: String,
 }
 
-type ReActActionStepOutput = __ReActActionStepOutput;
-
 /// ReAct extraction-step schema.
 #[derive(dsrs_macros::Signature, Clone, Debug)]
 struct ReActExtractStep<O>
@@ -48,8 +46,6 @@ where
     output: O,
 }
 
-type ReActExtractStepOutput<O> = __ReActExtractStepOutput<O>;
-
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
 pub struct ReAct<S>
@@ -58,9 +54,7 @@ where
     S::Input: BamlType + Clone,
     S::Output: BamlType,
 {
-    #[facet(opaque)]
     action: Predict<ReActActionStep>,
-    #[facet(opaque)]
     extract: Predict<ReActExtractStep<S::Output>>,
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
@@ -131,6 +125,112 @@ where
             || action.eq_ignore_ascii_case("final")
             || action.eq_ignore_ascii_case("done")
     }
+
+    fn format_trace_entry(
+        step: usize,
+        thought: &str,
+        action: &str,
+        action_input: &str,
+        observation: Option<&str>,
+    ) -> String {
+        let observation_text = observation.unwrap_or("<none>");
+        format!(
+            "Step {step}\nThought: {thought}\nAction: {action}\nAction Input: {action_input}\nObservation: {observation_text}"
+        )
+    }
+
+    async fn run(&self, input: S::Input) -> CallOutcome<S::Output> {
+        let serialized_input = serde_json::to_string(&input.to_baml_value())
+            .unwrap_or_else(|_| "<input serialization failed>".to_string());
+
+        let tool_manifest = self.render_tool_manifest().await;
+        let mut trajectory_text = tool_manifest.clone();
+        trajectory_text.push_str("\n\n");
+
+        let mut tool_calls = Vec::new();
+        let mut tool_executions = Vec::new();
+        tool_executions.push(tool_manifest);
+
+        for step in 0..self.max_steps {
+            let action_input =
+                ReActActionStepInput::new(serialized_input.clone(), trajectory_text.clone());
+
+            let (action_result, mut action_metadata) =
+                self.action.call(action_input).await.into_parts();
+            tool_calls.append(&mut action_metadata.tool_calls);
+            tool_executions.append(&mut action_metadata.tool_executions);
+
+            let ReActActionStepOutput {
+                thought,
+                action,
+                action_input,
+            } = match action_result {
+                Ok(output) => output,
+                Err(err) => return CallOutcome::err(err, action_metadata),
+            };
+
+            let action_name = action
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .to_string();
+
+            if Self::is_terminal_action(&action_name) {
+                let trace =
+                    Self::format_trace_entry(step + 1, &thought, &action_name, &action_input, None);
+                tool_executions.push(trace.clone());
+                trajectory_text.push_str(&format!(
+                    "Step {}\nThought: {}\nFinal: {}\n\n",
+                    step + 1,
+                    thought,
+                    action_input
+                ));
+                break;
+            }
+
+            let observation = self.execute_tool(&action_name, action_input.clone()).await;
+
+            tool_calls.push(ToolCall {
+                id: format!("react-step-{}", step + 1),
+                call_id: None,
+                function: ToolFunction {
+                    name: action_name.clone(),
+                    arguments: serde_json::json!(action_input),
+                },
+            });
+            tool_executions.push(Self::format_trace_entry(
+                step + 1,
+                &thought,
+                &action_name,
+                &action_input,
+                Some(&observation),
+            ));
+
+            trajectory_text.push_str(&format!(
+                "Step {}\nThought: {}\nAction: {}\nAction Input: {}\nObservation: {}\n\n",
+                step + 1,
+                thought,
+                action_name,
+                action_input,
+                observation
+            ));
+        }
+
+        let extract_input = ReActExtractStepInput::new(serialized_input, trajectory_text);
+
+        let (extract_result, mut extract_metadata) =
+            self.extract.call(extract_input).await.into_parts();
+        extract_metadata.tool_calls.extend(tool_calls);
+        extract_metadata.tool_executions.extend(tool_executions);
+
+        match extract_result {
+            Ok(output) => {
+                let output: ReActExtractStepOutput<S::Output> = output;
+                CallOutcome::ok(output.output, extract_metadata)
+            }
+            Err(err) => CallOutcome::err(err, extract_metadata),
+        }
+    }
 }
 
 impl<S> Default for ReAct<S>
@@ -154,89 +254,7 @@ where
     type Output = S::Output;
 
     async fn forward(&self, input: S::Input) -> CallOutcome<S::Output> {
-        let serialized_input = serde_json::to_string(&input.to_baml_value())
-            .unwrap_or_else(|_| "<input serialization failed>".to_string());
-
-        let mut trajectory = self.render_tool_manifest().await;
-        trajectory.push_str("\n\n");
-
-        let mut tool_calls = Vec::new();
-        let mut tool_executions = Vec::new();
-
-        for step in 0..self.max_steps {
-            let action_input = ReActActionStepInput {
-                input: serialized_input.clone(),
-                trajectory: trajectory.clone(),
-            };
-
-            let (action_result, mut action_metadata) = self.action.call(action_input).await.into_parts();
-            tool_calls.append(&mut action_metadata.tool_calls);
-            tool_executions.append(&mut action_metadata.tool_executions);
-
-            let ReActActionStepOutput {
-                thought,
-                action,
-                action_input,
-            } = match action_result {
-                Ok(output) => output,
-                Err(err) => return CallOutcome::err(err, action_metadata),
-            };
-
-            let action_name = action
-                .trim()
-                .trim_matches('"')
-                .trim_matches('\'')
-                .to_string();
-
-            if Self::is_terminal_action(&action_name) {
-                trajectory.push_str(&format!(
-                    "Step {}\nThought: {}\nFinal: {}\n\n",
-                    step + 1,
-                    thought,
-                    action_input
-                ));
-                break;
-            }
-
-            let observation = self.execute_tool(&action_name, action_input.clone()).await;
-
-            tool_calls.push(ToolCall {
-                id: format!("react-step-{}", step + 1),
-                call_id: None,
-                function: ToolFunction {
-                    name: action_name.clone(),
-                    arguments: serde_json::json!(action_input),
-                },
-            });
-            tool_executions.push(observation.clone());
-
-            trajectory.push_str(&format!(
-                "Step {}\nThought: {}\nAction: {}\nAction Input: {}\nObservation: {}\n\n",
-                step + 1,
-                thought,
-                action_name,
-                action_input,
-                observation
-            ));
-        }
-
-        let extract_input = ReActExtractStepInput {
-            input: serialized_input,
-            trajectory,
-            __phantom: std::marker::PhantomData,
-        };
-
-        let (extract_result, mut extract_metadata) = self.extract.call(extract_input).await.into_parts();
-        extract_metadata.tool_calls.extend(tool_calls);
-        extract_metadata.tool_executions.extend(tool_executions);
-
-        match extract_result {
-            Ok(output) => {
-                let output: ReActExtractStepOutput<S::Output> = output;
-                CallOutcome::ok(output.output, extract_metadata)
-            }
-            Err(err) => CallOutcome::err(err, extract_metadata),
-        }
+        self.run(input).await
     }
 }
 
@@ -292,7 +310,12 @@ where
         self
     }
 
-    pub fn tool<F, Fut>(mut self, name: impl Into<String>, description: impl Into<String>, tool_fn: F) -> Self
+    pub fn tool<F, Fut>(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        tool_fn: F,
+    ) -> Self
     where
         F: Fn(String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = String> + Send + 'static,

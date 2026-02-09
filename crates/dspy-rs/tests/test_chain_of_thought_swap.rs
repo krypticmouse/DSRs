@@ -49,8 +49,6 @@ struct QA {
     answer: String,
 }
 
-type QAOutput = __QAOutput;
-
 fn accepts_module<M: Module>(_: &M) {}
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]

@@ -16,6 +16,8 @@ use crate::{
     Prediction,
 };
 
+#[derive(facet::Facet)]
+#[facet(crate = facet)]
 pub struct Demo<S: Signature> {
     pub input: S::Input,
     pub output: S::Output,
@@ -27,10 +29,15 @@ impl<S: Signature> Demo<S> {
     }
 }
 
+#[derive(facet::Facet)]
+#[facet(crate = facet, opaque)]
 pub struct Predict<S: Signature> {
+    #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
+    #[facet(skip, opaque)]
     demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
+    #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
 

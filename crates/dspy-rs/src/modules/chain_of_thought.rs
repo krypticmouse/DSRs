@@ -18,7 +18,6 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 #[derive(Default, facet::Facet)]
 #[facet(crate = facet)]
 pub struct ChainOfThought<S: Signature> {
-    #[facet(opaque)]
     predictor: Predict<Augmented<S, Reasoning>>,
 }
 

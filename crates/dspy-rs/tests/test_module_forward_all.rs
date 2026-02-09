@@ -1,18 +1,33 @@
 use std::time::Duration;
 
-use dspy_rs::{CallMetadata, CallOutcome, Module, forward_all};
+use dspy_rs::{BamlType, CallMetadata, CallOutcome, Module, forward_all};
 use tokio::time::sleep;
 
 struct DelayEcho;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[BamlType]
+struct DelayInput {
+    value: i64,
+    delay_ms: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[BamlType]
+struct DelayOutput {
+    value: i64,
+}
+
 impl Module for DelayEcho {
-    type Input = (usize, u64);
-    type Output = usize;
+    type Input = DelayInput;
+    type Output = DelayOutput;
 
     async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
-        let (value, delay_ms) = input;
-        sleep(Duration::from_millis(delay_ms)).await;
-        CallOutcome::ok(value, CallMetadata::default())
+        sleep(Duration::from_millis(input.delay_ms.max(0) as u64)).await;
+        CallOutcome::ok(
+            DelayOutput { value: input.value },
+            CallMetadata::default(),
+        )
     }
 }
 
@@ -20,12 +35,29 @@ impl Module for DelayEcho {
 #[tokio::test]
 async fn forward_all_preserves_input_order() {
     let module = DelayEcho;
-    let inputs = vec![(0, 60), (1, 10), (2, 40), (3, 5)];
+    let inputs = vec![
+        DelayInput {
+            value: 0,
+            delay_ms: 60,
+        },
+        DelayInput {
+            value: 1,
+            delay_ms: 10,
+        },
+        DelayInput {
+            value: 2,
+            delay_ms: 40,
+        },
+        DelayInput {
+            value: 3,
+            delay_ms: 5,
+        },
+    ];
 
     let outcomes = forward_all(&module, inputs, 2).await;
     let outputs = outcomes
         .into_iter()
-        .map(|outcome| outcome.into_result().expect("forward should succeed"))
+        .map(|outcome| outcome.into_result().expect("forward should succeed").value)
         .collect::<Vec<_>>();
 
     assert_eq!(outputs, vec![0, 1, 2, 3]);

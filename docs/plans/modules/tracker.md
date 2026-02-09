@@ -1,8 +1,12 @@
 # Implementation Tracker
 
 ## Current State
-- **Slice**: 4
-- **Phase**: Done (Post-Implementation Cleanup pass committed)
+- **Slice**: 4.5-lite
+- **Phase**: Completed (Phase 4.5-lite Prerequisite Cleanup)
+- **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
+- **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
+- **Roadmap**: 4.5-lite (prerequisites) → V5 (optimizer interface) → V6 (dynamic graph) → Kill Pass (legacy deletion)
+- **Roadmap rationale**: Original Phase 4.5 descoped; C3/C4 recognized as V5 work, C2 quarantine replaced by post-V6 deletion sweep
 
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
@@ -37,10 +41,29 @@
 | `019c4467-1e16-7b82-a306-2989dd593944` | Plan refinery against ground truth for Slice 4 | 4 | Plan Refinery | Completed; produced `slice_4_refinery.md` and updated `slice_4.md` with spec/shape consistency checks | One ambiguity surfaced (`and_then` metadata semantics) and was resolved during arbitration in the approved plan |
 | `019c4475-b295-75b0-8b03-ecfd11932e5f` | Adversarial review against ground truth for Slice 4 | 4 | Adversarial Review | Completed; produced `slice_4_review.md` with one high and one medium finding | High: ReAct missing `Facet` derivation/discoverability. Medium: ReAct loop prompt formatting bypasses adapter building blocks |
 | `019c4478-d3ef-76b1-98e9-cbf5f4d127ec` | Apply agreed Slice 4 arbitrate fix (ReAct Facet discoverability) | 4 | Arbitrate | Completed; added `facet::Facet` derive on `ReAct` and skipped non-discoverable fields (`tools`, `max_steps`) while keeping predictor fields discoverable | Verified by `cargo check -p dspy-rs`, then re-ran targeted tests and Slice 4 smoke successfully |
+| `manual` | ReAct DSPy parity pass (single call surface + trajectory smoke evidence) | 4 | Implement → Smoke Test | Completed; removed public `call_with_trajectory`, kept trajectory in normal `CallOutcome` metadata, upgraded deterministic test to multi-tool calculator loop, and replaced smoke with GPT-5.2 calculator trajectory proof | `cargo test -p dspy-rs --test test_module_forward_all --test test_module_ext --test test_react_builder` and `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` passed |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
+- **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` as the `Module::forward` return type. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.forward(input).await?.answer`. The `call` vs `forward` naming distinction is eliminated. Former locked decision "call_with_meta folded into call" is superseded. Full revision brief: `docs/specs/modules/calling_convention_revision.md`.
+- **Phase 4.5-lite completion (2026-02-10):** Exit gates passed. `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test` are green after C1/C5/C6 execution.
+- **C1 implementation closeout (2026-02-10):** `Module::Input`/`Output` bounds now require `BamlType + for<'a> Facet<'a> + Send + Sync`, and combinator output bounds were tightened to match.
+- **Facet safety correction (2026-02-10):** Replaced unsound shape aliasing on legacy `Example`/`Prediction` with derive-based Facet metadata so layout/type metadata stays truthful while data-heavy fields remain skipped/opaque.
+- **C5 implementation closeout (2026-02-10):** Signature derive now emits clean helper names (`{Name}Input`, `{Name}Output`, `{Name}All`) and constructor helpers so users do not initialize phantom fields in literals.
+- **C6 implementation closeout (2026-02-10):** `ChainOfThought.predictor`, `ReAct.action`, and `ReAct.extract` are Facet-transparent, while non-parameter ReAct fields remain skipped. Added shape traversal coverage in `crates/dspy-rs/tests/test_module_facet_shapes.rs` (CoT, ReAct, Map nesting).
+- **C6 implementation note (2026-02-10):** `Map`/`AndThen` keep explicit `unsafe Facet` impls with skipped `facet::Opaque<F>` closure fields because current derive behavior imposes `F: Facet` for these generic wrappers.
+- **Roadmap revision (2026-02-09):** Descoped Phase 4.5 to "4.5-lite" (prerequisites only). C1 (Module bounds), C5 (macro naming), C6 (Facet annotations) are in scope. C3 (optimizer ABI) and C4 (evaluator adapter) reclassified as V5 feature work. C2 (legacy quarantine) replaced by post-V6 kill pass (straight deletion, no intermediate scaffolding). Rationale: building compatibility wrappers for a system about to be replaced is waste. Full C1-C8 arbitration outcomes recorded in `phase_4_5_cleanup_kickoff.md`.
+- **C1 arbitration (2026-02-09):** Accept option A (hard tighten now). `Module` bounds go to `BamlType + Facet` without compatibility wrappers. Legacy `Module<Input=Example, Output=Prediction>` impls stay on old types until kill pass.
+- **C2 arbitration (2026-02-09):** Skip quarantine entirely. Legacy surfaces frozen in place until kill pass after V5+V6.
+- **C3 arbitration (2026-02-09):** Reclassified as V5 scope. Optimizer ABI migration is the V5 slice definition.
+- **C4 arbitration (2026-02-09):** Reclassified as V5 scope. Typed evaluator surface replaces legacy `Evaluator` trait.
+- **C5 arbitration (2026-02-09):** Accept option B (redesign). Fix macro naming (`QAOutput` not `__QAOutput`) and phantom construction ergonomics.
+- **C6 arbitration (2026-02-09):** Accept option B (full matrix). Fix `#[facet(opaque)]` on predictor fields; add walker traversal shape tests.
+- **C7 arbitration (2026-02-09):** Accept option A (defer to V5). Error-path contract tests land when the walker exists.
+- **C8 arbitration (2026-02-09):** Accept option B (lock strategy). Annotation-first with optional trace inference. Recorded for V6 planning.
 - **State normalization (2026-02-09):** Tracker advanced from stale `Slice 3 / Done` to `Slice 4 / Research` per closure-audit transition rule (slice < 4 advances to next slice research).
+- **ReAct DSPy parity arbitration (2026-02-09):** Removed separate trajectory call API from `ReAct` to keep the single `CallOutcome` call surface aligned with `F4` and DSPy reference behavior (`forward` returns prediction while trajectory is part of returned data). Trajectory is now emitted through existing call metadata (`tool_executions`) and printed in smoke/tests without introducing another call path.
+- **ReAct calculator smoke proof (2026-02-09):** Updated `93-smoke-slice4-react-operational` to exercise multi-tool calculator flow (`add` → `multiply` → `add` → `finish`) and print step-by-step trajectory from metadata; real-model smoke on `openai:gpt-5.2` passed with `tool_calls: 3`, `tool_executions: 5`, `answer: 70`.
 - **Slice 4 research arbitration (2026-02-09):** Reclassified `U48` from `[EXISTS]` to `[MODIFY]` in `slice_4_research.md`; batching semantics are present, but API shape currently requires `display_progress` and does not match breadboard’s 3-arg `forward_all(&module, inputs, concurrency)`.
 - **Slice 4 plan review (2026-02-09):** Accepted high-level sequencing (U48 surface alignment → U51 combinators → U14 ReAct + tests), but flagged two areas for refinery against code/spec: (1) exact Facet strategy for closure-bearing wrappers (`Map`/`AndThen`), and (2) concrete plain-function tool adapter surface for ReAct builder.
 - **Slice 4 refinery arbitration (2026-02-09):** Resolved `and_then` metadata ambiguity by locking `ModuleExt::and_then` to a fallible transform signature `Fn(Output) -> Result<T, CallOutcomeErrorKind>` that preserves inner call metadata; removed stale `NEEDS ARBITRATION` marker from `slice_4.md`.
@@ -106,3 +129,5 @@
 <!-- Unresolved issues to revisit -->
 - `Post-Implementation Cleanup` remaining scope: strict typed `Module` bounds, generic-helper/`__phantom` ergonomics, and Option-C legacy-surface cutover (`MetaSignature`/`LegacyPredict`) are still large migrations with broad compatibility impact.
 - `V5 Implement`: complete walker discoverability for wrapper/combinator module trees as the canonical replacement for legacy `Optimizable` traversal.
+- Untyped `Example`/`Prediction` example policy and evaluator/feedback migration boundary are clarified in the kickoff doc; execution remains open under C2/C3/C4 gates.
+- Decision matrix and sequencing for cleanup kickoff are now centralized in `docs/plans/modules/phase_4_5_cleanup_kickoff.md`.

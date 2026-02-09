@@ -3,6 +3,17 @@
 Date: 2026-02-09
 Scope: Breadboard vertical slices `V1`, `V2`, `V3` from `docs/specs/modules/breadboard.md`.
 
+> Status Update (2026-02-09):
+> This file is a historical snapshot captured at Slice 1–3 closure time.
+> Current authoritative status for Slice 1–4 + cleanup routing:
+> - `docs/plans/modules/slices_closure_audit.md`
+> - `docs/plans/modules/tracker.md`
+> - `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
+>
+> Post-slice reconciliations completed after this snapshot:
+> - `U29` (`ChainOfThought` Facet discoverability) resolved.
+> - `build_system` API/spec mismatch resolved by spec alignment to fallible `Result<String>`.
+
 ## Audit Method
 - Re-read `docs/specs/modules/breadboard.md` slice details and `docs/specs/modules/shapes.md` / `docs/specs/modules/design_reference.md` constraints for `F1–F4`, `F5`, `F7`, `F11(CoT)`, and `F12`.
 - Verify implementation in repo code and tests.
@@ -118,3 +129,12 @@ Slice 3 verdict: **Partially Implemented** (three explicit hardening items defer
 - `cargo test -p dspy-rs --test test_call_outcome --test test_signature_schema --test test_chat_adapter_schema --test test_flatten_roundtrip --test test_chain_of_thought_swap --test test_with_reasoning_deref`
 
 Both command groups passed in current workspace state.
+
+## Post-Slice-4 Reconciliation (Added)
+
+The following rows in this historical snapshot have been superseded:
+
+- `U29` in Slice 2 table was deferred at snapshot time; it is now implemented (`ChainOfThought` derives `facet::Facet`).
+- `build_system` return-shape mismatch in the deferral ledger is now resolved by spec alignment.
+
+Use `docs/plans/modules/slices_closure_audit.md` for the current deferred ledger.

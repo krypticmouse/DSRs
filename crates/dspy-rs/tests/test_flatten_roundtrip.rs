@@ -11,8 +11,6 @@ struct QA {
     answer: String,
 }
 
-type QAOutput = __QAOutput;
-
 #[test]
 fn augmented_demo_roundtrips_through_adapter() {
     let adapter = ChatAdapter;

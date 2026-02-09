@@ -437,26 +437,49 @@ fn generate_helper_structs(
     runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let input_name = format_ident!("{}Input", name);
-    let output_name = format_ident!("__{}Output", name);
-    let all_name = format_ident!("__{}All", name);
+    let output_name = format_ident!("{}Output", name);
+    let all_name = format_ident!("{}All", name);
 
     let helper_generics = unconstrained_generics(generics);
     let (helper_impl_generics, helper_ty_generics, _helper_where_clause) =
         helper_generics.split_for_impl();
 
     let mut input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
-    if let Some(marker) = generic_marker_field(generics, &parsed.input_fields) {
-        input_fields.push(marker);
+    let input_marker = generic_marker_field(generics, &parsed.input_fields);
+    if let Some(marker) = &input_marker {
+        input_fields.push(marker.field.clone());
+    }
+    let input_new_args: Vec<_> = parsed.input_fields.iter().map(constructor_arg_tokens).collect();
+    let mut input_new_fields: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
+    if let Some(marker) = &input_marker {
+        input_new_fields.push(marker.init.clone());
     }
 
     let mut output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
-    if let Some(marker) = generic_marker_field(generics, &parsed.output_fields) {
-        output_fields.push(marker);
+    let output_marker = generic_marker_field(generics, &parsed.output_fields);
+    if let Some(marker) = &output_marker {
+        output_fields.push(marker.field.clone());
+    }
+    let output_new_args: Vec<_> = parsed.output_fields.iter().map(constructor_arg_tokens).collect();
+    let mut output_new_fields: Vec<_> =
+        parsed.output_fields.iter().map(constructor_init_tokens).collect();
+    if let Some(marker) = &output_marker {
+        output_new_fields.push(marker.init.clone());
     }
 
     let mut all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
-    if let Some(marker) = generic_marker_field(generics, &parsed.all_fields) {
-        all_fields.push(marker);
+    let all_marker = generic_marker_field(generics, &parsed.all_fields);
+    if let Some(marker) = &all_marker {
+        all_fields.push(marker.field.clone());
+    }
+    let all_new_args: Vec<_> = parsed.all_fields.iter().map(constructor_arg_tokens).collect();
+    let mut all_new_fields: Vec<_> = parsed.all_fields.iter().map(constructor_init_tokens).collect();
+    if let Some(marker) = &all_marker {
+        all_new_fields.push(marker.init.clone());
     }
 
     let facet = quote! { #runtime::__macro_support::bamltype::facet };
@@ -467,6 +490,14 @@ fn generate_helper_structs(
         #[facet(crate = #facet)]
         #vis struct #input_name #helper_generics {
             #(#input_fields),*
+        }
+
+        impl #helper_impl_generics #input_name #helper_ty_generics {
+            #vis fn new(#(#input_new_args),*) -> Self {
+                Self {
+                    #(#input_new_fields),*
+                }
+            }
         }
 
         impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #input_name #helper_ty_generics
@@ -487,6 +518,14 @@ fn generate_helper_structs(
             #(#output_fields),*
         }
 
+        impl #helper_impl_generics #output_name #helper_ty_generics {
+            pub fn new(#(#output_new_args),*) -> Self {
+                Self {
+                    #(#output_new_fields),*
+                }
+            }
+        }
+
         impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #output_name #helper_ty_generics
         where
             #output_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
@@ -503,6 +542,14 @@ fn generate_helper_structs(
         #[facet(crate = #facet)]
         pub struct #all_name #helper_generics {
             #(#all_fields),*
+        }
+
+        impl #helper_impl_generics #all_name #helper_ty_generics {
+            pub fn new(#(#all_new_args),*) -> Self {
+                Self {
+                    #(#all_new_fields),*
+                }
+            }
         }
 
         impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #all_name #helper_ty_generics
@@ -533,19 +580,29 @@ fn unconstrained_generics(generics: &syn::Generics) -> syn::Generics {
     helper_generics
 }
 
+struct MarkerFieldTokens {
+    field: proc_macro2::TokenStream,
+    init: proc_macro2::TokenStream,
+}
+
 fn generic_marker_field(
     generics: &syn::Generics,
     fields: &[ParsedField],
-) -> Option<proc_macro2::TokenStream> {
+) -> Option<MarkerFieldTokens> {
     let missing = missing_type_params_for_fields(generics, fields);
     if missing.is_empty() {
         return None;
     }
 
-    Some(quote! {
-        #[doc(hidden)]
-        #[facet(skip)]
-        __phantom: ::std::marker::PhantomData<(#(#missing),*)>
+    Some(MarkerFieldTokens {
+        field: quote! {
+            #[doc(hidden)]
+            #[facet(skip)]
+            _phantom: ::std::marker::PhantomData<(#(#missing),*)>
+        },
+        init: quote! {
+            _phantom: ::std::marker::PhantomData
+        },
     })
 }
 
@@ -619,6 +676,17 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         #(#attrs)*
         pub #ident: #ty
     }
+}
+
+fn constructor_arg_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
+    let ident = &field.ident;
+    let ty = &field.ty;
+    quote! { #ident: #ty }
+}
+
+fn constructor_init_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
+    let ident = &field.ident;
+    quote! { #ident }
 }
 
 fn generate_field_metadata(
@@ -717,7 +785,7 @@ fn generate_baml_delegation(
     parsed: &ParsedSignature,
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
-    let all_name = format_ident!("__{}All", name);
+    let all_name = format_ident!("{}All", name);
     let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
@@ -774,7 +842,7 @@ fn generate_signature_impl(
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let input_name = format_ident!("{}Input", name);
-    let output_name = format_ident!("__{}Output", name);
+    let output_name = format_ident!("{}Output", name);
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let instruction = LitStr::new(&parsed.instruction, proc_macro2::Span::call_site());

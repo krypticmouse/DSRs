@@ -1,5 +1,16 @@
 # S1 Spike: Generic `#[derive(Signature)]` with `#[flatten]`
 
+> Status Update (2026-02-09):
+> This spike captures pre-implementation gap analysis.
+> S1 architectural direction is now locked and executed as Option C (full replacement direction) in slices 1-4.
+>
+> Current source of truth for implementation status and remaining cleanup:
+> - `docs/plans/modules/slices_closure_audit.md`
+> - `docs/plans/modules/tracker.md`
+> - `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
+>
+> Remaining work is cleanup hardening (typed bounds tightening, F12 helper contract hardening, legacy compatibility cutover), not reopening S1 direction.
+
 ## Context
 
 S1 is explicitly called out as a high-priority spike in shaping/design docs: generic `Signature` derive with `#[flatten]` is required for F12 and module authoring (`docs/specs/modules/shapes.md:140`, `docs/specs/modules/design_reference.md:117`, `docs/specs/modules/design_reference.md:1006`).
