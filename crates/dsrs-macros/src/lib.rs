@@ -36,6 +36,20 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
     }
 }
 
+#[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
+pub fn derive_augmentation(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match expand_augmentation(&input, &runtime) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
 fn expand_signature(
     input: &DeriveInput,
     runtime: &syn::Path,
@@ -669,17 +683,6 @@ fn generate_signature_impl(
 
     let instruction = LitStr::new(&parsed.instruction, proc_macro2::Span::call_site());
 
-    let input_field_names: Vec<_> = parsed
-        .input_fields
-        .iter()
-        .map(|field| &field.ident)
-        .collect();
-    let output_field_names: Vec<_> = parsed
-        .output_fields
-        .iter()
-        .map(|field| &field.ident)
-        .collect();
-
     let input_fields_static = format_ident!("__{}_INPUT_FIELDS", name.to_string().to_uppercase());
     let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
     let input_metadata_static =
@@ -723,26 +726,211 @@ fn generate_signature_impl(
             fn output_format_content() -> &'static #runtime::OutputFormatContent {
                 <#output_name as #runtime::BamlType>::baml_output_format()
             }
+        }
+    }
+}
 
-            fn from_parts(input: Self::Input, output: Self::Output) -> Self {
-                Self {
-                    #(#input_field_names: input.#input_field_names),*,
-                    #(#output_field_names: output.#output_field_names),*
-                }
+#[derive(Clone)]
+struct AugmentField {
+    ident: Ident,
+    ty: syn::Type,
+    description: String,
+    alias: Option<String>,
+}
+
+#[derive(Default)]
+struct AugmentOptions {
+    prepend: bool,
+}
+
+fn expand_augmentation(
+    input: &DeriveInput,
+    runtime: &syn::Path,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let data = match &input.data {
+        Data::Struct(data) => data,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "#[derive(Augmentation)] only supports structs with named fields",
+            ));
+        }
+    };
+
+    let fields = match &data.fields {
+        Fields::Named(named) => &named.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "#[derive(Augmentation)] requires named fields",
+            ));
+        }
+    };
+
+    let options = parse_augment_options(&input.attrs)?;
+    let parsed_fields = parse_augmentation_fields(fields)?;
+
+    if parsed_fields.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input,
+            "#[derive(Augmentation)] requires at least one #[output] field",
+        ));
+    }
+
+    let struct_name = &input.ident;
+    let wrapper_name = format_ident!("With{}", struct_name);
+
+    let reasoning_fields: Vec<_> = parsed_fields
+        .iter()
+        .map(|field| {
+            let ident = &field.ident;
+            let ty = &field.ty;
+            let mut attrs = Vec::new();
+            if !field.description.is_empty() {
+                let doc = LitStr::new(&field.description, proc_macro2::Span::call_site());
+                attrs.push(quote! { #[doc = #doc] });
             }
+            if let Some(alias) = &field.alias {
+                let lit = LitStr::new(alias, proc_macro2::Span::call_site());
+                attrs.push(quote! { #[facet(rename = #lit)] });
+            }
+            quote! {
+                #(#attrs)*
+                pub #ident: #ty
+            }
+        })
+        .collect();
 
-            fn into_parts(self) -> (Self::Input, Self::Output) {
-                (
-                    #input_name {
-                        #(#input_field_names: self.#input_field_names),*
-                    },
-                    #output_name {
-                        #(#output_field_names: self.#output_field_names),*
-                    },
-                )
+    let output_field = quote! {
+        #[facet(flatten)]
+        pub inner: O
+    };
+
+    let (first_fields, last_fields) = if options.prepend {
+        (reasoning_fields, vec![output_field])
+    } else {
+        (vec![output_field], reasoning_fields)
+    };
+
+    Ok(quote! {
+        #[derive(Clone, Debug, #runtime::__macro_support::bamltype::facet::Facet)]
+        #[facet(crate = #runtime::__macro_support::bamltype::facet)]
+        pub struct #wrapper_name<O> {
+            #(#first_fields),*,
+            #(#last_fields),*
+        }
+
+        impl<O> std::ops::Deref for #wrapper_name<O> {
+            type Target = O;
+            fn deref(&self) -> &Self::Target {
+                &self.inner
+            }
+        }
+
+        impl<O> #runtime::__macro_support::bamltype::BamlSchema for #wrapper_name<O>
+        where
+            O: for<'a> #runtime::__macro_support::bamltype::facet::Facet<'a>,
+        {
+            fn baml_schema(
+            ) -> &'static #runtime::__macro_support::bamltype::SchemaBundle {
+                static SCHEMA: ::std::sync::OnceLock<
+                    #runtime::__macro_support::bamltype::SchemaBundle,
+                > = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #runtime::__macro_support::bamltype::SchemaBundle::from_shape(
+                        <Self as #runtime::__macro_support::bamltype::facet::Facet<'_>>::SHAPE,
+                    )
+                })
+            }
+        }
+
+        impl #runtime::augmentation::Augmentation for #struct_name {
+            type Wrap<T: #runtime::BamlType + for<'a> #runtime::Facet<'a> + Send + Sync> =
+                #wrapper_name<T>;
+        }
+    })
+}
+
+fn parse_augment_options(attrs: &[Attribute]) -> syn::Result<AugmentOptions> {
+    let mut options = AugmentOptions::default();
+    for attr in attrs {
+        if !attr.path().is_ident("augment") {
+            continue;
+        }
+        let meta = attr.parse_args_with(
+            syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated,
+        )?;
+        for ident in meta {
+            let name = ident.to_string();
+            match name.as_str() {
+                "output" => {}
+                "prepend" => options.prepend = true,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        format!("unsupported #[augment] option `{other}`"),
+                    ));
+                }
             }
         }
     }
+    Ok(options)
+}
+
+fn parse_augmentation_fields(
+    fields: &syn::punctuated::Punctuated<syn::Field, Token![,]>,
+) -> syn::Result<Vec<AugmentField>> {
+    let mut parsed = Vec::new();
+
+    for field in fields {
+        let ident = field.ident.clone().ok_or_else(|| {
+            syn::Error::new_spanned(field, "#[derive(Augmentation)] requires named fields")
+        })?;
+
+        let mut is_output = false;
+        let mut alias = None;
+        let mut desc_override = None;
+
+        for attr in &field.attrs {
+            if attr.path().is_ident("output") {
+                is_output = true;
+                if let Some(desc) = parse_desc_from_attr(attr, "output")? {
+                    desc_override = Some(desc);
+                }
+            } else if attr.path().is_ident("input") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[derive(Augmentation)] does not support #[input] fields",
+                ));
+            } else if attr.path().is_ident("alias") {
+                alias = Some(parse_string_attr(attr, "alias")?);
+            } else if attr.path().is_ident("flatten") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[derive(Augmentation)] does not support #[flatten] on fields",
+                ));
+            }
+        }
+
+        if !is_output {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[derive(Augmentation)] requires fields to be marked #[output]",
+            ));
+        }
+
+        let doc_comment = collect_doc_comment(&field.attrs);
+        let description = desc_override.unwrap_or(doc_comment);
+
+        parsed.push(AugmentField {
+            ident,
+            ty: field.ty.clone(),
+            description,
+            alias,
+        });
+    }
+
+    Ok(parsed)
 }
 
 #[allow(unused_assignments, non_snake_case)]

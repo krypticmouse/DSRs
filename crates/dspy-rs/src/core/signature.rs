@@ -46,8 +46,8 @@ pub trait MetaSignature: Send + Sync {
 }
 
 pub trait Signature: Send + Sync + 'static {
-    type Input: BamlType + Facet<'static> + Send + Sync;
-    type Output: BamlType + Facet<'static> + Send + Sync;
+    type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
+    type Output: BamlType + for<'a> Facet<'a> + Send + Sync;
 
     fn instruction() -> &'static str;
 
@@ -76,7 +76,4 @@ pub trait Signature: Send + Sync + 'static {
     {
         Self::schema().output_format()
     }
-
-    fn from_parts(input: Self::Input, output: Self::Output) -> Self;
-    fn into_parts(self) -> (Self::Input, Self::Output);
 }

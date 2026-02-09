@@ -246,21 +246,6 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
-    #[deprecated(since = "0.7.4", note = "Use PredictBuilder::demo(Demo::new(input, output))")]
-    pub fn demo_signature(mut self, demo: S) -> Self {
-        self.demos.push(demo_from_signature(demo));
-        self
-    }
-
-    #[deprecated(
-        since = "0.7.4",
-        note = "Use PredictBuilder::with_demos(...) with Demo<S> values"
-    )]
-    pub fn with_demo_signatures(mut self, demos: impl IntoIterator<Item = S>) -> Self {
-        self.demos.extend(demos.into_iter().map(demo_from_signature));
-        self
-    }
-
     pub fn add_tool(mut self, tool: impl ToolDyn + 'static) -> Self {
         self.tools.push(Arc::new(tool));
         self
@@ -362,15 +347,6 @@ where
     S::Output::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
-fn demo_from_signature<S: Signature>(signature: S) -> Demo<S>
-where
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    let (input, output) = signature.into_parts();
-    Demo::new(input, output)
-}
-
 fn demo_from_example<S: Signature>(example: Example) -> Result<Demo<S>>
 where
     S::Input: BamlType,
@@ -436,7 +412,7 @@ fn predict_error_from_outcome(kind: CallOutcomeErrorKind, metadata: CallMetadata
 
 impl<S> Module for Predict<S>
 where
-    S: Signature + Clone + BamlType,
+    S: Signature + Clone,
     S::Input: BamlType,
     S::Output: BamlType,
 {

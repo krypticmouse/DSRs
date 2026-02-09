@@ -532,7 +532,7 @@ impl ChatAdapter {
 
         let mut result = String::new();
         for field_spec in schema.input_fields() {
-            if let Some(value) = value_for_path(&baml_value, field_spec.path()) {
+            if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
                 result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
                 result.push_str(&format_baml_value_for_prompt_typed(
                     value,
@@ -555,7 +555,7 @@ impl ChatAdapter {
 
         let mut sections = Vec::new();
         for field_spec in schema.output_fields() {
-            if let Some(value) = value_for_path(&baml_value, field_spec.path()) {
+            if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
                 sections.push(format!(
                     "[[ ## {} ## ]]\n{}",
                     field_spec.lm_name,
@@ -569,14 +569,16 @@ impl ChatAdapter {
         result
     }
 
-    pub fn format_demo_typed<S: Signature>(&self, demo: S) -> (String, String)
+    pub fn format_demo_typed<S: Signature>(
+        &self,
+        demo: &crate::predictors::Demo<S>,
+    ) -> (String, String)
     where
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        let (input, output) = demo.into_parts();
-        let user_msg = self.format_user_message_typed::<S>(&input);
-        let assistant_msg = self.format_assistant_message_typed::<S>(&output);
+        let user_msg = self.format_user_message_typed::<S>(&demo.input);
+        let assistant_msg = self.format_assistant_message_typed::<S>(&demo.output);
         (user_msg, assistant_msg)
     }
 
@@ -880,13 +882,32 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     parsed
 }
 
-fn value_for_path<'a>(value: &'a BamlValue, path: &crate::FieldPath) -> Option<&'a BamlValue> {
+fn value_for_path_relaxed<'a>(
+    value: &'a BamlValue,
+    path: &crate::FieldPath,
+) -> Option<&'a BamlValue> {
     let mut current = value;
-    for part in path.iter() {
-        current = match current {
-            BamlValue::Class(_, fields) | BamlValue::Map(fields) => fields.get(part)?,
+    let parts: Vec<_> = path.iter().collect();
+    let mut idx = 0usize;
+    while idx < parts.len() {
+        match current {
+            BamlValue::Class(_, fields) | BamlValue::Map(fields) => {
+                if let Some(next) = fields.get(parts[idx]) {
+                    current = next;
+                    idx += 1;
+                    continue;
+                }
+                if idx + 1 < parts.len() {
+                    if let Some(next) = fields.get(parts[idx + 1]) {
+                        current = next;
+                        idx += 2;
+                        continue;
+                    }
+                }
+                return None;
+            }
             _ => return None,
-        };
+        }
     }
     Some(current)
 }

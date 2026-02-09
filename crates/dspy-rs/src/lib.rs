@@ -1,18 +1,22 @@
 extern crate self as dspy_rs;
 
 pub mod adapter;
+pub mod augmentation;
 pub mod core;
 pub mod data;
 pub mod evaluate;
+pub mod modules;
 pub mod optimizer;
 pub mod predictors;
 pub mod trace;
 pub mod utils;
 
 pub use adapter::chat::*;
+pub use augmentation::*;
 pub use core::*;
 pub use data::*;
 pub use evaluate::*;
+pub use modules::*;
 pub use optimizer::*;
 pub use predictors::*;
 pub use utils::*;
@@ -20,6 +24,7 @@ pub use utils::*;
 pub use bamltype::BamlConvertError;
 pub use bamltype::BamlType; // attribute macro
 pub use bamltype::Shape;
+pub use facet::Facet;
 pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };

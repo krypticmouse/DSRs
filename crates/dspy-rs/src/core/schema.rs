@@ -26,6 +26,7 @@ impl FieldPath {
         self.parts.push(part);
     }
 
+
     pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.parts.iter().copied()
     }
@@ -193,7 +194,7 @@ fn collect_fields(
         }
     };
 
-    let mut metadata_by_name = HashMap::new();
+    let mut metadata_by_name: HashMap<&'static str, &'static FieldMetadataSpec> = HashMap::new();
     for item in metadata {
         metadata_by_name.insert(item.rust_name, item);
     }
@@ -205,7 +206,7 @@ fn collect_fields(
         }
         let path = FieldPath::new([field.name]);
         let field_meta = metadata_by_name.get(field.name).copied();
-        emit_field(field, path, field_meta, &mut fields)?;
+        emit_field(field, path, field_meta, &metadata_by_name, &mut fields)?;
     }
 
     Ok(fields)
@@ -215,6 +216,7 @@ fn emit_field(
     field: &'static Field,
     path: FieldPath,
     inherited: Option<&FieldMetadataSpec>,
+    metadata_by_name: &HashMap<&'static str, &'static FieldMetadataSpec>,
     out: &mut Vec<FieldSchema>,
 ) -> Result<(), String> {
     if field.should_skip_deserializing() {
@@ -240,7 +242,11 @@ fn emit_field(
             }
             let mut nested_path = path.clone();
             nested_path.push(nested.name);
-            emit_field(nested, nested_path, inherited, out)?;
+            let nested_meta = metadata_by_name
+                .get(nested.name)
+                .copied()
+                .or(inherited);
+            emit_field(nested, nested_path, nested_meta, metadata_by_name, out)?;
         }
 
         return Ok(());
