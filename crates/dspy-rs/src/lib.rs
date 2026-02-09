@@ -19,6 +19,7 @@ pub use utils::*;
 
 pub use bamltype::BamlConvertError;
 pub use bamltype::BamlType; // attribute macro
+pub use bamltype::Shape;
 pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };

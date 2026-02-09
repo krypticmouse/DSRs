@@ -4,20 +4,26 @@ use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
 use tracing::debug;
 
-use crate::{BamlValue, ConversionError, Example, PredictError, Prediction, core::MetaSignature};
+use crate::{
+    BamlValue, CallMetadata, CallOutcome, CallOutcomeErrorKind, ConversionError, Example,
+    Prediction, core::MetaSignature,
+};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
-    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction>;
 
-    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError> {
-        Err(PredictError::Conversion {
-            source: ConversionError::TypeMismatch {
-                expected: "typed module",
-                actual: "legacy module".to_string(),
-            },
-            parsed: input,
-        })
+    async fn forward_untyped(&self, input: BamlValue) -> CallOutcome<BamlValue> {
+        CallOutcome::err(
+            CallOutcomeErrorKind::Conversion(
+                ConversionError::TypeMismatch {
+                    expected: "typed module",
+                    actual: "legacy module".to_string(),
+                },
+                input,
+            ),
+            CallMetadata::default(),
+        )
     }
 
     #[tracing::instrument(
@@ -47,7 +53,11 @@ pub trait Module: Send + Sync {
         let indexed_results: Vec<(usize, Result<Prediction>)> =
             stream::iter(inputs.into_iter().enumerate())
                 .map(|(idx, example)| async move {
-                    let result = self.forward(example).await;
+                    let result = self
+                        .forward(example)
+                        .await
+                        .into_result()
+                        .map_err(|err| anyhow::anyhow!(err));
                     (idx, result)
                 })
                 .buffer_unordered(max_concurrency)

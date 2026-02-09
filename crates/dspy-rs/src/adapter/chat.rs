@@ -19,12 +19,13 @@ use crate::{
     JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
     RenderOptions, Signature, TypeIR,
 };
+use crate::{CallMetadata, CallOutcomeErrorKind};
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[\[ ## (\w+) ## \]\]").unwrap());
+    LazyLock::new(|| Regex::new(r"^\[\[ ## ([^#]+?) ## \]\]").unwrap());
 
 fn render_field_type_schema(
     parent_format: &OutputFormatContent,
@@ -195,16 +196,19 @@ impl ChatAdapter {
         &self,
         instruction_override: Option<&str>,
     ) -> String {
-        let instruction = instruction_override.unwrap_or(S::instruction());
+        let schema = S::schema();
+        let instruction = instruction_override.unwrap_or(schema.instruction());
         let instruction = if instruction.is_empty() {
-            let input_fields = S::input_fields()
+            let input_fields = schema
+                .input_fields()
                 .iter()
-                .map(|field| format!("`{}`", field.name))
+                .map(|field| format!("`{}`", field.lm_name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let output_fields = S::output_fields()
+            let output_fields = schema
+                .output_fields()
                 .iter()
-                .map(|field| format!("`{}`", field.name))
+                .map(|field| format!("`{}`", field.lm_name))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("Given the fields {input_fields}, produce the fields {output_fields}.")
@@ -223,17 +227,18 @@ impl ChatAdapter {
     }
 
     fn format_response_instructions_typed<S: Signature>(&self) -> String {
-        let mut output_fields = S::output_fields().iter();
+        let schema = S::schema();
+        let mut output_fields = schema.output_fields().iter();
         let Some(first_field) = output_fields.next() else {
             return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
         };
 
         let mut message = format!(
             "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
-            first_field.name
+            first_field.lm_name
         );
         for field in output_fields {
-            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.name));
+            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.lm_name));
         }
         message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
@@ -452,29 +457,30 @@ impl ChatAdapter {
     }
 
     fn format_field_descriptions_typed<S: Signature>(&self) -> String {
+        let schema = S::schema();
         let input_format = <S::Input as BamlType>::baml_output_format();
-        let output_format = S::output_format_content();
+        let output_format = schema.output_format();
 
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
-        for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(input_format));
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
+        for (i, field) in schema.input_fields().iter().enumerate() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, Some(input_format));
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+            if !field.docs.is_empty() {
                 line.push_str(": ");
-                line.push_str(field.description);
+                line.push_str(&field.docs);
             }
             lines.push(line);
         }
 
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
-        for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(output_format));
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
+        for (i, field) in schema.output_fields().iter().enumerate() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, Some(output_format));
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+            if !field.docs.is_empty() {
                 line.push_str(": ");
-                line.push_str(field.description);
+                line.push_str(&field.docs);
             }
             lines.push(line);
         }
@@ -483,30 +489,30 @@ impl ChatAdapter {
     }
 
     fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
+        let schema = S::schema();
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
         ];
 
-        for field in S::input_fields() {
-            lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(field.name.to_string());
+        for field in schema.input_fields() {
+            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
+            lines.push(field.lm_name.to_string());
             lines.push(String::new());
         }
 
-        let parent_format = S::output_format_content();
-        for field in S::output_fields() {
-            let type_ir = (field.type_ir)();
-            let type_name = render_type_name_for_prompt(&type_ir, Some(parent_format));
-            let schema = render_field_type_schema(parent_format, &type_ir)?;
-            lines.push(format!("[[ ## {} ## ]]", field.name));
+        let parent_format = schema.output_format();
+        for field in schema.output_fields() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, Some(parent_format));
+            let rendered_schema = render_field_type_schema(parent_format, &field.type_ir)?;
+            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
             lines.push(format!(
                 "Output field `{}` should be of type: {type_name}",
-                field.name
+                field.lm_name
             ));
-            if !schema.is_empty() && schema != type_name {
+            if !rendered_schema.is_empty() && rendered_schema != type_name {
                 lines.push(String::new());
-                lines.push(format_schema_for_prompt(&schema));
+                lines.push(format_schema_for_prompt(&rendered_schema));
             }
             lines.push(String::new());
         }
@@ -520,16 +526,14 @@ impl ChatAdapter {
     where
         S::Input: BamlType,
     {
+        let schema = S::schema();
         let baml_value = input.to_baml_value();
-        let Some(fields) = baml_value_fields(&baml_value) else {
-            return String::new();
-        };
         let input_output_format = <S::Input as BamlType>::baml_output_format();
 
         let mut result = String::new();
-        for field_spec in S::input_fields() {
-            if let Some(value) = fields.get(field_spec.rust_name) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
+        for field_spec in schema.input_fields() {
+            if let Some(value) = value_for_path(&baml_value, field_spec.path()) {
+                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
                 result.push_str(&format_baml_value_for_prompt_typed(
                     value,
                     input_output_format,
@@ -546,17 +550,15 @@ impl ChatAdapter {
     where
         S::Output: BamlType,
     {
+        let schema = S::schema();
         let baml_value = output.to_baml_value();
-        let Some(fields) = baml_value_fields(&baml_value) else {
-            return String::new();
-        };
 
         let mut sections = Vec::new();
-        for field_spec in S::output_fields() {
-            if let Some(value) = fields.get(field_spec.rust_name) {
+        for field_spec in schema.output_fields() {
+            if let Some(value) = value_for_path(&baml_value, field_spec.path()) {
                 sections.push(format!(
                     "[[ ## {} ## ]]\n{}",
-                    field_spec.name,
+                    field_spec.lm_name,
                     format_baml_value_for_prompt(value)
                 ));
             }
@@ -585,15 +587,16 @@ impl ChatAdapter {
         skip(self, response),
         fields(
             signature = std::any::type_name::<S>(),
-            output_field_count = S::output_fields().len()
+            output_field_count = S::schema().output_fields().len()
         )
     )]
     pub fn parse_response_typed<S: Signature>(
         &self,
         response: &Message,
     ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
+        let schema = S::schema();
         let content = response.content();
-        let output_format = S::output_format_content();
+        let output_format = schema.output_format();
         let sections = parse_sections(&content);
 
         let mut metas = IndexMap::new();
@@ -603,11 +606,11 @@ impl ChatAdapter {
         let mut checks_failed = 0usize;
         let mut asserts_failed = 0usize;
 
-        for field in S::output_fields() {
-            let rust_name = field.rust_name.to_string();
-            let type_ir = (field.type_ir)();
+        for field in schema.output_fields() {
+            let rust_name = field.rust_name.clone();
+            let type_ir = field.type_ir.clone();
 
-            let raw_text = match sections.get(field.name) {
+            let raw_text = match sections.get(field.lm_name) {
                 Some(text) => text.clone(),
                 None => {
                     debug!(field = %rust_name, "missing output field in response");
@@ -717,7 +720,7 @@ impl ChatAdapter {
                 },
             );
 
-            output_map.insert(rust_name, baml_value);
+            insert_baml_at_path(&mut output_map, field.path(), baml_value);
         }
 
         if !errors.is_empty() {
@@ -751,6 +754,25 @@ impl ChatAdapter {
         );
 
         Ok((typed_output, metas))
+    }
+
+    pub fn parse_response_with_schema<S: Signature>(
+        &self,
+        response: Message,
+    ) -> std::result::Result<(S::Output, CallMetadata), CallOutcomeErrorKind> {
+        let raw_response = response.content();
+        let (output, field_meta) = self
+            .parse_response_typed::<S>(&response)
+            .map_err(CallOutcomeErrorKind::Parse)?;
+        let metadata = CallMetadata::new(
+            raw_response,
+            crate::LmUsage::default(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            field_meta,
+        );
+        Ok((output, metadata))
     }
 
     #[tracing::instrument(
@@ -830,7 +852,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(caps) = FIELD_HEADER_PATTERN.captures(trimmed) {
-            let header = caps.get(1).unwrap().as_str().to_string();
+            let header = caps.get(1).unwrap().as_str().trim().to_string();
             let marker = caps.get(0).unwrap();
             let remaining = trimmed[marker.end()..].trim();
 
@@ -858,14 +880,54 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     parsed
 }
 
-fn baml_value_fields(
-    value: &BamlValue,
-) -> Option<&bamltype::baml_types::BamlMap<String, BamlValue>> {
-    match value {
-        BamlValue::Class(_, fields) => Some(fields),
-        BamlValue::Map(fields) => Some(fields),
-        _ => None,
+fn value_for_path<'a>(value: &'a BamlValue, path: &crate::FieldPath) -> Option<&'a BamlValue> {
+    let mut current = value;
+    for part in path.iter() {
+        current = match current {
+            BamlValue::Class(_, fields) | BamlValue::Map(fields) => fields.get(part)?,
+            _ => return None,
+        };
     }
+    Some(current)
+}
+
+fn insert_baml_at_path(
+    root: &mut bamltype::baml_types::BamlMap<String, BamlValue>,
+    path: &crate::FieldPath,
+    value: BamlValue,
+) {
+    let parts: Vec<_> = path.iter().collect();
+    if parts.is_empty() {
+        return;
+    }
+    insert_baml_at_parts(root, &parts, value);
+}
+
+fn insert_baml_at_parts(
+    root: &mut bamltype::baml_types::BamlMap<String, BamlValue>,
+    parts: &[&'static str],
+    value: BamlValue,
+) {
+    if parts.len() == 1 {
+        root.insert(parts[0].to_string(), value);
+        return;
+    }
+
+    let key = parts[0].to_string();
+    let entry = root
+        .entry(key)
+        .or_insert_with(|| BamlValue::Map(bamltype::baml_types::BamlMap::new()));
+
+    if !matches!(entry, BamlValue::Map(_) | BamlValue::Class(_, _)) {
+        *entry = BamlValue::Map(bamltype::baml_types::BamlMap::new());
+    }
+
+    let child = match entry {
+        BamlValue::Map(map) | BamlValue::Class(_, map) => map,
+        _ => unreachable!(),
+    };
+
+    insert_baml_at_parts(child, &parts[1..], value);
 }
 
 fn format_baml_value_for_prompt(value: &BamlValue) -> String {

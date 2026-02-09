@@ -1,41 +1,31 @@
-use indexmap::IndexMap;
-use rig::message::ToolCall;
+use crate::LmUsage;
 
-use crate::{Flag, LmUsage};
+use super::{CallMetadata, CallOutcome, CallOutcomeError, ConstraintResult, FieldMeta};
 
+#[deprecated(
+    since = "0.7.4",
+    note = "Use CallOutcome<O> as the primary typed call surface"
+)]
 pub struct CallResult<O> {
     pub output: O,
     pub raw_response: String,
     pub lm_usage: LmUsage,
-    pub tool_calls: Vec<ToolCall>,
+    pub tool_calls: Vec<rig::message::ToolCall>,
     pub tool_executions: Vec<String>,
     pub node_id: Option<usize>,
-    fields: IndexMap<String, FieldMeta>,
+    fields: indexmap::IndexMap<String, FieldMeta>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FieldMeta {
-    pub raw_text: String,
-    pub flags: Vec<Flag>,
-    pub checks: Vec<ConstraintResult>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ConstraintResult {
-    pub label: String,
-    pub expression: String,
-    pub passed: bool,
-}
-
+#[allow(deprecated)]
 impl<O> CallResult<O> {
     pub fn new(
         output: O,
         raw_response: String,
         lm_usage: LmUsage,
-        tool_calls: Vec<ToolCall>,
+        tool_calls: Vec<rig::message::ToolCall>,
         tool_executions: Vec<String>,
         node_id: Option<usize>,
-        fields: IndexMap<String, FieldMeta>,
+        fields: indexmap::IndexMap<String, FieldMeta>,
     ) -> Self {
         Self {
             output,
@@ -48,7 +38,7 @@ impl<O> CallResult<O> {
         }
     }
 
-    pub fn field_flags(&self, field: &str) -> &[Flag] {
+    pub fn field_flags(&self, field: &str) -> &[crate::Flag] {
         self.fields
             .get(field)
             .map(|meta| meta.flags.as_slice())
@@ -67,7 +57,7 @@ impl<O> CallResult<O> {
     }
 
     pub fn field_names(&self) -> impl Iterator<Item = &str> + '_ {
-        self.fields.keys().map(|name| name.as_str())
+        self.fields.keys().map(|name: &String| name.as_str())
     }
 
     pub fn has_failed_checks(&self) -> bool {
@@ -75,6 +65,46 @@ impl<O> CallResult<O> {
             .values()
             .flat_map(|meta| &meta.checks)
             .any(|check| !check.passed)
+    }
+
+    pub fn into_outcome(self) -> CallOutcome<O> {
+        CallOutcome::ok(
+            self.output,
+            CallMetadata::new(
+                self.raw_response,
+                self.lm_usage,
+                self.tool_calls,
+                self.tool_executions,
+                self.node_id,
+                self.fields,
+            ),
+        )
+    }
+}
+
+#[allow(deprecated)]
+impl<O> From<CallResult<O>> for CallOutcome<O> {
+    fn from(value: CallResult<O>) -> Self {
+        value.into_outcome()
+    }
+}
+
+#[allow(deprecated)]
+impl<O> TryFrom<CallOutcome<O>> for CallResult<O> {
+    type Error = CallOutcomeError;
+
+    fn try_from(value: CallOutcome<O>) -> Result<Self, Self::Error> {
+        let metadata = value.metadata().clone();
+        let output = value.into_result()?;
+        Ok(Self::new(
+            output,
+            metadata.raw_response,
+            metadata.lm_usage,
+            metadata.tool_calls,
+            metadata.tool_executions,
+            metadata.node_id,
+            metadata.field_meta,
+        ))
     }
 }
 
@@ -84,7 +114,7 @@ mod tests {
 
     #[test]
     fn call_result_accessors() {
-        let mut fields = IndexMap::new();
+        let mut fields = indexmap::IndexMap::new();
         fields.insert(
             "answer".to_string(),
             FieldMeta {
@@ -98,6 +128,7 @@ mod tests {
             },
         );
 
+        #[allow(deprecated)]
         let result = CallResult::new(
             "ok",
             "raw".to_string(),

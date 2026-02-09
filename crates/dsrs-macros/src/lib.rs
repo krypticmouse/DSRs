@@ -19,7 +19,10 @@ pub fn derive_optimizable(input: TokenStream) -> TokenStream {
     optim::optimizable_impl(input)
 }
 
-#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format))]
+#[proc_macro_derive(
+    Signature,
+    attributes(input, output, check, assert, alias, format, flatten)
+)]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let runtime = match resolve_dspy_rs_path() {
@@ -67,6 +70,7 @@ struct ParsedField {
     ty: syn::Type,
     is_input: bool,
     is_output: bool,
+    is_flatten: bool,
     description: String,
     alias: Option<String>,
     format: Option<String>,
@@ -190,6 +194,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
 
     let mut is_input = false;
     let mut is_output = false;
+    let mut is_flatten = false;
     let mut alias = None;
     let mut format = None;
     let mut constraints = Vec::new();
@@ -216,6 +221,8 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
             format = Some(parse_string_attr(attr, "format")?);
+        } else if attr.path().is_ident("flatten") {
+            is_flatten = true;
         } else if attr.path().is_ident("check") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Check)?);
         } else if attr.path().is_ident("assert") {
@@ -250,6 +257,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         ty: field.ty.clone(),
         is_input,
         is_output,
+        is_flatten,
         description,
         alias,
         format,
@@ -431,6 +439,10 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         attrs.push(quote! { #[doc = #doc] });
     }
 
+    if field.is_flatten {
+        attrs.push(quote! { #[facet(flatten)] });
+    }
+
     // Note: aliases and constraints are handled at the FieldSpec level in
     // generate_field_specs, not via struct attributes. The adapter layer uses
     // FieldSpec metadata for LLM name mapping and constraint enforcement.
@@ -449,10 +461,13 @@ fn generate_field_specs(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let prefix = name.to_string().to_lowercase();
     let array_name = format_ident!("__{}_{}_FIELDS", name.to_string().to_uppercase(), kind);
+    let metadata_array_name =
+        format_ident!("__{}_{}_METADATA", name.to_string().to_uppercase(), kind);
 
     let mut type_ir_fns = Vec::new();
     let mut constraint_arrays = Vec::new();
     let mut field_specs = Vec::new();
+    let mut metadata_specs = Vec::new();
 
     for field in fields {
         let field_name = field.ident.to_string();
@@ -463,6 +478,13 @@ fn generate_field_specs(
         let llm_name = LitStr::new(llm_name, proc_macro2::Span::call_site());
         let rust_name = LitStr::new(&field_name, proc_macro2::Span::call_site());
         let description = LitStr::new(&field.description, proc_macro2::Span::call_site());
+        let alias = match &field.alias {
+            Some(value) => {
+                let lit = LitStr::new(value, proc_macro2::Span::call_site());
+                quote! { Some(#lit) }
+            }
+            None => quote! { None },
+        };
         let format = match &field.format {
             Some(value) => {
                 let lit = LitStr::new(value, proc_macro2::Span::call_site());
@@ -558,6 +580,15 @@ fn generate_field_specs(
                 format: #format,
             }
         });
+
+        metadata_specs.push(quote! {
+            #runtime::FieldMetadataSpec {
+                rust_name: #rust_name,
+                alias: #alias,
+                constraints: #constraints_name,
+                format: #format,
+            }
+        });
     }
 
     Ok(quote! {
@@ -566,6 +597,10 @@ fn generate_field_specs(
 
         static #array_name: &[#runtime::FieldSpec] = &[
             #(#field_specs),*
+        ];
+
+        static #metadata_array_name: &[#runtime::FieldMetadataSpec] = &[
+            #(#metadata_specs),*
         ];
     })
 }
@@ -647,6 +682,10 @@ fn generate_signature_impl(
 
     let input_fields_static = format_ident!("__{}_INPUT_FIELDS", name.to_string().to_uppercase());
     let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
+    let input_metadata_static =
+        format_ident!("__{}_INPUT_METADATA", name.to_string().to_uppercase());
+    let output_metadata_static =
+        format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
     quote! {
         impl #runtime::Signature for #name {
@@ -655,6 +694,22 @@ fn generate_signature_impl(
 
             fn instruction() -> &'static str {
                 #instruction
+            }
+
+            fn input_shape() -> &'static #runtime::Shape {
+                <#input_name as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+            }
+
+            fn output_shape() -> &'static #runtime::Shape {
+                <#output_name as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+            }
+
+            fn input_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
+                &#input_metadata_static
+            }
+
+            fn output_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
+                &#output_metadata_static
             }
 
             fn input_fields() -> &'static [#runtime::FieldSpec] {

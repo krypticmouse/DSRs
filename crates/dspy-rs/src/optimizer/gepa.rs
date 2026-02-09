@@ -265,7 +265,11 @@ impl GEPA {
         let futures: Vec<_> = examples
             .iter()
             .map(|example| async move {
-                let prediction = module.forward(example.clone()).await?;
+                let prediction = module
+                    .forward(example.clone())
+                    .await
+                    .into_result()
+                    .map_err(|err| anyhow::anyhow!(err))?;
                 let feedback = module.feedback_metric(example, &prediction).await;
                 Ok::<f32, anyhow::Error>(feedback.score)
             })
@@ -287,7 +291,11 @@ impl GEPA {
         let mut traces = Vec::with_capacity(minibatch.len());
 
         for example in minibatch {
-            let prediction = module.forward(example.clone()).await?;
+            let prediction = module
+                .forward(example.clone())
+                .await
+                .into_result()
+                .map_err(|err| anyhow::anyhow!(err))?;
             let feedback = module.feedback_metric(example, &prediction).await;
 
             // Format trace for LLM reflection

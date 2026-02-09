@@ -9,15 +9,27 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::adapter::Adapter;
-use crate::core::{FieldSpec, MetaSignature, Module, Optimizable, Signature};
+use crate::core::{MetaSignature, Module, Optimizable, Signature};
 use crate::{
-    BamlType, BamlValue, CallResult, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LM, LmError,
-    LmUsage, PredictError, Prediction,
+    BamlType, BamlValue, CallMetadata, CallOutcome, CallOutcomeError, CallOutcomeErrorKind, Chat,
+    ChatAdapter, Example, FieldSchema, GLOBAL_SETTINGS, LM, LmError, LmUsage, PredictError,
+    Prediction,
 };
+
+pub struct Demo<S: Signature> {
+    pub input: S::Input,
+    pub output: S::Output,
+}
+
+impl<S: Signature> Demo<S> {
+    pub fn new(input: S::Input, output: S::Output) -> Self {
+        Self { input, output }
+    }
+}
 
 pub struct Predict<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
-    demos: Vec<S>,
+    demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
     _marker: PhantomData<S>,
 }
@@ -36,17 +48,8 @@ impl<S: Signature> Predict<S> {
         PredictBuilder::new()
     }
 
-    pub async fn call(&self, input: S::Input) -> Result<S, PredictError>
-    where
-        S: Clone,
-        S::Input: BamlType,
-        S::Output: BamlType,
-    {
-        Ok(self.call_with_meta(input).await?.output)
-    }
-
     #[tracing::instrument(
-        name = "dsrs.predict.call_with_meta",
+        name = "dsrs.predict.call",
         level = "debug",
         skip(self, input),
         fields(
@@ -57,9 +60,8 @@ impl<S: Signature> Predict<S> {
             tracing_graph = crate::trace::is_tracing()
         )
     )]
-    pub async fn call_with_meta(&self, input: S::Input) -> Result<CallResult<S>, PredictError>
+    pub async fn call(&self, input: S::Input) -> CallOutcome<S::Output>
     where
-        S: Clone,
         S::Input: BamlType,
         S::Output: BamlType,
     {
@@ -70,15 +72,23 @@ impl<S: Signature> Predict<S> {
         };
 
         let chat_adapter = ChatAdapter;
-        let system = chat_adapter
+        let system = match chat_adapter
             .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
-            .map_err(|err| PredictError::Lm {
-                source: LmError::Provider {
-                    provider: "internal".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            })?;
+        {
+            Ok(system) => system,
+            Err(err) => {
+                let metadata = CallMetadata::default();
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: "internal".to_string(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    metadata,
+                );
+            }
+        };
+
         let user = chat_adapter.format_user_message_typed::<S>(&input);
         trace!(
             system_len = system.len(),
@@ -89,23 +99,28 @@ impl<S: Signature> Predict<S> {
         let mut chat = Chat::new(vec![]);
         chat.push("system", &system);
         for demo in &self.demos {
-            let (demo_user, demo_assistant) = chat_adapter.format_demo_typed::<S>(demo.clone());
+            let demo_user = chat_adapter.format_user_message_typed::<S>(&demo.input);
+            let demo_assistant = chat_adapter.format_assistant_message_typed::<S>(&demo.output);
             chat.push("user", &demo_user);
             chat.push("assistant", &demo_assistant);
         }
         chat.push("user", &user);
         trace!(message_count = chat.len(), "chat constructed");
 
-        let response = lm
-            .call(chat, self.tools.clone())
-            .await
-            .map_err(|err| PredictError::Lm {
-                source: LmError::Provider {
-                    provider: lm.model.clone(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            })?;
+        let response = match lm.call(chat, self.tools.clone()).await {
+            Ok(response) => response,
+            Err(err) => {
+                let metadata = CallMetadata::default();
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                        provider: lm.model.clone(),
+                        message: err.to_string(),
+                        source: None,
+                    }),
+                    metadata,
+                );
+            }
+        };
         debug!(
             prompt_tokens = response.usage.prompt_tokens,
             completion_tokens = response.usage.completion_tokens,
@@ -114,26 +129,44 @@ impl<S: Signature> Predict<S> {
             "lm response received"
         );
 
+        let node_id = if crate::trace::is_tracing() {
+            crate::trace::record_node(
+                crate::trace::NodeType::Predict {
+                    signature_name: std::any::type_name::<S>().to_string(),
+                },
+                vec![],
+                None,
+            )
+        } else {
+            None
+        };
+
         let raw_response = response.output.content().to_string();
         let lm_usage = response.usage.clone();
-        let (typed_output, field_metas) =
-            match chat_adapter.parse_response_typed::<S>(&response.output) {
-                Ok(parsed) => parsed,
-                Err(err) => {
-                    let fields = err.fields();
-                    debug!(
-                        failed_fields = fields.len(),
-                        fields = ?fields,
-                        raw_response_len = raw_response.len(),
-                        "typed parse failed"
-                    );
-                    return Err(PredictError::Parse {
-                        source: err,
-                        raw_response: raw_response.clone(),
-                        lm_usage: lm_usage.clone(),
-                    });
-                }
-            };
+
+        let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&response.output)
+        {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                let failed_fields = err.fields();
+                debug!(
+                    failed_fields = failed_fields.len(),
+                    fields = ?failed_fields,
+                    raw_response_len = raw_response.len(),
+                    "typed parse failed"
+                );
+                let metadata = CallMetadata::new(
+                    raw_response,
+                    lm_usage,
+                    response.tool_calls,
+                    response.tool_executions,
+                    node_id,
+                    IndexMap::new(),
+                );
+                return CallOutcome::err(CallOutcomeErrorKind::Parse(err), metadata);
+            }
+        };
+
         let checks_total = field_metas
             .values()
             .map(|meta| meta.checks.len())
@@ -149,20 +182,11 @@ impl<S: Signature> Predict<S> {
             .count();
         debug!(
             output_fields = field_metas.len(),
-            checks_total, checks_failed, flagged_fields, "typed parse completed"
+            checks_total,
+            checks_failed,
+            flagged_fields,
+            "typed parse completed"
         );
-
-        let node_id = if crate::trace::is_tracing() {
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
-                    signature_name: std::any::type_name::<S>().to_string(),
-                },
-                vec![],
-                None,
-            )
-        } else {
-            None
-        };
 
         if let Some(id) = node_id {
             match prediction_from_output::<S>(&typed_output, lm_usage.clone(), Some(id)) {
@@ -176,17 +200,16 @@ impl<S: Signature> Predict<S> {
             }
         }
 
-        let output = S::from_parts(input, typed_output);
-
-        Ok(CallResult::new(
-            output,
+        let metadata = CallMetadata::new(
             raw_response,
             lm_usage,
             response.tool_calls,
             response.tool_executions,
             node_id,
             field_metas,
-        ))
+        );
+
+        CallOutcome::ok(typed_output, metadata)
     }
 }
 
@@ -198,7 +221,7 @@ impl<S: Signature> Default for Predict<S> {
 
 pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
-    demos: Vec<S>,
+    demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
     _marker: PhantomData<S>,
 }
@@ -213,13 +236,28 @@ impl<S: Signature> PredictBuilder<S> {
         }
     }
 
-    pub fn demo(mut self, demo: S) -> Self {
+    pub fn demo(mut self, demo: Demo<S>) -> Self {
         self.demos.push(demo);
         self
     }
 
-    pub fn with_demos(mut self, demos: impl IntoIterator<Item = S>) -> Self {
+    pub fn with_demos(mut self, demos: impl IntoIterator<Item = Demo<S>>) -> Self {
         self.demos.extend(demos);
+        self
+    }
+
+    #[deprecated(since = "0.7.4", note = "Use PredictBuilder::demo(Demo::new(input, output))")]
+    pub fn demo_signature(mut self, demo: S) -> Self {
+        self.demos.push(demo_from_signature(demo));
+        self
+    }
+
+    #[deprecated(
+        since = "0.7.4",
+        note = "Use PredictBuilder::with_demos(...) with Demo<S> values"
+    )]
+    pub fn with_demo_signatures(mut self, demos: impl IntoIterator<Item = S>) -> Self {
+        self.demos.extend(demos.into_iter().map(demo_from_signature));
         self
     }
 
@@ -248,19 +286,19 @@ impl<S: Signature> PredictBuilder<S> {
     }
 }
 
-fn field_specs_to_value(fields: &[FieldSpec], field_type: &'static str) -> Value {
+fn schema_fields_to_value(fields: &[FieldSchema], field_type: &'static str) -> Value {
     let mut result = serde_json::Map::new();
     for field in fields {
-        let type_repr = (field.type_ir)().diagnostic_repr().to_string();
+        let type_repr = field.type_ir.diagnostic_repr().to_string();
         let mut meta = serde_json::Map::new();
         meta.insert("type".to_string(), json!(type_repr));
-        meta.insert("desc".to_string(), json!(field.description));
+        meta.insert("desc".to_string(), json!(field.docs));
         meta.insert("schema".to_string(), json!(""));
         meta.insert("__dsrs_field_type".to_string(), json!(field_type));
         if let Some(format) = field.format {
             meta.insert("format".to_string(), json!(format));
         }
-        result.insert(field.rust_name.to_string(), Value::Object(meta));
+        result.insert(field.lm_name.to_string(), Value::Object(meta));
     }
     Value::Object(result)
 }
@@ -282,9 +320,10 @@ fn baml_map_from_example_keys(
 
 fn input_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
     if example.input_keys.is_empty() {
-        S::input_fields()
+        S::schema()
+            .input_fields()
             .iter()
-            .map(|field| field.rust_name.to_string())
+            .map(|field| field.rust_name.clone())
             .collect()
     } else {
         example.input_keys.clone()
@@ -293,9 +332,10 @@ fn input_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
 
 fn output_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
     if example.output_keys.is_empty() {
-        S::output_fields()
+        S::schema()
+            .output_fields()
             .iter()
-            .map(|field| field.rust_name.to_string())
+            .map(|field| field.rust_name.clone())
             .collect()
     } else {
         example.output_keys.clone()
@@ -322,24 +362,32 @@ where
     S::Output::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
-fn signature_from_example<S: Signature>(example: Example) -> Result<S>
+fn demo_from_signature<S: Signature>(signature: S) -> Demo<S>
+where
+    S::Input: BamlType,
+    S::Output: BamlType,
+{
+    let (input, output) = signature.into_parts();
+    Demo::new(input, output)
+}
+
+fn demo_from_example<S: Signature>(example: Example) -> Result<Demo<S>>
 where
     S::Input: BamlType,
     S::Output: BamlType,
 {
     let input = input_from_example::<S>(&example)?;
     let output = output_from_example::<S>(&example)?;
-    Ok(S::from_parts(input, output))
+    Ok(Demo::new(input, output))
 }
 
-fn example_from_signature<S: Signature>(signature: S) -> Result<Example>
+fn example_from_demo<S: Signature>(demo: &Demo<S>) -> Result<Example>
 where
     S::Input: BamlType,
     S::Output: BamlType,
 {
-    let (input, output) = signature.into_parts();
-    let input_value = serde_json::to_value(input.to_baml_value())?;
-    let output_value = serde_json::to_value(output.to_baml_value())?;
+    let input_value = serde_json::to_value(demo.input.to_baml_value())?;
+    let output_value = serde_json::to_value(demo.output.to_baml_value())?;
 
     let input_map = input_value
         .as_object()
@@ -382,6 +430,10 @@ where
     Ok(prediction)
 }
 
+fn predict_error_from_outcome(kind: CallOutcomeErrorKind, metadata: CallMetadata) -> PredictError {
+    CallOutcomeError { metadata, kind }.into_predict_error()
+}
+
 impl<S> Module for Predict<S>
 where
     S: Signature + Clone + BamlType,
@@ -398,23 +450,56 @@ where
             output_keys = inputs.output_keys.len()
         )
     )]
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
+    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
         let typed_input = input_from_example::<S>(&inputs).map_err(|err| {
             debug!(error = %err, "typed input conversion failed");
             err
-        })?;
-        let call_result = self.call_with_meta(typed_input).await.map_err(|err| {
-            debug!(error = %err, "predict call_with_meta failed");
-            anyhow::anyhow!(err)
-        })?;
-        let (_, output) = call_result.output.into_parts();
-        let prediction =
-            prediction_from_output::<S>(&output, call_result.lm_usage, call_result.node_id)?;
+        });
+        let typed_input = match typed_input {
+            Ok(input) => input,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Conversion(
+                        crate::ConversionError::TypeMismatch {
+                            expected: "typed input",
+                            actual: err.to_string(),
+                        },
+                        BamlValue::Map(BamlMap::new()),
+                    ),
+                    CallMetadata::default(),
+                );
+            }
+        };
+
+        let (result, metadata) = self.call(typed_input).await.into_parts();
+        let output = match result {
+            Ok(output) => output,
+            Err(kind) => return CallOutcome::err(kind, metadata),
+        };
+        let prediction = match prediction_from_output::<S>(
+            &output,
+            metadata.lm_usage.clone(),
+            metadata.node_id,
+        ) {
+            Ok(prediction) => prediction,
+            Err(err) => {
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Conversion(
+                        crate::ConversionError::TypeMismatch {
+                            expected: "prediction",
+                            actual: err.to_string(),
+                        },
+                        output.to_baml_value(),
+                    ),
+                    metadata,
+                );
+            }
+        };
         debug!(
             output_fields = prediction.data.len(),
             "typed module forward complete"
         );
-        Ok(prediction)
+        CallOutcome::ok(prediction, metadata)
     }
 
     #[tracing::instrument(
@@ -426,17 +511,24 @@ where
     async fn forward_untyped(
         &self,
         input: BamlValue,
-    ) -> std::result::Result<BamlValue, PredictError> {
-        let typed_input = S::Input::try_from_baml_value(input.clone()).map_err(|err| {
-            debug!(error = %err, "untyped input conversion failed");
-            PredictError::Conversion {
-                source: err.into(),
-                parsed: input,
+    ) -> CallOutcome<BamlValue> {
+        let typed_input = match S::Input::try_from_baml_value(input.clone()) {
+            Ok(typed_input) => typed_input,
+            Err(err) => {
+                debug!(error = %err, "untyped input conversion failed");
+                return CallOutcome::err(
+                    CallOutcomeErrorKind::Conversion(err.into(), input),
+                    CallMetadata::default(),
+                );
             }
-        })?;
-        let output = self.call(typed_input).await?;
+        };
+        let (result, metadata) = self.call(typed_input).await.into_parts();
+        let output = match result {
+            Ok(output) => output,
+            Err(kind) => return CallOutcome::err(kind, metadata),
+        };
         debug!("typed module forward_untyped complete");
-        Ok(output.to_baml_value())
+        CallOutcome::ok(output.to_baml_value(), metadata)
     }
 }
 
@@ -449,17 +541,14 @@ where
     fn demos(&self) -> Vec<Example> {
         self.demos
             .iter()
-            .cloned()
-            .map(|demo| {
-                example_from_signature(demo).expect("typed Predict demo conversion should succeed")
-            })
+            .map(|demo| example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed"))
             .collect()
     }
 
     fn set_demos(&mut self, demos: Vec<Example>) -> Result<()> {
         self.demos = demos
             .into_iter()
-            .map(signature_from_example::<S>)
+            .map(demo_from_example::<S>)
             .collect::<Result<Vec<_>>>()?;
         Ok(())
     }
@@ -471,11 +560,11 @@ where
     }
 
     fn input_fields(&self) -> Value {
-        field_specs_to_value(S::input_fields(), "input")
+        schema_fields_to_value(S::schema().input_fields(), "input")
     }
 
     fn output_fields(&self) -> Value {
-        field_specs_to_value(S::output_fields(), "output")
+        schema_fields_to_value(S::schema().output_fields(), "output")
     }
 
     fn update_instruction(&mut self, instruction: String) -> Result<()> {
@@ -509,7 +598,6 @@ where
         Ok(())
     }
 }
-
 pub struct LegacyPredict {
     pub signature: Arc<dyn MetaSignature>,
     pub tools: Vec<Arc<dyn ToolDyn>>,
