@@ -2,7 +2,7 @@
 
 ## Current State
 - **Slice**: 4
-- **Phase**: Commit
+- **Phase**: Post-Implementation Cleanup
 
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
@@ -47,6 +47,15 @@
 - **Slice 4 smoke test (2026-02-09):** Real LM call passed end-to-end via `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` (loaded `.env`, model `openai:gpt-5.2`), returning `answer: smoke-ok`.
 - **Slice 4 arbitrate (2026-02-09):** Agreed with high finding on ReAct Facet discoverability and fixed in `modules/react.rs`. Re-ran compile/tests and smoke after fix; smoke now reports `tool_executions: 1`, `answer: smoke-ok`.
 - **Slice 4 arbitrate (2026-02-09):** Disagreed with medium finding (“ReAct bypasses adapter building blocks”) for this slice: both action/extract calls execute through `Predict::call` → `ChatAdapter` pipeline (`N8/F7`). The hand-built `trajectory` string is module orchestration state, not a replacement parsing/formatting pipeline; no immediate correctness gap observed in tests/smoke.
+- **Slice 4 implementation (2026-02-09):** Added `ReAct<S>` module (`modules/react.rs`) with plain async tool builder (`.tool(name, desc, fn)`), action/extract loop over typed `Predict` leaves, and Facet discoverability on the wrapper struct.
+- **Slice 4 implementation (2026-02-09):** Added operational affordances: new 3-arg `forward_all(&module, inputs, concurrency)` surface, `forward_all_with_progress` compatibility helper, and `ModuleExt::{map,and_then}` wrappers in `core/module_ext.rs`.
+- **Slice 4 validation (2026-02-09):** `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and targeted tests (`test_module_forward_all`, `test_module_ext`, `test_react_builder`, `test_chain_of_thought_swap`) passed.
+- **Slice 4 smoke test (post-fix, 2026-02-09):** `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` against `openai:gpt-5.2` passed (`tool_executions: 1`, `answer: smoke-ok`).
+- **Slice 4 commit (2026-02-09):** Change `nluquynv` / `d768449f` — \"slice4: implement react and operational affordances\".
+- **Slice 4 closure audit (2026-02-09):** Added `docs/plans/modules/slices_closure_audit.md` with `V4` requirement accounting and consolidated deferred ledger routing. Because slice = 4, workflow advanced to Post-Implementation Cleanup.
+- **Post-Implementation Cleanup (2026-02-09):** Resolved `U29` by deriving `facet::Facet` on `ChainOfThought` (`crates/dspy-rs/src/modules/chain_of_thought.rs`) and revalidated targeted module tests/smokes.
+- **Post-Implementation Cleanup (2026-02-09):** Resolved `build_system` API/spec mismatch by aligning spec docs to the implemented fallible surface (`Result<String>`) in `breadboard.md` and `design_reference.md`.
+- **Post-Implementation Cleanup (2026-02-09):** Ran full workspace validation (`cargo test`) successfully after cleanup edits.
 - Slice definitions for this execution are V1-V3 from `/Users/darin/src/personal/DSRs/docs/specs/modules/breadboard.md` (V1 Typed call, V2 Augmentation + CoT, V3 Module authoring).
 - Ground truth hierarchy for arbitration is: breadboard + shapes + design_reference + spikes S1-S8.
 - **Locked (2026-02-09):** N8/typed call default return is `CallOutcome<O>` (metadata-first). `call_with_meta` is folded into `call`; there is no separate convenience path like `forward_result`.
@@ -95,5 +104,5 @@
 
 ## Open Questions
 <!-- Unresolved issues to revisit -->
-- `Phase 4.5 Cleanup / API Surface Pass`: execute strict typed `Module` bounds, generic-helper/`__phantom` cleanup, `build_system` API/spec reconciliation, and legacy-surface cutover.
-- `V5 Implement`: wire Facet walker discoverability for wrapper modules (`ChainOfThought` and future combinators) as the canonical replacement for legacy `Optimizable` traversal.
+- `Post-Implementation Cleanup` remaining scope: strict typed `Module` bounds, generic-helper/`__phantom` ergonomics, and Option-C legacy-surface cutover (`MetaSignature`/`LegacyPredict`) are still large migrations with broad compatibility impact.
+- `V5 Implement`: complete walker discoverability for wrapper/combinator module trees as the canonical replacement for legacy `Optimizable` traversal.

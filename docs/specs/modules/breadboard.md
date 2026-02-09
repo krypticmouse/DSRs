@@ -98,7 +98,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U20** | P2 | `augmentation` | `WithReasoning<O>` generated wrapper type | access | — | ← N14 | F3 |
 | **U21** | P2 | `signature` | `#[derive(Signature)]` with generic type params | compile | → N15 | — | F12 |
 | **U22** | P2 | `signature` | `#[flatten]` on fields | compile | → N15 | — | F12 |
-| **U23** | P2 | `adapter` | `ChatAdapter::build_system(schema, override)` | call | → N3 | → String | F7 |
+| **U23** | P2 | `adapter` | `ChatAdapter::build_system(schema, override)` | call | → N3 | → Result\<String\> | F7 |
 | **U24** | P2 | `adapter` | `ChatAdapter::format_input(schema, &input)` | call | → N8 (formatting internals) | → String | F7 |
 | **U25** | P2 | `adapter` | `ChatAdapter::parse_sections(content)` | call | — | → IndexMap | F7 |
 | **U26** | P2 | `adapter` | `ChatAdapter::parse_output::<O>(schema, &response)` | call | → N8 (coercion internals), → N13 | → Result\<O\> | F7 |

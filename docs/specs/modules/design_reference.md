@@ -445,7 +445,7 @@ impl<S: Signature> Predict<S> {
         let adapter = ChatAdapter;
 
         // Build prompt
-        let system = adapter.build_system(schema, self.instruction_override.as_deref());
+        let system = adapter.build_system(schema, self.instruction_override.as_deref())?;
         let mut chat = Chat::new(vec![Message::system(system)]);
 
         // Format demos
@@ -583,7 +583,7 @@ impl ChatAdapter {
     pub fn build_system(
         schema: &SignatureSchema,
         instruction_override: Option<&str>,
-    ) -> String;
+    ) -> Result<String>;
 
     /// Format a typed input value as user message fields
     /// Uses Facet Peek to walk the value generically
