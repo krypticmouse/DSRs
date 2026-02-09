@@ -476,7 +476,7 @@ fn generate_field_specs(
         if field.constraints.is_empty() {
             type_ir_fns.push(quote! {
                 fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    <#ty as #runtime::BamlTypeInternal>::baml_type_ir()
+                    #runtime::__macro_support::bamltype::baml_type_ir::<#ty>()
                 }
             });
         } else {
@@ -500,7 +500,7 @@ fn generate_field_specs(
 
             type_ir_fns.push(quote! {
                 fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    let mut base = <#ty as #runtime::BamlTypeInternal>::baml_type_ir();
+                    let mut base = #runtime::__macro_support::bamltype::baml_type_ir::<#ty>();
                     base.meta_mut().constraints.extend(vec![#(#constraint_tokens),*]);
                     base
                 }
@@ -585,47 +585,37 @@ fn generate_baml_delegation(
         to_value_inserts.push(quote! {
             fields.insert(
                 #field_name.to_string(),
-                #runtime::ToBamlValue::to_baml_value(&self.#ident),
+                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or(#runtime::BamlValue::Null),
             );
         });
     }
 
     quote! {
-        impl #runtime::BamlTypeInternal for #name {
+        impl #runtime::BamlType for #name {
+            fn baml_output_format() -> &'static #runtime::OutputFormatContent {
+                <#all_name as #runtime::BamlType>::baml_output_format()
+            }
+
             fn baml_internal_name() -> &'static str {
-                <#all_name as #runtime::BamlTypeInternal>::baml_internal_name()
+                <#all_name as #runtime::BamlType>::baml_internal_name()
             }
 
             fn baml_type_ir() -> #runtime::TypeIR {
-                <#all_name as #runtime::BamlTypeInternal>::baml_type_ir()
+                <#all_name as #runtime::BamlType>::baml_type_ir()
             }
-        }
 
-        impl #runtime::BamlValueConvert for #name {
-            fn try_from_baml_value(
-                value: #runtime::BamlValue,
-                path: Vec<String>,
-            ) -> Result<Self, #runtime::BamlConvertError> {
-                let all = <#all_name as #runtime::BamlValueConvert>
-                    ::try_from_baml_value(value, path)?;
+            fn try_from_baml_value(value: #runtime::BamlValue) -> Result<Self, #runtime::BamlConvertError> {
+                let all = <#all_name as #runtime::BamlType>::try_from_baml_value(value)?;
                 Ok(Self {
                     #(#field_names: all.#field_names),*
                 })
             }
-        }
 
-        impl #runtime::BamlTypeTrait for #name {
-            fn baml_output_format() -> &'static #runtime::OutputFormatContent {
-                <#all_name as #runtime::BamlTypeTrait>::baml_output_format()
-            }
-        }
-
-        impl #runtime::ToBamlValue for #name {
             fn to_baml_value(&self) -> #runtime::BamlValue {
-                let mut fields = #runtime::bamltype::baml_types::BamlMap::new();
+                let mut fields = #runtime::__macro_support::bamltype::baml_types::BamlMap::new();
                 #(#to_value_inserts)*
-                #runtime::bamltype::baml_types::BamlValue::Class(
-                    <Self as #runtime::BamlTypeInternal>::baml_internal_name()
+                #runtime::__macro_support::bamltype::baml_types::BamlValue::Class(
+                    <Self as #runtime::BamlType>::baml_internal_name()
                         .to_string(),
                     fields,
                 )
@@ -676,7 +666,7 @@ fn generate_signature_impl(
             }
 
             fn output_format_content() -> &'static #runtime::OutputFormatContent {
-                <#output_name as #runtime::BamlTypeTrait>::baml_output_format()
+                <#output_name as #runtime::BamlType>::baml_output_format()
             }
 
             fn from_parts(input: Self::Input, output: Self::Output) -> Self {
@@ -818,8 +808,8 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                             let field_name_str = field_name.to_string();
                             schema_updates.push(quote! {
                                 {
-                                    let schema = #runtime::schemars::schema_for!(#field_type);
-                                    let schema_json = #runtime::serde_json::to_value(schema).unwrap();
+                                    let schema = #runtime::__macro_support::schemars::schema_for!(#field_type);
+                                    let schema_json = #runtime::__macro_support::serde_json::to_value(schema).unwrap();
                                     // Extract just the properties if it's an object schema
                                     if let Some(obj) = schema_json.as_object() {
                                         if obj.contains_key("properties") {
@@ -840,8 +830,8 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                             let field_name_str = field_name.to_string();
                             schema_updates.push(quote! {
                                 {
-                                    let schema = #runtime::schemars::schema_for!(#field_type);
-                                    let schema_json = #runtime::serde_json::to_value(schema).unwrap();
+                                    let schema = #runtime::__macro_support::schemars::schema_for!(#field_type);
+                                    let schema_json = #runtime::__macro_support::serde_json::to_value(schema).unwrap();
                                     // Extract just the properties if it's an object schema
                                     if let Some(obj) = schema_json.as_object() {
                                         if obj.contains_key("properties") {
@@ -883,18 +873,18 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
     let output_schema_str = serde_json::to_string(&output_schema).unwrap();
 
     let generated = quote! {
-        #[derive(Default, Debug, Clone, #runtime::serde::Serialize, #runtime::serde::Deserialize)]
+        #[derive(Default, Debug, Clone, #runtime::__macro_support::serde::Serialize, #runtime::__macro_support::serde::Deserialize)]
         struct #struct_name {
             instruction: String,
-            input_fields: #runtime::serde_json::Value,
-            output_fields: #runtime::serde_json::Value,
+            input_fields: #runtime::__macro_support::serde_json::Value,
+            output_fields: #runtime::__macro_support::serde_json::Value,
             demos: Vec<#runtime::Example>,
         }
 
         impl #struct_name {
             pub fn new() -> Self {
-                let mut input_fields: #runtime::serde_json::Value = #runtime::serde_json::from_str(#input_schema_str).unwrap();
-                let mut output_fields: #runtime::serde_json::Value = #runtime::serde_json::from_str(#output_schema_str).unwrap();
+                let mut input_fields: #runtime::__macro_support::serde_json::Value = #runtime::__macro_support::serde_json::from_str(#input_schema_str).unwrap();
+                let mut output_fields: #runtime::__macro_support::serde_json::Value = #runtime::__macro_support::serde_json::from_str(#output_schema_str).unwrap();
 
                 // Update schemas for complex types
                 #(#schema_updates)*
@@ -921,7 +911,7 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 self.demos.clone()
             }
 
-            fn set_demos(&mut self, demos: Vec<#runtime::Example>) -> #runtime::anyhow::Result<()> {
+            fn set_demos(&mut self, demos: Vec<#runtime::Example>) -> #runtime::__macro_support::anyhow::Result<()> {
                 self.demos = demos;
                 Ok(())
             }
@@ -930,20 +920,20 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                 self.instruction.clone()
             }
 
-            fn input_fields(&self) -> #runtime::serde_json::Value {
+            fn input_fields(&self) -> #runtime::__macro_support::serde_json::Value {
                 self.input_fields.clone()
             }
 
-            fn output_fields(&self) -> #runtime::serde_json::Value {
+            fn output_fields(&self) -> #runtime::__macro_support::serde_json::Value {
                 self.output_fields.clone()
             }
 
-            fn update_instruction(&mut self, instruction: String) -> #runtime::anyhow::Result<()> {
+            fn update_instruction(&mut self, instruction: String) -> #runtime::__macro_support::anyhow::Result<()> {
                 self.instruction = instruction;
                 Ok(())
             }
 
-            fn append(&mut self, name: &str, field_value: #runtime::serde_json::Value) -> #runtime::anyhow::Result<()> {
+            fn append(&mut self, name: &str, field_value: #runtime::__macro_support::serde_json::Value) -> #runtime::__macro_support::anyhow::Result<()> {
                 match field_value["__dsrs_field_type"].as_str() {
                     Some("input") => {
                         self.input_fields[name] = field_value;
@@ -952,7 +942,7 @@ pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
                         self.output_fields[name] = field_value;
                     }
                     _ => {
-                        return Err(#runtime::anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
+                        return Err(#runtime::__macro_support::anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
                     }
                 }
                 Ok(())

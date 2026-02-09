@@ -1,0 +1,24 @@
+---
+title: "Introduction"
+description: "Explaining the paradigm"
+icon: "book"
+---
+
+Okay so this is an opinionated way to think about how to interact with language models.
+
+And what's the actual explanation here? Right, what the fuck does this mean? It's basically saying that your unit of interaction with the model is fundamentally typed. It consists of three things:
+1. Inputs
+2. Outputs
+3. Instructions
+
+At the very simplest level, let's say you have a conversation. You're talking to ChatGPT. In this case, ChatGPT's instruction would be "You are a helpful assistant, please assist the user." The inputs would be the conversation so far and the system prompt. The output would be your message and the next turn of the conversation. A full chatbot conversation is like recursive right and all that jazz. The outputs feed into the inputs whatever. But it basically what we're doing here is asking you to represent the way that you're thinking about interacting with the models as composed of these three fundamental abstractions:
+1. Inputs
+2. Outputs
+3. Instructions  
+
+
+The special part about DSRS is that these inputs and these outputs can take the full power and flexibility of the Rust type system. But let's not get into that yet, right? So what we basically do is we say, "Okay, you define your input structs, you define your output structs," and you say, "This is the instructions that you want," right? It's all in docstrings, it lives in your code. 
+
+And then what you do is you you describe exactly what you want instead of using words, you use types and docstrings. What happens is that all of this is compiled down into a nice universal prompt format and it's parsed really well. There's a robust parser arguably the best in the world and all of this is just machinery to say that the vast majority of prompts that you will ever want to write will be generic. The thing that makes your prompts prompts isn't the way that you word things, the thing that we are just forcing you to be explicit about your intent. Like what you really mean and we ask you to encode these into rich beautiful Rust types, like really take full advantage of the incredible Rust type system.
+
+

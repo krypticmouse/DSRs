@@ -1,5 +1,5 @@
-use dspy_rs::bamltype::HoistClasses;
-use dspy_rs::{BamlType, BamlTypeTrait, ChatAdapter, RenderOptions, Signature};
+use bamltype::HoistClasses;
+use dspy_rs::{BamlType, ChatAdapter, RenderOptions, Signature};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -134,7 +134,7 @@ fn name_changes_type_label_in_prompt_and_hoisted_render() {
         "expected renamed type label in prompt:\n{block}"
     );
 
-    let rendered = <NamedPayload as BamlTypeTrait>::baml_output_format()
+    let rendered = <NamedPayload as BamlType>::baml_output_format()
         .render(RenderOptions::hoist_classes(HoistClasses::All))
         .expect("render")
         .unwrap_or_default();
@@ -146,11 +146,9 @@ fn name_changes_type_label_in_prompt_and_hoisted_render() {
 
 #[test]
 fn parse_behavior_matches_skip_and_default_claims() {
-    let parsed = dspy_rs::bamltype::parse_llm_output::<SkipDefaultPayload>(
-        r#"{ "content": "hello" }"#,
-        true,
-    )
-    .expect("parse");
+    let parsed =
+        bamltype::parse_llm_output::<SkipDefaultPayload>(r#"{ "content": "hello" }"#, true)
+            .expect("parse");
 
     assert_eq!(parsed.value.content, "hello");
     assert_eq!(parsed.value.internal_id, 0);

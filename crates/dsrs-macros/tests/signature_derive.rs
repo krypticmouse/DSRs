@@ -68,7 +68,7 @@ fn test_from_parts_into_parts() {
 
 #[test]
 fn test_baml_type_impl() {
-    let _ = <TestSig as dspy_rs::BamlTypeTrait>::baml_output_format();
+    let _ = <TestSig as dspy_rs::BamlType>::baml_output_format();
 }
 
 #[test]

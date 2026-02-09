@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, BamlTypeTrait, BamlValue, ChatAdapter, Signature, ToBamlValue};
+use dspy_rs::{BamlType, BamlValue, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -136,13 +136,10 @@ fn typed_input_format_toon_matches_formatter() {
 
     let baml_value = input.to_baml_value();
     let context_baml = extract_baml_field(&baml_value, "context");
-    let output_format = <FormatToonSigInput as BamlTypeTrait>::baml_output_format();
-    let expected = dspy_rs::bamltype::internal_baml_jinja::format_baml_value(
-        context_baml,
-        output_format,
-        "toon",
-    )
-    .expect("formatting should succeed");
+    let output_format = <FormatToonSigInput as BamlType>::baml_output_format();
+    let expected =
+        bamltype::internal_baml_jinja::format_baml_value(context_baml, output_format, "toon")
+            .expect("formatting should succeed");
 
     assert_eq!(context_value, expected);
 }

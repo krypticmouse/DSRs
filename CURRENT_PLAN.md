@@ -486,10 +486,11 @@ Example for confidence:
 
 ```rust
 fn __qa_confidence_type_ir() -> ::dspy_rs::TypeIR {
-    let ty = <f32 as ::dspy_rs::legacy_bridge::BamlTypeInternal>::baml_type_ir();
-    ::dspy_rs::legacy_bridge::with_constraints(ty, vec![
+    let mut ty = ::dspy_rs::baml_type_ir::<f32>();
+    ty.meta_mut().constraints.extend(vec![
         ::dspy_rs::Constraint::new_check("range", "this >= 0.0 && this <= 1.0"),
-    ])
+    ]);
+    ty
 }
 ```
 

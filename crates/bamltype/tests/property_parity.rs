@@ -44,8 +44,9 @@ impl facet_runtime::adapters::FieldCodec<i64> for PropertyI64Adapter {
         TypeIR::class("PropertyAdapterI64Wrapper")
     }
 
-    fn register(reg: &mut facet_runtime::adapters::AdapterSchemaRegistry) {
+    fn register(ctx: facet_runtime::adapters::FieldCodecRegisterContext<'_>) {
         use facet_runtime::internal_baml_jinja::types::{Class, Name};
+        let reg = ctx.registry;
 
         if !reg.mark_type("PropertyAdapterI64Wrapper") {
             return;

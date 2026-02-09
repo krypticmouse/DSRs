@@ -1,10 +1,8 @@
-//! Facet runtime traits and conversion helpers.
+//! Facet runtime helpers and conversion glue.
 
 use baml_types::{BamlMap, BamlValue, TypeIR, type_meta};
 use facet::Facet;
-use internal_baml_jinja::types::OutputFormatContent;
 
-use crate::BamlSchema;
 use crate::convert;
 use crate::schema_builder::build_type_ir_from_shape;
 
@@ -75,77 +73,38 @@ impl From<convert::ConvertError> for BamlConvertError {
     }
 }
 
-/// Internal type metadata.
-pub trait BamlTypeInternal {
-    fn baml_internal_name() -> &'static str;
-    fn baml_type_ir() -> TypeIR;
-}
-
-/// Convert from BamlValue to Rust.
-pub trait BamlValueConvert: Sized {
-    fn try_from_baml_value(value: BamlValue, path: Vec<String>) -> Result<Self, BamlConvertError>;
-}
-
-/// Convert from Rust to BamlValue.
-pub trait ToBamlValue {
-    fn to_baml_value(&self) -> BamlValue;
-}
-
-/// Runtime trait used by schema rendering and parsing.
-///
-/// Named `BamlTypeTrait` to avoid collision with the `#[BamlType]` attribute macro.
-pub trait BamlTypeTrait: BamlTypeInternal + BamlValueConvert + Sized + 'static {
-    fn baml_output_format() -> &'static OutputFormatContent;
-
-    fn baml_internal_name() -> &'static str {
-        <Self as BamlTypeInternal>::baml_internal_name()
-    }
-
-    fn baml_type_ir() -> TypeIR {
-        <Self as BamlTypeInternal>::baml_type_ir()
-    }
-}
-
-impl<T: Facet<'static>> BamlTypeInternal for T {
-    fn baml_internal_name() -> &'static str {
-        for attr in T::SHAPE.attributes {
-            if attr.ns != Some("bamltype") || attr.key != "internal_name" {
-                continue;
-            }
-
-            if let Some(name) = attr.get_as::<&'static str>() {
-                return name;
-            }
+/// Compute the BAML internal name for a type.
+pub fn baml_internal_name<T: Facet<'static>>() -> &'static str {
+    for attr in T::SHAPE.attributes {
+        if attr.ns != Some("bamltype") || attr.key != "internal_name" {
+            continue;
         }
 
-        if let Some(name) = T::SHAPE.get_builtin_attr_value::<&'static str>("internal_name") {
-            name
-        } else {
-            std::any::type_name::<T>()
+        if let Some(name) = attr.get_as::<&'static str>() {
+            return name;
         }
     }
 
-    fn baml_type_ir() -> TypeIR {
-        build_type_ir_from_shape(T::SHAPE)
+    if let Some(name) = T::SHAPE.get_builtin_attr_value::<&'static str>("internal_name") {
+        name
+    } else {
+        std::any::type_name::<T>()
     }
 }
 
-impl<T: Facet<'static>> BamlValueConvert for T {
-    fn try_from_baml_value(value: BamlValue, _path: Vec<String>) -> Result<Self, BamlConvertError> {
-        convert::from_baml_value(value).map_err(BamlConvertError::from)
-    }
+/// Compute TypeIR for a type from facet shape data.
+pub fn baml_type_ir<T: Facet<'static>>() -> TypeIR {
+    build_type_ir_from_shape(T::SHAPE)
 }
 
-impl<T: Facet<'static>> ToBamlValue for T {
-    fn to_baml_value(&self) -> BamlValue {
-        convert::to_baml_value(self).unwrap_or(BamlValue::Null)
-    }
+/// Convert a BamlValue into a concrete Rust type with stable BamlConvertError shape.
+pub fn try_from_baml_value<T: Facet<'static>>(value: BamlValue) -> Result<T, BamlConvertError> {
+    convert::from_baml_value(value).map_err(BamlConvertError::from)
 }
 
-impl<T: BamlSchema> BamlTypeTrait for T {
-    fn baml_output_format() -> &'static OutputFormatContent {
-        &T::baml_schema().output_format
-    }
+/// Convert a Rust value into BamlValue, preserving legacy null-fallback behavior.
+pub fn to_baml_value_lossy<T: Facet<'static>>(value: &T) -> BamlValue {
+    convert::to_baml_value(value).unwrap_or(BamlValue::Null)
 }
 
 /// Default streaming behavior helper.

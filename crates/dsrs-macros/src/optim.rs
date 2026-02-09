@@ -40,14 +40,14 @@ pub fn optimizable_impl(input: TokenStream) -> TokenStream {
         impl #impl_generics #trait_path for #name #type_generics #where_clause {
             fn parameters(
                 &mut self,
-            ) -> #runtime::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> {
-                let mut params: #runtime::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> = #runtime::indexmap::IndexMap::new();
+            ) -> #runtime::__macro_support::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> {
+                let mut params: #runtime::__macro_support::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> = #runtime::__macro_support::indexmap::IndexMap::new();
                 #(
                 {
                     let __field_name = stringify!(#parameter_names).to_string();
                     // SAFETY: We only create disjoint mutable borrows to distinct struct fields
                     let __field_ptr: *mut dyn #trait_path = &mut self.#parameter_names as *mut dyn #trait_path;
-                    let __child_params: #runtime::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> = unsafe { (&mut *__field_ptr).parameters() };
+                    let __child_params: #runtime::__macro_support::indexmap::IndexMap<::std::string::String, &mut dyn #trait_path> = unsafe { (&mut *__field_ptr).parameters() };
                     if __child_params.is_empty() {
                         // Leaf: insert the field itself
                         unsafe {

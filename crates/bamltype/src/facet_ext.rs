@@ -2,7 +2,7 @@
 
 use baml_types::{BamlValue, TypeIR};
 
-use crate::adapters::AdapterSchemaRegistry;
+use crate::adapters::FieldCodecRegisterContext;
 use crate::runtime::BamlConvertError;
 
 /// Field-level adapter application function.
@@ -12,6 +12,9 @@ pub type AdapterApplyFn = fn(
     Vec<String>,
 ) -> Result<facet_reflect::Partial<'static>, BamlConvertError>;
 
+/// Field-level adapter schema registration function.
+pub type AdapterRegisterFn = for<'a> fn(FieldCodecRegisterContext<'a>);
+
 /// Runtime hooks for `#[baml(with = "...")]`.
 #[derive(Clone, Copy, Debug, facet::Facet)]
 #[facet(opaque)]
@@ -19,7 +22,7 @@ pub struct WithAdapterFns {
     /// Schema type representation callback.
     pub type_ir: fn() -> TypeIR,
     /// Schema registration callback.
-    pub register: fn(&mut AdapterSchemaRegistry),
+    pub register: AdapterRegisterFn,
     /// Value conversion callback.
     pub apply: AdapterApplyFn,
 }
