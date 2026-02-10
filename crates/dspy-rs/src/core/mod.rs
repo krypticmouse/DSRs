@@ -1,6 +1,5 @@
-mod call_outcome;
-mod call_result;
 mod errors;
+mod predicted;
 pub mod lm;
 pub mod module;
 mod module_ext;
@@ -9,11 +8,8 @@ pub mod settings;
 pub mod signature;
 pub mod specials;
 
-pub use call_outcome::{
-    CallMetadata, CallOutcome, CallOutcomeError, CallOutcomeErrorKind, ConstraintResult, FieldMeta,
-};
-pub use call_result::CallResult;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use lm::*;
 pub use module::*;
 pub use module_ext::*;

@@ -1,5 +1,5 @@
 use dspy_rs::{
-    BamlType, CallMetadata, CallOutcome, CallOutcomeErrorKind, Module, ModuleExt, ParseError,
+    BamlType, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted,
 };
 
 struct MaybeFails;
@@ -20,7 +20,7 @@ impl Module for MaybeFails {
     type Input = IntPayload;
     type Output = IntPayload;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         let input_value = input.value;
         let metadata = CallMetadata::new(
             format!("raw:{input_value}"),
@@ -32,20 +32,21 @@ impl Module for MaybeFails {
         );
 
         if input_value < 0 {
-            CallOutcome::err(
-                CallOutcomeErrorKind::Parse(ParseError::MissingField {
+            Err(PredictError::Parse {
+                source: ParseError::MissingField {
                     field: "value".to_string(),
                     raw_response: format!("raw:{input_value}"),
-                }),
-                metadata,
-            )
+                },
+                raw_response: format!("raw:{input_value}"),
+                lm_usage: dspy_rs::LmUsage::default(),
+            })
         } else {
-            CallOutcome::ok(
+            Ok(Predicted::new(
                 IntPayload {
                     value: input_value * 2,
                 },
                 metadata,
-            )
+            ))
         }
     }
 }
@@ -57,21 +58,24 @@ async fn map_transforms_success_and_preserves_metadata() {
         value: format!("v={}", value.value),
     });
 
-    let success = mapped.forward(IntPayload { value: 3 }).await;
+    let success = mapped.call(IntPayload { value: 3 }).await.unwrap();
     assert_eq!(success.metadata().raw_response, "raw:3");
     assert_eq!(
-        success.into_result().expect("success expected"),
+        success.into_inner(),
         TextPayload {
             value: "v=6".to_string()
         }
     );
 
-    let failure = mapped.forward(IntPayload { value: -7 }).await;
-    let err = failure.into_result().expect_err("failure expected");
-    assert_eq!(err.metadata.raw_response, "raw:-7");
-    match err.kind {
-        CallOutcomeErrorKind::Parse(ParseError::MissingField { field, .. }) => {
-            assert_eq!(field, "value")
+    let err = mapped.call(IntPayload { value: -7 }).await.expect_err("failure expected");
+    match err {
+        PredictError::Parse {
+            source: ParseError::MissingField { field, .. },
+            raw_response,
+            ..
+        } => {
+            assert_eq!(field, "value");
+            assert_eq!(raw_response, "raw:-7");
         }
         other => panic!("unexpected error: {other:?}"),
     }
@@ -86,30 +90,38 @@ async fn and_then_applies_fallible_transform_and_keeps_metadata() {
                 value: value.value.to_string(),
             })
         } else {
-            Err(CallOutcomeErrorKind::Parse(ParseError::MissingField {
-                field: "transformed".to_string(),
+            Err(PredictError::Parse {
+                source: ParseError::MissingField {
+                    field: "transformed".to_string(),
+                    raw_response: "transform".to_string(),
+                },
                 raw_response: "transform".to_string(),
-            }))
+                lm_usage: dspy_rs::LmUsage::default(),
+            })
         }
     });
 
-    let success = module.forward(IntPayload { value: 3 }).await;
+    let success = module.call(IntPayload { value: 3 }).await.unwrap();
     assert_eq!(success.metadata().raw_response, "raw:3");
     assert_eq!(
-        success.into_result().expect("success expected"),
+        success.into_inner(),
         TextPayload {
             value: "6".to_string()
         }
     );
 
-    let transformed_error = module.forward(IntPayload { value: 1 }).await;
-    let err = transformed_error
-        .into_result()
+    let err = module
+        .call(IntPayload { value: 1 })
+        .await
         .expect_err("transform error expected");
-    assert_eq!(err.metadata.raw_response, "raw:1");
-    match err.kind {
-        CallOutcomeErrorKind::Parse(ParseError::MissingField { field, .. }) => {
-            assert_eq!(field, "transformed")
+    match err {
+        PredictError::Parse {
+            source: ParseError::MissingField { field, .. },
+            raw_response,
+            ..
+        } => {
+            assert_eq!(field, "transformed");
+            assert_eq!(raw_response, "transform");
         }
         other => panic!("unexpected error: {other:?}"),
     }

@@ -1,4 +1,4 @@
-use dspy_rs::{CallMetadata, CallOutcome, ChatAdapter, Message, Signature};
+use dspy_rs::{CallMetadata, ChatAdapter, Message, Predicted, Signature};
 
 #[derive(Signature, Clone, Debug)]
 /// Adapter schema parse fixture.
@@ -42,11 +42,11 @@ fn parse_response_typed_uses_schema_field_names() {
         None,
         field_meta,
     );
-    let outcome = CallOutcome::ok(output, metadata);
+    let predicted = Predicted::new(output, metadata);
 
-    assert_eq!(outcome.metadata().field_raw("answer"), Some("Paris"));
-    assert!(!outcome.metadata().has_failed_checks());
-    assert_eq!(outcome.into_result().expect("outcome ok").answer, "Paris");
+    assert_eq!(predicted.metadata().field_raw("answer"), Some("Paris"));
+    assert!(!predicted.metadata().has_failed_checks());
+    assert_eq!(predicted.into_inner().answer, "Paris");
 }
 
 #[test]

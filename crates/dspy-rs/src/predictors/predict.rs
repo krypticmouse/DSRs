@@ -11,9 +11,8 @@ use tracing::{debug, trace};
 use crate::adapter::Adapter;
 use crate::core::{MetaSignature, Module, Optimizable, Signature};
 use crate::{
-    BamlType, BamlValue, CallMetadata, CallOutcome, CallOutcomeError, CallOutcomeErrorKind, Chat,
-    ChatAdapter, Example, FieldSchema, GLOBAL_SETTINGS, LM, LmError, LmUsage, PredictError,
-    Prediction,
+    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Example, FieldSchema, GLOBAL_SETTINGS,
+    LM, LmError, LmUsage, PredictError, Predicted, Prediction,
 };
 
 #[derive(facet::Facet)]
@@ -67,7 +66,15 @@ impl<S: Signature> Predict<S> {
             tracing_graph = crate::trace::is_tracing()
         )
     )]
-    pub async fn call(&self, input: S::Input) -> CallOutcome<S::Output>
+    pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
+    where
+        S::Input: BamlType,
+        S::Output: BamlType,
+    {
+        self.forward(input).await
+    }
+
+    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -84,15 +91,13 @@ impl<S: Signature> Predict<S> {
         {
             Ok(system) => system,
             Err(err) => {
-                let metadata = CallMetadata::default();
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "internal".to_string(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    metadata,
-                );
+                    },
+                });
             }
         };
 
@@ -117,15 +122,13 @@ impl<S: Signature> Predict<S> {
         let response = match lm.call(chat, self.tools.clone()).await {
             Ok(response) => response,
             Err(err) => {
-                let metadata = CallMetadata::default();
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: lm.model.clone(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    metadata,
-                );
+                    },
+                });
             }
         };
         debug!(
@@ -162,15 +165,11 @@ impl<S: Signature> Predict<S> {
                     raw_response_len = raw_response.len(),
                     "typed parse failed"
                 );
-                let metadata = CallMetadata::new(
+                return Err(PredictError::Parse {
+                    source: err,
                     raw_response,
                     lm_usage,
-                    response.tool_calls,
-                    response.tool_executions,
-                    node_id,
-                    IndexMap::new(),
-                );
-                return CallOutcome::err(CallOutcomeErrorKind::Parse(err), metadata);
+                });
             }
         };
 
@@ -216,7 +215,7 @@ impl<S: Signature> Predict<S> {
             field_metas,
         );
 
-        CallOutcome::ok(typed_output, metadata)
+        Ok(Predicted::new(typed_output, metadata))
     }
 }
 
@@ -413,10 +412,6 @@ where
     Ok(prediction)
 }
 
-fn predict_error_from_outcome(kind: CallOutcomeErrorKind, metadata: CallMetadata) -> PredictError {
-    CallOutcomeError { metadata, kind }.into_predict_error()
-}
-
 impl<S> Module for Predict<S>
 where
     S: Signature + Clone,
@@ -435,8 +430,8 @@ where
             typed = true
         )
     )]
-    async fn forward(&self, input: S::Input) -> CallOutcome<S::Output> {
-        self.call(input).await
+    async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
+        Predict::forward(self, input).await
     }
 }
 
@@ -455,24 +450,21 @@ where
     pub async fn forward_untyped(
         &self,
         input: BamlValue,
-    ) -> CallOutcome<BamlValue> {
+    ) -> Result<Predicted<BamlValue>, PredictError> {
         let typed_input = match S::Input::try_from_baml_value(input.clone()) {
             Ok(typed_input) => typed_input,
             Err(err) => {
                 debug!(error = %err, "untyped input conversion failed");
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Conversion(err.into(), input),
-                    CallMetadata::default(),
-                );
+                return Err(PredictError::Conversion {
+                    source: err.into(),
+                    parsed: input,
+                });
             }
         };
-        let (result, metadata) = self.call(typed_input).await.into_parts();
-        let output = match result {
-            Ok(output) => output,
-            Err(kind) => return CallOutcome::err(kind, metadata),
-        };
+        let predicted = self.call(typed_input).await?;
+        let (output, metadata) = predicted.into_parts();
         debug!("typed predict forward_untyped complete");
-        CallOutcome::ok(output.to_baml_value(), metadata)
+        Ok(Predicted::new(output.to_baml_value(), metadata))
     }
 }
 

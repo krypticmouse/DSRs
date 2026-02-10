@@ -11,8 +11,8 @@ cargo run --example 02-module-iteration-and-updation
 
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, CallOutcome, CallOutcomeErrorKind, Example, LegacyPredict, LegacySignature,
-    LmError, Module, Optimizable, Prediction, Predictor, hashmap, init_tracing, prediction,
+    CallMetadata, Example, LegacyPredict, LegacySignature, LmError, Module, Optimizable,
+    PredictError, Predicted, Prediction, Predictor, hashmap, init_tracing, prediction,
 };
 
 #[LegacySignature(cot)]
@@ -68,18 +68,17 @@ impl Module for QARater {
     type Input = Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
         let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
             Ok(prediction) => prediction,
             Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "legacy_predict".to_string(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    CallMetadata::default(),
-                );
+                    },
+                });
             }
         };
 
@@ -97,17 +96,16 @@ impl Module for QARater {
         let rating_prediction = match self.rater.forward(inputs).await {
             Ok(prediction) => prediction,
             Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "legacy_predict".to_string(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    CallMetadata::default(),
-                );
+                    },
+                });
             }
         };
-        CallOutcome::ok(
+        Ok(Predicted::new(
             prediction! {
             "answer"=> answer,
             "question"=> question,
@@ -115,7 +113,7 @@ impl Module for QARater {
         }
             .set_lm_usage(rating_prediction.lm_usage),
             CallMetadata::default(),
-        )
+        ))
     }
 }
 

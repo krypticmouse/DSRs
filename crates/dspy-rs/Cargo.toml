@@ -49,4 +49,3 @@ ignored = ["rig-core"]
 
 [features]
 default = []
-nightly-try = []

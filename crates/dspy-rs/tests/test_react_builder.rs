@@ -108,13 +108,14 @@ async fn react_builder_executes_multi_tool_calculator_loop_and_extracts_output()
         })
         .build();
 
-    let outcome = react
-        .forward(QAInput {
+    let predicted = react
+        .call(QAInput {
             question: "Compute (17 + 5) * 3 using tools.".to_string(),
         })
-        .await;
+        .await
+        .expect("react call should succeed");
 
-    let (result, metadata) = outcome.into_parts();
+    let (result, metadata) = predicted.into_parts();
     assert_eq!(
         add_calls.load(Ordering::SeqCst),
         1,
@@ -167,8 +168,6 @@ async fn react_builder_executes_multi_tool_calculator_loop_and_extracts_output()
         metadata.tool_executions
     );
 
-    let result: QAOutput = result
-        .map_err(|err| format!("{err:?}"))
-        .expect("react call should succeed");
+    let result: QAOutput = result;
     assert_eq!(result.answer, "66");
 }

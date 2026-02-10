@@ -81,18 +81,17 @@ impl Module for MathSolver {
     type Input = Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
         // Just forward to the solver - judge only used during evaluation.
         match self.solver.forward(inputs).await {
-            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
-            Err(err) => CallOutcome::err(
-                CallOutcomeErrorKind::Lm(LmError::Provider {
+            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
+            Err(err) => Err(PredictError::Lm {
+                source: LmError::Provider {
                     provider: "legacy_predict".to_string(),
                     message: err.to_string(),
                     source: None,
-                }),
-                CallMetadata::default(),
-            ),
+                },
+            }),
         }
     }
 }
@@ -342,7 +341,8 @@ async fn main() -> Result<()> {
     let test_prediction = module
         .forward(test_problem.clone())
         .await
-        .into_result()?;
+        ?
+        .into_inner();
     let test_feedback = module
         .feedback_metric(&test_problem, &test_prediction)
         .await;

@@ -244,10 +244,10 @@ impl MIPROv2 {
 
             // Run forward pass
             let prediction = module
-                .forward(example.clone())
+                .call(example.clone())
                 .await
-                .into_result()
                 .map_err(|err| anyhow::anyhow!(err))
+                .map(|predicted| predicted.into_inner())
                 .context("Failed to generate prediction for trace")?;
 
             // Evaluate the prediction

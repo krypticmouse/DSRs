@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure};
+use dspy_rs::{ChatAdapter, LM, Predict, PredictError, Signature, configure};
 
 #[derive(Signature, Clone, Debug)]
 struct SmokeSig {
@@ -26,11 +26,14 @@ async fn main() -> Result<()> {
         prompt: "Reply with exactly: smoke-ok".to_string(),
     };
 
-    let output = module.call(input).await.into_result().map_err(|err| {
-        eprintln!("smoke call failed: {}", err.kind);
-        eprintln!("raw_response: {:?}", err.metadata.raw_response);
+    let output = module.call(input).await.map_err(|err| {
+        eprintln!("smoke call failed: {err}");
+        if let PredictError::Parse { raw_response, .. } = &err {
+            eprintln!("raw_response: {:?}", raw_response);
+        }
         anyhow::anyhow!("slice1 smoke failed")
-    })?;
+    })?
+    .into_inner();
 
     println!("answer: {}", output.answer);
 

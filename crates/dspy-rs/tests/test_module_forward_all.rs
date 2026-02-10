@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use dspy_rs::{BamlType, CallMetadata, CallOutcome, Module, forward_all};
+use dspy_rs::{BamlType, CallMetadata, Module, PredictError, Predicted, forward_all};
 use tokio::time::sleep;
 
 struct DelayEcho;
@@ -22,12 +22,12 @@ impl Module for DelayEcho {
     type Input = DelayInput;
     type Output = DelayOutput;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         sleep(Duration::from_millis(input.delay_ms.max(0) as u64)).await;
-        CallOutcome::ok(
+        Ok(Predicted::new(
             DelayOutput { value: input.value },
             CallMetadata::default(),
-        )
+        ))
     }
 }
 
@@ -57,7 +57,7 @@ async fn forward_all_preserves_input_order() {
     let outcomes = forward_all(&module, inputs, 2).await;
     let outputs = outcomes
         .into_iter()
-        .map(|outcome| outcome.into_result().expect("forward should succeed").value)
+        .map(|outcome| outcome.expect("forward should succeed").into_inner().value)
         .collect::<Vec<_>>();
 
     assert_eq!(outputs, vec![0, 1, 2, 3]);

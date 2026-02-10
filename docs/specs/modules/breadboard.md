@@ -48,14 +48,14 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 
 **Resolved gaps:**
 - ~~No LM configuration affordance~~ → **Global default with scoped override.** LM is globally scoped (existing `GLOBAL_SETTINGS` infrastructure). `dsrs::with_lm(eval_lm, || ...)` overrides per-call via scoped context. N8 checks scoped context first, falls back to global default. Global LM configuration is existing infrastructure, not breadboarded (see External dependencies).
-- ~~No batching affordance~~ → **Standalone utility, not a trait method.** `dsrs::forward_all(&module, inputs, concurrency)` → `Vec<CallOutcome<Output>>` (Vec-of-Outcomes, not Result-of-Vec — individual failures don't abort batch). Module trait stays minimal (one method: `forward`). Rationale: a default `forward_batch` on Module forces P2 authors to reason about concurrency composition — BestOfN already runs N concurrent calls per invocation, so default batching would produce `batch_size × N` concurrent LM requests. Standalone utility keeps this concern at P1. See U48.
+- ~~No batching affordance~~ → **Standalone utility, not a trait method.** `dsrs::forward_all(&module, inputs, concurrency)` → `Vec<Result<Predicted<Output>, PredictError>>` (Vec-of-Results, not Result-of-Vec — individual failures don't abort batch). Module trait stays minimal (`forward` implementation hook + default `call` wrapper). Rationale: a default `forward_batch` on Module forces P2 authors to reason about concurrency composition — BestOfN already runs N concurrent calls per invocation, so default batching would produce `batch_size × N` concurrent LM requests. Standalone utility keeps this concern at P1. See U48.
 - ~~Error paths underspecified~~ → `PredictError` carries raw LM response + failed field + stage + coercion detail. Error `Display` includes full LM response for iterative debugging. No separate debug API needed for V1. See U49.
 - ~~Container traversal silently fails~~ → N18 errors on containers with `dsrs::parameter` inner types. See architectural invariant above.
 - ~~Strategy swap blast radius understated~~ → Updated U16 to note output type change.
 - ~~N12/N13 status~~ → **Keep N13, collapse N12 into N8.** N12 (jsonish coerce) is part of the "text → BamlValue" pipeline inside N8. N13 (try_from_baml_value) is a distinct error boundary: "BamlValue → typed output." Two affordances, two error semantics (N8 failures = coercion/parsing, N13 failures = type mismatch).
 - ~~Missing P1→P3 handoff~~ → Added U50 (`optimizer.compile(&mut module, trainset, metric)`). Exclusive `&mut` during optimization = no concurrent `forward()`.
 - ~~P1→P2 cliff too sharp~~ → **Module combinators as P1 ramp.** Without combinators, a P1 user who wants to post-process output (e.g., derive a confidence score from reasoning) must jump to full `impl Module` — learning associated types, async plumbing, and the Module trait. With `.map()` / `.and_then()`, they write a closure. Added U51 (module combinators). This is the intermediate step between "use a library module" and "author your own module."
-- ~~CallOutcome undecided~~ → **Locked for V1.** N8 returns `CallOutcome<O>` by default (single calling convention). `call_with_meta` is folded into `call`. No parallel convenience API (`forward_result`, etc.). Metadata and result travel together.
+- ~~Calling convention undecided~~ → **Locked for V1.** N8 returns `Result<Predicted<O>, PredictError>`. `Predicted<O>` carries output + call metadata (like DSPy's `Prediction`) with `Deref<Target = O>` for direct field access and `.metadata()` for metadata access. `?` works on stable Rust without nightly `Try`. User-facing invocation is `Module::call`, while module authors implement `Module::forward` as the execution hook.
 
 **N-affordance principle:** Keep **orchestration boundaries** (N3, N8, N17, N18, N25/N26) and **error/decision boundaries** (N13, N22, N23, N24). Collapse pure pipes/transforms into their parent. Test: "can you change the implementation without changing any wiring?" If yes, it's guts, not an affordance.
 
@@ -63,7 +63,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 - ⚠️ **P1→P2 cliff / Module combinators:** Resolved — see U51 (`.map()`, `.and_then()`) and boundary note on P1→P2. **Remaining question:** Module combinators must be Facet-transparent for the F6 walker (N18) to see through them. `Map<M, F>` needs a manual Facet impl exposing `inner: M` as a field (closures are opaque to Facet derive). This is an architectural invariant on all future combinators: they must expose inner modules as struct fields, not trait objects.
 
 **Deferred (acknowledged, out of scope for V1):**
-- ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `forward()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
+- ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `call()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
 - ⚠️ **Container traversal (Vec, Option, HashMap, Box):** Walker errors on containers with `dsrs::parameter` inner types (N18). Full traversal deferred — tracked in S5.
 
 ---
@@ -80,14 +80,14 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U6** | P1 | `predict` | `Predict::<S>::new()` | construct | → S2, → S3 | — | F5 |
 | **U7** | P1 | `predict` | `Predict::<S>::builder().demo(...).instruction(...).build()` | construct | → S2, → S3, → S4 | — | F5 |
 | **U8** | P1 | `predict` | `Demo { input: ..., output: ... }` | construct | → U7 | — | F5 |
-| **U9** | P1 | `module` | `module.forward(input).await` | call | → N3 | → U10 | F4 |
-| **U10** | P1 | `module` | `CallOutcome<S::Output>` (single return surface; carries `Result` + metadata) | access | → U5 (Ok) | ← N8 | F4 |
+| **U9** | P1 | `module` | `module.call(input).await` | call | → N3 | → U10 | F4 |
+| **U10** | P1 | `module` | `Result<Predicted<S::Output>, PredictError>` from `call` (`Predicted` carries output + metadata; Deref to output fields) | access | → U5 (Ok) | ← N8 | F4 |
 | **U11** | P1 | — | `result.answer` — direct field access | access | — | ← U5 | F1 |
 | **U12** | P1 | — | `result.reasoning` — Deref to augmented field | access | — | ← U5 | F3 |
 | **U13** | P1 | `library` | `ChainOfThought::<S>::new()` | construct | → S2 (internal predict) | — | F11 |
 | **U14** | P1 | `library` | `ReAct::<S>::builder().tool("name", "desc", fn).build()` | construct | → S2, → S4 | — | F11 |
 | **U16** | P1 | — | Strategy swap: change type annotation (e.g. `Predict<QA>` → `ChainOfThought<QA>`). **Note:** output type also changes (`QAOutput` → `WithReasoning<QAOutput>`), breaking explicit type annotations and downstream function signatures. Compiler catches all breakage. | compile | — | — | F4 |
-| **U48** | P1 | `module` | `dsrs::forward_all(&module, inputs, concurrency).await` — standalone utility. Returns `Vec<CallOutcome<Output>>`. Individual failures don't abort batch. Module trait stays minimal (one method). | call | → N8 (×N) | → Vec\<CallOutcome\> | F4 |
+| **U48** | P1 | `module` | `dsrs::forward_all(&module, inputs, concurrency).await` — standalone utility. Returns `Vec<Result<Predicted<Output>, PredictError>>`. Individual failures don't abort batch. Module trait stays minimal (`forward` hook + default `call`). | call | → N8 (×N) | → Vec\<Result<Predicted<Output>, PredictError>\> | F4 |
 | **U50** | P1 | `optimizer` | `optimizer.compile(&mut module, trainset, metric).await` — hands module to optimizer. Exclusive `&mut` = no concurrent forward() during optimization. This is the P1→P3 entry point. | call | → U30 (P3 entry) | → &mut module (optimized in place) | F6, F8 |
 | **U51** | P1 | `module` | `module.map(\|output\| transform(output))` — output transformation combinator. Constructs `Map<M, F>` wrapping the original module. Also `.and_then()` for fallible transforms. P1 ramp to avoid `impl Module` for simple post-processing (e.g., derive confidence from reasoning). Map/AndThen must have manual Facet impls exposing `inner` field for N18 walker traversal. | construct | — | → Module\<Output=NewType\> | F4 |
 | **U49** | P1 | `module` | `PredictError` variants — `Provider { source }` (retry-worthy: network, timeout, rate limit), `Parse { raw_response, field, stage, detail }` (prompt-engineering problem). `stage` distinguishes substages within N8: `SectionParsing` (missing `[[ ## field ## ]]` markers), `Coercion` (jsonish can't parse field value), `PathAssembly` (nested structure mismatch). N13 failures use stage `TypeConversion` (BamlValue→typed output mismatch). Error Display includes full LM response text. | access | — | ← N8, ← N13 | F5, F7 |
@@ -134,7 +134,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **N1** | P1 | `signature` (macro) | Proc macro expansion — generates `QAInput`, `QAOutput` structs + `impl Signature` | compile | → U4, → U5 | — | F1 |
 | **N2** | P1 | `signature` (macro) | Extract doc comment → `fn instructions() -> &'static str` | compile | — | → N8 | F1 |
 | **N3** | P1 | `schema` | `SignatureSchema::of::<S>()` — TypeId-keyed cached derivation. Internally: walk_fields (Facet shape walk, flatten-aware), build_type_ir (TypeIR from Shape), build_output_format (OutputFormatContent). Pure pipes collapsed — swapping internals changes no wiring. | cache | → S1 | → N8, → U23–U26 | F2 |
-| **N8** | P1 | `adapter` | Predict call pipeline: build_system → format_demos → format_input → lm.call → parse_sections → jsonish coerce → path assembly. Internally uses format_value, navigate_path, insert_at_path, jsonish::from_str (all collapsed — pure pipes). **Error boundary for coercion:** produces `PredictError::Parse` with raw content + field name + coercion detail when LM output doesn't parse. LM resolution: scoped context (`dsrs::with_lm`) > global default (`GLOBAL_SETTINGS`). Returns `CallOutcome<O>` (result + metadata) as the single call surface. | call | → N3, → S2 (read demos), → N13, → LM | → U10, → U49 (on error) | F5, F7 |
+| **N8** | P1 | `adapter` | Predict call pipeline: build_system → format_demos → format_input → lm.call → parse_sections → jsonish coerce → path assembly. Internally uses format_value, navigate_path, insert_at_path, jsonish::from_str (all collapsed — pure pipes). **Error boundary for coercion:** produces `PredictError::Parse` with raw content + field name + coercion detail when LM output doesn't parse. LM resolution: scoped context (`dsrs::with_lm`) > global default (`GLOBAL_SETTINGS`). Returns `Result<Predicted<O>, PredictError>` via `Module::call` (delegating to module `forward`). | call | → N3, → S2 (read demos), → N13, → LM | → U10, → U49 (on error) | F5, F7 |
 | **N13** | P1 | `adapter` | `O::try_from_baml_value()` — BamlValue → typed output. **Error boundary:** rejects structurally invalid BamlValue (constraint violations, missing fields). Distinct from N8 coercion errors: N8 = "couldn't understand LM text", N13 = "understood it but doesn't match expected type." | compute | — | → U10 | F7 |
 | | | | | | | | |
 | **N14** | P2 | `augmentation` (macro) | Augmentation proc macro — generates `WithX<O>` + `Deref` + `impl Augmentation`. Includes tuple composition: `impl Augmentation for (A, B)` provides `(A, B)::Wrap<T> = A::Wrap<B::Wrap<T>>` via GATs (type-level only, no code generation — collapsed from former N16). | compile | → U20 | — | F3 |
@@ -180,7 +180,7 @@ U6 (Predict::new()) → initializes S2 (empty demos), S3 (None instruction)
   — or —
 U7 (builder) + U8 (Demo) → writes S2, S3, S4
 
-U9 (module.forward(input))
+U9 (module.call(input))
   → N3 (SignatureSchema::of::<S>()) → S1 (TypeId cache: cached or init)
   → N8 (adapter pipeline)
     → reads S2 (demos), LM from scoped context or global default
@@ -188,18 +188,18 @@ U9 (module.forward(input))
     → LM provider (external call)
     → parse sections, jsonish coerce, path assembly (all internal to N8)
     → N13 (try_from_baml_value — error boundary: BamlValue → typed output)
-  → U10 (CallOutcome<Output>)
+  → U10 (Result<Predicted<Output>, PredictError>)
     → on error: U49 (PredictError with raw response + stage)
 
 U10 → U5 (typed output) → U11 (result.answer) or U12 (result.reasoning via Deref)
 
 U48 (dsrs::forward_all(&module, inputs, concurrency))
-  → N8 (×N, buffer_unordered) → Vec<CallOutcome<Output>>
+  → N8 (×N, buffer_unordered) → Vec<Result<Predicted<Output>, PredictError>>
   Individual failures don't abort the batch.
 
 U51 (module.map(|output| transform(output)))
   → constructs Map<M, F> wrapper (no new wiring — pure value construction)
-  → the returned Module delegates forward() to inner via existing U9→N8 path
+  → the returned Module delegates call() to inner via existing U9→N8 path
   → Map<M, F> has manual Facet impl: walker sees through to inner Predict leaves
   → avoids impl Module for simple post-processing (P1→P2 ramp)
 ```
@@ -221,7 +221,7 @@ Inside forward(), module author calls:
   U23 (build_system) → N3 (schema)
   U24 (format_input) → N8 internals (format_value, navigate_path)
   U26 (parse_output) → N8 internals (jsonish coerce, path assembly) → N13
-  — or simply delegates to internal Predict::call() (most common path)
+  — or simply delegates to internal Predict::forward() (most common path)
 ```
 
 ### P3 Workflow: "Discover and optimize parameters"
@@ -284,7 +284,7 @@ P1 → P3: U50 (optimizer.compile(&mut module, trainset, metric)).
   After optimization, S2/S3 are mutated but the typed module is unchanged.
 
 P3 → P1: After optimization, &mut borrow released.
-  User calls U9 (module.forward()) as normal.
+  User calls U9 (module.call()) as normal.
   The module reads from S2/S3 which now contain optimized demos/instructions.
   No code change in P1 — optimization is invisible.
 
@@ -339,7 +339,7 @@ V5 (optimizer) depends on V2 (needs augmented modules to test multi-level discov
 | U1, U2, U3 | Signature derive + markers + doc comment | Entry point |
 | U4, U5 | Generated QAInput / QAOutput types | Compile-time output |
 | U6, U7, U8 | Predict construction + builder + Demo | Module setup |
-| U9, U10, U11 | forward(), CallOutcome, field access | Call and result |
+| U9, U10, U11 | forward(), Predicted<O>, field access | Call and result |
 | U49 | PredictError variants | Error path |
 | N1, N2 | Proc macro expansion, doc extraction | Compile-time mechanisms |
 | N3 | SignatureSchema derivation | Schema cache |
@@ -357,7 +357,7 @@ struct QA {
 }
 
 let predict = Predict::<QA>::new();
-let result = predict.forward(QAInput { question: "What is 2+2?".into() }).await?;
+let result = predict.call(QAInput { question: "What is 2+2?".into() }).await?;
 println!("{}", result.answer);  // typed field access
 ```
 
@@ -375,7 +375,7 @@ println!("{}", result.answer);  // typed field access
 Demo program:
 ```rust
 let cot = ChainOfThought::<QA>::new();
-let result = cot.forward(QAInput { question: "What is 2+2?".into() }).await?;
+let result = cot.call(QAInput { question: "What is 2+2?".into() }).await?;
 println!("Reasoning: {}", result.reasoning);
 println!("Answer: {}", result.answer);  // via Deref
 ```
@@ -400,9 +400,9 @@ struct SimpleRAG {
 impl Module for SimpleRAG {
     type Input = QAInput;
     type Output = WithReasoning<QAWithContextOutput>;
-    async fn forward(&self, input: QAInput) -> Result<Self::Output, PredictError> {
-        let ctx = self.retrieve.forward(RetrieveInput { query: input.question.clone() }).await?;
-        self.answer.forward(QAWithContextInput { question: input.question, context: ctx.passages }).await
+    async fn forward(&self, input: QAInput) -> Result<Predicted<Self::Output>, PredictError> {
+        let ctx = self.retrieve.call(RetrieveInput { query: input.question.clone() }).await?;
+        self.answer.call(QAWithContextInput { question: input.question, context: ctx.passages }).await
     }
 }
 ```
@@ -424,7 +424,7 @@ Demo program:
 let react = ReAct::<QA>::builder()
     .tool("search", "Search the web", search_fn)
     .build();
-let result = react.forward(QAInput { question: "Who won the 2024 election?".into() }).await?;
+let result = react.call(QAInput { question: "Who won the 2024 election?".into() }).await?;
 
 // Batch 10 inputs concurrently
 let results = dsrs::forward_all(&react, inputs, 5).await;
@@ -460,7 +460,7 @@ params[0].1.set_demos_from_examples(new_demos)?;
 params[1].1.set_instruction("Be concise.".into());
 
 // Verify mutations took effect
-let result = module.forward(input).await?;
+let result = module.call(input).await?;
 
 // Save optimized state to disk
 let state = dsrs::dump_state(&module);

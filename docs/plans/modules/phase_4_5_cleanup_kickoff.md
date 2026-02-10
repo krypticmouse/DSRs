@@ -44,7 +44,7 @@ Primary references:
 ## Locked Decisions (Do Not Re-open)
 
 1. **S1/S6 direction is Option C full replacement**: Facet-native `SignatureSchema` is the target; legacy `FieldSpec`/`MetaSignature` are transitional only.
-2. **Single call surface**: `CallOutcome<O>` is the default call contract; no parallel convenience call path.
+2. **Single call surface**: `Module::call` returns `Result<Predicted<O>, PredictError>`. `Predicted<O>` carries output + metadata with `Deref<Target = O>`. `forward` remains as a compatibility hook/alias for implementers. Revision brief: `docs/specs/modules/calling_convention_revision.md`.
 3. **Typed path is primary; dynamic is escape hatch**: user-facing APIs should optimize for typed modules first.
 4. **`build_system` fallibility is intentional**: spec/docs were aligned to `Result<String>`.
 5. **Post-slice reconciliations already completed**: `ChainOfThought` Facet discoverability and ReAct parity fixes are done.

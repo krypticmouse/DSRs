@@ -4,7 +4,7 @@ use crate::augmentation::Augmented;
 use crate::Augmentation;
 use crate::core::{MetaSignature, Module, Optimizable, Signature};
 use crate::predictors::{Demo, Predict, PredictBuilder};
-use crate::{BamlType, CallOutcome, Example};
+use crate::{BamlType, Example, PredictError, Predicted};
 
 #[derive(Augmentation, Clone, Debug)]
 #[augment(output, prepend)]
@@ -36,7 +36,21 @@ impl<S: Signature> ChainOfThought<S> {
         ChainOfThoughtBuilder::new()
     }
 
-    pub async fn call(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>>
+    pub async fn call(
+        &self,
+        input: S::Input,
+    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
+    where
+        S::Input: BamlType,
+        S::Output: BamlType,
+    {
+        self.forward(input).await
+    }
+
+    pub async fn forward(
+        &self,
+        input: S::Input,
+    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -54,8 +68,11 @@ where
     type Input = S::Input;
     type Output = WithReasoning<S::Output>;
 
-    async fn forward(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>> {
-        self.predictor.call(input).await
+    async fn forward(
+        &self,
+        input: S::Input,
+    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
+        ChainOfThought::forward(self, input).await
     }
 }
 

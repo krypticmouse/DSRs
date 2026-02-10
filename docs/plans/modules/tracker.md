@@ -1,16 +1,17 @@
 # Implementation Tracker
 
 ## Current State
-- **Slice**: 4.5-lite
-- **Phase**: Completed (Phase 4.5-lite Prerequisite Cleanup)
+- **Slice**: 5 (V5 optimizer interface)
+- **Phase**: Plan
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
-- **Roadmap**: 4.5-lite (prerequisites) → V5 (optimizer interface) → V6 (dynamic graph) → Kill Pass (legacy deletion)
-- **Roadmap rationale**: Original Phase 4.5 descoped; C3/C4 recognized as V5 work, C2 quarantine replaced by post-V6 deletion sweep
+- **Roadmap**: V5 (optimizer interface) → V6 (dynamic graph) → Kill Pass (legacy deletion)
+- **Roadmap rationale**: 4.5-lite prerequisites are complete; remaining execution follows breadboard V5→V6, then legacy deletion sweep.
 
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
 |----|---------|-------|-------|--------|-------|
+| `019c453b-9133-7b23-bb4d-6cb001dea031` | Stupidly implementable plan for Slice 5 (optimizer interface) | 5 | Plan | In progress | Drafting `slice_5.md` with verified symbols, concrete signatures, and V5-only sequencing |
 
 ## Completed Subagents
 | ID | Purpose | Slice | Phase | Outcome |
@@ -41,11 +42,15 @@
 | `019c4467-1e16-7b82-a306-2989dd593944` | Plan refinery against ground truth for Slice 4 | 4 | Plan Refinery | Completed; produced `slice_4_refinery.md` and updated `slice_4.md` with spec/shape consistency checks | One ambiguity surfaced (`and_then` metadata semantics) and was resolved during arbitration in the approved plan |
 | `019c4475-b295-75b0-8b03-ecfd11932e5f` | Adversarial review against ground truth for Slice 4 | 4 | Adversarial Review | Completed; produced `slice_4_review.md` with one high and one medium finding | High: ReAct missing `Facet` derivation/discoverability. Medium: ReAct loop prompt formatting bypasses adapter building blocks |
 | `019c4478-d3ef-76b1-98e9-cbf5f4d127ec` | Apply agreed Slice 4 arbitrate fix (ReAct Facet discoverability) | 4 | Arbitrate | Completed; added `facet::Facet` derive on `ReAct` and skipped non-discoverable fields (`tools`, `max_steps`) while keeping predictor fields discoverable | Verified by `cargo check -p dspy-rs`, then re-ran targeted tests and Slice 4 smoke successfully |
-| `manual` | ReAct DSPy parity pass (single call surface + trajectory smoke evidence) | 4 | Implement → Smoke Test | Completed; removed public `call_with_trajectory`, kept trajectory in normal `CallOutcome` metadata, upgraded deterministic test to multi-tool calculator loop, and replaced smoke with GPT-5.2 calculator trajectory proof | `cargo test -p dspy-rs --test test_module_forward_all --test test_module_ext --test test_react_builder` and `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` passed |
+| `manual` | ReAct DSPy parity pass (single call surface + trajectory smoke evidence) | 4 | Implement → Smoke Test | Completed; removed public `call_with_trajectory`, kept trajectory in normal `Predicted` metadata, upgraded deterministic test to multi-tool calculator loop, and replaced smoke with GPT-5.2 calculator trajectory proof | `cargo test -p dspy-rs --test test_module_forward_all --test test_module_ext --test test_react_builder` and `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` passed |
+| `019c4536-e461-7792-ad3e-3c1115103a7a` | Research brief for Slice 5 (optimizer interface) | 5 | Research | Completed; created `slice_5_research.md` with V5 requirement inventory, existing optimizer/discovery surfaces, and [EXISTS]/[MODIFY]/[NEW] gaps for `DynPredictor` + walker migration |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
-- **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` as the `Module::forward` return type. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.forward(input).await?.answer`. The `call` vs `forward` naming distinction is eliminated. Former locked decision "call_with_meta folded into call" is superseded. Full revision brief: `docs/specs/modules/calling_convention_revision.md`.
+- **State transition (2026-02-10):** Advanced workflow to `Slice 5 / Research` after 4.5-lite completion; V5 is now the active slice.
+- **Slice 5 research arbitration (2026-02-10):** Accepted `slice_5_research.md` as implementation baseline. Locked V5 to struct-field walker recursion with explicit container errors (per N18 + S5 deferral), and carried forward the U50 API ambiguity (`metric` arg in breadboard vs current `Evaluator`-bound compile trait) into planning for explicit resolution.
+- **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` for typed module calls. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.call(input).await?.answer`. Canonical user entrypoint is `Module::call`; module authors implement `forward` as the hook.
+- **Interpretation note:** historical entries below may still reference `CallOutcome` because they log pre-revision milestones. Treat those references as superseded unless an entry explicitly says otherwise.
 - **Phase 4.5-lite completion (2026-02-10):** Exit gates passed. `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test` are green after C1/C5/C6 execution.
 - **C1 implementation closeout (2026-02-10):** `Module::Input`/`Output` bounds now require `BamlType + for<'a> Facet<'a> + Send + Sync`, and combinator output bounds were tightened to match.
 - **Facet safety correction (2026-02-10):** Replaced unsound shape aliasing on legacy `Example`/`Prediction` with derive-based Facet metadata so layout/type metadata stays truthful while data-heavy fields remain skipped/opaque.
@@ -62,7 +67,7 @@
 - **C7 arbitration (2026-02-09):** Accept option A (defer to V5). Error-path contract tests land when the walker exists.
 - **C8 arbitration (2026-02-09):** Accept option B (lock strategy). Annotation-first with optional trace inference. Recorded for V6 planning.
 - **State normalization (2026-02-09):** Tracker advanced from stale `Slice 3 / Done` to `Slice 4 / Research` per closure-audit transition rule (slice < 4 advances to next slice research).
-- **ReAct DSPy parity arbitration (2026-02-09):** Removed separate trajectory call API from `ReAct` to keep the single `CallOutcome` call surface aligned with `F4` and DSPy reference behavior (`forward` returns prediction while trajectory is part of returned data). Trajectory is now emitted through existing call metadata (`tool_executions`) and printed in smoke/tests without introducing another call path.
+- **ReAct DSPy parity arbitration (2026-02-09):** Removed separate trajectory call API from `ReAct` to keep a single call surface aligned with `F4` and DSPy reference behavior (`call` returns prediction while trajectory is part of returned data). Trajectory is now emitted through existing call metadata (`tool_executions`) and printed in smoke/tests without introducing another call path. Superseded return wrapper: `CallOutcome` -> `Result<Predicted<...>, PredictError>` per the calling convention revision.
 - **ReAct calculator smoke proof (2026-02-09):** Updated `93-smoke-slice4-react-operational` to exercise multi-tool calculator flow (`add` → `multiply` → `add` → `finish`) and print step-by-step trajectory from metadata; real-model smoke on `openai:gpt-5.2` passed with `tool_calls: 3`, `tool_executions: 5`, `answer: 70`.
 - **Slice 4 research arbitration (2026-02-09):** Reclassified `U48` from `[EXISTS]` to `[MODIFY]` in `slice_4_research.md`; batching semantics are present, but API shape currently requires `display_progress` and does not match breadboard’s 3-arg `forward_all(&module, inputs, concurrency)`.
 - **Slice 4 plan review (2026-02-09):** Accepted high-level sequencing (U48 surface alignment → U51 combinators → U14 ReAct + tests), but flagged two areas for refinery against code/spec: (1) exact Facet strategy for closure-bearing wrappers (`Map`/`AndThen`), and (2) concrete plain-function tool adapter surface for ReAct builder.
@@ -81,13 +86,13 @@
 - **Post-Implementation Cleanup (2026-02-09):** Ran full workspace validation (`cargo test`) successfully after cleanup edits.
 - Slice definitions for this execution are V1-V3 from `/Users/darin/src/personal/DSRs/docs/specs/modules/breadboard.md` (V1 Typed call, V2 Augmentation + CoT, V3 Module authoring).
 - Ground truth hierarchy for arbitration is: breadboard + shapes + design_reference + spikes S1-S8.
-- **Locked (2026-02-09):** N8/typed call default return is `CallOutcome<O>` (metadata-first). `call_with_meta` is folded into `call`; there is no separate convenience path like `forward_result`.
-- **Calling convention constraint:** single return type + single convention. `CallOutcome` must support ergonomic `?`-style consumption via traits (if feasible on toolchain) without introducing parallel APIs.
+- **Superseded lock (2026-02-09):** N8/typed call default return was `CallOutcome<O>` (metadata-first) with `call_with_meta` folded into `call`. Superseded the same day by the calling convention revision to `Result<Predicted<O>, PredictError>` with `Module::call` as canonical and `forward` as implementation hook.
+- **Calling convention constraint (updated):** single return type + single convention. `Module::call` returns `Result<Predicted<O>, PredictError>` and delegates to `forward`; no parallel convenience call path.
 - **Error payload constraint:** errors must carry call metadata context (raw response/usage/field parse detail) in the same default return flow.
 - **Plan review decision (2026-02-09):** Slice 1 plan must align with S1/S6 Option C replacement direction; broad legacy compatibility strategy in draft plan requires refinery correction or explicit arbitration.
 - **Arbitration (2026-02-09): Flatten alias/constraint semantics.** `SignatureSchema` enforces unique LM-visible names per side (input/output). Collisions after flatten are hard errors with path detail. Constraints/format metadata are attached to flattened emitted leaf paths.
-- **Arbitration (2026-02-09): `CallOutcome` ergonomics.** Implement `Try`/`FromResidual` on nightly (`try_trait_v2`) and keep `into_result()` explicit conversion API.
-- **Implementation decision (2026-02-09):** Keep minimal optimizer file edits in `optimizer/gepa.rs` and `optimizer/mipro.rs` because they are mechanical call-site adaptations required by `Module::forward -> CallOutcome<Prediction>`; no optimizer behavior changes were introduced.
+- **Superseded arbitration (2026-02-09): `CallOutcome` ergonomics.** Prior plan considered `Try`/`FromResidual` on nightly (`try_trait_v2`) with `into_result()`. Superseded by `Result<Predicted<...>, PredictError>` on stable.
+- **Implementation decision (2026-02-09):** Keep minimal optimizer file edits in `optimizer/gepa.rs` and `optimizer/mipro.rs` because they were mechanical call-site adaptations required by typed module invocation; no optimizer behavior changes were introduced.
 - **Adversarial arbitration (2026-02-09):** Accepted high-severity review finding on legacy flatten marker mismatch. Fixed by (1) emitting `FieldSchema::lm_name` keys in `schema_fields_to_value`, and (2) updating `FIELD_HEADER_PATTERN` to parse non-`\w` marker names (including dotted aliases/paths).
 - **Smoke test (2026-02-09):** Real LM call passed end-to-end using `cargo run -p dspy-rs --example _slice1_smoke` with `.env` `OPENAI_API_KEY` and model `openai:gpt-5.2`; typed path returned expected `answer = "smoke-ok"`.
 - **Arbitration result (2026-02-09):** Agreed with the single review finding and fixed it in-place (`predict.rs` legacy field-key mapping and `chat.rs` header regex). Post-fix test suite and smoke run passed.
@@ -98,7 +103,7 @@
 - **Slice 2 implementation (2026-02-09):** Adapter formatting uses relaxed path lookup to handle `#[facet(flatten)]` outputs whose BamlValue serialization flattens fields while parsing still expects nested paths.
 - **Slice 2 smoke test (2026-02-09):** Real LM calls passed end-to-end against `openai:gpt-5.2` via named examples: `cargo run -p dspy-rs --example 90-smoke-slice1-typed-predict` (`answer = smoke-ok`) and `cargo run -p dspy-rs --example 91-smoke-slice2-chain-of-thought` (`answer = smoke-ok`, reasoning populated).
 - **Slice 2 arbitrate (2026-02-09):** Accepted finding on legacy optimizer visibility and fixed by exposing `predictor` through `ChainOfThought::parameters()`. Re-ran Slice 2 smoke test after fix; still passes (`answer = smoke-ok`).
-- **Slice 2 arbitrate (2026-02-09):** Deferred review findings on `Facet` derivation and typed `Module::forward` as cross-slice architectural alignment work; current Slice 2 deliverable remains consistent with the existing `Module` trait contract introduced in Slice 1.
+- **Slice 2 arbitrate (2026-02-09):** Deferred review findings on `Facet` derivation and typed module-call contract as cross-slice architectural alignment work; current Slice 2 deliverable remains consistent with the existing `Module` trait contract introduced in Slice 1.
 - **Slice 2 commit (2026-02-09):** `owmrznzo` / `748368c8` — "slice2: implement augmentation + chain-of-thought module".
 - **Slice 3 research (2026-02-09):** Accepted recommendation that V3 requires completing F4/F12 (typed `Module` surface + generic/flatten signature authoring) and exposing schema-driven adapter building blocks; this is a high-blast-radius migration that must preserve `CallOutcome` metadata semantics.
 - **Slice 3 plan review (2026-02-09):** Accepted high-level sequencing (schema/derive → trait migration → adapter surface → module updates → tests), but flagged concrete type/API drift in the draft plan (non-existent symbols like `ChatMessage`/`schema_from_signature`, incorrect import ownership for `BamlType`). Refine against ground truth before implementation.

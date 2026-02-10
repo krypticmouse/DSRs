@@ -22,9 +22,9 @@ Note: The `dataloaders` feature is required for loading datasets.
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, DataLoader, Evaluator, Example,
-    LM, LegacyPredict, LegacySignature, LmError, MIPROv2, Module, Optimizable, Optimizer,
-    Prediction, Predictor, configure, example, init_tracing,
+    CallMetadata, ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature,
+    LmError, MIPROv2, Module, Optimizable, Optimizer, PredictError, Predicted, Prediction,
+    Predictor, configure, example, init_tracing,
 };
 
 #[LegacySignature]
@@ -49,17 +49,16 @@ impl Module for SimpleQA {
     type Input = Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
         match self.answerer.forward(inputs).await {
-            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
-            Err(err) => CallOutcome::err(
-                CallOutcomeErrorKind::Lm(LmError::Provider {
+            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
+            Err(err) => Err(PredictError::Lm {
+                source: LmError::Provider {
                     provider: "legacy_predict".to_string(),
                     message: err.to_string(),
                     source: None,
-                }),
-                CallMetadata::default(),
-            ),
+                },
+            }),
         }
     }
 }
@@ -182,7 +181,7 @@ async fn main() -> Result<()> {
         "question": "input" => "What is the capital of France?",
     };
 
-    let result = qa_module.forward(test_example).await.into_result()?;
+    let result = qa_module.call(test_example).await?.into_inner();
     println!("Question: What is the capital of France?");
     println!("Answer: {}", result.get("answer", None));
 

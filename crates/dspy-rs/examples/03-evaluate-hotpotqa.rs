@@ -11,9 +11,8 @@ Note: The `dataloaders` feature is required for loading datasets.
 
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, Evaluator, Example, LM,
-    LegacyPredict, LegacySignature, LmError, Module, Optimizable, Prediction, Predictor, configure,
-    init_tracing,
+    CallMetadata, ChatAdapter, Evaluator, Example, LM, LegacyPredict, LegacySignature, LmError,
+    Module, Optimizable, PredictError, Predicted, Prediction, Predictor, configure, init_tracing,
 };
 
 use dspy_rs::DataLoader;
@@ -40,17 +39,16 @@ impl Module for QARater {
     type Input = Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
         match self.answerer.forward(inputs).await {
-            Ok(prediction) => CallOutcome::ok(prediction, CallMetadata::default()),
-            Err(err) => CallOutcome::err(
-                CallOutcomeErrorKind::Lm(LmError::Provider {
+            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
+            Err(err) => Err(PredictError::Lm {
+                source: LmError::Provider {
                     provider: "legacy_predict".to_string(),
                     message: err.to_string(),
                     source: None,
-                }),
-                CallMetadata::default(),
-            ),
+                },
+            }),
         }
     }
 }

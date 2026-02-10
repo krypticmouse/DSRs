@@ -266,10 +266,10 @@ impl GEPA {
             .iter()
             .map(|example| async move {
                 let prediction = module
-                    .forward(example.clone())
+                    .call(example.clone())
                     .await
-                    .into_result()
-                    .map_err(|err| anyhow::anyhow!(err))?;
+                    .map_err(|err| anyhow::anyhow!(err))?
+                    .into_inner();
                 let feedback = module.feedback_metric(example, &prediction).await;
                 Ok::<f32, anyhow::Error>(feedback.score)
             })
@@ -292,10 +292,10 @@ impl GEPA {
 
         for example in minibatch {
             let prediction = module
-                .forward(example.clone())
+                .call(example.clone())
                 .await
-                .into_result()
-                .map_err(|err| anyhow::anyhow!(err))?;
+                .map_err(|err| anyhow::anyhow!(err))?
+                .into_inner();
             let feedback = module.feedback_metric(example, &prediction).await;
 
             // Format trace for LLM reflection

@@ -30,8 +30,8 @@ pub trait Evaluator: Module<Input = Example, Output = Prediction> {
         .await;
         let mut predictions = Vec::with_capacity(outcomes.len());
         for (idx, outcome) in outcomes.into_iter().enumerate() {
-            match outcome.into_result() {
-                Ok(prediction) => predictions.push(prediction),
+            match outcome {
+                Ok(prediction) => predictions.push(prediction.into_inner()),
                 Err(err) => {
                     warn!(idx, error = %err, "evaluation failed while generating predictions");
                     panic!("evaluation failed: {err}");

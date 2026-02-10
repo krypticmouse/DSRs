@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use dspy_rs::{CallOutcome, ChatAdapter, LM, Module, Predict, Signature, configure};
+use dspy_rs::{ChatAdapter, LM, Module, Predict, PredictError, Predicted, Signature, configure};
 
 #[derive(Signature, Clone, Debug)]
 struct SmokeSig {
@@ -26,7 +26,7 @@ impl Module for SmokeModule {
     type Input = <SmokeSig as Signature>::Input;
     type Output = <SmokeSig as Signature>::Output;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         self.inner.call(input).await
     }
 }
@@ -47,11 +47,14 @@ async fn main() -> Result<()> {
         prompt: "Reply with exactly: smoke-ok".to_string(),
     };
 
-    let output = module.forward(input).await.into_result().map_err(|err| {
-        eprintln!("smoke call failed: {}", err.kind);
-        eprintln!("raw_response: {:?}", err.metadata.raw_response);
+    let output = module.call(input).await.map_err(|err| {
+        eprintln!("smoke call failed: {err}");
+        if let PredictError::Parse { raw_response, .. } = &err {
+            eprintln!("raw_response: {:?}", raw_response);
+        }
         anyhow::anyhow!("slice3 smoke failed")
-    })?;
+    })?
+    .into_inner();
 
     println!("answer: {}", output.answer);
 

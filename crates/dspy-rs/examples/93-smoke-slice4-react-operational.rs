@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use dspy_rs::{ChatAdapter, LM, ReAct, Signature, configure, forward_all};
+use dspy_rs::{ChatAdapter, LM, PredictError, ReAct, Signature, configure, forward_all};
 use serde_json::Value;
 
 #[derive(Signature, Clone, Debug)]
@@ -76,13 +76,14 @@ async fn main() -> Result<()> {
 
     let mut outcomes = forward_all(&module, vec![input], 1).await.into_iter();
     let outcome = outcomes.next().expect("expected one batch outcome");
-    let (result, metadata) = outcome.into_parts();
-
-    let output = result.map_err(|err| {
-        eprintln!("smoke call failed: {}", err);
-        eprintln!("raw_response: {:?}", metadata.raw_response);
+    let predicted = outcome.map_err(|err| {
+        eprintln!("smoke call failed: {err}");
+        if let PredictError::Parse { raw_response, .. } = &err {
+            eprintln!("raw_response: {:?}", raw_response);
+        }
         anyhow::anyhow!("slice4 smoke failed")
     })?;
+    let (output, metadata) = predicted.into_parts();
 
     println!("tool_calls: {}", metadata.tool_calls.len());
     println!("tool_executions: {}", metadata.tool_executions.len());

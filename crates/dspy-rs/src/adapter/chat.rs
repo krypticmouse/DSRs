@@ -16,10 +16,10 @@ use crate::serde_utils::get_iter_from_value;
 use crate::utils::cache::CacheEntry;
 use crate::{
     BamlType, BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature, TypeIR,
+    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, PredictError,
+    Predicted, Prediction, RenderOptions, Signature, TypeIR,
 };
-use crate::{CallMetadata, CallOutcomeErrorKind};
+use crate::CallMetadata;
 
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
@@ -840,11 +840,15 @@ impl ChatAdapter {
     pub fn parse_response_with_schema<S: Signature>(
         &self,
         response: Message,
-    ) -> std::result::Result<(S::Output, CallMetadata), CallOutcomeErrorKind> {
+    ) -> std::result::Result<Predicted<S::Output>, PredictError> {
         let raw_response = response.content();
         let (output, field_meta) = self
             .parse_response_typed::<S>(&response)
-            .map_err(CallOutcomeErrorKind::Parse)?;
+            .map_err(|source| PredictError::Parse {
+                source,
+                raw_response: raw_response.clone(),
+                lm_usage: crate::LmUsage::default(),
+            })?;
         let metadata = CallMetadata::new(
             raw_response,
             crate::LmUsage::default(),
@@ -853,7 +857,7 @@ impl ChatAdapter {
             None,
             field_meta,
         );
-        Ok((output, metadata))
+        Ok(Predicted::new(output, metadata))
     }
 
     #[tracing::instrument(

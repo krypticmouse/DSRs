@@ -68,8 +68,7 @@ async fn chain_of_thought_swaps_and_returns_with_reasoning() {
     let input = QAInput {
         question: "What is the capital of France?".to_string(),
     };
-    let outcome = cot.call(input).await;
-    let result: WithReasoning<QAOutput> = outcome.into_result().unwrap();
+    let result: WithReasoning<QAOutput> = cot.call(input).await.unwrap().into_inner();
 
     assert_eq!(result.reasoning, "Think");
     assert_eq!(result.answer, "Paris");

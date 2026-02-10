@@ -9,7 +9,7 @@ use rig::wasm_compat::WasmBoxedFuture;
 
 use crate::core::{Module, Signature};
 use crate::predictors::{Predict, PredictBuilder};
-use crate::{BamlType, CallOutcome};
+use crate::{BamlType, PredictError, Predicted};
 
 /// ReAct action-step schema.
 #[derive(dsrs_macros::Signature, Clone, Debug)]
@@ -76,8 +76,12 @@ where
         ReActBuilder::new()
     }
 
-    pub async fn call(&self, input: S::Input) -> CallOutcome<S::Output> {
+    pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         self.forward(input).await
+    }
+
+    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
+        self.run(input).await
     }
 
     async fn render_tool_manifest(&self) -> String {
@@ -139,7 +143,7 @@ where
         )
     }
 
-    async fn run(&self, input: S::Input) -> CallOutcome<S::Output> {
+    async fn run(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         let serialized_input = serde_json::to_string(&input.to_baml_value())
             .unwrap_or_else(|_| "<input serialization failed>".to_string());
 
@@ -155,8 +159,8 @@ where
             let action_input =
                 ReActActionStepInput::new(serialized_input.clone(), trajectory_text.clone());
 
-            let (action_result, mut action_metadata) =
-                self.action.call(action_input).await.into_parts();
+            let action_predicted = self.action.call(action_input).await?;
+            let (action_output, mut action_metadata) = action_predicted.into_parts();
             tool_calls.append(&mut action_metadata.tool_calls);
             tool_executions.append(&mut action_metadata.tool_executions);
 
@@ -164,10 +168,7 @@ where
                 thought,
                 action,
                 action_input,
-            } = match action_result {
-                Ok(output) => output,
-                Err(err) => return CallOutcome::err(err, action_metadata),
-            };
+            } = action_output;
 
             let action_name = action
                 .trim()
@@ -218,18 +219,13 @@ where
 
         let extract_input = ReActExtractStepInput::new(serialized_input, trajectory_text);
 
-        let (extract_result, mut extract_metadata) =
-            self.extract.call(extract_input).await.into_parts();
+        let extract_predicted = self.extract.call(extract_input).await?;
+        let (extract_output, mut extract_metadata) = extract_predicted.into_parts();
         extract_metadata.tool_calls.extend(tool_calls);
         extract_metadata.tool_executions.extend(tool_executions);
 
-        match extract_result {
-            Ok(output) => {
-                let output: ReActExtractStepOutput<S::Output> = output;
-                CallOutcome::ok(output.output, extract_metadata)
-            }
-            Err(err) => CallOutcome::err(err, extract_metadata),
-        }
+        let output: ReActExtractStepOutput<S::Output> = extract_output;
+        Ok(Predicted::new(output.output, extract_metadata))
     }
 }
 
@@ -253,8 +249,8 @@ where
     type Input = S::Input;
     type Output = S::Output;
 
-    async fn forward(&self, input: S::Input) -> CallOutcome<S::Output> {
-        self.run(input).await
+    async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
+        ReAct::forward(self, input).await
     }
 }
 

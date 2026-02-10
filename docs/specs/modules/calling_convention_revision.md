@@ -1,7 +1,7 @@
 # Calling Convention Revision: `CallOutcome<O>` -> `Result<Predicted<O>, PredictError>`
 
 Date: 2026-02-09
-Status: Approved, pending spec updates
+Status: Approved and integrated (spec updates applied 2026-02-10)
 Scope: Spec-only changes across `breadboard.md`, `design_reference.md`, `shapes.md`
 
 ---
@@ -53,7 +53,7 @@ Key observations:
 1. Output and metadata travel together on one object.
 2. Field access is direct — no unwrapping, no `.into_result()`.
 3. `__call__` wraps `forward` and adds token tracking. No return type difference.
-4. Module composition just chains `.forward()` calls. The return value from one
+4. Module composition chains `.call()` invocations. The return value from one
    module feeds naturally into the next.
 
 ---
@@ -181,12 +181,12 @@ lm_usage on parse failures). No changes needed to the error type.
 
 ```rust
 // P1: Simple call — ? just works
-let result = predict.forward(input).await?;
+let result = predict.call(input).await?;
 println!("{}", result.answer);              // Deref to QAOutput
 println!("{:?}", result.metadata().lm_usage); // metadata if you want it
 
 // P1: Chain of thought
-let result = cot.forward(input).await?;
+let result = cot.call(input).await?;
 println!("{}", result.reasoning);           // Deref to WithReasoning<QAOutput>
 println!("{}", result.answer);              // Deref chain through WithReasoning -> QAOutput
 
@@ -207,7 +207,7 @@ impl<S: Signature> Module for ChainOfThought<S> {
     type Output = WithReasoning<S::Output>;
 
     async fn forward(&self, input: S::Input) -> Result<Predicted<Self::Output>, PredictError> {
-        self.predictor.forward(input).await
+        self.predictor.call(input).await
     }
 }
 
@@ -220,7 +220,7 @@ impl<S: Signature> Module for ReAct<S> {
         let mut merged_metadata = CallMetadata::default();
 
         for step in 0..self.max_steps {
-            let action = self.action.forward(action_input).await?;
+            let action = self.action.call(action_input).await?;
             // action is Predicted<ActionStepOutput>
             // action.thought via Deref — direct field access
             // action.metadata() for token tracking
@@ -231,7 +231,7 @@ impl<S: Signature> Module for ReAct<S> {
             trajectory.push_str(&format_step(step, &action, &observation));
         }
 
-        let extract = self.extract.forward(extract_input).await?;
+        let extract = self.extract.call(extract_input).await?;
         merged_metadata.merge(extract.metadata());
 
         Ok(Predicted::new(extract.into_inner().output, merged_metadata))
@@ -248,7 +248,7 @@ impl<M: Module> Module for BestOfN<M> where M::Input: Clone {
         let mut best_score = f64::NEG_INFINITY;
 
         for _ in 0..self.n {
-            let result = self.module.forward(input.clone()).await?;
+            let result = self.module.call(input.clone()).await?;
             let score = (self.reward_fn)(&input, &result);  // Deref to M::Output
             if score >= self.threshold {
                 return Ok(result);
@@ -271,7 +271,7 @@ impl<M, F, T> Module for Map<M, F> where M: Module, F: Fn(M::Output) -> T {
     type Output = T;
 
     async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
-        let result = self.inner.forward(input).await?;
+        let result = self.inner.call(input).await?;
         let (output, metadata) = result.into_parts();
         Ok(Predicted::new((self.map)(output), metadata))
     }
@@ -294,17 +294,16 @@ pub trait DynPredictor: Send + Sync {
 
 ### What `call` vs `forward` means after this change
 
-There is no meaningful distinction. `forward` is the Module trait method. Concrete
-types may also expose `forward` directly (they already do, via the trait). There is
-no separate `call` method with a different return type.
+`call` is the canonical user-facing entry point. It returns
+`Result<Predicted<O>, PredictError>`.
 
-If a concrete type wants to expose extra functionality beyond what Module provides
-(e.g., ReAct exposing trajectory details), it does so through its Output type or
-through additional methods — not through a different calling convention.
+`forward` remains the implementation hook for module authors. The default `call`
+method delegates to `forward`, mirroring DSPy's model where callers invoke the
+module while implementers define forward logic.
 
-The locked decision "call_with_meta is folded into call" is superseded. There is no
-`call` vs `call_with_meta` distinction because metadata always travels with the
-output inside `Predicted<O>`. The method is `forward`. That's it.
+The locked decision "call_with_meta is folded into call" is still superseded:
+there is no `call_with_meta` split because metadata always travels with the output
+inside `Predicted<O>`.
 
 ### What gets deleted
 
@@ -328,16 +327,15 @@ Change to `Vec<Result<Predicted<Output>, PredictError>>`.
 
 **Location: Line 58** — "CallOutcome undecided" resolved gap.
 Full rewrite. Currently reads:
-> N8 returns `CallOutcome<O>` by default (single calling convention). `call_with_meta`
-> is folded into `call`. No parallel convenience API (`forward_result`, etc.).
-> Metadata and result travel together.
+> N8 returns a metadata-first wrapper by default and treats `forward` as the
+> canonical invocation path.
 
 Replace with:
 > N8 returns `Result<Predicted<O>, PredictError>`. `Predicted<O>` carries output +
 > call metadata (like DSPy's `Prediction`), with `Deref<Target = O>` for direct field
 > access and `.metadata()` for call metadata. `?` works on stable Rust — no nightly
-> `Try` trait needed. There is no `call` vs `forward` distinction; `Module::forward`
-> is the single calling convention.
+> `Try` trait needed. `Module::call` is the canonical user-facing entrypoint, and
+> `Module::forward` remains the implementation hook.
 
 **Location: Line 84** — U10 affordance row.
 Change `CallOutcome<S::Output>` to `Predicted<S::Output>` and update the description
@@ -372,7 +370,7 @@ Change `forward(), CallOutcome, field access` to `forward(), Predicted<O>, field
 **Location: ~Line 360** — V1 demo program code block.
 Currently uses `?` which is correct. Verify it reads naturally:
 ```rust
-let result = predict.forward(QAInput { question: "What is 2+2?".into() }).await?;
+let result = predict.call(QAInput { question: "What is 2+2?".into() }).await?;
 println!("{}", result.answer);  // typed field access via Deref
 ```
 
@@ -456,7 +454,7 @@ async fn forward(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>
 To:
 ```rust
 async fn forward(&self, input: S::Input) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
-    self.predict.forward(input).await
+    self.predict.call(input).await
 }
 ```
 
@@ -512,21 +510,22 @@ Currently reads:
 > convenience call path.
 
 Replace with:
-> **Single call surface**: `Module::forward` returns `Result<Predicted<O>, PredictError>`.
-> `Predicted<O>` carries output + metadata. No `call` vs `forward` distinction.
+> **Single call surface**: `Module::call` returns `Result<Predicted<O>, PredictError>`.
+> `Predicted<O>` carries output + metadata. `forward` remains the implementation hook.
 
 ### `docs/plans/modules/tracker.md`
 
 Add a decision entry in the Decisions & Architectural Notes section:
 > **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with
-> `Result<Predicted<O>, PredictError>` as the Module::forward return type.
+> `Result<Predicted<O>, PredictError>` as the canonical `Module::call` return type
+> (delegating to `forward`).
 > `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries
 > `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required
 > `.into_result()?` on stable Rust, violating P1 ergonomics goals. The nightly `Try`
 > trait (`try_trait_v2`) has no stabilization timeline. `Predicted<O>` + `Result`
-> gives DSPy-parity ergonomics on stable: `module.forward(input).await?.answer`.
-> The `call` vs `forward` naming distinction is eliminated — `forward` is the single
-> method. Former locked decision "call_with_meta folded into call" is superseded.
+> gives DSPy-parity ergonomics on stable: `module.call(input).await?.answer`.
+> `call` is canonical for users; `forward` is the implementation hook. Former locked
+> decision "call_with_meta folded into call" is superseded.
 
 ---
 
@@ -551,5 +550,5 @@ After all spec changes are made, verify:
 3. **All code sketches compile conceptually** — return types match, error handling
    uses `?` and `Err(...)`, success uses `Ok(Predicted::new(...))`.
 4. **Demo programs use `?`** — V1-V6 demo code blocks show the clean P1 experience.
-5. **No "call_with_meta" or "into_result" references** remain in the spec files.
+5. **No legacy split-call or `into_result` references** remain in the spec files.
 6. **F4 description** in shapes.md matches the trait in design_reference.md.

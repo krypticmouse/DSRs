@@ -58,7 +58,7 @@ pub trait Signature: Send + Sync + 'static {
 
 Bounds: `BamlType` for jsonish coercion and value conversion. `Facet` for schema derivation. Both are derived, not manual.
 
-Note: `from_parts`/`into_parts` were removed from the trait (S7). The current codebase uses them to combine input+output into one struct and split back apart, but with demos stored as `Demo<S> { input: S::Input, output: S::Output }` pairs and `Predict::call()` returning `S::Output` directly, the round-trip is unnecessary. The user's `#[derive(Signature)]` still generates the combined struct for ergonomic field access, but that's a convenience on the user's type, not a trait requirement.
+Note: `from_parts`/`into_parts` were removed from the trait (S7). The current codebase uses them to combine input+output into one struct and split back apart, but with demos stored as `Demo<S> { input: S::Input, output: S::Output }` pairs and `Module::call()` returning `Result<Predicted<S::Output>, PredictError>` (delegating to `forward`), the round-trip is unnecessary. The user's `#[derive(Signature)]` still generates the combined struct for ergonomic field access, but that's a convenience on the user's type, not a trait requirement.
 
 ### User-facing derive
 
@@ -308,7 +308,7 @@ impl<S: Signature, A: Augmentation> Signature for Augmented<S, A> {
 }
 ```
 
-`Augmented` is a zero-sized type-level combinator. It exists purely to map `S::Input → A::Wrap<S::Output>` at the type level. Modules hold `Predict<Augmented<S, A>>` where demos are stored as `Demo { input: S::Input, output: A::Wrap<S::Output> }` pairs and `call()` returns `A::Wrap<S::Output>` directly. No `from_parts`/`into_parts` needed (S7).
+`Augmented` is a zero-sized type-level combinator. It exists purely to map `S::Input → A::Wrap<S::Output>` at the type level. Modules hold `Predict<Augmented<S, A>>` where demos are stored as `Demo { input: S::Input, output: A::Wrap<S::Output> }` pairs and `forward()` returns `Result<Predicted<A::Wrap<S::Output>>, PredictError>`. No `from_parts`/`into_parts` needed (S7).
 
 ### How BamlType works for flatten
 
@@ -364,11 +364,41 @@ pub trait Module: Send + Sync {
     type Input: BamlType + Facet + Send + Sync;
     type Output: BamlType + Facet + Send + Sync;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output>;
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
+
+    async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.forward(input).await
+    }
 }
 ```
 
-`CallOutcome<O>` is the default return surface for N8. It carries both outcome (`Result<O, PredictError>`) and call metadata (raw response, usage, tool calls, field parse metadata). There is no separate convenience API (for example `forward_result()`); ergonomics come from trait impls on `CallOutcome` itself (`Try` when available on toolchain, otherwise at least `Deref<Target = Result<...>>` + `into_result()`).
+`Module::call` is the canonical user-facing entry point and returns `Result<Predicted<O>, PredictError>`. Module authors implement `forward` as the execution hook; the default `call` delegates to it. `Predicted<O>` carries typed output and call metadata together (raw response, usage, tool calls, field parse metadata). It implements `Deref<Target = O>`, so output fields stay ergonomic (`result.answer`, `result.reasoning`), and metadata is available via `result.metadata()`. The outer `Result` keeps error handling idiomatic and stable: `?` works on stable Rust without nightly `Try` trait machinery.
+
+```rust
+pub struct Predicted<O> {
+    output: O,
+    metadata: CallMetadata,
+}
+
+impl<O> Deref for Predicted<O> {
+    type Target = O;
+    fn deref(&self) -> &O { &self.output }
+}
+
+impl<O> Predicted<O> {
+    pub fn new(output: O, metadata: CallMetadata) -> Self {
+        Self { output, metadata }
+    }
+
+    pub fn metadata(&self) -> &CallMetadata { &self.metadata }
+
+    pub fn into_inner(self) -> O { self.output }
+
+    pub fn into_parts(self) -> (O, CallMetadata) {
+        (self.output, self.metadata)
+    }
+}
+```
 
 Every prompting strategy implements this. The associated types make composition type-safe:
 
@@ -378,7 +408,7 @@ struct Bad {
     step1: Predict<QA>,
     step2: Predict<Summarize>,  // Summarize expects SummarizeInput, not QAOutput
 }
-// step2.forward(step1_output) → type mismatch → compile error
+// step2.call(step1_output) → type mismatch → compile error
 ```
 
 ### Swapping strategies
@@ -439,7 +469,7 @@ let predict = Predict::<QA>::builder()
 
 ```rust
 impl<S: Signature> Predict<S> {
-    pub async fn call(&self, input: S::Input) -> CallOutcome<S::Output> {
+    pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         let schema = SignatureSchema::of::<S>();  // F2: Facet-derived, cached
         let lm = get_global_lm();
         let adapter = ChatAdapter;
@@ -463,19 +493,24 @@ impl<S: Signature> Predict<S> {
         // Call LM
         let response = match lm.call(chat, self.tools.clone()).await {
             Ok(response) => response,
-            Err(err) => return CallOutcome::from_error(PredictError::Lm { source: err }),
+            Err(err) => return Err(PredictError::Lm { source: err }),
         };
 
         // Parse response
-        let output = adapter.parse_output::<S::Output>(schema, &response);
+        let typed_output = adapter.parse_output::<S::Output>(schema, &response)?;
 
-        CallOutcome::from_parts(
-            output,
+        let metadata = CallMetadata::new(
             response.output.content().to_string(),
             response.usage.clone(),
             response.tool_calls,
             response.tool_executions,
-        )
+        );
+
+        Ok(Predicted::new(typed_output, metadata))
+    }
+
+    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
+        self.call(input).await
     }
 }
 ```
@@ -696,7 +731,7 @@ pub trait DynPredictor: Send + Sync {
     fn load_state(&mut self, state: PredictState) -> Result<()>;
 
     /// Untyped forward (for dynamic graph execution)
-    async fn forward_untyped(&self, input: BamlValue) -> CallOutcome<BamlValue>;
+    async fn forward_untyped(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError>;
 }
 ```
 
@@ -725,14 +760,13 @@ where S::Input: BamlType, S::Output: BamlType
         Ok(())
     }
 
-    async fn forward_untyped(&self, input: BamlValue) -> CallOutcome<BamlValue> {
-        let typed_input = match S::Input::try_from_baml_value(input) {
-            Ok(v) => v,
-            Err(err) => return CallOutcome::from_error(PredictError::Conversion { source: err.into() }),
-        };
-        self.call(typed_input)
-            .await
-            .map(|output| output.to_baml_value())  // map/into_result helper on CallOutcome
+    async fn forward_untyped(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError> {
+        let typed_input = S::Input::try_from_baml_value(input)
+            .map_err(|err| PredictError::Conversion { source: err.into() })?;
+
+        let result = self.call(typed_input).await?;
+        let (output, metadata) = result.into_parts();
+        Ok(Predicted::new(output.to_baml_value(), metadata))
     }
 }
 ```
@@ -758,7 +792,7 @@ pub trait DynModule: Send + Sync {
     fn predictors_mut(&mut self) -> Vec<(&str, &mut dyn DynPredictor)>;
 
     /// Execute with untyped values
-    async fn forward(&self, input: BamlValue) -> Result<BamlValue>;
+    async fn forward(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError>;
 }
 ```
 
@@ -878,7 +912,7 @@ impl<S: Signature> Module for ChainOfThought<S> {
     type Input = S::Input;
     type Output = WithReasoning<S::Output>;
 
-    async fn forward(&self, input: S::Input) -> CallOutcome<WithReasoning<S::Output>> {
+    async fn forward(&self, input: S::Input) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
         self.predict.call(input).await
     }
 }
@@ -902,16 +936,16 @@ where M::Input: Clone
     type Input = M::Input;
     type Output = M::Output;
 
-    async fn forward(&self, input: M::Input) -> CallOutcome<M::Output> {
-        let mut best = None;
+    async fn forward(&self, input: M::Input) -> Result<Predicted<M::Output>, PredictError> {
+        let mut best: Option<Predicted<M::Output>> = None;
         let mut best_score = f64::NEG_INFINITY;
         for _ in 0..self.n {
-            let output = self.module.forward(input.clone()).await?;
-            let score = (self.reward_fn)(&input, &output);
-            if score >= self.threshold { return CallOutcome::ok(output); }
-            if score > best_score { best_score = score; best = Some(output); }
+            let result = self.module.call(input.clone()).await?;
+            let score = (self.reward_fn)(&input, &result);
+            if score >= self.threshold { return Ok(result); }
+            if score > best_score { best_score = score; best = Some(result); }
         }
-        CallOutcome::from_error(PredictError::AllAttemptsFailed)
+        Err(PredictError::AllAttemptsFailed)
     }
 }
 ```

@@ -1,4 +1,4 @@
-use crate::{BamlType, CallOutcome, CallOutcomeErrorKind, Facet};
+use crate::{BamlType, Facet, PredictError, Predicted};
 
 use super::Module;
 
@@ -16,7 +16,7 @@ pub trait ModuleExt: Module + Sized {
 
     fn and_then<F, T>(self, and_then: F) -> AndThen<Self, F>
     where
-        F: Fn(Self::Output) -> Result<T, CallOutcomeErrorKind> + Send + Sync + 'static,
+        F: Fn(Self::Output) -> Result<T, PredictError> + Send + Sync + 'static,
         T: BamlType + for<'a> Facet<'a> + Send + Sync,
     {
         AndThen {
@@ -106,12 +106,10 @@ where
     type Input = M::Input;
     type Output = T;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
-        let (result, metadata) = self.inner.forward(input).await.into_parts();
-        match result {
-            Ok(output) => CallOutcome::ok((self.map.0)(output), metadata),
-            Err(err) => CallOutcome::err(err, metadata),
-        }
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        let predicted = self.inner.call(input).await?;
+        let (output, metadata) = predicted.into_parts();
+        Ok(Predicted::new((self.map.0)(output), metadata))
     }
 }
 
@@ -186,20 +184,16 @@ where
 impl<M, F, T> Module for AndThen<M, F>
 where
     M: Module,
-    F: Fn(M::Output) -> Result<T, CallOutcomeErrorKind> + Send + Sync + 'static,
+    F: Fn(M::Output) -> Result<T, PredictError> + Send + Sync + 'static,
     T: BamlType + for<'a> Facet<'a> + Send + Sync,
 {
     type Input = M::Input;
     type Output = T;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output> {
-        let (result, metadata) = self.inner.forward(input).await.into_parts();
-        match result {
-            Ok(output) => match (self.and_then.0)(output) {
-                Ok(transformed) => CallOutcome::ok(transformed, metadata),
-                Err(err) => CallOutcome::err(err, metadata),
-            },
-            Err(err) => CallOutcome::err(err, metadata),
-        }
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        let predicted = self.inner.call(input).await?;
+        let (output, metadata) = predicted.into_parts();
+        let transformed = (self.and_then.0)(output)?;
+        Ok(Predicted::new(transformed, metadata))
     }
 }

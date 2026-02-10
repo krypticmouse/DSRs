@@ -3,9 +3,8 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, LM, LegacyPredict,
-    LegacySignature, LmError, Module, Prediction, Predictor, configure, example, init_tracing,
-    prediction,
+    CallMetadata, ChatAdapter, LM, LegacyPredict, LegacySignature, LmError, Module, PredictError,
+    Predicted, Prediction, Predictor, configure, example, init_tracing, prediction,
     trace::{self, IntoTracked},
 };
 
@@ -39,18 +38,20 @@ impl Module for QARater {
     type Input = dspy_rs::Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: dspy_rs::Example) -> CallOutcome<Prediction> {
+    async fn forward(
+        &self,
+        inputs: dspy_rs::Example,
+    ) -> Result<Predicted<Prediction>, PredictError> {
         let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
             Ok(prediction) => prediction,
             Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "legacy_predict".to_string(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    CallMetadata::default(),
-                );
+                    },
+                });
             }
         };
 
@@ -68,19 +69,18 @@ impl Module for QARater {
         let rating_prediction = match self.rater.forward(inputs).await {
             Ok(prediction) => prediction,
             Err(err) => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "legacy_predict".to_string(),
                         message: err.to_string(),
                         source: None,
-                    }),
-                    CallMetadata::default(),
-                );
+                    },
+                });
             }
         };
 
         // Final output
-        CallOutcome::ok(
+        Ok(Predicted::new(
             prediction! {
             "answer"=> answer.value,
             "question"=> question.value,
@@ -88,7 +88,7 @@ impl Module for QARater {
         }
             .set_lm_usage(rating_prediction.lm_usage),
             CallMetadata::default(),
-        )
+        ))
     }
 }
 
@@ -112,10 +112,10 @@ async fn main() -> Result<()> {
     };
 
     println!("Starting trace...");
-    let (result, graph) = trace::trace(|| async { module.forward(example).await }).await;
+    let (result, graph) = trace::trace(|| async { module.call(example).await }).await;
 
-    match result.into_result() {
-        Ok(pred) => println!("Prediction keys: {:?}", pred.data.keys()),
+    match result {
+        Ok(predicted) => println!("Prediction keys: {:?}", predicted.into_inner().data.keys()),
         Err(e) => println!("Error (expected if no API key/network): {}", e),
     }
 

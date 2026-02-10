@@ -82,9 +82,9 @@ async fn typed_prediction_happy_path_with_metadata() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let outcome = predict.call(input).await;
-    let metadata = outcome.metadata().clone();
-    let result = outcome.into_result().unwrap();
+    let predicted = predict.call(input).await.unwrap();
+    let metadata = predicted.metadata().clone();
+    let result = predicted.into_inner();
 
     assert_eq!(result.answer, "Paris");
     assert!((result.confidence - 0.9).abs() < 1e-6);
@@ -111,9 +111,9 @@ async fn typed_prediction_check_failure_is_recorded() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let outcome = predict.call(input).await;
-    let metadata = outcome.metadata().clone();
-    let _ = outcome.into_result().unwrap();
+    let predicted = predict.call(input).await.unwrap();
+    let metadata = predicted.metadata().clone();
+    let _ = predicted.into_inner();
 
     let checks = metadata.field_checks("confidence");
     let check = checks
@@ -136,10 +136,10 @@ async fn typed_prediction_missing_field_surfaces_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call(input).await.into_result() {
-        Ok(_) => panic!("expected missing field error"),
-        Err(err) => err.into_predict_error(),
-    };
+    let err = predict
+        .call(input)
+        .await
+        .expect_err("expected missing field error");
     match err {
         PredictError::Parse { source, .. } => match source {
             ParseError::Multiple { errors, .. } => {
@@ -168,10 +168,10 @@ async fn typed_prediction_assert_failure_raises_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call(input).await.into_result() {
-        Ok(_) => panic!("expected assert failure error"),
-        Err(err) => err.into_predict_error(),
-    };
+    let err = predict
+        .call(input)
+        .await
+        .expect_err("expected assert failure error");
     match err {
         PredictError::Parse { source, .. } => match source {
             ParseError::Multiple { errors, .. } => {
@@ -214,7 +214,7 @@ async fn typed_i32_rating_parses_correctly() {
         answer: "The sky is blue because of Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call(input).await.into_result().unwrap();
+    let result = predict.call(input).await.unwrap().into_inner();
     assert_eq!(result.rating, 8);
 }
 
@@ -232,7 +232,7 @@ async fn typed_i32_rating_parses_fraction() {
         answer: "Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call(input).await.into_result().unwrap();
+    let result = predict.call(input).await.unwrap().into_inner();
     // 8/10 = 0.8, rounded to 1 as integer
     assert_eq!(result.rating, 1);
 }
@@ -252,7 +252,7 @@ async fn typed_i32_rating_parses_with_text() {
     };
 
     // This should fail to parse - demonstrates the limitation
-    let result = predict.call(input).await.into_result();
+    let result = predict.call(input).await;
     assert!(
         result.is_err(),
         "Expected parse error for rating with surrounding text"

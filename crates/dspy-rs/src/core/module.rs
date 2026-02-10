@@ -3,14 +3,18 @@ use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
 use tracing::debug;
 
-use crate::{BamlType, CallOutcome, Facet, core::MetaSignature};
+use crate::{BamlType, Facet, PredictError, Predicted, core::MetaSignature};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
     type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
     type Output: BamlType + for<'a> Facet<'a> + Send + Sync;
 
-    async fn forward(&self, input: Self::Input) -> CallOutcome<Self::Output>;
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
+
+    async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.forward(input).await
+    }
 }
 
 #[tracing::instrument(
@@ -23,7 +27,7 @@ pub async fn forward_all<M>(
     module: &M,
     inputs: Vec<M::Input>,
     max_concurrency: usize,
-) -> Vec<CallOutcome<M::Output>>
+) -> Vec<Result<Predicted<M::Output>, PredictError>>
 where
     M: Module + ?Sized,
 {
@@ -41,7 +45,7 @@ pub async fn forward_all_with_progress<M>(
     inputs: Vec<M::Input>,
     max_concurrency: usize,
     display_progress: bool,
-) -> Vec<CallOutcome<M::Output>>
+) -> Vec<Result<Predicted<M::Output>, PredictError>>
 where
     M: Module + ?Sized,
 {
@@ -52,9 +56,9 @@ where
         None
     };
 
-    let mut indexed_results: Vec<(usize, CallOutcome<M::Output>)> =
+    let mut indexed_results: Vec<(usize, Result<Predicted<M::Output>, PredictError>)> =
         stream::iter(inputs.into_iter().enumerate())
-            .map(|(idx, input)| async move { (idx, module.forward(input).await) })
+            .map(|(idx, input)| async move { (idx, module.call(input).await) })
             .buffer_unordered(max_concurrency)
             .inspect(|_| {
                 if let Some(ref mut progress) = pb {

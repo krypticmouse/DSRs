@@ -16,8 +16,8 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, CallOutcome, CallOutcomeErrorKind, ChatAdapter, Demo, Example, LM, LmError,
-    Module, Predict, Prediction, configure, init_tracing,
+    CallMetadata, ChatAdapter, Demo, Example, LM, LmError, Module, Predict, PredictError,
+    Predicted, Prediction, configure, init_tracing,
 };
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
@@ -61,47 +61,40 @@ impl Module for QARater {
     type Input = Example;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> CallOutcome<Prediction> {
+    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
         // Step 1: Convert module input into typed predictor input.
         let question = match inputs.data.get("question").and_then(|value| value.as_str()) {
             Some(question) => question.to_string(),
             None => {
-                return CallOutcome::err(
-                    CallOutcomeErrorKind::Lm(LmError::Provider {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
                         provider: "QARater".to_string(),
                         message: "missing required string field `question`".to_string(),
                         source: None,
-                    }),
-                    CallMetadata::default(),
-                );
+                    },
+                });
             }
         };
 
-        let answer_outcome = self
+        let answer_predicted = self
             .answerer
             .call(QAInput {
                 question: question.clone(),
             })
-            .await;
-        let answer_usage = answer_outcome.metadata().lm_usage.clone();
-        let answerer_prediction = match answer_outcome.into_result() {
-            Ok(output) => output,
-            Err(err) => return CallOutcome::err(err.kind, err.metadata),
-        };
+            .await?;
+        let answer_usage = answer_predicted.metadata().lm_usage.clone();
+        let answerer_prediction = answer_predicted.into_inner();
 
         // Step 2: Rate the generated answer.
-        let rate_outcome = self
+        let rate_predicted = self
             .rater
             .call(RateInput {
                 question: question.clone(),
                 answer: answerer_prediction.answer.clone(),
             })
-            .await;
-        let rate_usage = rate_outcome.metadata().lm_usage.clone();
-        let rate_result = match rate_outcome.into_result() {
-            Ok(output) => output,
-            Err(err) => return CallOutcome::err(err.kind, err.metadata),
-        };
+            .await?;
+        let rate_usage = rate_predicted.metadata().lm_usage.clone();
+        let rate_result = rate_predicted.into_inner();
 
         // Step 3: Compose the final untyped prediction for module consumers.
         let mut combined = Prediction {
@@ -121,7 +114,7 @@ impl Module for QARater {
             .data
             .insert("rating".into(), rate_result.rating.into());
 
-        CallOutcome::ok(combined, CallMetadata::default())
+        Ok(Predicted::new(combined, CallMetadata::default()))
     }
 }
 
@@ -147,14 +140,14 @@ async fn main() -> Result<()> {
         question: "What is the capital of France?".to_string(),
     };
 
-    // call() returns the typed output struct
-    let output = predict.call(input.clone()).await.into_result()?;
+    // forward() returns Predicted<Output>; access the typed output directly.
+    let output = predict.call(input.clone()).await?.into_inner();
     println!("Question: {}", input.question);
     println!("Reasoning: {}", output.reasoning);
     println!("Answer: {}", output.answer);
 
-    // CallOutcome carries both typed output and metadata.
-    let result = predict.call(input).await;
+    // Predicted carries both typed output and metadata.
+    let result = predict.call(input).await?;
     println!("\nWith metadata:");
     println!("  Raw 'answer' field: {:?}", result.metadata().field_raw("answer"));
     println!("  Token usage: {:?}", result.metadata().lm_usage);
@@ -172,7 +165,7 @@ async fn main() -> Result<()> {
         .data
         .insert("question".into(), "Why is the sky blue?".into());
 
-    let prediction = qa_rater.forward(example).await.into_result()?;
+    let prediction = qa_rater.call(example).await?.into_inner();
     println!("Composed pipeline result:");
     println!("  Question: {}", prediction.data.get("question").unwrap());
     println!("  Reasoning: {}", prediction.data.get("reasoning").unwrap());
@@ -212,8 +205,8 @@ async fn main() -> Result<()> {
         .call(QAInput {
             question: demo_question.clone(),
         })
-        .await
-        .into_result()?;
+        .await?
+        .into_inner();
 
     println!("With few-shot demos:");
     println!("  Question: {}", demo_question);
