@@ -4,9 +4,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use bamltype::baml_types::BamlValue;
 use bamltype::baml_types::TypeIR;
+use bamltype::build_type_ir_from_shape;
 use bamltype::facet::{Def, Field, Shape, Type, UserType};
 use bamltype::internal_baml_jinja::types::OutputFormatContent;
-use bamltype::build_type_ir_from_shape;
 
 use crate::{Constraint, ConstraintKind, ConstraintSpec, Signature};
 
@@ -25,7 +25,6 @@ impl FieldPath {
     pub fn push(&mut self, part: &'static str) {
         self.parts.push(part);
     }
-
 
     pub fn iter(&self) -> impl Iterator<Item = &'static str> + '_ {
         self.parts.iter().copied()
@@ -70,7 +69,7 @@ impl FieldSchema {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SignatureSchema {
     instruction: &'static str,
     input_fields: Box<[FieldSchema]>,
@@ -79,9 +78,22 @@ pub struct SignatureSchema {
 }
 
 impl SignatureSchema {
+    pub(crate) fn from_parts(
+        instruction: &'static str,
+        input_fields: Vec<FieldSchema>,
+        output_fields: Vec<FieldSchema>,
+        output_format: Arc<OutputFormatContent>,
+    ) -> Self {
+        Self {
+            instruction,
+            input_fields: input_fields.into_boxed_slice(),
+            output_fields: output_fields.into_boxed_slice(),
+            output_format,
+        }
+    }
+
     pub fn of<S: Signature>() -> &'static Self {
-        static CACHE: OnceLock<Mutex<HashMap<TypeId, &'static SignatureSchema>>> =
-            OnceLock::new();
+        static CACHE: OnceLock<Mutex<HashMap<TypeId, &'static SignatureSchema>>> = OnceLock::new();
 
         let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         {
@@ -170,6 +182,31 @@ impl SignatureSchema {
             .find(|field| field.rust_name == rust_name)
     }
 
+    pub fn input_field_by_rust<'a>(&'a self, rust_name: &str) -> Option<&'a FieldSchema> {
+        self.input_fields()
+            .iter()
+            .find(|field| field.rust_name == rust_name)
+    }
+
+    pub fn output_field_by_rust<'a>(&'a self, rust_name: &str) -> Option<&'a FieldSchema> {
+        self.output_fields()
+            .iter()
+            .find(|field| field.rust_name == rust_name)
+    }
+
+    pub fn with_fields(
+        &self,
+        input_fields: Vec<FieldSchema>,
+        output_fields: Vec<FieldSchema>,
+    ) -> Self {
+        Self {
+            instruction: self.instruction,
+            input_fields: input_fields.into_boxed_slice(),
+            output_fields: output_fields.into_boxed_slice(),
+            output_format: Arc::clone(&self.output_format),
+        }
+    }
+
     pub fn field_paths(&self) -> impl Iterator<Item = &FieldPath> {
         self.input_fields
             .iter()
@@ -242,10 +279,7 @@ fn emit_field(
             }
             let mut nested_path = path.clone();
             nested_path.push(nested.name);
-            let nested_meta = metadata_by_name
-                .get(nested.name)
-                .copied()
-                .or(inherited);
+            let nested_meta = metadata_by_name.get(nested.name).copied().or(inherited);
             emit_field(nested, nested_path, nested_meta, metadata_by_name, out)?;
         }
 

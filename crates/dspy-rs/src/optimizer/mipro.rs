@@ -14,10 +14,10 @@
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
 use crate::{
-    Facet, SignatureSchema,
+    Evaluator, Example, Facet, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor,
+    SignatureSchema,
     core::{MetaSignature, named_parameters},
-    Evaluator, Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor, example,
-    get_lm,
+    example, get_lm,
 };
 use anyhow::{Context, Result};
 use bon::Builder;
@@ -621,7 +621,8 @@ impl Optimizer for MIPROv2 {
             // Apply best candidate
             {
                 let mut params = named_parameters(module)?;
-                if let Some((_, predictor)) = params.iter_mut().find(|(name, _)| name == &predictor_name)
+                if let Some((_, predictor)) =
+                    params.iter_mut().find(|(name, _)| name == &predictor_name)
                 {
                     predictor.set_instruction(best_candidate.instruction.clone());
                     // Note: Demo setting would require mutable signature access

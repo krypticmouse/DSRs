@@ -21,12 +21,12 @@ Note: The `dataloaders` feature is required for loading datasets.
 
 use anyhow::Result;
 use bon::Builder;
+use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     CallMetadata, ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature,
     LmError, MIPROv2, Module, Optimizable, Optimizer, PredictError, Predicted, Prediction,
     Predictor, configure, example, init_tracing,
 };
-use dspy_rs::__macro_support::bamltype::facet;
 
 #[LegacySignature]
 struct QuestionAnswering {

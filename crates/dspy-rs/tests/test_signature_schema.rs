@@ -61,9 +61,16 @@ fn schema_contains_flattened_paths_and_aliases() {
         .iter()
         .map(|field| field.path().iter().collect())
         .collect();
-    assert_eq!(output_paths, vec![vec!["result", "answer"], vec!["confidence"]]);
+    assert_eq!(
+        output_paths,
+        vec![vec!["result", "answer"], vec!["confidence"]]
+    );
 
-    let output_names: Vec<&str> = schema.output_fields().iter().map(|field| field.lm_name).collect();
+    let output_names: Vec<&str> = schema
+        .output_fields()
+        .iter()
+        .map(|field| field.lm_name)
+        .collect();
     assert_eq!(output_names, vec!["answer", "score"]);
 
     let expected = <<NestedSig as Signature>::Output as BamlType>::baml_output_format();

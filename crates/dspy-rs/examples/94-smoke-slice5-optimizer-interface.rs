@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
+use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     ChainOfThought, ChatAdapter, LM, PredictError, Signature, configure, named_parameters,
 };
-use dspy_rs::__macro_support::bamltype::facet;
 
 #[derive(Signature, Clone, Debug, facet::Facet)]
 #[facet(crate = facet)]

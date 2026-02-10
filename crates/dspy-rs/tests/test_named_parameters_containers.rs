@@ -1,5 +1,5 @@
-use dspy_rs::{NamedParametersError, Predict, Signature, named_parameters};
 use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::{NamedParametersError, Predict, Signature, named_parameters};
 
 #[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
 #[facet(crate = facet)]

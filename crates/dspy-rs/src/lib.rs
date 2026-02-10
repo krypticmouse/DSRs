@@ -24,13 +24,13 @@ pub use utils::*;
 pub use bamltype::BamlConvertError;
 pub use bamltype::BamlType; // attribute macro
 pub use bamltype::Shape;
-pub use facet::Facet;
 pub use bamltype::baml_types::{
     BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
 };
 pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
+pub use facet::Facet;
 
 #[doc(hidden)]
 pub mod __macro_support {

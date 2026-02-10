@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{
-    Facet,
+    Example, Facet, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor,
     core::{DynPredictor, named_parameters},
-    Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor,
-    evaluate::FeedbackEvaluator, example,
+    evaluate::FeedbackEvaluator,
+    example,
 };
 use dsrs_macros::LegacySignature;
 

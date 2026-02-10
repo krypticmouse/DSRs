@@ -1,10 +1,10 @@
 use std::sync::LazyLock;
 
+use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     BamlType, ChatAdapter, LM, LMClient, Predict, Signature, TestCompletionModel, configure,
     named_parameters,
 };
-use dspy_rs::__macro_support::bamltype::facet;
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use tokio::sync::Mutex;

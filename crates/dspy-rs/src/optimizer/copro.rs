@@ -1,10 +1,9 @@
 #![allow(deprecated)]
 
 use crate::{
-    Facet,
+    Evaluator, Example, Facet, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor,
     core::{DynPredictor, named_parameters},
-    Evaluator, Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor, example,
-    get_lm,
+    example, get_lm,
 };
 use anyhow::Result;
 use bon::Builder;
@@ -81,11 +80,7 @@ impl COPRO {
 }
 
 impl Optimizer for COPRO {
-    async fn compile<M>(
-        &self,
-        module: &mut M,
-        trainset: Vec<Example>,
-    ) -> Result<()>
+    async fn compile<M>(&self, module: &mut M, trainset: Vec<Example>) -> Result<()>
     where
         M: Module + Evaluator + for<'a> Facet<'a>,
     {
@@ -465,10 +460,14 @@ impl Optimizer for COPRO {
         if let Some((_, best_candidate)) = best_overall {
             let mut module_predictors = named_parameters(module)?;
             for (predictor_name, predictor) in &mut module_predictors {
-                if let Some(best) = evaluated_candidates.get(predictor_name.as_str()).and_then(|m| {
-                    m.values()
-                        .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
-                }) {
+                if let Some(best) =
+                    evaluated_candidates
+                        .get(predictor_name.as_str())
+                        .and_then(|m| {
+                            m.values()
+                                .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
+                        })
+                {
                     predictor.set_instruction(best.instruction.clone());
                 }
             }

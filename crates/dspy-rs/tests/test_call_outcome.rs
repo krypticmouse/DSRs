@@ -1,4 +1,6 @@
-use dspy_rs::{CallMetadata, ConstraintResult, FieldMeta, LmUsage, ParseError, PredictError, Predicted};
+use dspy_rs::{
+    CallMetadata, ConstraintResult, FieldMeta, LmUsage, ParseError, PredictError, Predicted,
+};
 use indexmap::IndexMap;
 
 #[test]

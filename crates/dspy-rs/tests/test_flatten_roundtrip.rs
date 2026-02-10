@@ -1,6 +1,4 @@
-use dspy_rs::{
-    Augmented, ChatAdapter, Demo, Message, Reasoning, Signature, WithReasoning,
-};
+use dspy_rs::{Augmented, ChatAdapter, Demo, Message, Reasoning, Signature, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -26,8 +24,7 @@ fn augmented_demo_roundtrips_through_adapter() {
         },
     );
 
-    let (user_msg, assistant_msg) =
-        adapter.format_demo_typed::<Augmented<QA, Reasoning>>(&demo);
+    let (user_msg, assistant_msg) = adapter.format_demo_typed::<Augmented<QA, Reasoning>>(&demo);
     let schema = <Augmented<QA, Reasoning> as Signature>::schema();
     let output_names: Vec<&str> = schema.output_fields().iter().map(|f| f.lm_name).collect();
 

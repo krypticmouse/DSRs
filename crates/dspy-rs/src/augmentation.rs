@@ -5,8 +5,11 @@ use crate::{BamlType, Signature};
 use facet::Facet;
 
 pub trait Augmentation: Send + Sync + 'static {
-    type Wrap<T: BamlType + for<'a> Facet<'a> + Send + Sync>:
-        BamlType + for<'a> Facet<'a> + Deref + Send + Sync;
+    type Wrap<T: BamlType + for<'a> Facet<'a> + Send + Sync>: BamlType
+        + for<'a> Facet<'a>
+        + Deref
+        + Send
+        + Sync;
 }
 
 #[derive(Clone, Copy, Default)]

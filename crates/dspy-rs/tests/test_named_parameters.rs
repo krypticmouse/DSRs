@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use dspy_rs::{ChainOfThought, Example, Predict, Signature, named_parameters};
 use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::{ChainOfThought, Example, Predict, Signature, named_parameters};
 use serde_json::json;
 
 #[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
@@ -54,7 +54,9 @@ fn named_parameters_chain_of_thought_exposes_predictor_and_mutates_state() {
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].0, "predictor");
 
-    params[0].1.set_instruction("Use short direct answers".to_string());
+    params[0]
+        .1
+        .set_instruction("Use short direct answers".to_string());
     assert_eq!(params[0].1.instruction(), "Use short direct answers");
     assert_eq!(params[0].1.demos_as_examples().len(), 0);
 
@@ -104,7 +106,10 @@ fn named_parameters_predict_dump_load_state_roundtrip() {
     assert_eq!(predictor.instruction(), "Use short direct answers");
     let demos = predictor.demos_as_examples();
     assert_eq!(demos.len(), 1);
-    assert_eq!(demos[0].data.get("question"), Some(&json!("What is 2 + 2?")));
+    assert_eq!(
+        demos[0].data.get("question"),
+        Some(&json!("What is 2 + 2?"))
+    );
     assert_eq!(demos[0].data.get("answer"), Some(&json!("4")));
 }
 

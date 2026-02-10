@@ -42,6 +42,17 @@ where
     dyn_ref as *mut dyn DynPredictor
 }
 
+fn predict_dyn_accessor_ref<S>(value: *const ()) -> *const dyn DynPredictor
+where
+    S: Signature,
+{
+    // SAFETY: this function is only called via `register_predict_accessor` for
+    // `Predict<S>`'s own shape, so `value` points at a valid `Predict<S>`.
+    let typed = unsafe { &*(value.cast::<Predict<S>>()) };
+    let dyn_ref: &dyn DynPredictor = typed;
+    dyn_ref as *const dyn DynPredictor
+}
+
 #[derive(facet::Facet)]
 #[facet(crate = facet, opaque)]
 pub struct Predict<S: Signature> {
@@ -59,6 +70,7 @@ impl<S: Signature> Predict<S> {
         register_predict_accessor(
             <Self as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
+            predict_dyn_accessor_ref::<S>,
         );
         Self {
             tools: Vec::new(),
@@ -172,24 +184,24 @@ impl<S: Signature> Predict<S> {
         let raw_response = response.output.content().to_string();
         let lm_usage = response.usage.clone();
 
-        let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&response.output)
-        {
-            Ok(parsed) => parsed,
-            Err(err) => {
-                let failed_fields = err.fields();
-                debug!(
-                    failed_fields = failed_fields.len(),
-                    fields = ?failed_fields,
-                    raw_response_len = raw_response.len(),
-                    "typed parse failed"
-                );
-                return Err(PredictError::Parse {
-                    source: err,
-                    raw_response,
-                    lm_usage,
-                });
-            }
-        };
+        let (typed_output, field_metas) =
+            match chat_adapter.parse_response_typed::<S>(&response.output) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    let failed_fields = err.fields();
+                    debug!(
+                        failed_fields = failed_fields.len(),
+                        fields = ?failed_fields,
+                        raw_response_len = raw_response.len(),
+                        "typed parse failed"
+                    );
+                    return Err(PredictError::Parse {
+                        source: err,
+                        raw_response,
+                        lm_usage,
+                    });
+                }
+            };
 
         let checks_total = field_metas
             .values()
@@ -206,10 +218,7 @@ impl<S: Signature> Predict<S> {
             .count();
         debug!(
             output_fields = field_metas.len(),
-            checks_total,
-            checks_failed,
-            flagged_fields,
-            "typed parse completed"
+            checks_total, checks_failed, flagged_fields, "typed parse completed"
         );
 
         if let Some(id) = node_id {
@@ -289,6 +298,7 @@ impl<S: Signature> PredictBuilder<S> {
         register_predict_accessor(
             <Predict<S> as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
+            predict_dyn_accessor_ref::<S>,
         );
         Predict {
             tools: self.tools,
@@ -514,7 +524,9 @@ where
     fn demos_as_examples(&self) -> Vec<Example> {
         self.demos
             .iter()
-            .map(|demo| example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed"))
+            .map(|demo| {
+                example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed")
+            })
             .collect()
     }
 
@@ -556,7 +568,9 @@ where
     fn demos(&self) -> Vec<Example> {
         self.demos
             .iter()
-            .map(|demo| example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed"))
+            .map(|demo| {
+                example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed")
+            })
             .collect()
     }
 

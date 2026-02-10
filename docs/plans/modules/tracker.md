@@ -2,7 +2,7 @@
 
 ## Current State
 - **Slice**: 6 (V6 dynamic graph)
-- **Phase**: Research
+- **Phase**: Post-Implementation Cleanup
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
 - **Roadmap**: V6 (dynamic graph) → Kill Pass (legacy deletion)
@@ -47,6 +47,11 @@
 | `019c4542-56ae-73a2-bcf6-8078d6368393` | Plan refinery against ground truth for Slice 5 | 5 | Plan Refinery | Completed; created `slice_5_refinery.md`, updated `slice_5.md`, and surfaced C4 evaluator-surface arbitration for owner decision |
 | `019c4564-8a9e-7e60-8c67-f45160adb26f` | Adversarial review against ground truth for Slice 5 | 5 | Adversarial Review | Completed; created `slice_5_review.md` with 6 findings (2 high, 2 medium, 2 low) and evidence paths |
 | `019c456a-ec36-75e0-bc4e-f3028aca1001` | Arbitrate fixes for Slice 5 review findings | 5 | Arbitrate | Completed; fixed pointer/Box container erroring in walker and added V5 coverage for dump/load-state + deterministic multi-leaf discovery ordering |
+| `019c4573-3f66-7e03-b1f8-b9dbb69e0738` | Research brief for Slice 6 (V6 dynamic graph) | 6 | Research | Completed; created `slice_6_research.md` with V6/F9/F10 requirements, existing inventory, and [EXISTS]/[MODIFY]/[NEW] gaps |
+| `019c457a-a6d4-7892-8e0a-cc58d11f80a1` | Stupidly implementable plan for Slice 6 (V6 dynamic graph) | 6 | Plan | Failed/no output; subagent stalled without producing `slice_6.md` after repeated waits and interrupt request |
+| `019c4582-c2dc-7f81-963c-2b2b2780005d` | Replacement stupidly implementable plan for Slice 6 (V6 dynamic graph) | 6 | Plan | Completed; produced `slice_6.md` with required sections, grounded signatures, and snapshot-then-fit-back contract from the resolved ambiguity (`from_module` immutable projection + `fit` mutable write-back) |
+| `019c458b-e671-7b13-9b7b-d3921607a791` | Plan refinery against ground truth for Slice 6 | 6 | Plan Refinery | Completed; produced `slice_6_refinery.md` and updated `slice_6.md` with fidelity corrections (`StrategyError`, `format_output_baml`, `insert_between` coverage, execution-order note, `from_parts` visibility tightening) plus two arbitration markers |
+| `019c45a4-fb62-7e62-8efa-b2d050d15e2c` | Adversarial review against ground truth for Slice 6 | 6 | Adversarial Review | Completed; produced `slice_6_review.md` with 6 findings (2 high, 3 medium, 1 low) used for Slice 6 arbitrate fixes |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
@@ -65,6 +70,34 @@
 - **Slice 5 commit (2026-02-10):** Change `ovrlqprm` / `89d83af6` — "slice5: implement optimizer interface with dyn predictor walker".
 - **Slice 5 closure audit (2026-02-10):** Updated `docs/plans/modules/slices_closure_audit.md` with V5 requirement accounting, explicit implemented/deferred classification (`U50`, S2 mechanism, GEPA entrypoint), and validation evidence including Slice 5 GPT-5.2 smoke.
 - **State transition (2026-02-10):** Advanced tracker from Slice 5 closure to `Slice 6 / Research` per closure-audit transition rule (`slice < 6`).
+- **Slice 6 research arbitration (2026-02-10):** Accepted `slice_6_research.md` as planning baseline for V6 (`F9`/`F10`) with graph-first sequencing (`DynModule/registry` → `ProgramGraph` mutation/validation → execution → typed projection).
+- **Slice 6 research discrepancy note (2026-02-10):** Confirmed a concrete tension between design example `ProgramGraph::from_module(&module)` and current discovery surface `named_parameters(&mut module)`. Planning must explicitly choose immutable projection API vs mutable-only projection path.
+- **Slice 6 `from_module` mutability resolution (2026-02-09):** Resolved via **snapshot-then-fit-back** semantics. `ProgramGraph::from_module(&module)` takes `&module` (immutable), reads each predictor's schema + state via an immutable walker variant, and creates standalone `DynModule` wrappers (owned, decoupled from source module). The optimizer mutates the graph independently. After optimization, `graph.fit(&mut module)` applies optimized state back to the typed module's predictors via `load_state` on path-matched leaves. Implementation requires: (1) add `fn(*const ()) -> *const dyn DynPredictor` to `PredictAccessorFns` for immutable accessor; (2) add `named_parameters_ref(&module) -> Vec<(String, &dyn DynPredictor)>` immutable walker variant; (3) `from_module` calls immutable walker, reads `.schema()` + `.dump_state()`, constructs independent graph nodes; (4) `graph.fit(&mut module)` uses existing mutable walker to write back. Structural divergences (topology changes in the graph that don't map to typed module paths) are surfaced, not silently dropped. Rationale: keeps typed path zero-cost (no Arc/Mutex), matches spec signatures (breadboard U46 `&module`, design_reference §11 `&M`, shapes F6 `&dyn DynPredictor`), and the `&mut` lives where mutation actually happens (fit-back), not where it doesn't (projection).
+- **Slice 6 research discrepancy note (2026-02-10):** Locked annotation-first edge derivation for `ProgramGraph::from_module` per prior C8 decision; trace-inferred wiring remains deferred until post-V6 cleanup unless required by a blocker.
+- **Slice 6 planning execution note (2026-02-10):** Initial planning subagent (`019c457a-a6d4-7892-8e0a-cc58d11f80a1`) stalled with no deliverable after repeated waits/interrupt; replaced by `019c4582-c2dc-7f81-963c-2b2b2780005d` with tighter repo-grounding constraints.
+- **Slice 6 ambiguity resolution sync (2026-02-10):** Incorporated user-authored clarifications from `slice_6_research.md` before finalizing plan, including snapshot-then-fit-back (`from_module(&module)` via immutable walker + `fit(&mut module)` write-back), explicit structural divergence surfacing, and annotation-first edge derivation.
+- **Slice 6 plan initial review (2026-02-10):** Accepted `slice_6.md` as Plan-phase baseline and advanced to Plan Refinery. Refinery must explicitly verify two fidelity risks: (1) whether `from_module` should return `ProgramGraph` exactly (U46) versus `Result<ProgramGraph, GraphError>` in the plan draft; (2) whether proposed `SignatureSchema` cloning constructors preserve existing lifetime/ownership constraints without mutating global cached schemas.
+- **Slice 6 plan refinery outcome (2026-02-10):** Accepted refinery corrections in `slice_6.md`/`slice_6_refinery.md` (typed `StrategyError` APIs, `format_output_baml` helper, `insert_between` test coverage, and ordering fix requiring adapter helpers before dynamic factory implementation).
+- **Slice 6 arbitration resolution (2026-02-10):** Resolved both plan markers: (1) keep global accessor registry bridge in V6 (defer shape-local attr payload migration to cleanup); (2) use global edge-annotation registration keyed by shape ID as the sole V6 annotation source (defer shape-local annotation storage to cleanup). All `NEEDS ARBITRATION` markers for Slice 6 are cleared.
+- **State transition (2026-02-10):** Advanced Slice 6 from `Plan Refinery` to `Implement` after arbitration closure.
+- **Slice 6 implement completion pass (2026-02-10):** Added strict typed/dynamic prompt parity coverage for both `predict` and `chain_of_thought` (`test_program_graph_execution.rs`) and aligned dynamic CoT reasoning-field docs to typed schema prompt behavior.
+- **Slice 6 validation sweep (2026-02-10):** `cargo test -p dspy-rs --lib --tests` and `cargo check -p dspy-rs --examples` both pass after V6 implementation updates; no failing regressions remain in crate-level tests.
+- **Facet API verification (2026-02-10):** Re-ran Nia semantic queries over indexed `facet-rs/facet` + docs resources to confirm current walker/accessor model (`Peek`/`Poke` + pointer vtables + attr grammar mechanics). Kept registry bridge for V6 per prior arbitration and migration-debt policy.
+- **State transition (2026-02-10):** Advanced Slice 6 from `Implement` to `Adversarial Review` and spawned review subagent `019c45a4-fb62-7e62-8efa-b2d050d15e2c`.
+- **Slice 6 adversarial review outcome (2026-02-10):** `slice_6_review.md` reported 6 findings (2 high, 3 medium, 1 low). Agreed with all findings and applied fixes in-slice; no deferrals.
+- **Slice 6 arbitrate fixes (2026-02-10):**
+  - Implemented true dynamic ReAct orchestration (`action` + `extract` predictors, iterative loop, terminal action handling, tool-call/execution metadata accumulation) and strict `react` config validation (`InvalidConfig` on malformed `max_steps`).
+  - Added breadboard input wiring semantics: `connect("input", ...)` is now supported; execution resolves pseudo-node edges from root input; topo-sort ignores pseudo-node dependency edges.
+  - Reduced dynamic API friction: `ProgramGraph::add_node`/`replace_node` now accept `impl Into<Node>`, so `Box<dyn DynModule>` from `registry::create` can be passed directly while schema/module sync is enforced at insertion.
+  - Added projection fallback and guardrails: `from_module` remains annotation-first but now falls back to ordered schema/path inference when annotations are absent, and errors on unresolved multi-node projections.
+  - Made `insert_between` failure-atomic for missing inserted-node IO fields by pre-validating before graph mutation.
+- **Slice 6 post-arbitrate validation (2026-02-10):** Re-ran targeted V6 suites plus full crate validation: `cargo test -p dspy-rs --test test_registry_dynamic_modules --test test_program_graph_execution --test test_program_graph_mutation --test test_program_graph_annotations --test test_program_graph_projection_fit --test test_named_parameters_ref`, then `cargo test -p dspy-rs --lib --tests`, and `cargo check -p dspy-rs --examples` all pass.
+- **Slice 6 smoke test (2026-02-10):** Added and ran `crates/dspy-rs/examples/95-smoke-slice6-dynamic-graph.rs` against `openai:gpt-5.2` with `.env` loaded; dynamic graph path (`registry::create` + `add_node` + `connect(\"input\", ...)` + `execute`) returned `answer: smoke-ok`.
+- **State transition (2026-02-10):** Completed Slice 6 Arbitrate and advanced to `Commit`.
+- **Slice 6 commit (2026-02-10):** Change `nmvtxvrn` — "slice6: implement dynamic graph registry and execution".
+- **State transition (2026-02-10):** Advanced Slice 6 from `Commit` to `Closure Audit`.
+- **Slice 6 closure audit (2026-02-10):** Updated `docs/plans/modules/slices_closure_audit.md` with V6 requirement accounting (`U38`-`U46`, `N17`, `N24`-`N27`, `R8`) and refreshed deferred-ledger entries for V6 annotation storage and TypeIR assignability breadth.
+- **State transition (2026-02-10):** Because current slice = 6, advanced from `Closure Audit` to `Post-Implementation Cleanup`.
 - **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` for typed module calls. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.call(input).await?.answer`. Canonical user entrypoint is `Module::call`; module authors implement `forward` as the hook.
 - **Interpretation note:** historical entries below may still reference `CallOutcome` because they log pre-revision milestones. Treat those references as superseded unless an entry explicitly says otherwise.
 - **Phase 4.5-lite completion (2026-02-10):** Exit gates passed. `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test` are green after C1/C5/C6 execution.
@@ -153,6 +186,8 @@
 - `V5 Implement`: complete walker discoverability for wrapper/combinator module trees as the canonical replacement for legacy `Optimizable` traversal.
 - Untyped `Example`/`Prediction` example policy and evaluator/feedback migration boundary are clarified in the kickoff doc; execution remains open under C2/C3/C4 gates.
 - Decision matrix and sequencing for cleanup kickoff are now centralized in `docs/plans/modules/phase_4_5_cleanup_kickoff.md`.
+- ~~`V6`: resolve `ProgramGraph::from_module` mutability contract~~ → **Resolved.** See decision entry below.
+- `V6`: define v1 graph output contract for multi-sink graphs (single terminal node requirement vs aggregate-output shape).
 
 ## Migration Debt
 <!-- Compatibility shims and legacy bridges left in place during slices. Each gets removed in Post-Implementation Cleanup. -->

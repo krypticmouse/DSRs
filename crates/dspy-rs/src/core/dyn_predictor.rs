@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use anyhow::Result;
-use bamltype::facet_reflect::Poke;
+use bamltype::facet_reflect::{Peek, Poke};
 use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 
 use crate::{BamlValue, Example, PredictError, Predicted, SignatureSchema};
@@ -31,12 +31,14 @@ pub struct PredictState {
 #[derive(Clone, Copy, Debug, facet::Facet)]
 #[facet(opaque)]
 pub struct PredictAccessorFns {
-    pub accessor: fn(*mut ()) -> *mut dyn DynPredictor,
+    pub accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
+    pub accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 }
 
 impl PartialEq for PredictAccessorFns {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.accessor, other.accessor)
+        std::ptr::fn_addr_eq(self.accessor_mut, other.accessor_mut)
+            && std::ptr::fn_addr_eq(self.accessor_ref, other.accessor_ref)
     }
 }
 
@@ -47,13 +49,17 @@ static ACCESSOR_REGISTRY: OnceLock<Mutex<HashMap<ConstTypeId, PredictAccessorFns
 
 pub fn register_predict_accessor(
     shape: &'static Shape,
-    accessor: fn(*mut ()) -> *mut dyn DynPredictor,
+    accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
+    accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 ) {
     let registry = ACCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = registry.lock().expect("predict accessor registry lock poisoned");
-    guard
-        .entry(shape.id)
-        .or_insert(PredictAccessorFns { accessor });
+    let mut guard = registry
+        .lock()
+        .expect("predict accessor registry lock poisoned");
+    guard.entry(shape.id).or_insert(PredictAccessorFns {
+        accessor_mut,
+        accessor_ref,
+    });
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -64,11 +70,7 @@ pub enum NamedParametersError {
     MissingAttr { path: String },
 }
 
-#[tracing::instrument(
-    level = "debug",
-    name = "dsrs.named_parameters",
-    skip(module),
-)]
+#[tracing::instrument(level = "debug", name = "dsrs.named_parameters", skip(module))]
 pub fn named_parameters<M>(
     module: &mut M,
 ) -> std::result::Result<Vec<(String, &mut dyn DynPredictor)>, NamedParametersError>
@@ -88,6 +90,26 @@ where
     Ok(handles)
 }
 
+#[tracing::instrument(level = "debug", name = "dsrs.named_parameters_ref", skip(module))]
+pub fn named_parameters_ref<M>(
+    module: &M,
+) -> std::result::Result<Vec<(String, &dyn DynPredictor)>, NamedParametersError>
+where
+    M: for<'a> Facet<'a>,
+{
+    let mut raw_handles = Vec::<(String, *const dyn DynPredictor)>::new();
+    walk_value_ref(Peek::new(module), "", &mut raw_handles)?;
+
+    let mut handles = Vec::with_capacity(raw_handles.len());
+    for (path, ptr) in raw_handles {
+        // SAFETY: pointers are created from a shared traversal over `module`.
+        let handle = unsafe { &*ptr };
+        handles.push((path, handle));
+    }
+
+    Ok(handles)
+}
+
 fn walk_value(
     mut value: Poke<'_, '_>,
     path: &str,
@@ -95,10 +117,11 @@ fn walk_value(
 ) -> std::result::Result<(), NamedParametersError> {
     let shape = value.shape();
     if is_parameter_shape(shape) {
-        let accessor = registered_accessor(shape).ok_or_else(|| NamedParametersError::MissingAttr {
-            path: display_path(path),
-        })?;
-        let ptr = (accessor.accessor)(value.data_mut().as_mut_byte_ptr().cast::<()>());
+        let accessor =
+            registered_accessor(shape).ok_or_else(|| NamedParametersError::MissingAttr {
+                path: display_path(path),
+            })?;
+        let ptr = (accessor.accessor_mut)(value.data_mut().as_mut_byte_ptr().cast::<()>());
         out.push((path.to_string(), ptr));
         return Ok(());
     }
@@ -124,10 +147,60 @@ fn walk_value(
             });
         }
 
-        let child = struct_value.field(idx).map_err(|_| NamedParametersError::MissingAttr {
-            path: display_path(&field_path),
-        })?;
+        let child = struct_value
+            .field(idx)
+            .map_err(|_| NamedParametersError::MissingAttr {
+                path: display_path(&field_path),
+            })?;
         walk_value(child, &field_path, out)?;
+    }
+
+    Ok(())
+}
+
+fn walk_value_ref(
+    value: Peek<'_, '_>,
+    path: &str,
+    out: &mut Vec<(String, *const dyn DynPredictor)>,
+) -> std::result::Result<(), NamedParametersError> {
+    let shape = value.shape();
+    if is_parameter_shape(shape) {
+        let accessor =
+            registered_accessor(shape).ok_or_else(|| NamedParametersError::MissingAttr {
+                path: display_path(path),
+            })?;
+        let ptr = (accessor.accessor_ref)(value.data().as_byte_ptr().cast::<()>());
+        out.push((path.to_string(), ptr));
+        return Ok(());
+    }
+
+    let struct_value = match value.into_struct() {
+        Ok(struct_value) => struct_value,
+        Err(_) => return Ok(()),
+    };
+
+    for idx in 0..struct_value.field_count() {
+        let field = struct_value.ty().fields[idx];
+        if field.should_skip_deserializing() {
+            continue;
+        }
+
+        let field_path = push_field(path, field.name);
+        if let Some(ty) = container_name(field.shape())
+            && contains_parameter(field.shape(), &mut HashSet::new())
+        {
+            return Err(NamedParametersError::Container {
+                path: field_path,
+                ty,
+            });
+        }
+
+        let child = struct_value
+            .field(idx)
+            .map_err(|_| NamedParametersError::MissingAttr {
+                path: display_path(&field_path),
+            })?;
+        walk_value_ref(child, &field_path, out)?;
     }
 
     Ok(())
@@ -160,7 +233,9 @@ fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>
             Def::Result(def) => {
                 contains_parameter(def.t(), visiting) || contains_parameter(def.e(), visiting)
             }
-            Def::Pointer(def) => def.pointee().is_some_and(|inner| contains_parameter(inner, visiting)),
+            Def::Pointer(def) => def
+                .pointee()
+                .is_some_and(|inner| contains_parameter(inner, visiting)),
             _ => false,
         },
     };

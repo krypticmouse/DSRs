@@ -1,7 +1,7 @@
 use indexmap::IndexMap;
 
-use crate::augmentation::Augmented;
 use crate::Augmentation;
+use crate::augmentation::Augmented;
 use crate::core::{MetaSignature, Module, Optimizable, Signature};
 use crate::predictors::{Demo, Predict, PredictBuilder};
 use crate::{BamlType, Example, PredictError, Predicted};

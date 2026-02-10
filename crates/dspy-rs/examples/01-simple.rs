@@ -149,7 +149,10 @@ async fn main() -> Result<()> {
     // Predicted carries both typed output and metadata.
     let result = predict.call(input).await?;
     println!("\nWith metadata:");
-    println!("  Raw 'answer' field: {:?}", result.metadata().field_raw("answer"));
+    println!(
+        "  Raw 'answer' field: {:?}",
+        result.metadata().field_raw("answer")
+    );
     println!("  Token usage: {:?}", result.metadata().lm_usage);
 
     // =========================================================================
@@ -184,8 +187,8 @@ async fn main() -> Result<()> {
                 question: "What is 2+2?".to_string(),
             },
             QAOutput {
-                reasoning:
-                    "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4.".to_string(),
+                reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4."
+                    .to_string(),
                 answer: "4".to_string(),
             },
         ))

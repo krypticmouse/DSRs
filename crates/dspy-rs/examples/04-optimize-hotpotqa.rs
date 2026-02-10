@@ -10,12 +10,12 @@ Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use bon::Builder;
+use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     COPRO, CallMetadata, ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict,
     LegacySignature, LmError, Module, Optimizable, Optimizer, PredictError, Predicted, Prediction,
     Predictor, configure, init_tracing,
 };
-use dspy_rs::__macro_support::bamltype::facet;
 
 #[LegacySignature(cot)]
 struct QASignature {

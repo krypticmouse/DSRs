@@ -9,11 +9,7 @@ pub use mipro::*;
 pub use pareto::*;
 
 use crate::{
-    core::Module,
-    data::example::Example,
-    data::prediction::Prediction,
-    evaluate::Evaluator,
-    Facet,
+    Facet, core::Module, data::example::Example, data::prediction::Prediction, evaluate::Evaluator,
 };
 use anyhow::Result;
 

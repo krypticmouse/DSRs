@@ -12,8 +12,8 @@
 /// ```
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::*;
 use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::*;
 use dsrs_macros::{LegacySignature, Optimizable};
 use std::sync::Arc;
 
@@ -343,11 +343,7 @@ async fn main() -> Result<()> {
         "expected_answer": "input" => "2"
     };
 
-    let test_prediction = module
-        .forward(test_problem.clone())
-        .await
-        ?
-        .into_inner();
+    let test_prediction = module.forward(test_problem.clone()).await?.into_inner();
     let test_feedback = module
         .feedback_metric(&test_problem, &test_prediction)
         .await;

@@ -415,8 +415,7 @@ fn generate_signature_code(
 
     let helper_structs = generate_helper_structs(name, generics, parsed, vis, runtime)?;
     let input_metadata = generate_field_metadata(name, &parsed.input_fields, "INPUT", runtime)?;
-    let output_metadata =
-        generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
+    let output_metadata = generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
     let baml_delegation = generate_baml_delegation(name, generics, parsed, runtime);
     let signature_impl = generate_signature_impl(name, generics, parsed, runtime);
 
@@ -449,7 +448,11 @@ fn generate_helper_structs(
     if let Some(marker) = &input_marker {
         input_fields.push(marker.field.clone());
     }
-    let input_new_args: Vec<_> = parsed.input_fields.iter().map(constructor_arg_tokens).collect();
+    let input_new_args: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
     let mut input_new_fields: Vec<_> = parsed
         .input_fields
         .iter()
@@ -464,9 +467,16 @@ fn generate_helper_structs(
     if let Some(marker) = &output_marker {
         output_fields.push(marker.field.clone());
     }
-    let output_new_args: Vec<_> = parsed.output_fields.iter().map(constructor_arg_tokens).collect();
-    let mut output_new_fields: Vec<_> =
-        parsed.output_fields.iter().map(constructor_init_tokens).collect();
+    let output_new_args: Vec<_> = parsed
+        .output_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
+    let mut output_new_fields: Vec<_> = parsed
+        .output_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
     if let Some(marker) = &output_marker {
         output_new_fields.push(marker.init.clone());
     }
@@ -476,8 +486,16 @@ fn generate_helper_structs(
     if let Some(marker) = &all_marker {
         all_fields.push(marker.field.clone());
     }
-    let all_new_args: Vec<_> = parsed.all_fields.iter().map(constructor_arg_tokens).collect();
-    let mut all_new_fields: Vec<_> = parsed.all_fields.iter().map(constructor_init_tokens).collect();
+    let all_new_args: Vec<_> = parsed
+        .all_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
+    let mut all_new_fields: Vec<_> = parsed
+        .all_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
     if let Some(marker) = &all_marker {
         all_new_fields.push(marker.init.clone());
     }
@@ -606,10 +624,7 @@ fn generic_marker_field(
     })
 }
 
-fn missing_type_params_for_fields(
-    generics: &syn::Generics,
-    fields: &[ParsedField],
-) -> Vec<Ident> {
+fn missing_type_params_for_fields(generics: &syn::Generics, fields: &[ParsedField]) -> Vec<Ident> {
     let type_params: Vec<Ident> = generics
         .type_params()
         .map(|param| param.ident.clone())
@@ -1011,9 +1026,8 @@ fn parse_augment_options(attrs: &[Attribute]) -> syn::Result<AugmentOptions> {
         if !attr.path().is_ident("augment") {
             continue;
         }
-        let meta = attr.parse_args_with(
-            syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated,
-        )?;
+        let meta = attr
+            .parse_args_with(syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated)?;
         for ident in meta {
             let name = ident.to_string();
             match name.as_str() {

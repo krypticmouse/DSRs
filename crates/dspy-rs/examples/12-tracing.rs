@@ -82,10 +82,10 @@ impl Module for QARater {
         // Final output
         Ok(Predicted::new(
             prediction! {
-            "answer"=> answer.value,
-            "question"=> question.value,
-            "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
-        }
+                "answer"=> answer.value,
+                "question"=> question.value,
+                "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
+            }
             .set_lm_usage(rating_prediction.lm_usage),
             CallMetadata::default(),
         ))

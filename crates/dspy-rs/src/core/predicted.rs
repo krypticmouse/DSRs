@@ -80,7 +80,9 @@ impl CallMetadata {
     }
 
     pub fn field_raw(&self, field: &str) -> Option<&str> {
-        self.field_meta.get(field).map(|meta| meta.raw_text.as_str())
+        self.field_meta
+            .get(field)
+            .map(|meta| meta.raw_text.as_str())
     }
 
     pub fn field_names(&self) -> impl Iterator<Item = &str> + '_ {

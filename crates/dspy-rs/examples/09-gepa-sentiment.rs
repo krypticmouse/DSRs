@@ -13,8 +13,8 @@
 /// ```
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::*;
 use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::*;
 use dsrs_macros::{LegacySignature, Optimizable};
 
 #[LegacySignature]

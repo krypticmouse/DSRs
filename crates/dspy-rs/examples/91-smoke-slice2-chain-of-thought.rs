@@ -26,14 +26,17 @@ async fn main() -> Result<()> {
         prompt: "Reply with exactly: smoke-ok".to_string(),
     };
 
-    let output = module.call(input).await.map_err(|err| {
-        eprintln!("smoke call failed: {err}");
-        if let PredictError::Parse { raw_response, .. } = &err {
-            eprintln!("raw_response: {:?}", raw_response);
-        }
-        anyhow::anyhow!("slice2 smoke failed")
-    })?
-    .into_inner();
+    let output = module
+        .call(input)
+        .await
+        .map_err(|err| {
+            eprintln!("smoke call failed: {err}");
+            if let PredictError::Parse { raw_response, .. } = &err {
+                eprintln!("raw_response: {:?}", raw_response);
+            }
+            anyhow::anyhow!("slice2 smoke failed")
+        })?
+        .into_inner();
 
     println!("reasoning: {}", output.reasoning);
     println!("answer: {}", output.answer);

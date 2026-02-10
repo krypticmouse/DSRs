@@ -1,7 +1,7 @@
-# Slices 1-5 Closure Audit
+# Slices 1-6 Closure Audit
 
 Date: 2026-02-10  
-Scope: Breadboard vertical slices `V1`, `V2`, `V3`, `V4`, `V5` from `docs/specs/modules/breadboard.md`.
+Scope: Breadboard vertical slices `V1`, `V2`, `V3`, `V4`, `V5`, `V6` from `docs/specs/modules/breadboard.md`.
 
 ## Audit Method
 - Re-checked `docs/specs/modules/breadboard.md` slice definitions and `docs/specs/modules/shapes.md` / `docs/specs/modules/design_reference.md` constraints.
@@ -10,7 +10,7 @@ Scope: Breadboard vertical slices `V1`, `V2`, `V3`, `V4`, `V5` from `docs/specs/
 
 ## Slices 1-3 Baseline
 - Baseline accounting for `V1`-`V3` remains in `docs/plans/modules/slices_1_3_closure_audit.md`.
-- This document extends that ledger through `V5` and updates deferred-item routing with current post-V5 status.
+- This document extends that ledger through `V6` and updates deferred-item routing with current post-V6 status.
 
 ## Slice 4 (V4 ReAct + Operational) Accounting
 
@@ -42,6 +42,23 @@ Slice 4 verdict: **Implemented**.
 
 Slice 5 verdict: **Partially Implemented** (core F6/F8 behavior shipped; U50/C4 and strict S2 mechanism deferred with explicit cleanup targets).
 
+## Slice 6 (V6 Dynamic Graph) Accounting
+
+| Affordance(s) | Status | Evidence |
+|---|---|---|
+| `U38`, `U39` strategy registry (`registry::create`, `registry::list`) | Implemented | `crates/dspy-rs/src/core/dyn_module.rs:53`, `crates/dspy-rs/src/core/dyn_module.rs:79`, `crates/dspy-rs/src/core/dyn_module.rs:88`, `crates/dspy-rs/tests/test_registry_dynamic_modules.rs:45` |
+| `U40` dynamic predictor exposure (`predictors`, `predictors_mut`) | Implemented | `crates/dspy-rs/src/core/dyn_module.rs:29`, `crates/dspy-rs/src/core/dyn_factories.rs:329`, `crates/dspy-rs/src/core/dyn_factories.rs:333`, `crates/dspy-rs/tests/test_registry_dynamic_modules.rs:63` |
+| `U41`, `U42` graph construction (`new`, `add_node`) including direct registry node insertion | Implemented | `crates/dspy-rs/src/core/program_graph.rs:162`, `crates/dspy-rs/src/core/program_graph.rs:181`, `crates/dspy-rs/tests/test_registry_dynamic_modules.rs:68` |
+| `U43`, `N24` edge insertion with validation, including breadboard input pseudo-node wiring | Implemented | `crates/dspy-rs/src/core/program_graph.rs:209`, `crates/dspy-rs/src/core/program_graph.rs:601`, `crates/dspy-rs/tests/test_program_graph_mutation.rs:86`, `crates/dspy-rs/tests/test_program_graph_execution.rs:231` |
+| `U44` node replacement + incident-edge revalidation | Implemented | `crates/dspy-rs/src/core/program_graph.rs:226`, `crates/dspy-rs/tests/test_program_graph_mutation.rs:100` |
+| `U45`, `N25`, `N26` topological execution and BamlValue piping | Implemented | `crates/dspy-rs/src/core/program_graph.rs:349`, `crates/dspy-rs/src/core/program_graph.rs:657`, `crates/dspy-rs/tests/test_program_graph_execution.rs:143`, `crates/dspy-rs/tests/test_program_graph_execution.rs:198` |
+| `U46` typed→graph projection + fit-back | Implemented | `crates/dspy-rs/src/core/program_graph.rs:453`, `crates/dspy-rs/src/core/program_graph.rs:512`, `crates/dspy-rs/tests/test_program_graph_projection_fit.rs:33` |
+| `N17` schema-transforming factories (`chain_of_thought` reasoning prepend, `react` action/extract schemas) | Implemented | `crates/dspy-rs/src/core/dyn_factories.rs:449`, `crates/dspy-rs/src/core/dyn_factories.rs:552`, `crates/dspy-rs/src/core/dyn_factories.rs:617`, `crates/dspy-rs/tests/test_registry_dynamic_modules.rs:95` |
+| `N27` distributed factory auto-registration (`inventory::submit!`) | Implemented | `crates/dspy-rs/src/core/dyn_factories.rs:540`, `crates/dspy-rs/src/core/dyn_factories.rs:544`, `crates/dspy-rs/src/core/dyn_factories.rs:548` |
+| `R8` typed/dynamic prompt parity and dynamic graph real-model smoke | Implemented | `crates/dspy-rs/tests/test_program_graph_execution.rs:269`, `crates/dspy-rs/examples/95-smoke-slice6-dynamic-graph.rs:18`, `crates/dspy-rs/examples/95-smoke-slice6-dynamic-graph.rs:33` |
+
+Slice 6 verdict: **Implemented** (with explicit post-implementation debt retained for strict S2 attr payload, edge-annotation storage mechanism, and broader TypeIR assignability semantics).
+
 ## Consolidated Deferred Ledger (Post-Implementation Cleanup)
 
 | Deferred item | Why deferred | Target phase | Exit criteria |
@@ -54,6 +71,8 @@ Slice 5 verdict: **Partially Implemented** (core F6/F8 behavior shipped; U50/C4 
 | `V5` strict S2 mechanism (`dsrs::parameter` payload extraction) | Current generic payload attachment path is blocked in current derive expansion; registry fallback was used to keep V5 green | **Post-Implementation Cleanup** | Replace registry/type-name discovery with shape-local typed attr payload extraction or finalize audited equivalent and update spec debt note |
 | `V5` U50 typed metric surface (`compile(..., metric)`) | Optimizer compile remains coupled to legacy `Evaluator` / `Example`→`Prediction` IO boundary | **Post-Implementation Cleanup** | Optimizer compile path accepts typed metric/evaluator surface and no longer requires legacy compile bounds |
 | GEPA uniform compile entrypoint | `GEPA::compile` intentionally bails and redirects to `compile_with_feedback`; inconsistent with uniform U50 contract | **Post-Implementation Cleanup** | GEPA exposes a functional uniform compile surface (or officially documented trait split) without runtime bailout |
+| `V6` edge annotation storage mechanism | V6 uses global shape-id keyed registration for annotations; shape-local Facet attr storage remains deferred | **Post-Implementation Cleanup** | Move edge annotations to shape-local Facet attrs (or ratify global registration path in spec) and remove dual-path ambiguity |
+| `V6` TypeIR assignability breadth | Current `is_assignable_to` is conservative (exact, nullable widening, simple unions) | **Post-Implementation Cleanup** | Replace with native/complete TypeIR subtyping semantics that cover richer unions/classes/aliases |
 
 ## Cleanup Kickoff Reference
 
@@ -71,14 +90,17 @@ Use that doc as the active decision matrix for:
 - `U29` (`ChainOfThought` Facet discoverability) resolved in code: `crates/dspy-rs/src/modules/chain_of_thought.rs:16`.
 - `build_system` API/spec mismatch resolved by spec alignment to fallible return (`Result<String>`): `docs/specs/modules/breadboard.md:101`, `docs/specs/modules/design_reference.md:583`.
 
-## Validation During Slice 5 Closure Audit
+## Validation During Slice 5-6 Closure Audit
 - `cargo check -p dspy-rs`
 - `cargo check -p dspy-rs --examples`
 - `cargo test -p dspy-rs --lib --tests`
 - `cargo test -p dspy-rs --test test_named_parameters --test test_named_parameters_containers --test test_dyn_predictor_forward_untyped`
+- `cargo test -p dspy-rs --test test_registry_dynamic_modules --test test_program_graph_execution --test test_program_graph_mutation --test test_program_graph_annotations --test test_program_graph_projection_fit --test test_named_parameters_ref`
 - `set -a && source .env && set +a && cargo run -p dspy-rs --example 93-smoke-slice4-react-operational`
 - `set -a && source .env && set +a && cargo run -p dspy-rs --example 94-smoke-slice5-optimizer-interface`
+- `set -a && source .env && set +a && cargo run -p dspy-rs --example 95-smoke-slice6-dynamic-graph`
 
 Observed smoke outputs:
 - Slice 4 calculator trajectory parity pass: `tool_calls: 3`, `tool_executions: 5`, trajectory printed with `Step 1..4`, `answer: 70`.
 - Slice 5 optimizer-interface pass: `named_parameters: ["predictor"]`, instruction mutation applied, `answer: smoke-ok`.
+- Slice 6 dynamic-graph pass: registry-created node + input pseudo-edge execution returned `answer: smoke-ok`.

@@ -1,6 +1,4 @@
-use dspy_rs::{
-    BamlType, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted,
-};
+use dspy_rs::{BamlType, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted};
 
 struct MaybeFails;
 
@@ -67,7 +65,10 @@ async fn map_transforms_success_and_preserves_metadata() {
         }
     );
 
-    let err = mapped.call(IntPayload { value: -7 }).await.expect_err("failure expected");
+    let err = mapped
+        .call(IntPayload { value: -7 })
+        .await
+        .expect_err("failure expected");
     match err {
         PredictError::Parse {
             source: ParseError::MissingField { field, .. },
