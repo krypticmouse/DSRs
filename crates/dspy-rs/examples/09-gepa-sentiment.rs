@@ -14,6 +14,7 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
+use dspy_rs::__macro_support::bamltype::facet;
 use dsrs_macros::{LegacySignature, Optimizable};
 
 #[LegacySignature]
@@ -30,9 +31,11 @@ struct SentimentSignature {
     pub reasoning: String,
 }
 
-#[derive(Builder, Optimizable)]
+#[derive(Builder, Optimizable, facet::Facet)]
+#[facet(crate = facet)]
 struct SentimentAnalyzer {
     #[parameter]
+    #[facet(skip, opaque)]
     predictor: LegacyPredict,
 }
 

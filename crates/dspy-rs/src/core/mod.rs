@@ -1,4 +1,5 @@
 mod errors;
+pub mod dyn_predictor;
 mod predicted;
 pub mod lm;
 pub mod module;
@@ -9,6 +10,7 @@ pub mod signature;
 pub mod specials;
 
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use dyn_predictor::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use lm::*;
 pub use module::*;

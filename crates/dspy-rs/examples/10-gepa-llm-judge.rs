@@ -13,6 +13,7 @@
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::*;
+use dspy_rs::__macro_support::bamltype::facet;
 use dsrs_macros::{LegacySignature, Optimizable};
 use std::sync::Arc;
 
@@ -64,16 +65,20 @@ struct MathJudge {
 // Step 3: Create the main module with LLM judge
 // ============================================================================
 
-#[derive(Builder, Optimizable)]
+#[derive(Builder, Optimizable, facet::Facet)]
+#[facet(crate = facet)]
 struct MathSolver {
     // The main predictor we want to optimize
     #[parameter]
+    #[facet(skip, opaque)]
     solver: LegacyPredict,
 
     // The judge predictor (not optimized, just used for evaluation)
+    #[facet(skip, opaque)]
     judge: LegacyPredict,
 
     // LM for the judge (could be different/cheaper model)
+    #[facet(skip, opaque)]
     judge_lm: Arc<LM>,
 }
 

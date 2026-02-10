@@ -2,7 +2,7 @@
 
 ## Current State
 - **Slice**: 5 (V5 optimizer interface)
-- **Phase**: Plan
+- **Phase**: Commit
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
 - **Roadmap**: V5 (optimizer interface) → V6 (dynamic graph) → Kill Pass (legacy deletion)
@@ -11,7 +11,6 @@
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
 |----|---------|-------|-------|--------|-------|
-| `019c453b-9133-7b23-bb4d-6cb001dea031` | Stupidly implementable plan for Slice 5 (optimizer interface) | 5 | Plan | In progress | Drafting `slice_5.md` with verified symbols, concrete signatures, and V5-only sequencing |
 
 ## Completed Subagents
 | ID | Purpose | Slice | Phase | Outcome |
@@ -44,11 +43,25 @@
 | `019c4478-d3ef-76b1-98e9-cbf5f4d127ec` | Apply agreed Slice 4 arbitrate fix (ReAct Facet discoverability) | 4 | Arbitrate | Completed; added `facet::Facet` derive on `ReAct` and skipped non-discoverable fields (`tools`, `max_steps`) while keeping predictor fields discoverable | Verified by `cargo check -p dspy-rs`, then re-ran targeted tests and Slice 4 smoke successfully |
 | `manual` | ReAct DSPy parity pass (single call surface + trajectory smoke evidence) | 4 | Implement → Smoke Test | Completed; removed public `call_with_trajectory`, kept trajectory in normal `Predicted` metadata, upgraded deterministic test to multi-tool calculator loop, and replaced smoke with GPT-5.2 calculator trajectory proof | `cargo test -p dspy-rs --test test_module_forward_all --test test_module_ext --test test_react_builder` and `cargo run -p dspy-rs --example 93-smoke-slice4-react-operational` passed |
 | `019c4536-e461-7792-ad3e-3c1115103a7a` | Research brief for Slice 5 (optimizer interface) | 5 | Research | Completed; created `slice_5_research.md` with V5 requirement inventory, existing optimizer/discovery surfaces, and [EXISTS]/[MODIFY]/[NEW] gaps for `DynPredictor` + walker migration |
+| `019c453b-9133-7b23-bb4d-6cb001dea031` | Stupidly implementable plan for Slice 5 (optimizer interface) | 5 | Plan | Completed; created `slice_5.md` with concrete file-level steps for `DynPredictor`, Facet walker discovery, optimizer rewiring, and regression tests |
+| `019c4542-56ae-73a2-bcf6-8078d6368393` | Plan refinery against ground truth for Slice 5 | 5 | Plan Refinery | Completed; created `slice_5_refinery.md`, updated `slice_5.md`, and surfaced C4 evaluator-surface arbitration for owner decision |
+| `019c4564-8a9e-7e60-8c67-f45160adb26f` | Adversarial review against ground truth for Slice 5 | 5 | Adversarial Review | Completed; created `slice_5_review.md` with 6 findings (2 high, 2 medium, 2 low) and evidence paths |
+| `019c456a-ec36-75e0-bc4e-f3028aca1001` | Arbitrate fixes for Slice 5 review findings | 5 | Arbitrate | Completed; fixed pointer/Box container erroring in walker and added V5 coverage for dump/load-state + deterministic multi-leaf discovery ordering |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
 - **State transition (2026-02-10):** Advanced workflow to `Slice 5 / Research` after 4.5-lite completion; V5 is now the active slice.
 - **Slice 5 research arbitration (2026-02-10):** Accepted `slice_5_research.md` as implementation baseline. Locked V5 to struct-field walker recursion with explicit container errors (per N18 + S5 deferral), and carried forward the U50 API ambiguity (`metric` arg in breadboard vs current `Evaluator`-bound compile trait) into planning for explicit resolution.
+- **Execution heuristic (2026-02-10):** For ambiguous V5 details, follow spec spirit while choosing the shortest correct implementation path; avoid adding migration scaffolding unless required for green builds, and record every shortcut as explicit cleanup debt for post-slice reconciliation.
+- **Slice 5 plan review (2026-02-10):** Accepted plan direction for F6/F8 core deliverables and quick-path migration strategy; plan refinery must still arbitrate strict U50/C4 fidelity (typed evaluator replacement vs temporary `Evaluator` carryover) and concrete Facet attribute payload syntax for `PredictAccessorFns`.
+- **Slice 5 plan refinery arbitration (2026-02-10):** Resolved all `NEEDS ARBITRATION` markers in `slice_5.md`. Chosen path for this slice: land F6/F8 (`DynPredictor` + walker + optimizer rewiring) with minimal churn by keeping the current `Evaluator` metric boundary temporarily, while explicitly recording C4 typed-evaluator replacement as migration debt for the cleanup pass after V5/V6.
+- **Slice 5 implementation validation (2026-02-10):** `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test -p dspy-rs --lib --tests` all pass after V5 rewiring (`named_parameters`, `DynPredictor`, optimizer integrations, and new V5 regression tests).
+- **Slice 5 mechanism audit (2026-02-10):** Queried Facet indexed resources via Nia to validate S2 Mechanism A (`define_attr_grammar!` + typed attr decode). Attempted direct `#[facet(dsrs::parameter = ...)]` payload path and hit compile blockers for generic function-pointer payload attachment (`E0401`) in current derive expansion. Kept registry-backed accessor mapping for this slice as the shortest correct path and recorded as migration debt for cleanup.
+- **Slice 5 smoke test (2026-02-10):** Added and ran `crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs` against `openai:gpt-5.2` with `.env` loaded; walker discovered `named_parameters: [\"predictor\"]`, instruction mutation took effect, and call returned `answer: smoke-ok`.
+- **Slice 5 adversarial arbitration (2026-02-10):** Agreed and fixed finding on pointer/Box container guard gap (`Def::Pointer` now errors as container when it encloses parameter leaves) and agreed on expanding V5 regression coverage (state dump/load roundtrip + deterministic multi-leaf ordering tests).
+- **Slice 5 adversarial arbitration (2026-02-10):** Deferred both high findings: (1) S2 Mechanism A attr-payload discovery remains blocked by generic derive constraints in current implementation and is tracked as migration debt; (2) U50 typed metric surface (`compile(..., metric)`) remains deferred per prior C4 decision to avoid duplicate migration churn before cleanup.
+- **Slice 5 adversarial arbitration (2026-02-10):** Deferred GEPA uniform-entrypoint finding and legacy surface cleanup as post-V5/V6 cleanup work; no stale `NEEDS ARBITRATION` markers remain in Slice 5 docs.
+- **Slice 5 post-fix smoke rerun (2026-02-10):** Re-ran `94-smoke-slice5-optimizer-interface` against `openai:gpt-5.2` after arbitrate fixes; still passes with `answer: smoke-ok`.
 - **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` for typed module calls. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.call(input).await?.answer`. Canonical user entrypoint is `Module::call`; module authors implement `forward` as the hook.
 - **Interpretation note:** historical entries below may still reference `CallOutcome` because they log pre-revision milestones. Treat those references as superseded unless an entry explicitly says otherwise.
 - **Phase 4.5-lite completion (2026-02-10):** Exit gates passed. `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test` are green after C1/C5/C6 execution.
@@ -129,6 +142,7 @@
 - Slice 2 planning subagent produced no deliverable (`slice_2.md` missing) and had to be replaced.
 - Slice 2 adversarial review subagent took longer than expected; waited through multiple polls before completion.
 - Slice 3 research confirms V3 is not incremental polish: it requires trait-shape migration across core module/predictor surfaces and may ripple into optimizer and examples.
+- S2 Mechanism A direct attr-payload implementation in generic `Predict<S>` currently fails due derive-generated static context rejecting outer generic parameter use for accessor fn payload (`E0401`), so V5 uses a runtime accessor registry fallback.
 
 ## Open Questions
 <!-- Unresolved issues to revisit -->
@@ -136,3 +150,9 @@
 - `V5 Implement`: complete walker discoverability for wrapper/combinator module trees as the canonical replacement for legacy `Optimizable` traversal.
 - Untyped `Example`/`Prediction` example policy and evaluator/feedback migration boundary are clarified in the kickoff doc; execution remains open under C2/C3/C4 gates.
 - Decision matrix and sequencing for cleanup kickoff are now centralized in `docs/plans/modules/phase_4_5_cleanup_kickoff.md`.
+
+## Migration Debt
+<!-- Compatibility shims and legacy bridges left in place during slices. Each gets removed in Post-Implementation Cleanup. -->
+- **V5-S2 accessor fallback:** `crates/dspy-rs/src/core/dyn_predictor.rs` uses runtime `register_predict_accessor(shape.id -> fn)` plus `shape.type_identifier == "Predict"` detection instead of shape-local `dsrs::parameter` payload extraction. Exit criteria: implement attr-driven accessor payload (Mechanism A) or equivalent audited replacement without runtime registry.
+- **V5-C4 evaluator bridge:** `Optimizer::compile` remains coupled to legacy `Evaluator` (`Module<Input=Example, Output=Prediction>`) instead of typed metric surface. Exit criteria: land typed evaluator/metric entrypoint and remove legacy IO bound from optimizer compile path.
+- **Legacy optimizer surfaces:** `MetaSignature`/`Optimizable` are still present as compatibility shims while DynPredictor path lands. Exit criteria: remove duplicate optimization surface once typed optimizer compile flow is complete and examples are migrated.

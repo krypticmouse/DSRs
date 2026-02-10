@@ -26,6 +26,7 @@ use dspy_rs::{
     LmError, MIPROv2, Module, Optimizable, Optimizer, PredictError, Predicted, Prediction,
     Predictor, configure, example, init_tracing,
 };
+use dspy_rs::__macro_support::bamltype::facet;
 
 #[LegacySignature]
 struct QuestionAnswering {
@@ -38,9 +39,11 @@ struct QuestionAnswering {
     pub answer: String,
 }
 
-#[derive(Builder, Optimizable)]
+#[derive(Builder, Optimizable, facet::Facet)]
+#[facet(crate = facet)]
 pub struct SimpleQA {
     #[parameter]
+    #[facet(skip, opaque)]
     #[builder(default = LegacyPredict::new(QuestionAnswering::new()))]
     pub answerer: LegacyPredict,
 }

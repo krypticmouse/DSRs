@@ -16,7 +16,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::{
-    Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
+    Facet,
+    core::{DynPredictor, named_parameters},
+    Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor,
     evaluate::FeedbackEvaluator, example,
 };
 use dsrs_macros::LegacySignature;
@@ -51,10 +53,10 @@ pub struct GEPACandidate {
 
 impl GEPACandidate {
     /// Create a new candidate from a predictor
-    pub fn from_predictor(predictor: &dyn Optimizable, module_name: impl Into<String>) -> Self {
+    pub fn from_predictor(predictor: &dyn DynPredictor, module_name: impl Into<String>) -> Self {
         Self {
             id: 0,
-            instruction: predictor.get_signature().instruction(),
+            instruction: predictor.instruction(),
             module_name: module_name.into(),
             example_scores: Vec::new(),
             parent_id: None,
@@ -226,16 +228,16 @@ impl GEPA {
         trainset: &[Example],
     ) -> Result<ParetoFrontier>
     where
-        M: Module<Input = Example, Output = Prediction> + Optimizable + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + FeedbackEvaluator + for<'a> Facet<'a>,
     {
         let mut frontier = ParetoFrontier::new();
 
         // Collect predictor information first (to release mutable borrow)
         let candidate_infos: Vec<GEPACandidate> = {
-            let predictors = module.parameters();
+            let mut predictors = named_parameters(module)?;
             predictors
-                .into_iter()
-                .map(|(name, predictor)| GEPACandidate::from_predictor(predictor, name))
+                .iter_mut()
+                .map(|(name, predictor)| GEPACandidate::from_predictor(*predictor, name.clone()))
                 .collect()
         };
 
@@ -378,7 +380,7 @@ impl GEPA {
 impl Optimizer for GEPA {
     async fn compile<M>(&self, _module: &mut M, _trainset: Vec<Example>) -> Result<()>
     where
-        M: Module<Input = Example, Output = Prediction> + Optimizable + crate::Evaluator,
+        M: Module<Input = Example, Output = Prediction> + crate::Evaluator + for<'a> Facet<'a>,
     {
         // GEPA requires FeedbackEvaluator, not just Evaluator
         // This is a compilation error that guides users to implement the right trait
@@ -397,7 +399,7 @@ impl GEPA {
         trainset: Vec<Example>,
     ) -> Result<GEPAResult>
     where
-        M: Module<Input = Example, Output = Prediction> + Optimizable + FeedbackEvaluator,
+        M: Module<Input = Example, Output = Prediction> + FeedbackEvaluator + for<'a> Facet<'a>,
     {
         println!("GEPA: Starting reflective prompt optimization");
         println!("  Iterations: {}", self.num_iterations);
@@ -447,9 +449,12 @@ impl GEPA {
 
             // Apply parent instruction to module
             {
-                let mut predictors = module.parameters();
-                if let Some(predictor) = predictors.get_mut(&parent.module_name) {
-                    predictor.update_signature_instruction(parent.instruction.clone())?;
+                let mut predictors = named_parameters(module)?;
+                if let Some((_, predictor)) = predictors
+                    .iter_mut()
+                    .find(|(name, _)| name == &parent.module_name)
+                {
+                    predictor.set_instruction(parent.instruction.clone());
                 }
             }
 
@@ -472,9 +477,12 @@ impl GEPA {
 
             // Apply child instruction and evaluate
             {
-                let mut predictors = module.parameters();
-                if let Some(predictor) = predictors.get_mut(&child.module_name) {
-                    predictor.update_signature_instruction(child.instruction.clone())?;
+                let mut predictors = named_parameters(module)?;
+                if let Some((_, predictor)) = predictors
+                    .iter_mut()
+                    .find(|(name, _)| name == &child.module_name)
+                {
+                    predictor.set_instruction(child.instruction.clone());
                 }
             }
 
@@ -522,9 +530,12 @@ impl GEPA {
 
         // Apply best instruction to module
         {
-            let mut predictors = module.parameters();
-            if let Some(predictor) = predictors.get_mut(&best_candidate.module_name) {
-                predictor.update_signature_instruction(best_candidate.instruction.clone())?;
+            let mut predictors = named_parameters(module)?;
+            if let Some((_, predictor)) = predictors
+                .iter_mut()
+                .find(|(name, _)| name == &best_candidate.module_name)
+            {
+                predictor.set_instruction(best_candidate.instruction.clone());
             }
         }
 

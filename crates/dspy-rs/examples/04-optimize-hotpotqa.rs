@@ -15,6 +15,7 @@ use dspy_rs::{
     LegacySignature, LmError, Module, Optimizable, Optimizer, PredictError, Predicted, Prediction,
     Predictor, configure, init_tracing,
 };
+use dspy_rs::__macro_support::bamltype::facet;
 
 #[LegacySignature(cot)]
 struct QASignature {
@@ -27,9 +28,11 @@ struct QASignature {
     pub answer: String,
 }
 
-#[derive(Builder, Optimizable)]
+#[derive(Builder, Optimizable, facet::Facet)]
+#[facet(crate = facet)]
 pub struct QARater {
     #[parameter]
+    #[facet(skip, opaque)]
     #[builder(default = LegacyPredict::new(QASignature::new()))]
     pub answerer: LegacyPredict,
 }

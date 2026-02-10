@@ -9,10 +9,11 @@ pub use mipro::*;
 pub use pareto::*;
 
 use crate::{
-    core::{Module, Optimizable},
+    core::Module,
     data::example::Example,
     data::prediction::Prediction,
     evaluate::Evaluator,
+    Facet,
 };
 use anyhow::Result;
 
@@ -20,5 +21,5 @@ use anyhow::Result;
 pub trait Optimizer {
     async fn compile<M>(&self, module: &mut M, trainset: Vec<Example>) -> Result<()>
     where
-        M: Module<Input = Example, Output = Prediction> + Optimizable + Evaluator;
+        M: Module<Input = Example, Output = Prediction> + Evaluator + for<'a> Facet<'a>;
 }

@@ -1,8 +1,10 @@
 #![allow(deprecated)]
 
 use crate::{
-    Evaluator, Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
-    example, get_lm,
+    Facet,
+    core::{DynPredictor, named_parameters},
+    Evaluator, Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor, example,
+    get_lm,
 };
 use anyhow::Result;
 use bon::Builder;
@@ -68,36 +70,36 @@ static REFINEMENT_GENERATOR: LazyLock<LegacyPredict> =
     LazyLock::new(|| LegacyPredict::new(GenerateInstructionGivenAttempts::new()));
 
 impl COPRO {
-    fn get_output_field_prefix(&self, predictor: &dyn Optimizable) -> String {
-        // Get the last output field's prefix/desc
-        let output_fields = predictor.get_signature().output_fields();
-        if let Some(obj) = output_fields.as_object()
-            && let Some((_, field)) = obj.iter().next_back()
-            && let Some(desc) = field.get("desc")
-        {
-            return desc.as_str().unwrap_or("").to_string();
-        }
-        "".to_string()
+    fn get_output_field_prefix(&self, predictor: &dyn DynPredictor) -> String {
+        predictor
+            .schema()
+            .output_fields()
+            .last()
+            .map(|field| field.docs.to_string())
+            .unwrap_or_default()
     }
 }
 
 impl Optimizer for COPRO {
-    async fn compile<M: Module + Optimizable + Evaluator>(
+    async fn compile<M>(
         &self,
         module: &mut M,
         trainset: Vec<Example>,
-    ) -> Result<()> {
+    ) -> Result<()>
+    where
+        M: Module + Evaluator + for<'a> Facet<'a>,
+    {
         if self.breadth <= 1 {
             return Err(anyhow::anyhow!("Breadth must be greater than 1"));
         }
 
         // Collect predictor information first
         let predictor_info: Vec<(String, String, String)> = {
-            let named_predictors = module.parameters();
+            let mut named_predictors = named_parameters(module)?;
             named_predictors
-                .iter()
+                .iter_mut()
                 .map(|(name, predictor)| {
-                    let basic_instruction = predictor.get_signature().instruction();
+                    let basic_instruction = predictor.instruction();
                     let basic_prefix = self.get_output_field_prefix(*predictor);
                     (name.clone(), basic_instruction, basic_prefix)
                 })
@@ -218,9 +220,12 @@ impl Optimizer for COPRO {
                     } else {
                         // Update predictor with candidate
                         {
-                            let mut module_predictors = module.parameters();
-                            if let Some(predictor) = module_predictors.get_mut(predictor_name) {
-                                predictor.update_signature_instruction(instruction.clone())?;
+                            let mut module_predictors = named_parameters(module)?;
+                            if let Some((_, predictor)) = module_predictors
+                                .iter_mut()
+                                .find(|(name, _)| name == predictor_name)
+                            {
+                                predictor.set_instruction(instruction.clone());
                                 // Note: We can't update prefix without modifying the signature system
                                 // This would require extending MetaSignature trait
                             }
@@ -268,9 +273,12 @@ impl Optimizer for COPRO {
                         .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
                 }) {
                     {
-                        let mut module_predictors = module.parameters();
-                        if let Some(predictor) = module_predictors.get_mut(predictor_name) {
-                            predictor.update_signature_instruction(best.instruction.clone())?;
+                        let mut module_predictors = named_parameters(module)?;
+                        if let Some((_, predictor)) = module_predictors
+                            .iter_mut()
+                            .find(|(name, _)| name == predictor_name)
+                        {
+                            predictor.set_instruction(best.instruction.clone());
                         }
                     }
 
@@ -455,13 +463,13 @@ impl Optimizer for COPRO {
 
         // Update original module with best candidates
         if let Some((_, best_candidate)) = best_overall {
-            let module_predictors = module.parameters();
-            for (predictor_name, predictor) in module_predictors {
-                if let Some(best) = evaluated_candidates.get(&predictor_name).and_then(|m| {
+            let mut module_predictors = named_parameters(module)?;
+            for (predictor_name, predictor) in &mut module_predictors {
+                if let Some(best) = evaluated_candidates.get(predictor_name.as_str()).and_then(|m| {
                     m.values()
                         .max_by(|a, b| a.score.partial_cmp(&b.score).unwrap())
                 }) {
-                    predictor.update_signature_instruction(best.instruction.clone())?;
+                    predictor.set_instruction(best.instruction.clone());
                 }
             }
 

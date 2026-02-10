@@ -14,8 +14,10 @@
 ///    - Prompting tips library
 /// 3. **Evaluation & Combination**: Evaluates candidates in batches and combines best components
 use crate::{
-    Evaluator, Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
-    example, get_lm,
+    Facet, SignatureSchema,
+    core::{MetaSignature, named_parameters},
+    Evaluator, Example, LM, LegacyPredict, Module, Optimizer, Prediction, Predictor, example,
+    get_lm,
 };
 use anyhow::{Context, Result};
 use bon::Builder;
@@ -414,13 +416,14 @@ impl MIPROv2 {
         predictor_name: &str,
     ) -> Result<f32>
     where
-        M: Module + Optimizable + Evaluator,
+        M: Module + Evaluator + for<'a> Facet<'a>,
     {
         // Update module with candidate instruction
         {
-            let mut params = module.parameters();
-            if let Some(predictor) = params.get_mut(predictor_name) {
-                predictor.update_signature_instruction(candidate.instruction.clone())?;
+            let mut params = named_parameters(module)?;
+            if let Some((_, predictor)) = params.iter_mut().find(|(name, _)| name == predictor_name)
+            {
+                predictor.set_instruction(candidate.instruction.clone());
 
                 // Note: Demo setting would require mutable signature access
                 // This is a design consideration for future enhancement
@@ -447,7 +450,7 @@ impl MIPROv2 {
         predictor_name: &str,
     ) -> Result<PromptCandidate>
     where
-        M: Module + Optimizable + Evaluator,
+        M: Module + Evaluator + for<'a> Facet<'a>,
     {
         println!(
             "Stage 3: Evaluating {} candidates on minibatch of {} examples",
@@ -489,8 +492,35 @@ impl MIPROv2 {
     // Helper Methods
     // ========================================================================
 
-    /// Formats signature fields as a string
-    pub fn format_signature_fields(&self, signature: &dyn crate::core::MetaSignature) -> String {
+    /// Formats schema fields as a string.
+    pub fn format_schema_fields(&self, signature: &SignatureSchema) -> String {
+        let mut result = String::new();
+
+        result.push_str("Input Fields:\n");
+        for field in signature.input_fields() {
+            let desc = if field.docs.is_empty() {
+                "No description"
+            } else {
+                field.docs.as_str()
+            };
+            result.push_str(&format!("  - {}: {}\n", field.lm_name, desc));
+        }
+
+        result.push_str("\nOutput Fields:\n");
+        for field in signature.output_fields() {
+            let desc = if field.docs.is_empty() {
+                "No description"
+            } else {
+                field.docs.as_str()
+            };
+            result.push_str(&format!("  - {}: {}\n", field.lm_name, desc));
+        }
+
+        result
+    }
+
+    /// Legacy helper retained for compatibility tests that still use MetaSignature.
+    pub fn format_signature_fields(&self, signature: &dyn MetaSignature) -> String {
         let mut result = String::new();
 
         result.push_str("Input Fields:\n");
@@ -526,7 +556,7 @@ impl MIPROv2 {
 impl Optimizer for MIPROv2 {
     async fn compile<M>(&self, module: &mut M, trainset: Vec<Example>) -> Result<()>
     where
-        M: Module + Optimizable + Evaluator,
+        M: Module + Evaluator + for<'a> Facet<'a>,
     {
         println!("\n=== MIPROv2 Optimization Started ===");
         println!("Configuration:");
@@ -536,7 +566,10 @@ impl Optimizer for MIPROv2 {
         println!("  Training examples: {}", trainset.len());
 
         // Get predictor information
-        let predictor_names: Vec<String> = module.parameters().keys().cloned().collect();
+        let predictor_names: Vec<String> = named_parameters(module)?
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
 
         if predictor_names.is_empty() {
             return Err(anyhow::anyhow!("No optimizable parameters found in module"));
@@ -554,9 +587,11 @@ impl Optimizer for MIPROv2 {
 
             // Get signature for this predictor
             let signature_desc = {
-                let params = module.parameters();
-                if let Some(predictor) = params.get(&predictor_name) {
-                    self.format_signature_fields(predictor.get_signature())
+                let mut params = named_parameters(module)?;
+                if let Some((_, predictor)) =
+                    params.iter_mut().find(|(name, _)| name == &predictor_name)
+                {
+                    self.format_schema_fields(predictor.schema())
                 } else {
                     continue;
                 }
@@ -585,9 +620,10 @@ impl Optimizer for MIPROv2 {
 
             // Apply best candidate
             {
-                let mut params = module.parameters();
-                if let Some(predictor) = params.get_mut(&predictor_name) {
-                    predictor.update_signature_instruction(best_candidate.instruction.clone())?;
+                let mut params = named_parameters(module)?;
+                if let Some((_, predictor)) = params.iter_mut().find(|(name, _)| name == &predictor_name)
+                {
+                    predictor.set_instruction(best_candidate.instruction.clone());
                     // Note: Demo setting would require mutable signature access
                     // This is a design consideration for future enhancement
                 }

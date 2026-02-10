@@ -9,10 +9,13 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate::adapter::Adapter;
-use crate::core::{MetaSignature, Module, Optimizable, Signature};
+use crate::core::{
+    DynPredictor, MetaSignature, Module, Optimizable, PredictState, Signature,
+    register_predict_accessor,
+};
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Example, FieldSchema, GLOBAL_SETTINGS,
-    LM, LmError, LmUsage, PredictError, Predicted, Prediction,
+    LM, LmError, LmUsage, PredictError, Predicted, Prediction, SignatureSchema,
 };
 
 #[derive(facet::Facet)]
@@ -26,6 +29,17 @@ impl<S: Signature> Demo<S> {
     pub fn new(input: S::Input, output: S::Output) -> Self {
         Self { input, output }
     }
+}
+
+fn predict_dyn_accessor<S>(value: *mut ()) -> *mut dyn DynPredictor
+where
+    S: Signature,
+{
+    // SAFETY: this function is only called via `register_predict_accessor` for
+    // `Predict<S>`'s own shape, so `value` points at a valid `Predict<S>`.
+    let typed = unsafe { &mut *(value.cast::<Predict<S>>()) };
+    let dyn_ref: &mut dyn DynPredictor = typed;
+    dyn_ref as *mut dyn DynPredictor
 }
 
 #[derive(facet::Facet)]
@@ -42,6 +56,10 @@ pub struct Predict<S: Signature> {
 
 impl<S: Signature> Predict<S> {
     pub fn new() -> Self {
+        register_predict_accessor(
+            <Self as facet::Facet<'static>>::SHAPE,
+            predict_dyn_accessor::<S>,
+        );
         Self {
             tools: Vec::new(),
             demos: Vec::new(),
@@ -268,6 +286,10 @@ impl<S: Signature> PredictBuilder<S> {
     }
 
     pub fn build(self) -> Predict<S> {
+        register_predict_accessor(
+            <Predict<S> as facet::Facet<'static>>::SHAPE,
+            predict_dyn_accessor::<S>,
+        );
         Predict {
             tools: self.tools,
             demos: self.demos,
@@ -437,7 +459,7 @@ where
 
 impl<S> Predict<S>
 where
-    S: Signature + Clone,
+    S: Signature,
     S::Input: BamlType,
     S::Output: BamlType,
 {
@@ -465,6 +487,63 @@ where
         let (output, metadata) = predicted.into_parts();
         debug!("typed predict forward_untyped complete");
         Ok(Predicted::new(output.to_baml_value(), metadata))
+    }
+}
+
+#[async_trait::async_trait]
+impl<S> DynPredictor for Predict<S>
+where
+    S: Signature,
+    S::Input: BamlType,
+    S::Output: BamlType,
+{
+    fn schema(&self) -> &SignatureSchema {
+        S::schema()
+    }
+
+    fn instruction(&self) -> String {
+        self.instruction_override
+            .clone()
+            .unwrap_or_else(|| S::instruction().to_string())
+    }
+
+    fn set_instruction(&mut self, instruction: String) {
+        self.instruction_override = Some(instruction);
+    }
+
+    fn demos_as_examples(&self) -> Vec<Example> {
+        self.demos
+            .iter()
+            .map(|demo| example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed"))
+            .collect()
+    }
+
+    fn set_demos_from_examples(&mut self, demos: Vec<Example>) -> Result<()> {
+        self.demos = demos
+            .into_iter()
+            .map(demo_from_example::<S>)
+            .collect::<Result<Vec<_>>>()?;
+        Ok(())
+    }
+
+    fn dump_state(&self) -> PredictState {
+        PredictState {
+            demos: self.demos_as_examples(),
+            instruction_override: self.instruction_override.clone(),
+        }
+    }
+
+    fn load_state(&mut self, state: PredictState) -> Result<()> {
+        self.set_demos_from_examples(state.demos)?;
+        self.instruction_override = state.instruction_override;
+        Ok(())
+    }
+
+    async fn forward_untyped(
+        &self,
+        input: BamlValue,
+    ) -> std::result::Result<Predicted<BamlValue>, PredictError> {
+        Predict::forward_untyped(self, input).await
     }
 }
 
@@ -530,7 +609,9 @@ where
     }
 
     fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        self.instruction_override = Some(instruction);
+        // Legacy shim kept during Slice 5 migration: optimizer callers still using
+        // `Optimizable` route through this while the Facet walker path rolls out.
+        self.set_instruction(instruction);
         Ok(())
     }
 }
