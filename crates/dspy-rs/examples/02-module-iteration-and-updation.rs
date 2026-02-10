@@ -1,5 +1,5 @@
 /*
-Script to iterate and update the parameters of a module.
+Script to iterate and update the predictors of a module via the typed walker.
 
 Run with:
 ```
@@ -7,163 +7,88 @@ cargo run --example 02-module-iteration-and-updation
 ```
 */
 
-#![allow(deprecated)]
-
+use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    CallMetadata, Example, LegacyPredict, LegacySignature, LmError, Module, Optimizable,
-    PredictError, Predicted, Prediction, Predictor, hashmap, init_tracing, prediction,
-};
+use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::{Predict, Signature, init_tracing, named_parameters, named_parameters_ref};
 
-#[LegacySignature(cot)]
-struct QASignature {
+#[derive(Signature, Clone, Debug)]
+struct QA {
     #[input]
-    pub question: String,
+    question: String,
 
     #[output]
-    pub answer: String,
+    answer: String,
 }
 
-#[LegacySignature]
-struct RateSignature {
-    /// Rate the answer on a scale of 1(very bad) to 10(very good)
+#[derive(Signature, Clone, Debug)]
+struct Rate {
+    #[input]
+    question: String,
 
     #[input]
-    pub question: String,
-
-    #[input]
-    pub answer: String,
+    answer: String,
 
     #[output]
-    pub rating: i8,
+    rating: i8,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct QARater {
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct QARater {
+    #[builder(default = Predict::<QA>::builder().instruction("Answer clearly.").build())]
+    answerer: Predict<QA>,
 
-    #[parameter]
-    #[builder(default = LegacyPredict::new(RateSignature::new()))]
-    pub rater: LegacyPredict,
+    #[builder(default = Predict::<Rate>::builder().instruction("Rate from 1 to 10.").build())]
+    rater: Predict<Rate>,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct NestedModule {
-    #[parameter]
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct NestedModule {
     #[builder(default = QARater::builder().build())]
-    pub qa_outer: QARater,
+    qa_outer: QARater,
 
-    #[parameter]
     #[builder(default = QARater::builder().build())]
-    pub qa_inner: QARater,
+    qa_inner: QARater,
 
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub extra: LegacyPredict,
+    #[builder(default = Predict::<QA>::builder().instruction("Extra QA predictor.").build())]
+    extra: Predict<QA>,
 }
 
-impl Module for QARater {
-    type Input = Example;
-    type Output = Prediction;
-
-    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
-        let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
-            Ok(prediction) => prediction,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "legacy_predict".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
-
-        let question = inputs.data.get("question").unwrap().clone();
-        let answer = answerer_prediction.data.get("answer").unwrap().clone();
-
-        let inputs = Example::new(
-            hashmap! {
-                "answer".to_string() => answer.clone(),
-                "question".to_string() => question.clone()
-            },
-            vec!["answer".to_string(), "question".to_string()],
-            vec![],
-        );
-        let rating_prediction = match self.rater.forward(inputs).await {
-            Ok(prediction) => prediction,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "legacy_predict".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
-        Ok(Predicted::new(
-            prediction! {
-                "answer"=> answer,
-                "question"=> question,
-                "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
-            }
-            .set_lm_usage(rating_prediction.lm_usage),
-            CallMetadata::default(),
-        ))
+fn print_instructions<T>(label: &str, module: &T) -> Result<()>
+where
+    T: for<'a> facet::Facet<'a>,
+{
+    println!("{label}");
+    let params = named_parameters_ref(module)?;
+    for (path, predictor) in params {
+        println!("  {path} -> {}", predictor.instruction());
     }
+    Ok(())
 }
 
 #[tokio::main]
-async fn main() {
-    init_tracing().expect("failed to initialize tracing");
+async fn main() -> Result<()> {
+    init_tracing()?;
 
-    // Single module test
     let mut qa_rater = QARater::builder().build();
-    for (name, param) in qa_rater.parameters() {
-        param
-            .update_signature_instruction("Updated instruction for ".to_string() + &name)
-            .unwrap();
+    {
+        let mut params = named_parameters(&mut qa_rater)?;
+        for (path, predictor) in params.iter_mut() {
+            predictor.set_instruction(format!("Updated instruction for `{path}`"));
+        }
     }
-    println!(
-        "single.answerer -> {}",
-        qa_rater.answerer.signature.instruction()
-    );
-    println!(
-        "single.rater    -> {}",
-        qa_rater.rater.signature.instruction()
-    );
+    print_instructions("single module", &qa_rater)?;
 
-    // Nested module test
     let mut nested = NestedModule::builder().build();
-    for (name, param) in nested.parameters() {
-        param
-            .update_signature_instruction("Deep updated: ".to_string() + &name)
-            .unwrap();
+    {
+        let mut params = named_parameters(&mut nested)?;
+        for (path, predictor) in params.iter_mut() {
+            predictor.set_instruction(format!("Deep updated: `{path}`"));
+        }
     }
+    print_instructions("nested module", &nested)?;
 
-    // Show nested updates (module-in-module)
-    println!(
-        "nested.qa_outer.answerer -> {}",
-        nested.qa_outer.answerer.signature.instruction()
-    );
-    println!(
-        "nested.qa_outer.rater    -> {}",
-        nested.qa_outer.rater.signature.instruction()
-    );
-    println!(
-        "nested.qa_inner.answerer -> {}",
-        nested.qa_inner.answerer.signature.instruction()
-    );
-    println!(
-        "nested.qa_inner.rater    -> {}",
-        nested.qa_inner.rater.signature.instruction()
-    );
-    println!(
-        "nested.extra    -> {}",
-        nested.extra.signature.instruction()
-    );
+    Ok(())
 }

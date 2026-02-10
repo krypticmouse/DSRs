@@ -36,9 +36,9 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 **Architectural invariants:**
 - **Dependency direction is acyclic:** P1 ← P2 ← P3 ← P4. Each layer sees the one below, never above. No cycles.
 - **S1 (SignatureSchema cache) is the shared backbone:** Written once (immutable after init), read by all Places. Immutable shared state across Places is coupling in name only — it's a computed property of types. If this invariant were ever violated (mutable schema), the whole Place decomposition would collapse.
-- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. Predict carries `PredictAccessorFns` as a static Shape attribute — zero-cost at runtime (no vtable, no allocation, just static data). **Tradeoff:** zero-registration automatic discovery, paid for with a shared compilation unit. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
-- **"Structure IS declaration" — with a known hole.** The walker discovers Predict leaves by reflecting on struct fields. Module authors don't annotate `#[parameter]` or implement traversal. BUT: the walker cannot traverse containers (`Vec`, `Option`, `HashMap`, `Box`). Predictors inside containers are invisible to the optimizer. **Mitigation:** N18 errors (not silently skips) when encountering a container whose inner type has `dsrs::parameter`. See S5 (deferred).
-- **Module combinators must be Facet-transparent.** Any wrapper that composes modules (Map, AndThen, Pipe) must expose inner modules as struct fields visible to the F6 walker (N18), not behind trait objects. `Map<M, F>` requires a manual Facet impl walking only `inner: M` (closures are opaque to Facet derive). `BestOfN<M>` has `module: M` as a concrete typed field. If a combinator hides the inner module behind `Box<dyn Module>`, the walker cannot find Predict leaves inside — optimization breaks silently. This is the same container limitation as above, applied to combinators. **Path namespace consequence:** Wrapping a module changes path prefixes — `predict` becomes `inner.predict`. Serialized optimizer state (U36) is tied to the module tree shape. Changing the tree (adding/removing a wrapper) invalidates saved state with a clear error, not silent misapplication.
+- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. **Current mechanism:** accessor fns are resolved through a runtime shape-id registry. Dispatch is registry-only; Predict-like leaves without registration now fail explicitly with `MissingAttr` diagnostics. **Tradeoff:** stable behavior now, explicit S2 migration debt until shape-local payload extraction is available. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
+- **"Structure IS declaration" — with bounded container support.** The walker discovers Predict leaves by reflecting on struct fields. Module authors don't annotate `#[parameter]` or implement traversal. The current implementation traverses structs plus common containers (`Option`, list/array/slice, `HashMap<String, _>`, and `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) produce explicit N18 errors rather than silent skips.
+- **Module combinators must be Facet-transparent.** Any wrapper that composes modules (Map, AndThen, Pipe) must expose inner modules as struct fields visible to the F6 walker (N18), not behind trait objects. `Map<M, F>` requires a manual Facet impl walking only `inner: M` (closures are opaque to Facet derive). `BestOfN<M>` has `module: M` as a concrete typed field. If a combinator hides the inner module behind `Box<dyn Module>`, the walker cannot find Predict leaves inside — optimization breaks silently. **Path namespace consequence:** Wrapping a module changes path prefixes — `predict` becomes `inner.predict`. Serialized optimizer state (U36) is tied to the module tree shape. Changing the tree (adding/removing a wrapper) invalidates saved state with a clear error, not silent misapplication.
 
 **Boundary notes:**
 - **P1 → P2 boundary:** P1 users *consume* what P2 creates. The blocking test is cognitive: P2 affordances (`#[derive(Augmentation)]`, adapter building blocks, `impl Module`) require understanding prompt pipeline internals, wrapper type mechanics, and Facet composition — a fundamentally different mental model from P1's "pick a module, call it." P2 is a valid separate Place even though nothing physically prevents a P1 user from importing P2 APIs. **Ramp:** Module combinators (U51: `.map()`, `.and_then()`) let P1 users customize output without crossing into P2. The cliff from "use a library module" to "author your own module" has an intermediate step.
@@ -50,7 +50,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 - ~~No LM configuration affordance~~ → **Global default with scoped override.** LM is globally scoped (existing `GLOBAL_SETTINGS` infrastructure). `dsrs::with_lm(eval_lm, || ...)` overrides per-call via scoped context. N8 checks scoped context first, falls back to global default. Global LM configuration is existing infrastructure, not breadboarded (see External dependencies).
 - ~~No batching affordance~~ → **Standalone utility, not a trait method.** `dsrs::forward_all(&module, inputs, concurrency)` → `Vec<Result<Predicted<Output>, PredictError>>` (Vec-of-Results, not Result-of-Vec — individual failures don't abort batch). Module trait stays minimal (`forward` implementation hook + default `call` wrapper). Rationale: a default `forward_batch` on Module forces P2 authors to reason about concurrency composition — BestOfN already runs N concurrent calls per invocation, so default batching would produce `batch_size × N` concurrent LM requests. Standalone utility keeps this concern at P1. See U48.
 - ~~Error paths underspecified~~ → `PredictError` carries raw LM response + failed field + stage + coercion detail. Error `Display` includes full LM response for iterative debugging. No separate debug API needed for V1. See U49.
-- ~~Container traversal silently fails~~ → N18 errors on containers with `dsrs::parameter` inner types. See architectural invariant above.
+- ~~Container traversal silently fails~~ → N18 now traverses supported containers (`Option`, lists, maps, `Box`) and errors on unsupported pointer-like containers (`Rc`, `Arc`, etc.) with explicit path/type diagnostics.
 - ~~Strategy swap blast radius understated~~ → Updated U16 to note output type change.
 - ~~N12/N13 status~~ → **Keep N13, collapse N12 into N8.** N12 (jsonish coerce) is part of the "text → BamlValue" pipeline inside N8. N13 (try_from_baml_value) is a distinct error boundary: "BamlValue → typed output." Two affordances, two error semantics (N8 failures = coercion/parsing, N13 failures = type mismatch).
 - ~~Missing P1→P3 handoff~~ → Added U50 (`optimizer.compile(&mut module, trainset, metric)`). Exclusive `&mut` during optimization = no concurrent `forward()`.
@@ -64,7 +64,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 
 **Deferred (acknowledged, out of scope for V1):**
 - ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `call()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
-- ⚠️ **Container traversal (Vec, Option, HashMap, Box):** Walker errors on containers with `dsrs::parameter` inner types (N18). Full traversal deferred — tracked in S5.
+- ⚠️ **Container traversal (remaining):** Common container traversal is implemented (`Option`, lists, maps, `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) still error explicitly in N18; broader pointer/container strategy remains tracked in S5.
 
 ---
 
@@ -123,7 +123,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U43** | P4 | `graph` | `graph.connect(from, from_field, to, to_field)` | call | → N24, → S6 | → Result | F10 |
 | **U44** | P4 | `graph` | `graph.replace_node(name, node)` | call | → S5, → N24 | → Result | F10 |
 | **U45** | P4 | `graph` | `graph.execute(input).await` | call | → N25, → N26 | → Result\<BamlValue\> | F10 |
-| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` | call | → N18 (reuses F6 walker) | → ProgramGraph | F10 |
+| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` / `ProgramGraph::from_module_with_annotations(&module, annotations)` | call | → N18 (reuses F6 walker) | → ProgramGraph | F10 |
 
 ---
 
@@ -141,7 +141,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **N15** | P2 | `signature` (macro) | Generic signature macro — `split_for_impl()`, generic param threading, flatten handling | compile | → U4, → U5 (generic variants) | — | F12 |
 | **N17** | P2/P4 | `dyn_module` | Schema transformation — factory modifies `SignatureSchema` (prepend reasoning, build action schema, etc.) | compute | → N3 | → U38 | F9 |
 | | | | | | | | |
-| **N18** | P3 | `discovery` | `walk_value()` — recursive struct-field traversal via Facet reflection. Internally: checks `dsrs::parameter` on each Shape, extracts `PredictAccessorFns` payload and casts to `&mut dyn DynPredictor` (one audited unsafe boundary — pointer cast through known-layout Shape attribute). Errors on containers (Vec, Option, HashMap) whose inner type has `dsrs::parameter`. | walk | — | → U31 | F6, F8 |
+| **N18** | P3 | `discovery` | `walk_value()` — recursive Facet traversal over struct fields and supported containers (`Option`, list/array/slice, `HashMap<String, _>`, `Box`). Resolves `PredictAccessorFns` through runtime shape-id registration, then casts to `&mut dyn DynPredictor` (one audited unsafe boundary). Predict-like leaves without registration fail explicitly with path diagnostics (`MissingAttr`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) error explicitly with path/type diagnostics. Target state remains shape-local typed attr payload extraction. | walk | — | → U31 | F6, F8 |
 | **N21** | P3 | `dyn_predictor` | `Demo<S> → Example` — `to_baml_value()` on input + output | convert | — | → U33 | F8 |
 | **N22** | P3 | `dyn_predictor` | `Example → Demo<S>` — `try_from_baml_value()` gatekeeper (type safety boundary) | convert | → N23 | → S2 | F8 |
 | **N23** | P3 | `dyn_predictor` | `S::Input::try_from_baml_value(input)` — typed conversion for forward_untyped | convert | → N8 | → U37 | F8 |
@@ -232,7 +232,8 @@ U50 (optimizer.compile(&mut module, trainset, metric))
 
   U30 (named_parameters(&mut module))
     → N18 (walk_value: recurse through struct fields via Facet reflection,
-           check dsrs::parameter attr, extract PredictAccessorFns,
+           resolve PredictAccessorFns via runtime shape-id registry,
+           fail explicit on unregistered Predict-like leaves,
            cast to &mut dyn DynPredictor — one audited unsafe boundary)
     → U31 (Vec<(path, &mut dyn DynPredictor)>)
 
@@ -264,7 +265,10 @@ U43 (graph.connect("input", "question", "cot", "question"))
   → N24 (TypeIR::is_assignable_to) → S6 (edge stored if valid)
 
 U44 (graph.replace_node("cot", new_node)) → S5, re-validates via N24
-U46 (ProgramGraph::from_module(&module)) → N18 (reuses F6 walker) → auto-populates S5/S6
+U46 (ProgramGraph::from_module(&module)) → N18 (reuses F6 walker) → auto-populates S5/S6 with inferred edges
+  or
+U46 (ProgramGraph::from_module_with_annotations(&module, annotations))
+  → N18 (reuses F6 walker) → auto-populates S5/S6 with explicit per-call edge wiring
 
 U45 (graph.execute(input))
   → N25 (topological sort from S5 + S6)
@@ -437,7 +441,7 @@ let confident = cot.map(|r| ConfidentAnswer { answer: r.answer.clone(), confiden
 
 | # | Affordance | Slice Role |
 |---|------------|------------|
-| U50 | optimizer.compile(&mut module, ...) | P1→P3 entry |
+| U50 | optimizer.compile(&mut module, trainset, metric) | P1→P3 entry |
 | U30, U31 | named_parameters, handle vec | Discovery |
 | U32 | predictor.schema() | Schema access |
 | U33, U34 | demos_as_examples / set_demos | Demo mutation |

@@ -1,5 +1,5 @@
 use dspy_rs::__macro_support::bamltype::facet::{self, Type, UserType};
-use dspy_rs::{ChainOfThought, Facet, ModuleExt, ReAct, Signature};
+use dspy_rs::{ChainOfThought, Facet, ModuleExt, PredictError, ReAct, Signature};
 
 #[derive(Signature, Clone, Debug, facet::Facet)]
 #[facet(crate = facet)]
@@ -45,6 +45,12 @@ fn drop_reasoning(output: dspy_rs::WithReasoning<QAOutput>) -> QAOutput {
     output.inner
 }
 
+fn drop_reasoning_checked(
+    output: dspy_rs::WithReasoning<QAOutput>,
+) -> Result<QAOutput, PredictError> {
+    Ok(output.inner)
+}
+
 #[test]
 fn chain_of_thought_shape_exposes_predictor_field() {
     let module = ChainOfThought::<QA>::new();
@@ -79,6 +85,21 @@ fn map_shape_exposes_inner_chain_of_thought_shape() {
         .map(drop_reasoning as fn(dspy_rs::WithReasoning<QAOutput>) -> QAOutput);
     let map_shape = shape_of(&mapped);
     let inner = find_field(map_shape, "inner");
+
+    assert!(!inner.should_skip_deserializing());
+    assert_eq!(inner.shape().type_identifier, "ChainOfThought");
+
+    let nested_predictor = find_field(inner.shape(), "predictor");
+    assert_eq!(nested_predictor.shape().type_identifier, "Predict");
+}
+
+#[test]
+fn and_then_shape_exposes_inner_chain_of_thought_shape() {
+    let chained = ChainOfThought::<QA>::new().and_then(
+        drop_reasoning_checked as fn(dspy_rs::WithReasoning<QAOutput>) -> Result<QAOutput, PredictError>,
+    );
+    let and_then_shape = shape_of(&chained);
+    let inner = find_field(and_then_shape, "inner");
 
     assert!(!inner.should_skip_deserializing());
     assert_eq!(inner.shape().type_identifier, "ChainOfThought");

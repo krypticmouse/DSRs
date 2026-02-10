@@ -1,11 +1,9 @@
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
 
-use bamltype::facet_reflect::Peek;
-use facet::{ConstTypeId, Facet, Shape};
+use facet::Facet;
 use indexmap::IndexMap;
 
-use bamltype::baml_types::BamlMap;
+use bamltype::baml_types::{BamlMap, LiteralValue, TypeValue};
 
 use crate::core::{DynModule, PredictState, named_parameters, named_parameters_ref};
 use crate::{BamlValue, PredictError, SignatureSchema, TypeIR};
@@ -54,12 +52,12 @@ pub struct Edge {
     pub to_field: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEdgeAnnotation {
-    pub from_node: &'static str,
-    pub from_field: &'static str,
-    pub to_node: &'static str,
-    pub to_field: &'static str,
+    pub from_node: String,
+    pub from_field: String,
+    pub to_node: String,
+    pub to_field: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -103,59 +101,117 @@ pub trait TypeIrAssignabilityExt {
 
 impl TypeIrAssignabilityExt for TypeIR {
     fn is_assignable_to(&self, to: &TypeIR) -> bool {
-        let from = normalize_type_repr(&self.diagnostic_repr().to_string());
-        let to = normalize_type_repr(&to.diagnostic_repr().to_string());
-
-        if from == to {
-            return true;
-        }
-
-        if from == "null" && to.contains("null") {
-            return true;
-        }
-
-        if to.contains(" or ") {
-            return to.split(" or ").any(|part| part.trim() == from);
-        }
-
-        false
+        type_ir_is_assignable(self, to)
     }
 }
 
-fn normalize_type_repr(raw: &str) -> String {
-    raw.replace('`', "")
-        .replace("class ", "")
-        .replace("enum ", "")
-        .replace(['(', ')'], "")
-        .trim()
-        .to_string()
+fn type_ir_is_assignable(from: &TypeIR, to: &TypeIR) -> bool {
+    if from == to {
+        return true;
+    }
+
+    if matches!(to, TypeIR::Top(_)) {
+        return true;
+    }
+
+    match (from, to) {
+        (TypeIR::Literal(from_lit, _), TypeIR::Primitive(to_primitive, _)) => {
+            literal_is_assignable_to_primitive(from_lit, to_primitive)
+        }
+        (TypeIR::Union(from_union, _), _) => from_union
+            .iter_include_null()
+            .into_iter()
+            .all(|from_branch| type_ir_is_assignable(from_branch, to)),
+        (_, TypeIR::Union(to_union, _)) => to_union
+            .iter_include_null()
+            .into_iter()
+            .any(|to_branch| type_ir_is_assignable(from, to_branch)),
+        (TypeIR::List(from_inner, _), TypeIR::List(to_inner, _)) => {
+            type_ir_is_assignable(from_inner, to_inner)
+        }
+        (TypeIR::Map(from_key, from_value, _), TypeIR::Map(to_key, to_value, _)) => {
+            type_ir_is_assignable(from_key, to_key) && type_ir_is_assignable(from_value, to_value)
+        }
+        (TypeIR::Tuple(from_items, _), TypeIR::Tuple(to_items, _)) => {
+            from_items.len() == to_items.len()
+                && from_items
+                    .iter()
+                    .zip(to_items)
+                    .all(|(from_item, to_item)| type_ir_is_assignable(from_item, to_item))
+        }
+        (
+            TypeIR::Class {
+                name: from_name,
+                dynamic: from_dynamic,
+                ..
+            },
+            TypeIR::Class {
+                name: to_name,
+                dynamic: to_dynamic,
+                ..
+            },
+        ) => from_name == to_name && from_dynamic == to_dynamic,
+        (
+            TypeIR::Enum {
+                name: from_name,
+                dynamic: from_dynamic,
+                ..
+            },
+            TypeIR::Enum {
+                name: to_name,
+                dynamic: to_dynamic,
+                ..
+            },
+        ) => from_name == to_name && from_dynamic == to_dynamic,
+        (
+            TypeIR::RecursiveTypeAlias {
+                name: from_name,
+                mode: from_mode,
+                ..
+            },
+            TypeIR::RecursiveTypeAlias {
+                name: to_name,
+                mode: to_mode,
+                ..
+            },
+        ) => from_name == to_name && from_mode == to_mode,
+        _ => false,
+    }
 }
 
-static EDGE_ANNOTATIONS: OnceLock<Mutex<HashMap<ConstTypeId, &'static [GraphEdgeAnnotation]>>> =
-    OnceLock::new();
-
-pub fn register_graph_edge_annotations(
-    shape: &'static Shape,
-    annotations: &'static [GraphEdgeAnnotation],
-) {
-    let store = EDGE_ANNOTATIONS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = store
-        .lock()
-        .expect("graph annotation registry lock poisoned");
-    guard.insert(shape.id, annotations);
+fn literal_is_assignable_to_primitive(from: &LiteralValue, to: &TypeValue) -> bool {
+    matches!(
+        (from, to),
+        (LiteralValue::String(_), TypeValue::String)
+            | (LiteralValue::Int(_), TypeValue::Int)
+            | (LiteralValue::Bool(_), TypeValue::Bool)
+    )
 }
 
-fn graph_edge_annotations(shape: &'static Shape) -> Vec<GraphEdgeAnnotation> {
-    let Some(store) = EDGE_ANNOTATIONS.get() else {
-        return Vec::new();
-    };
-    let guard = store
-        .lock()
-        .expect("graph annotation registry lock poisoned");
-    guard
-        .get(&shape.id)
-        .map(|annotations| annotations.to_vec())
-        .unwrap_or_default()
+fn projection_mismatch(path: impl Into<String>, reason: impl Into<String>) -> GraphError {
+    GraphError::ProjectionMismatch {
+        path: path.into(),
+        reason: reason.into(),
+    }
+}
+
+fn missing_node(name: &str) -> GraphError {
+    GraphError::MissingNode {
+        name: name.to_string(),
+    }
+}
+
+fn missing_field(node: &str, field: &str, side: &'static str) -> GraphError {
+    GraphError::MissingField {
+        node: node.to_string(),
+        field: field.to_string(),
+        side,
+    }
+}
+
+fn sync_node_schema(node: &mut Node) {
+    // Keep schema/module in sync even when callers manually construct Node.
+    node.schema = node.module.schema().clone();
 }
 
 impl ProgramGraph {
@@ -188,8 +244,7 @@ impl ProgramGraph {
             return Err(GraphError::DuplicateNode { name });
         }
         let mut node = node.into();
-        // Keep schema/module in sync even when callers manually construct Node.
-        node.schema = node.module.schema().clone();
+        sync_node_schema(&mut node);
         self.nodes.insert(name, node);
         Ok(())
     }
@@ -198,9 +253,7 @@ impl ProgramGraph {
         let removed = self
             .nodes
             .shift_remove(name)
-            .ok_or_else(|| GraphError::MissingNode {
-                name: name.to_string(),
-            })?;
+            .ok_or_else(|| missing_node(name))?;
         self.edges
             .retain(|edge| edge.from_node != name && edge.to_node != name);
         Ok(removed)
@@ -225,13 +278,10 @@ impl ProgramGraph {
 
     pub fn replace_node(&mut self, name: &str, node: impl Into<Node>) -> Result<(), GraphError> {
         if !self.nodes.contains_key(name) {
-            return Err(GraphError::MissingNode {
-                name: name.to_string(),
-            });
+            return Err(missing_node(name));
         }
         let mut node = node.into();
-        // Keep schema/module in sync even when callers manually construct Node.
-        node.schema = node.module.schema().clone();
+        sync_node_schema(&mut node);
 
         let incident = self
             .edges
@@ -285,28 +335,26 @@ impl ProgramGraph {
                     && edge.from_field == from_field
                     && edge.to_field == to_field
             })
-            .ok_or_else(|| GraphError::ProjectionMismatch {
-                path: format!("{from}.{from_field}->{to}.{to_field}"),
-                reason: "edge not found for insert_between".to_string(),
+            .ok_or_else(|| {
+                projection_mismatch(
+                    format!("{from}.{from_field}->{to}.{to_field}"),
+                    "edge not found for insert_between",
+                )
             })?;
 
         let inserted_input = inserted_node
             .schema
             .input_fields()
             .first()
-            .ok_or_else(|| GraphError::ProjectionMismatch {
-                path: inserted_name.clone(),
-                reason: "inserted node has no input fields".to_string(),
-            })?
+            .ok_or_else(|| projection_mismatch(inserted_name.clone(), "inserted node has no input fields"))?
             .rust_name
             .clone();
         let inserted_output = inserted_node
             .schema
             .output_fields()
             .first()
-            .ok_or_else(|| GraphError::ProjectionMismatch {
-                path: inserted_name.clone(),
-                reason: "inserted node has no output fields".to_string(),
+            .ok_or_else(|| {
+                projection_mismatch(inserted_name.clone(), "inserted node has no output fields")
             })?
             .rust_name
             .clone();
@@ -354,9 +402,7 @@ impl ProgramGraph {
             let node = self
                 .nodes
                 .get(node_name)
-                .ok_or_else(|| GraphError::MissingNode {
-                    name: node_name.clone(),
-                })?;
+                .ok_or_else(|| missing_node(node_name))?;
 
             let incoming = self
                 .edges
@@ -372,54 +418,40 @@ impl ProgramGraph {
                     for edge in incoming {
                         if edge.from_node == INPUT_NODE {
                             let value = navigate_runtime_path(&input, &edge.from_field)
-                                .ok_or_else(|| GraphError::ProjectionMismatch {
-                                    path: format!("{INPUT_NODE}.{}", edge.from_field),
-                                    reason: "source value missing".to_string(),
+                                .ok_or_else(|| {
+                                    projection_mismatch(
+                                        format!("{INPUT_NODE}.{}", edge.from_field),
+                                        "source value missing",
+                                    )
                                 })?;
                             let to_schema = find_input_field(&node.schema, &edge.to_field)
-                                .ok_or_else(|| GraphError::MissingField {
-                                    node: edge.to_node.clone(),
-                                    field: edge.to_field.clone(),
-                                    side: "input",
-                                })?;
+                                .ok_or_else(|| missing_field(&edge.to_node, &edge.to_field, "input"))?;
                             insert_baml_at_path(&mut map, to_schema.path(), value.clone());
                             continue;
                         }
 
-                        let upstream = outputs.get(&edge.from_node).ok_or_else(|| {
-                            GraphError::ProjectionMismatch {
-                                path: format!("{}", edge.from_node),
-                                reason: "missing upstream output".to_string(),
-                            }
-                        })?;
-                        let from_node = self.nodes.get(&edge.from_node).ok_or_else(|| {
-                            GraphError::MissingNode {
-                                name: edge.from_node.clone(),
-                            }
-                        })?;
+                        let upstream = outputs
+                            .get(&edge.from_node)
+                            .ok_or_else(|| projection_mismatch(&edge.from_node, "missing upstream output"))?;
+                        let from_node = self
+                            .nodes
+                            .get(&edge.from_node)
+                            .ok_or_else(|| missing_node(&edge.from_node))?;
                         let from_schema = find_output_field(&from_node.schema, &edge.from_field)
-                            .ok_or_else(|| GraphError::MissingField {
-                                node: edge.from_node.clone(),
-                                field: edge.from_field.clone(),
-                                side: "output",
-                            })?;
+                            .ok_or_else(|| missing_field(&edge.from_node, &edge.from_field, "output"))?;
                         let value = from_node
                             .schema
                             .navigate_field(from_schema.path(), upstream)
-                            .ok_or_else(|| GraphError::ProjectionMismatch {
-                                path: format!("{}.{}", edge.from_node, edge.from_field),
-                                reason: "source value missing".to_string(),
+                            .ok_or_else(|| {
+                                projection_mismatch(
+                                    format!("{}.{}", edge.from_node, edge.from_field),
+                                    "source value missing",
+                                )
                             })?
                             .clone();
 
-                        let to_schema =
-                            find_input_field(&node.schema, &edge.to_field).ok_or_else(|| {
-                                GraphError::MissingField {
-                                    node: edge.to_node.clone(),
-                                    field: edge.to_field.clone(),
-                                    side: "input",
-                                }
-                            })?;
+                        let to_schema = find_input_field(&node.schema, &edge.to_field)
+                            .ok_or_else(|| missing_field(&edge.to_node, &edge.to_field, "input"))?;
 
                         insert_baml_at_path(&mut map, to_schema.path(), value);
                     }
@@ -442,10 +474,7 @@ impl ProgramGraph {
             0 => Err(GraphError::NoSink),
             1 => outputs
                 .remove(&sinks[0])
-                .ok_or_else(|| GraphError::ProjectionMismatch {
-                    path: sinks[0].clone(),
-                    reason: "sink output missing".to_string(),
-                }),
+                .ok_or_else(|| projection_mismatch(sinks[0].clone(), "sink output missing")),
             _ => Err(GraphError::AmbiguousSink { sinks }),
         }
     }
@@ -454,45 +483,42 @@ impl ProgramGraph {
     where
         M: for<'a> Facet<'a>,
     {
-        let shape = Peek::new(module).shape();
-        let mut graph = ProgramGraph::new();
+        Self::from_module_with_annotations(module, &[])
+    }
 
+    pub fn from_module_with_annotations<M>(
+        module: &M,
+        annotations: &[GraphEdgeAnnotation],
+    ) -> Result<Self, GraphError>
+    where
+        M: for<'a> Facet<'a>,
+    {
+        let mut graph = ProgramGraph::new();
         let predictors =
-            named_parameters_ref(module).map_err(|err| GraphError::ProjectionMismatch {
-                path: "<module>".to_string(),
-                reason: err.to_string(),
-            })?;
+            named_parameters_ref(module).map_err(|err| projection_mismatch("<module>", err.to_string()))?;
 
         for (path, predictor) in predictors {
-            let schema = predictor.schema().clone();
             let state = predictor.dump_state();
 
             let mut dyn_module: Box<dyn DynModule> =
-                Box::new(crate::core::PredictDynModule::new(schema.clone()));
+                Box::new(crate::core::PredictDynModule::new(predictor.schema().clone()));
             let leaves = dyn_module.predictors_mut();
             let Some((_, dyn_predictor)) = leaves.into_iter().next() else {
-                return Err(GraphError::ProjectionMismatch {
-                    path,
-                    reason: "dynamic module has no predictor leaves".to_string(),
-                });
+                return Err(projection_mismatch(path, "dynamic module has no predictor leaves"));
             };
             dyn_predictor
                 .load_state(state)
-                .map_err(|err| GraphError::ProjectionMismatch {
-                    path: path.clone(),
-                    reason: err.to_string(),
-                })?;
+                .map_err(|err| projection_mismatch(path.clone(), err.to_string()))?;
 
             graph.add_node(path, dyn_module)?;
         }
 
-        let annotations = graph_edge_annotations(shape);
         for annotation in annotations {
             graph.connect(
-                annotation.from_node,
-                annotation.from_field,
-                annotation.to_node,
-                annotation.to_field,
+                &annotation.from_node,
+                &annotation.from_field,
+                &annotation.to_node,
+                &annotation.to_field,
             )?;
         }
 
@@ -500,10 +526,10 @@ impl ProgramGraph {
             graph.infer_edges_by_schema_order()?;
         }
         if graph.nodes.len() > 1 && graph.edges.is_empty() {
-            return Err(GraphError::ProjectionMismatch {
-                path: "<module>".to_string(),
-                reason: "projection produced multiple nodes with no resolvable edges".to_string(),
-            });
+            return Err(projection_mismatch(
+                "<module>",
+                "projection produced multiple nodes with no resolvable edges",
+            ));
         }
 
         Ok(graph)
@@ -514,10 +540,7 @@ impl ProgramGraph {
         M: for<'a> Facet<'a>,
     {
         let mut destination =
-            named_parameters(module).map_err(|err| GraphError::ProjectionMismatch {
-                path: "<module>".to_string(),
-                reason: err.to_string(),
-            })?;
+            named_parameters(module).map_err(|err| projection_mismatch("<module>", err.to_string()))?;
 
         for (node_name, node) in &self.nodes {
             let mut node_predictors = node.module.predictors();
@@ -528,17 +551,14 @@ impl ProgramGraph {
 
             let Some((_, target)) = destination.iter_mut().find(|(path, _)| path == node_name)
             else {
-                return Err(GraphError::ProjectionMismatch {
-                    path: node_name.clone(),
-                    reason: "graph node has no matching typed predictor path".to_string(),
-                });
+                return Err(projection_mismatch(
+                    node_name.clone(),
+                    "graph node has no matching typed predictor path",
+                ));
             };
             target
                 .load_state(state)
-                .map_err(|err| GraphError::ProjectionMismatch {
-                    path: node_name.clone(),
-                    reason: err.to_string(),
-                })?;
+                .map_err(|err| projection_mismatch(node_name.clone(), err.to_string()))?;
         }
 
         Ok(())
@@ -605,42 +625,26 @@ impl ProgramGraph {
         to: &str,
         to_field: &str,
     ) -> Result<(), GraphError> {
-        let to_node = self.nodes.get(to).ok_or_else(|| GraphError::MissingNode {
-            name: to.to_string(),
-        })?;
-
-        let to_schema = find_input_field(&to_node.schema, to_field).ok_or_else(|| {
-            GraphError::MissingField {
-                node: to.to_string(),
-                field: to_field.to_string(),
-                side: "input",
-            }
-        })?;
+        let to_node = self.nodes.get(to).ok_or_else(|| missing_node(to))?;
+        let to_schema = find_input_field(&to_node.schema, to_field)
+            .ok_or_else(|| missing_field(to, to_field, "input"))?;
 
         if from == INPUT_NODE {
             if from_field.trim().is_empty() {
-                return Err(GraphError::ProjectionMismatch {
-                    path: format!("{INPUT_NODE}.{from_field}"),
-                    reason: "input edge field cannot be empty".to_string(),
-                });
+                return Err(projection_mismatch(
+                    format!("{INPUT_NODE}.{from_field}"),
+                    "input edge field cannot be empty",
+                ));
             }
-            let _ = to_schema;
             return Ok(());
         }
 
         let from_node = self
             .nodes
             .get(from)
-            .ok_or_else(|| GraphError::MissingNode {
-                name: from.to_string(),
-            })?;
-        let from_schema = find_output_field(&from_node.schema, from_field).ok_or_else(|| {
-            GraphError::MissingField {
-                node: from.to_string(),
-                field: from_field.to_string(),
-                side: "output",
-            }
-        })?;
+            .ok_or_else(|| missing_node(from))?;
+        let from_schema = find_output_field(&from_node.schema, from_field)
+            .ok_or_else(|| missing_field(from, from_field, "output"))?;
 
         if !from_schema.type_ir.is_assignable_to(&to_schema.type_ir) {
             return Err(GraphError::TypeMismatch {
@@ -664,21 +668,15 @@ impl ProgramGraph {
         for edge in &self.edges {
             if edge.from_node == INPUT_NODE {
                 if !self.nodes.contains_key(&edge.to_node) {
-                    return Err(GraphError::MissingNode {
-                        name: edge.to_node.clone(),
-                    });
+                    return Err(missing_node(&edge.to_node));
                 }
                 continue;
             }
             if !self.nodes.contains_key(&edge.from_node) {
-                return Err(GraphError::MissingNode {
-                    name: edge.from_node.clone(),
-                });
+                return Err(missing_node(&edge.from_node));
             }
             if !self.nodes.contains_key(&edge.to_node) {
-                return Err(GraphError::MissingNode {
-                    name: edge.to_node.clone(),
-                });
+                return Err(missing_node(&edge.to_node));
             }
             *indegree
                 .get_mut(edge.to_node.as_str())

@@ -1,76 +1,52 @@
 /*
-Script to evaluate the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
+Script to evaluate a typed QA predictor on a HotpotQA sample.
 
 Run with:
 ```
 cargo run --example 03-evaluate-hotpotqa --features dataloaders
 ```
-
-Note: The `dataloaders` feature is required for loading datasets.
 */
 
-use bon::Builder;
+use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, Evaluator, Example, LM, LegacyPredict, LegacySignature, LmError,
-    Module, Optimizable, PredictError, Predicted, Prediction, Predictor, configure, init_tracing,
+    ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
+    TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
-use dspy_rs::DataLoader;
-
-#[LegacySignature(cot)]
-struct QASignature {
-    /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    /// Concisely answer the question, but be accurate.
 
     #[input]
-    pub question: String,
+    question: String,
 
     #[output(desc = "Answer in less than 5 words.")]
-    pub answer: String,
+    answer: String,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct QARater {
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
-}
+struct ExactMatchMetric;
 
-impl Module for QARater {
-    type Input = Example;
-    type Output = Prediction;
+impl TypedMetric<Predict<QA>> for ExactMatchMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<QAOutput>,
+    ) -> Result<MetricOutcome> {
+        let expected = example
+            .data
+            .get("answer")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
 
-    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
-        match self.answerer.forward(inputs).await {
-            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
-            Err(err) => Err(PredictError::Lm {
-                source: LmError::Provider {
-                    provider: "legacy_predict".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            }),
-        }
-    }
-}
-
-impl Evaluator for QARater {
-    const MAX_CONCURRENCY: usize = 16;
-    const DISPLAY_PROGRESS: bool = true;
-
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let answer = example.data.get("answer").unwrap().clone();
-        let prediction = prediction.data.get("answer").unwrap().clone();
-
-        if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
-            1.0
-        } else {
-            0.0
-        }
+        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     init_tracing()?;
 
     configure(
@@ -78,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter {},
+        ChatAdapter,
     );
 
     let examples = DataLoader::load_hf(
@@ -88,12 +64,18 @@ async fn main() -> anyhow::Result<()> {
         "fullwiki",
         "validation",
         true,
-    )?[..128]
+    )?[..64]
         .to_vec();
 
-    let evaluator = QARater::builder().build();
-    let metric = evaluator.evaluate(examples).await;
+    let module = Predict::<QA>::builder()
+        .instruction("Answer with a short, factual response.")
+        .build();
+    let metric = ExactMatchMetric;
 
-    println!("Metric: {metric}");
+    let outcomes = evaluate_trainset(&module, &examples, &metric).await?;
+    let score = average_score(&outcomes);
+
+    println!("evaluated {} examples", outcomes.len());
+    println!("average exact-match score: {score:.3}");
     Ok(())
 }

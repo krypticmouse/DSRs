@@ -83,84 +83,102 @@ struct MathJudge {
 }
 ```
 
-### 3. Module with Embedded Judge
+### 3. Optimized Module
 
 ```rust
-#[derive(Builder, Optimizable)]
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
 struct MathSolver {
-    #[parameter]
-    solver: Predict,  // This gets optimized
-    
-    judge: Predict,   // This stays fixed, just evaluates
-    judge_lm: Arc<Mutex<LM>>,
+    #[builder(default = Predict::<MathWordProblem>::new())]
+    solver: Predict<MathWordProblem>,  // This gets optimized
 }
 ```
 
-### 4. FeedbackEvaluator with Judge
+### 4. TypedMetric with Judge
 
 ```rust
-impl FeedbackEvaluator for MathSolver {
-    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) 
-        -> FeedbackMetric 
-    {
-        // Extract outputs
-        let student_answer = prediction.get("answer", None).as_str().unwrap();
-        let student_reasoning = prediction.get("reasoning", None).as_str().unwrap();
-        let expected = example.get("expected_answer", None).as_str().unwrap();
-        
-        // Call the judge
-        let judge_input = example! {
-            "problem": "input" => problem,
-            "expected_answer": "input" => expected,
-            "student_answer": "input" => student_answer,
-            "student_reasoning": "input" => student_reasoning
-        };
-        
-        let judge_output = match self.judge
-            .forward_with_config(judge_input, Arc::clone(&self.judge_lm))
-            .await 
-        {
-            Ok(output) => output,
-            Err(_) => {
-                // Fallback if judge fails
-                return FeedbackMetric::new(
-                    if student_answer == expected { 1.0 } else { 0.0 },
-                    format!("Expected: {}, Got: {}", expected, student_answer)
+struct LlmJudgeMetric {
+    judge: Predict<MathJudge>,
+}
+
+impl TypedMetric<MathSolver> for LlmJudgeMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<MathWordProblemOutput>,
+    ) -> Result<MetricOutcome> {
+        let problem = example
+            .data
+            .get("problem")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+        let expected = example
+            .data
+            .get("expected_answer")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let student_answer = prediction.answer.clone();
+        let student_reasoning = prediction.reasoning.clone();
+        let exact_match = student_answer.trim() == expected.trim();
+
+        let judge_output = self
+            .judge
+            .call(MathJudgeInput {
+                problem: problem.clone(),
+                expected_answer: expected.clone(),
+                student_answer: student_answer.clone(),
+                student_reasoning: student_reasoning.clone(),
+            })
+            .await;
+
+        let (score, evaluation_text) = match judge_output {
+            Ok(evaluation) => {
+                let evaluation_text = evaluation.evaluation.clone();
+                let evaluation_lc = evaluation_text.to_lowercase();
+                let good_reasoning =
+                    evaluation_lc.contains("sound reasoning")
+                    || evaluation_lc.contains("correct approach")
+                    || evaluation_lc.contains("clear");
+                let partial_reasoning =
+                    evaluation_lc.contains("partially")
+                    || evaluation_lc.contains("good start")
+                    || evaluation_lc.contains("minor arithmetic")
+                    || evaluation_lc.contains("close");
+
+                let score = match (exact_match, good_reasoning, partial_reasoning) {
+                    (true, true, _) => 1.0,
+                    (true, false, _) => 0.7,
+                    (false, true, _) | (false, _, true) => 0.3,
+                    (false, false, false) => 0.0,
+                };
+                (score, evaluation_text)
+            }
+            Err(err) => {
+                let fallback = format!(
+                    "judge call failed: {err}; expected={expected}; predicted={student_answer}"
                 );
+                ((exact_match as u8 as f32), fallback)
             }
         };
-        
-        let judge_evaluation = judge_output
-            .get("evaluation", None)
-            .as_str()
-            .unwrap_or("No evaluation provided")
-            .to_string();
-        
-        // Score based on both correctness AND reasoning quality
-        let answer_correct = student_answer.trim() == expected.trim();
-        let good_reasoning = judge_evaluation.to_lowercase().contains("sound reasoning") 
-            || judge_evaluation.to_lowercase().contains("correct approach");
-        
-        let score = match (answer_correct, good_reasoning) {
-            (true, true) => 1.0,   // Perfect
-            (true, false) => 0.7,  // Right answer, flawed reasoning
-            (false, true) => 0.3,  // Wrong answer, but valid approach
-            (false, false) => 0.0, // Completely wrong
-        };
-        
-        // Combine factual info with judge's analysis
-        let feedback = format!(
-            "Problem: {}\nExpected: {}\nPredicted: {}\n\
-             Answer: {}\n\nReasoning Quality Analysis:\n{}",
-            problem, expected, student_answer,
-            if answer_correct { "CORRECT" } else { "INCORRECT" },
-            judge_evaluation
+
+        let feedback = FeedbackMetric::new(
+            score,
+            format!(
+                "problem={problem}\nexpected={expected}\npredicted={student_answer}\njudge={evaluation_text}"
+            ),
         );
-        
-        FeedbackMetric::new(score, feedback)
+
+        Ok(MetricOutcome::with_feedback(score, feedback))
     }
 }
 ```
+
+`GEPA` itself does not own a special `feedback_metric` hook anymore.
+The feedback function lives in your `TypedMetric` implementation, and GEPA enforces that every evaluation returns `MetricOutcome::with_feedback(...)`.
+That keeps the optimizer generic while preserving full judge-driven behavior.
 
 ## Key Benefits
 
@@ -224,34 +242,38 @@ GEPA::builder()
 Best results often come from combining explicit checks with LLM judging:
 
 ```rust
-async fn feedback_metric(&self, example: &Example, prediction: &Prediction) 
-    -> FeedbackMetric 
-{
-    let mut feedback_parts = vec![];
-    let mut score = 1.0;
-    
-    // Explicit checks first (fast, cheap, deterministic)
-    if !is_valid_json(output) {
-        feedback_parts.push("Invalid JSON format");
-        score = 0.0;
-    }
-    
-    if missing_required_fields(output) {
-        feedback_parts.push("Missing fields: user_id, timestamp");
-        score *= 0.5;
-    }
-    
-    // Only call judge if basic checks pass
-    if score > 0.0 {
-        let judge_feedback = self.judge_quality(example, prediction).await;
-        feedback_parts.push(judge_feedback);
-        
-        if judge_feedback.contains("low quality") {
-            score *= 0.7;
+impl TypedMetric<MyModule> for HybridMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<MyModuleOutput>,
+    ) -> Result<MetricOutcome> {
+        let mut score = 1.0;
+        let mut feedback_parts = vec![];
+
+        // Explicit checks first (fast, cheap, deterministic)
+        if !is_valid_json(&prediction.result_json) {
+            feedback_parts.push("Invalid JSON format".to_string());
+            score = 0.0;
         }
+
+        if score > 0.0 && missing_required_fields(&prediction.result_json) {
+            feedback_parts.push("Missing fields: user_id, timestamp".to_string());
+            score *= 0.5;
+        }
+
+        // Optional judge pass for qualitative scoring
+        if score > 0.0 {
+            let judge_feedback = self.judge_quality(example, prediction).await?;
+            if judge_feedback.to_lowercase().contains("low quality") {
+                score *= 0.7;
+            }
+            feedback_parts.push(judge_feedback);
+        }
+
+        let feedback = FeedbackMetric::new(score, feedback_parts.join("\n"));
+        Ok(MetricOutcome::with_feedback(score, feedback))
     }
-    
-    FeedbackMetric::new(score, feedback_parts.join("\n"))
 }
 ```
 

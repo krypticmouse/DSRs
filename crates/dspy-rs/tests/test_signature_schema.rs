@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, MetaSignature, Predict, Signature, SignatureSchema};
+use dspy_rs::{BamlType, DynPredictor, Predict, Signature, SignatureSchema};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -89,14 +89,15 @@ fn schema_panics_on_flattened_lm_name_collision() {
 }
 
 #[test]
-fn legacy_meta_signature_uses_lm_names_for_flattened_fields() {
+fn dyn_predictor_schema_uses_lm_names_for_flattened_fields() {
     let predict = Predict::<NestedSig>::new();
-    let output_fields = predict.output_fields();
-    let obj = output_fields
-        .as_object()
-        .expect("output_fields should be an object");
+    let schema = <Predict<NestedSig> as DynPredictor>::schema(&predict);
+    let output_names = schema
+        .output_fields()
+        .iter()
+        .map(|field| field.lm_name)
+        .collect::<Vec<_>>();
 
-    assert!(obj.contains_key("answer"));
-    assert!(obj.contains_key("score"));
-    assert!(!obj.contains_key("result.answer"));
+    assert_eq!(output_names, vec!["answer", "score"]);
+    assert!(!output_names.contains(&"result.answer"));
 }

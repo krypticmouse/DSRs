@@ -1,21 +1,16 @@
 use anyhow::Result;
 use bamltype::baml_types::BamlMap;
-use indexmap::IndexMap;
 use rig::tool::ToolDyn;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tracing::{debug, trace};
 
-use crate::adapter::Adapter;
-use crate::core::{
-    DynPredictor, MetaSignature, Module, Optimizable, PredictState, Signature,
-    register_predict_accessor,
-};
+use crate::core::{DynPredictor, Module, PredictState, Signature, register_predict_accessor};
 use crate::{
-    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Example, FieldSchema, GLOBAL_SETTINGS,
-    LM, LmError, LmUsage, PredictError, Predicted, Prediction, SignatureSchema,
+    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LmError,
+    LmUsage, PredictError, Predicted, Prediction, SignatureSchema,
 };
 
 #[derive(facet::Facet)]
@@ -67,12 +62,6 @@ pub struct Predict<S: Signature> {
 
 impl<S: Signature> Predict<S> {
     pub fn new() -> Self {
-        // TODO(dsrs-s2): Remove explicit registration after switching to shape-local
-        // `PredictAccessorFns` attr payload lookup in the walker.
-        // Upstream:
-        // - https://github.com/facet-rs/facet/issues/2039
-        // - https://github.com/facet-rs/facet/pull/2040
-        // - https://github.com/facet-rs/facet/pull/2041
         register_predict_accessor(
             <Self as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
@@ -224,7 +213,10 @@ impl<S: Signature> Predict<S> {
             .count();
         debug!(
             output_fields = field_metas.len(),
-            checks_total, checks_failed, flagged_fields, "typed parse completed"
+            checks_total,
+            checks_failed,
+            flagged_fields,
+            "typed parse completed"
         );
 
         if let Some(id) = node_id {
@@ -313,23 +305,6 @@ impl<S: Signature> PredictBuilder<S> {
             _marker: PhantomData,
         }
     }
-}
-
-fn schema_fields_to_value(fields: &[FieldSchema], field_type: &'static str) -> Value {
-    let mut result = serde_json::Map::new();
-    for field in fields {
-        let type_repr = field.type_ir.diagnostic_repr().to_string();
-        let mut meta = serde_json::Map::new();
-        meta.insert("type".to_string(), json!(type_repr));
-        meta.insert("desc".to_string(), json!(field.docs));
-        meta.insert("schema".to_string(), json!(""));
-        meta.insert("__dsrs_field_type".to_string(), json!(field_type));
-        if let Some(format) = field.format {
-            meta.insert("format".to_string(), json!(format));
-        }
-        result.insert(field.lm_name.to_string(), Value::Object(meta));
-    }
-    Value::Object(result)
 }
 
 fn baml_map_from_example_keys(
@@ -562,256 +537,5 @@ where
         input: BamlValue,
     ) -> std::result::Result<Predicted<BamlValue>, PredictError> {
         Predict::forward_untyped(self, input).await
-    }
-}
-
-impl<S> MetaSignature for Predict<S>
-where
-    S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    fn demos(&self) -> Vec<Example> {
-        self.demos
-            .iter()
-            .map(|demo| {
-                example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed")
-            })
-            .collect()
-    }
-
-    fn set_demos(&mut self, demos: Vec<Example>) -> Result<()> {
-        self.demos = demos
-            .into_iter()
-            .map(demo_from_example::<S>)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(())
-    }
-
-    fn instruction(&self) -> String {
-        self.instruction_override
-            .clone()
-            .unwrap_or_else(|| S::instruction().to_string())
-    }
-
-    fn input_fields(&self) -> Value {
-        schema_fields_to_value(S::schema().input_fields(), "input")
-    }
-
-    fn output_fields(&self) -> Value {
-        schema_fields_to_value(S::schema().output_fields(), "output")
-    }
-
-    fn update_instruction(&mut self, instruction: String) -> Result<()> {
-        self.instruction_override = Some(instruction);
-        Ok(())
-    }
-
-    fn append(&mut self, _name: &str, _value: Value) -> Result<()> {
-        Err(anyhow::anyhow!(
-            "Typed signatures cannot be extended at runtime"
-        ))
-    }
-}
-
-impl<S> Optimizable for Predict<S>
-where
-    S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    fn get_signature(&self) -> &dyn MetaSignature {
-        self
-    }
-
-    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
-        IndexMap::new()
-    }
-
-    fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        // Legacy shim kept during Slice 5 migration: optimizer callers still using
-        // `Optimizable` route through this while the Facet walker path rolls out.
-        self.set_instruction(instruction);
-        Ok(())
-    }
-}
-pub struct LegacyPredict {
-    pub signature: Arc<dyn MetaSignature>,
-    pub tools: Vec<Arc<dyn ToolDyn>>,
-}
-
-impl LegacyPredict {
-    pub fn new(signature: impl MetaSignature + 'static) -> Self {
-        Self {
-            signature: Arc::new(signature),
-            tools: vec![],
-        }
-    }
-
-    pub fn new_with_tools(
-        signature: impl MetaSignature + 'static,
-        tools: Vec<Box<dyn ToolDyn>>,
-    ) -> Self {
-        Self {
-            signature: Arc::new(signature),
-            tools: tools.into_iter().map(Arc::from).collect(),
-        }
-    }
-
-    pub fn with_tools(mut self, tools: Vec<Box<dyn ToolDyn>>) -> Self {
-        self.tools = tools.into_iter().map(Arc::from).collect();
-        self
-    }
-
-    pub fn add_tool(mut self, tool: Box<dyn ToolDyn>) -> Self {
-        self.tools.push(Arc::from(tool));
-        self
-    }
-}
-
-impl super::Predictor for LegacyPredict {
-    #[tracing::instrument(
-        name = "dsrs.legacy_predict.forward",
-        level = "debug",
-        skip(self, inputs),
-        fields(
-            tool_count = self.tools.len(),
-            tracing_graph = crate::trace::is_tracing()
-        )
-    )]
-    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        let trace_node_id = if crate::trace::is_tracing() {
-            let input_id = if let Some(id) = inputs.node_id {
-                id
-            } else {
-                crate::trace::record_node(
-                    crate::trace::NodeType::Root,
-                    vec![],
-                    Some(inputs.clone()),
-                )
-                .unwrap_or(0)
-            };
-
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
-                    signature_name: "LegacyPredict".to_string(),
-                },
-                vec![input_id],
-                None,
-            )
-        } else {
-            None
-        };
-
-        let (adapter, lm) = {
-            let guard = GLOBAL_SETTINGS.read().unwrap();
-            let settings = guard.as_ref().unwrap();
-            (settings.adapter.clone(), Arc::clone(&settings.lm))
-        }; // guard is dropped here
-        let mut prediction = adapter
-            .call(lm, self.signature.as_ref(), inputs, self.tools.clone())
-            .await?;
-        debug!(
-            prompt_tokens = prediction.lm_usage.prompt_tokens,
-            completion_tokens = prediction.lm_usage.completion_tokens,
-            total_tokens = prediction.lm_usage.total_tokens,
-            "legacy predictor call complete"
-        );
-
-        if let Some(id) = trace_node_id {
-            prediction.node_id = Some(id);
-            crate::trace::record_output(id, prediction.clone());
-            trace!(node_id = id, "recorded legacy predictor output");
-        }
-
-        Ok(prediction)
-    }
-
-    #[tracing::instrument(
-        name = "dsrs.legacy_predict.forward_with_config",
-        level = "debug",
-        skip(self, inputs, lm),
-        fields(
-            tool_count = self.tools.len(),
-            tracing_graph = crate::trace::is_tracing()
-        )
-    )]
-    async fn forward_with_config(
-        &self,
-        inputs: Example,
-        lm: Arc<LM>,
-    ) -> anyhow::Result<Prediction> {
-        let trace_node_id = if crate::trace::is_tracing() {
-            let input_id = if let Some(id) = inputs.node_id {
-                id
-            } else {
-                crate::trace::record_node(
-                    crate::trace::NodeType::Root,
-                    vec![],
-                    Some(inputs.clone()),
-                )
-                .unwrap_or(0)
-            };
-
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
-                    signature_name: "LegacyPredict".to_string(),
-                },
-                vec![input_id],
-                None,
-            )
-        } else {
-            None
-        };
-
-        let mut prediction = ChatAdapter
-            .call(lm, self.signature.as_ref(), inputs, self.tools.clone())
-            .await?;
-        debug!(
-            prompt_tokens = prediction.lm_usage.prompt_tokens,
-            completion_tokens = prediction.lm_usage.completion_tokens,
-            total_tokens = prediction.lm_usage.total_tokens,
-            "legacy predictor call_with_config complete"
-        );
-
-        if let Some(id) = trace_node_id {
-            prediction.node_id = Some(id);
-            crate::trace::record_output(id, prediction.clone());
-            trace!(node_id = id, "recorded legacy predictor output");
-        }
-
-        Ok(prediction)
-    }
-}
-
-impl Optimizable for LegacyPredict {
-    fn get_signature(&self) -> &dyn MetaSignature {
-        self.signature.as_ref()
-    }
-
-    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
-        IndexMap::new()
-    }
-
-    fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        if let Some(sig) = Arc::get_mut(&mut self.signature) {
-            sig.update_instruction(instruction)?;
-            Ok(())
-        } else {
-            // If Arc is shared, we might need to clone it first?
-            // But Optimizable usually assumes exclusive access for modification.
-            // If we are optimizing, we should have ownership or mutable access.
-            // If tracing is active, `LegacyPredict` instances might be shared in Graph, but here we are modifying the instance.
-            // If we can't get mut, it means it's shared.
-            // We can clone-on-write? But MetaSignature is a trait object, so we can't easily clone it unless we implement Clone for Box<dyn MetaSignature>.
-            // However, we changed it to Arc.
-            // If we are running optimization, we probably shouldn't be tracing or the graph is already built.
-            // For now, let's error or assume we can clone if we had a way.
-            // But actually, we can't clone `dyn MetaSignature` easily without more boilerplate.
-            // Let's assume unique ownership for optimization.
-            anyhow::bail!(
-                "Cannot update signature instruction: Signature is shared (Arc has multiple strong references)"
-            )
-        }
     }
 }

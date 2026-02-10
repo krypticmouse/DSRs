@@ -1,10 +1,8 @@
-use indexmap::IndexMap;
-
 use crate::Augmentation;
 use crate::augmentation::Augmented;
-use crate::core::{MetaSignature, Module, Optimizable, Signature};
+use crate::core::{Module, Signature};
 use crate::predictors::{Demo, Predict, PredictBuilder};
-use crate::{BamlType, Example, PredictError, Predicted};
+use crate::{BamlType, PredictError, Predicted};
 
 #[derive(Augmentation, Clone, Debug)]
 #[augment(output, prepend)]
@@ -73,65 +71,6 @@ where
         input: S::Input,
     ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
         ChainOfThought::forward(self, input).await
-    }
-}
-
-impl<S> MetaSignature for ChainOfThought<S>
-where
-    S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    fn demos(&self) -> Vec<Example> {
-        self.predictor.demos()
-    }
-
-    fn set_demos(&mut self, demos: Vec<Example>) -> anyhow::Result<()> {
-        self.predictor.set_demos(demos)
-    }
-
-    fn instruction(&self) -> String {
-        self.predictor.instruction()
-    }
-
-    fn input_fields(&self) -> serde_json::Value {
-        self.predictor.input_fields()
-    }
-
-    fn output_fields(&self) -> serde_json::Value {
-        self.predictor.output_fields()
-    }
-
-    fn update_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        self.predictor.update_instruction(instruction)
-    }
-
-    fn append(&mut self, name: &str, value: serde_json::Value) -> anyhow::Result<()> {
-        self.predictor.append(name, value)
-    }
-}
-
-impl<S> Optimizable for ChainOfThought<S>
-where
-    S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    fn get_signature(&self) -> &dyn MetaSignature {
-        self
-    }
-
-    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable> {
-        let mut parameters = IndexMap::new();
-        parameters.insert(
-            "predictor".to_string(),
-            &mut self.predictor as &mut dyn Optimizable,
-        );
-        parameters
-    }
-
-    fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        self.predictor.update_signature_instruction(instruction)
     }
 }
 

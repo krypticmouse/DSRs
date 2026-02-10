@@ -29,28 +29,46 @@ let copro = COPRO::builder()
 ## Usage Example
 
 ```rust
-use dspy_rs::{COPRO, Optimizer, init_tracing};
+use anyhow::Result;
+use bon::Builder;
+use dspy_rs::__macro_support::bamltype::facet;
+use dspy_rs::{
+    COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    Predicted, Signature, TypedMetric, configure, init_tracing,
+};
 
-#[derive(Builder, Optimizable)]
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
 struct MyModule {
-    #[parameter]
-    predictor: Predict,
+    #[builder(default = Predict::<QA>::new())]
+    predictor: Predict<QA>,
 }
 
 impl Module for MyModule {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        self.predictor.forward(inputs).await
+    type Input = QAInput;
+    type Output = QAOutput;
+
+    async fn forward(&self, inputs: QAInput) -> Result<Predicted<QAOutput>, PredictError> {
+        self.predictor.call(inputs).await
     }
 }
 
-impl Evaluator for MyModule {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        // Your evaluation logic
-        if prediction.get("answer", None) == example.get("expected", None) {
-            1.0
-        } else {
-            0.0
-        }
+struct ExactMatchMetric;
+
+impl TypedMetric<MyModule> for ExactMatchMetric {
+    async fn evaluate(&self, example: &Example, prediction: &Predicted<QAOutput>) -> Result<MetricOutcome> {
+        let expected = example.get("answer", None).as_str().unwrap_or("").trim().to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
+        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
@@ -73,8 +91,9 @@ async fn main() -> Result<()> {
         .breadth(10)
         .depth(3)
         .build();
+    let metric = ExactMatchMetric;
     
-    copro.compile(&mut module, trainset).await?;
+    copro.compile(&mut module, trainset, &metric).await?;
     
     Ok(())
 }

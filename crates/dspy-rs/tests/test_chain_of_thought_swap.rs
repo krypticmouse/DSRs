@@ -1,6 +1,6 @@
 use dspy_rs::{
-    ChainOfThought, ChatAdapter, LM, LMClient, Module, Optimizable, Predict, Reasoning, Signature,
-    TestCompletionModel, WithReasoning, configure,
+    ChainOfThought, ChatAdapter, LM, LMClient, Module, Predict, Reasoning, Signature,
+    TestCompletionModel, WithReasoning, configure, named_parameters,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -40,7 +40,8 @@ async fn configure_test_lm(responses: Vec<String>) {
     configure(lm, ChatAdapter {});
 }
 
-#[derive(Signature, Clone, Debug, PartialEq)]
+#[derive(Signature, Clone, Debug, PartialEq, dspy_rs::__macro_support::bamltype::facet::Facet)]
+#[facet(crate = dspy_rs::__macro_support::bamltype::facet)]
 struct QA {
     #[input]
     question: String,
@@ -77,22 +78,13 @@ async fn chain_of_thought_swaps_and_returns_with_reasoning() {
 }
 
 #[test]
-fn chain_of_thought_parameters_expose_predictor_for_legacy_optimizers() {
+fn chain_of_thought_named_parameters_exposes_predictor() {
     let mut cot = ChainOfThought::<QA>::new();
-    let mut params = cot.parameters();
+    let mut params = named_parameters(&mut cot).expect("walker should expose predictor");
 
-    let names: Vec<String> = params.keys().cloned().collect();
-    assert_eq!(names, vec!["predictor".to_string()]);
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].0, "predictor".to_string());
 
-    let predictor = params
-        .get_mut("predictor")
-        .expect("ChainOfThought parameters should expose wrapped predictor");
-    predictor
-        .update_signature_instruction("updated instruction".to_string())
-        .unwrap();
-
-    assert_eq!(
-        predictor.get_signature().instruction(),
-        "updated instruction"
-    );
+    params[0].1.set_instruction("updated instruction".to_string());
+    assert_eq!(params[0].1.instruction(), "updated instruction");
 }

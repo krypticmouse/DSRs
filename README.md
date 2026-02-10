@@ -173,27 +173,34 @@ let lm = LM::builder()
 #### 5. **Evaluation** - Evaluating your Modules
 
 ```rust
-impl Evaluator for MyModule {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        // Define your custom metric logic
-        let expected = example.get("answer", None);
-        let predicted = prediction.get("answer", None);
-        
-        // Example: Exact match metric
-        if expected.to_lowercase() == predicted.to_lowercase() {
-            1.0
-        } else {
-            0.0
-        }
+struct ExactMatchMetric;
+
+impl TypedMetric<MyModule> for ExactMatchMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<MySignatureOutput>,
+    ) -> Result<MetricOutcome> {
+        let expected = example
+            .data
+            .get("answer")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
+        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
 // Evaluate your module
 let test_examples = load_test_data();
 let module = MyModule::new();
+let metric = ExactMatchMetric;
 
 // Automatically runs predictions and computes average metric
-let score = module.evaluate(test_examples).await;
+let outcomes = evaluate_trainset(&module, &test_examples, &metric).await?;
+let score = average_score(&outcomes);
 println!("Average score: {}", score);
 ```
 
@@ -203,9 +210,9 @@ DSRs provides two powerful optimizers:
 
 **COPRO (Collaborative Prompt Optimization)**
 ```rust
-#[derive(Optimizable)]
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
 pub struct MyModule {
-    #[parameter]
     predictor: Predict<MySignature>,
 }
 
@@ -217,10 +224,11 @@ let optimizer = COPRO::builder()
 
 // Prepare training data
 let train_examples = load_training_data();
+let metric = ExactMatchMetric;
 
 // Compile optimizes the module in-place
 let mut module = MyModule::new();
-optimizer.compile(&mut module, train_examples).await?;
+optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
 **MIPROv2 (Multi-prompt Instruction Proposal Optimizer v2)** - Advanced optimizer using LLMs
@@ -237,25 +245,30 @@ let optimizer = MIPROv2::builder()
     .temperature(1.0)      // Temperature for prompt generation
     .build();
 
-optimizer.compile(&mut module, train_examples).await?;
+optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
 See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` feature).
 
-**Component Freezing:**
+**Component Discovery:**
 ```rust
-// The Optimizable derive macro automatically implements the trait and marks Module Optimizable
-#[derive(Builder, Optimizable)]
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
 pub struct ComplexPipeline {
-    #[parameter]  // Mark optimizable components
     analyzer: Predict<AnalyzeSignature>,
     
-    // Non-parameter fields won't be optimized
+    // Additional Predict leaves are also optimizer-visible
     summarizer: Predict<SummarizeSignature>,
     
-    // Non-parameter fields won't be optimized
+    // Non-predict fields are ignored by optimizers
     config: Config,
 }
+
+let visible = named_parameters_ref(&pipeline)?
+    .into_iter()
+    .map(|(path, _)| path)
+    .collect::<Vec<_>>();
+println!("optimizer-visible leaves: {:?}", visible);
 ```
 
 ## 📚 Examples

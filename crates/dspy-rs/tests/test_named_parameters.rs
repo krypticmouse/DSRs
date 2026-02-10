@@ -140,3 +140,43 @@ fn named_parameters_multi_leaf_discovery_order_is_deterministic() {
         assert_eq!(names, expected);
     }
 }
+
+#[test]
+fn named_parameters_dump_load_is_idempotent_across_multiple_roundtrips() {
+    let mut module = StateRoundtripModule {
+        predictor: Predict::<QA>::new(),
+    };
+
+    let first_dump = {
+        let mut params = named_parameters(&mut module).expect("walker should find predictor");
+        let (_, predictor) = params
+            .iter_mut()
+            .find(|(name, _)| name == "predictor")
+            .expect("predictor should exist");
+        predictor.set_instruction("first-pass".to_string());
+        predictor
+            .set_demos_from_examples(vec![qa_demo("Q1", "A1"), qa_demo("Q2", "A2")])
+            .expect("demo setup should succeed");
+        predictor.dump_state()
+    };
+
+    let second_dump = {
+        let mut params = named_parameters(&mut module).expect("walker should find predictor");
+        let (_, predictor) = params
+            .iter_mut()
+            .find(|(name, _)| name == "predictor")
+            .expect("predictor should exist");
+        predictor
+            .load_state(first_dump.clone())
+            .expect("loading first state should succeed");
+        predictor.dump_state()
+    };
+
+    assert_eq!(second_dump.instruction_override, first_dump.instruction_override);
+    assert_eq!(second_dump.demos.len(), first_dump.demos.len());
+    for (actual, expected) in second_dump.demos.iter().zip(first_dump.demos.iter()) {
+        assert_eq!(actual.data, expected.data);
+        assert_eq!(actual.input_keys, expected.input_keys);
+        assert_eq!(actual.output_keys, expected.output_keys);
+    }
+}

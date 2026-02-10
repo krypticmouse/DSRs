@@ -1,94 +1,85 @@
-#![allow(deprecated)]
+/*
+Example showing typed tracing for a composed module.
+
+Run with:
+```
+cargo run --example 12-tracing
+```
+*/
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, LM, LegacyPredict, LegacySignature, LmError, Module, PredictError,
-    Predicted, Prediction, Predictor, configure, example, init_tracing, prediction,
-    trace::{self, IntoTracked},
+    CallMetadata, ChatAdapter, Example, LM, LmUsage, Module, Predict, PredictError, Predicted,
+    Prediction, Signature, configure, init_tracing,
+    trace::{self, Executor},
 };
+use serde_json::json;
+use std::collections::HashMap;
 
-#[LegacySignature]
+#[derive(Signature, Clone, Debug)]
 struct QASignature {
     #[input]
-    pub question: String,
+    question: String,
+
     #[output]
-    pub answer: String,
+    answer: String,
 }
 
-#[LegacySignature]
+#[derive(Signature, Clone, Debug)]
 struct RateSignature {
     #[input]
-    pub question: String,
+    question: String,
+
     #[input]
-    pub answer: String,
+    answer: String,
+
     #[output]
-    pub rating: i8,
+    rating: i8,
 }
 
 #[derive(Builder)]
-pub struct QARater {
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
-    #[builder(default = LegacyPredict::new(RateSignature::new()))]
-    pub rater: LegacyPredict,
+struct QARater {
+    #[builder(default = Predict::<QASignature>::new())]
+    answerer: Predict<QASignature>,
+
+    #[builder(default = Predict::<RateSignature>::new())]
+    rater: Predict<RateSignature>,
 }
 
 impl Module for QARater {
-    type Input = dspy_rs::Example;
+    type Input = QASignatureInput;
     type Output = Prediction;
 
-    async fn forward(
-        &self,
-        inputs: dspy_rs::Example,
-    ) -> Result<Predicted<Prediction>, PredictError> {
-        let answerer_prediction = match self.answerer.forward(inputs.clone()).await {
-            Ok(prediction) => prediction,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "legacy_predict".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
+    async fn forward(&self, input: QASignatureInput) -> Result<Predicted<Prediction>, PredictError> {
+        let answer_predicted = self.answerer.call(input.clone()).await?;
+        let answer_usage = answer_predicted.metadata().lm_usage.clone();
+        let answer_output = answer_predicted.into_inner();
 
-        // We use .get_tracked() to preserve lineage info
-        let question = inputs.data.get("question").unwrap().clone().into_tracked(); // Input passed through
-        let answer = answerer_prediction.get_tracked("answer");
+        let rating_predicted = self
+            .rater
+            .call(RateSignatureInput {
+                question: input.question.clone(),
+                answer: answer_output.answer.clone(),
+            })
+            .await?;
+        let rating_usage = rating_predicted.metadata().lm_usage.clone();
+        let rating_output = rating_predicted.into_inner();
 
-        // The example! macro will now detect the tracked values and record a Map node.
-        // We don't need .linked_to() anymore if we use tracked values.
-        let inputs = example! {
-            "question": "input" => question.clone(),
-            "answer": "input" => answer.clone()
-        };
+        let prediction = Prediction::new(
+            HashMap::from([
+                ("question".to_string(), json!(input.question)),
+                ("answer".to_string(), json!(answer_output.answer)),
+                ("rating".to_string(), json!(rating_output.rating)),
+            ]),
+            LmUsage {
+                prompt_tokens: answer_usage.prompt_tokens + rating_usage.prompt_tokens,
+                completion_tokens: answer_usage.completion_tokens + rating_usage.completion_tokens,
+                total_tokens: answer_usage.total_tokens + rating_usage.total_tokens,
+            },
+        );
 
-        let rating_prediction = match self.rater.forward(inputs).await {
-            Ok(prediction) => prediction,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "legacy_predict".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
-
-        // Final output
-        Ok(Predicted::new(
-            prediction! {
-                "answer"=> answer.value,
-                "question"=> question.value,
-                "rating"=> rating_prediction.data.get("rating").unwrap().clone(),
-            }
-            .set_lm_usage(rating_prediction.lm_usage),
-            CallMetadata::default(),
-        ))
+        Ok(Predicted::new(prediction, CallMetadata::default()))
     }
 }
 
@@ -96,58 +87,50 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    // Configure with a dummy model string
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await
-            .unwrap(),
+            .await?,
         ChatAdapter,
     );
 
     let module = QARater::builder().build();
-    let example = example! {
-        "question": "input" => "Hello",
-    };
 
     println!("Starting trace...");
-    let (result, graph) = trace::trace(|| async { module.call(example).await }).await;
+    let (result, graph) = trace::trace(|| async {
+        module
+            .call(QASignatureInput {
+                question: "Hello".to_string(),
+            })
+            .await
+    })
+    .await;
 
     match result {
-        Ok(predicted) => println!("Prediction keys: {:?}", predicted.into_inner().data.keys()),
-        Err(e) => println!("Error (expected if no API key/network): {}", e),
+        Ok(predicted) => println!("Prediction keys: {:?}", predicted.into_inner().keys()),
+        Err(err) => println!("Error (expected without credentials/network): {err}"),
     }
 
-    println!("Graph Nodes: {}", graph.nodes.len());
+    println!("Graph nodes: {}", graph.nodes.len());
     for node in &graph.nodes {
-        println!(
-            "Node {}: Type={:?}, Inputs={:?}",
-            node.id, node.node_type, node.inputs
-        );
+        println!("Node {}: type={:?}, inputs={:?}", node.id, node.node_type, node.inputs);
     }
 
-    // Check if the graph is connected:
-    // Expected:
-    // Node 0: Root (Initial input)
-    // Node 1: LegacyPredict (Answerer) -> Inputs: [0]
-    // Node 2: Map (Data Transform) -> Inputs: [0, 1]
-    // Node 3: LegacyPredict (Rater)    -> Inputs: [2]
+    println!("\nExecuting graph replay...");
+    let executor = Executor::new(graph);
+    let replay_input = Example::new(
+        HashMap::from([(
+            "question".to_string(),
+            json!("What is the capital of Germany?"),
+        )]),
+        vec!["question".to_string()],
+        vec![],
+    );
 
-    // Execute the graph with new input
-    println!("\nExecuting Graph with new input...");
-    let executor = dspy_rs::trace::Executor::new(graph);
-    let new_input = example! {
-        "question": "input" => "What is the capital of Germany?",
-    };
-
-    match executor.execute(new_input).await {
-        Ok(preds) => {
-            if let Some(final_pred) = preds.first() {
-                println!("Final Prediction from Graph: {:?}", final_pred);
-            }
-        }
-        Err(e) => println!("Graph Execution Error: {}", e),
+    match executor.execute(replay_input).await {
+        Ok(predictions) => println!("Replay outputs: {}", predictions.len()),
+        Err(err) => println!("Replay failed (expected for Predict nodes): {err}"),
     }
 
     Ok(())

@@ -1,252 +1,158 @@
-#![allow(deprecated)]
+/*
+Example: using GEPA to optimize a typed sentiment module.
 
-/// Example: Using GEPA to optimize a sentiment analysis module
-///
-/// This example demonstrates:
-/// 1. Implementing FeedbackEvaluator with rich textual feedback
-/// 2. Using GEPA optimizer for reflective prompt evolution
-/// 3. Tracking optimization progress with detailed statistics
-///
-/// To run:
-/// ```
-/// OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
-/// ```
+Run with:
+```
+OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
+```
+*/
+
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::__macro_support::bamltype::facet;
-use dspy_rs::*;
-use dsrs_macros::{LegacySignature, Optimizable};
+use dspy_rs::{
+    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
+    init_tracing,
+};
+use serde_json::json;
+use std::collections::HashMap;
 
-#[LegacySignature]
+#[derive(Signature, Clone, Debug)]
 struct SentimentSignature {
-    /// Analyze the sentiment of the given text. Classify as 'Positive', 'Negative', or 'Neutral'.
+    /// Analyze the sentiment and classify as positive, negative, or neutral.
 
     #[input]
-    pub text: String,
+    text: String,
 
     #[output]
-    pub sentiment: String,
+    sentiment: String,
 
     #[output]
-    pub reasoning: String,
+    reasoning: String,
 }
 
-#[derive(Builder, Optimizable, facet::Facet)]
+#[derive(Builder, facet::Facet)]
 #[facet(crate = facet)]
 struct SentimentAnalyzer {
-    #[parameter]
-    #[facet(skip, opaque)]
-    predictor: LegacyPredict,
+    #[builder(default = Predict::<SentimentSignature>::new())]
+    predictor: Predict<SentimentSignature>,
 }
 
 impl Module for SentimentAnalyzer {
-    type Input = Example;
-    type Output = Prediction;
+    type Input = SentimentSignatureInput;
+    type Output = SentimentSignatureOutput;
 
-    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
-        match self.predictor.forward(inputs).await {
-            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
-            Err(err) => Err(PredictError::Lm {
-                source: LmError::Provider {
-                    provider: "legacy_predict".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            }),
-        }
+    async fn forward(
+        &self,
+        input: SentimentSignatureInput,
+    ) -> Result<Predicted<SentimentSignatureOutput>, PredictError> {
+        self.predictor.call(input).await
     }
 }
 
-impl Evaluator for SentimentAnalyzer {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let feedback = self.feedback_metric(example, prediction).await;
-        feedback.score
-    }
-}
+struct SentimentMetric;
 
-impl FeedbackEvaluator for SentimentAnalyzer {
-    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) -> FeedbackMetric {
-        let predicted = prediction
-            .get("sentiment", None)
-            .as_str()
-            .unwrap_or("")
-            .to_string()
-            .to_lowercase();
-
+impl TypedMetric<SentimentAnalyzer> for SentimentMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<SentimentSignatureOutput>,
+    ) -> Result<MetricOutcome> {
+        let predicted = prediction.sentiment.trim().to_lowercase();
         let expected = example
-            .get("expected_sentiment", None)
-            .as_str()
+            .data
+            .get("expected_sentiment")
+            .and_then(|value| value.as_str())
             .unwrap_or("")
-            .to_string()
+            .trim()
             .to_lowercase();
 
-        let text = example.get("text", None).as_str().unwrap_or("").to_string();
-
-        let reasoning = prediction
-            .get("reasoning", None)
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        // Calculate score
-        let correct = predicted == expected;
-        let score = if correct { 1.0 } else { 0.0 };
-
-        // Create rich feedback
-        let mut feedback = if correct {
-            format!("Correct classification: \"{}\"\n", expected)
-        } else {
+        let score = (predicted == expected) as u8 as f32;
+        let feedback = FeedbackMetric::new(
+            score,
             format!(
-                "Incorrect classification\n  Expected: \"{}\"\n  Predicted: \"{}\"\n",
-                expected, predicted
-            )
-        };
+                "expected={expected}; predicted={predicted}; reasoning={}",
+                prediction.reasoning
+            ),
+        );
 
-        // Add context about the input
-        feedback.push_str(&format!("  Input text: \"{}\"\n", text));
-
-        // Add reasoning analysis
-        if !reasoning.is_empty() {
-            feedback.push_str(&format!("  Reasoning: {}\n", reasoning));
-
-            // Check if reasoning mentions key sentiment words
-            let has_reasoning_quality = if correct {
-                // For correct answers, check if reasoning is substantive
-                reasoning.len() > 20
-            } else {
-                // For incorrect answers, note what went wrong
-                false
-            };
-
-            if has_reasoning_quality {
-                feedback.push_str("  Reasoning appears detailed\n");
-            } else if !correct {
-                feedback.push_str("  May have misunderstood the text sentiment\n");
-            }
-        }
-
-        FeedbackMetric::new(score, feedback)
+        Ok(MetricOutcome::with_feedback(score, feedback))
     }
+}
+
+fn sentiment_example(text: &str, expected: &str) -> Example {
+    Example::new(
+        HashMap::from([
+            ("text".to_string(), json!(text)),
+            ("expected_sentiment".to_string(), json!(expected)),
+        ]),
+        vec!["text".to_string()],
+        vec![],
+    )
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    println!("GEPA Sentiment Analysis Optimization Example\n");
+    configure(
+        LM::builder().temperature(0.7).build().await?,
+        ChatAdapter,
+    );
 
-    // Setup LM
-    let lm = LM::builder().temperature(0.7).build().await.unwrap();
-
-    configure(lm.clone(), ChatAdapter);
-
-    // Create training examples with diverse sentiments
     let trainset = vec![
-        example! {
-            "text": "input" => "This movie was absolutely fantastic! I loved every minute of it.",
-            "expected_sentiment": "input" => "positive"
-        },
-        example! {
-            "text": "input" => "Terrible service, will never come back again.",
-            "expected_sentiment": "input" => "negative"
-        },
-        example! {
-            "text": "input" => "The weather is okay, nothing special.",
-            "expected_sentiment": "input" => "neutral"
-        },
-        example! {
-            "text": "input" => "Despite some minor issues, I'm quite happy with the purchase.",
-            "expected_sentiment": "input" => "positive"
-        },
-        example! {
-            "text": "input" => "I have mixed feelings about this product.",
-            "expected_sentiment": "input" => "neutral"
-        },
-        example! {
-            "text": "input" => "This is the worst experience I've ever had!",
-            "expected_sentiment": "input" => "negative"
-        },
-        example! {
-            "text": "input" => "It's fine. Does what it's supposed to do.",
-            "expected_sentiment": "input" => "neutral"
-        },
-        example! {
-            "text": "input" => "Exceeded all my expectations! Highly recommend!",
-            "expected_sentiment": "input" => "positive"
-        },
-        example! {
-            "text": "input" => "Disappointed and frustrated with the outcome.",
-            "expected_sentiment": "input" => "negative"
-        },
-        example! {
-            "text": "input" => "Standard quality, nothing remarkable.",
-            "expected_sentiment": "input" => "neutral"
-        },
+        sentiment_example(
+            "This movie was absolutely fantastic! I loved every minute of it.",
+            "positive",
+        ),
+        sentiment_example("Terrible service, will never come back again.", "negative"),
+        sentiment_example("The weather is okay, nothing special.", "neutral"),
+        sentiment_example(
+            "Despite some minor issues, I'm quite happy with the purchase.",
+            "positive",
+        ),
+        sentiment_example("I have mixed feelings about this product.", "neutral"),
+        sentiment_example("This is the worst experience I've ever had!", "negative"),
     ];
 
-    // Create module
-    let mut module = SentimentAnalyzer::builder()
-        .predictor(LegacyPredict::new(SentimentSignature::new()))
-        .build();
+    let metric = SentimentMetric;
+    let mut module = SentimentAnalyzer::builder().build();
 
-    // Evaluate baseline performance
-    println!("Baseline Performance:");
-    let baseline_score = module.evaluate(trainset.clone()).await;
-    println!("  Average score: {:.3}\n", baseline_score);
+    let baseline = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
+    println!("Baseline score: {baseline:.3}");
 
-    // Configure GEPA optimizer
     let gepa = GEPA::builder()
         .num_iterations(5)
-        .minibatch_size(5)
+        .minibatch_size(4)
         .num_trials(3)
         .temperature(0.9)
         .track_stats(true)
         .build();
 
-    // Run optimization
-    println!("Starting GEPA optimization...\n");
-    let result = gepa
-        .compile_with_feedback(&mut module, trainset.clone())
+    let result = gepa.compile(&mut module, trainset.clone(), &metric).await?;
+
+    println!("Best average score: {:.3}", result.best_candidate.average_score());
+    println!("Total rollouts: {}", result.total_rollouts);
+    println!("Total LM calls: {}", result.total_lm_calls);
+    println!("Best instruction: {}", result.best_candidate.instruction);
+
+    let test_example = sentiment_example(
+        "This product changed my life! Absolutely amazing!",
+        "positive",
+    );
+    let test_prediction = module
+        .call(SentimentSignatureInput {
+            text: "This product changed my life! Absolutely amazing!".to_string(),
+        })
         .await?;
+    let test_feedback = metric.evaluate(&test_example, &test_prediction).await?;
 
-    // Display results
-    println!("\nOptimization Results:");
-    println!(
-        "  Best average score: {:.3}",
-        result.best_candidate.average_score()
-    );
-    println!("  Total rollouts: {}", result.total_rollouts);
-    println!("  Total LM calls: {}", result.total_lm_calls);
-    println!("  Generations: {}", result.evolution_history.len());
-
-    println!("\nBest Instruction:");
-    println!("  {}", result.best_candidate.instruction);
-
-    if !result.evolution_history.is_empty() {
-        println!("\nEvolution History:");
-        for entry in &result.evolution_history {
-            println!("  Generation {}: {:.3}", entry.0, entry.1);
-        }
+    println!("Test prediction: {}", test_prediction.sentiment);
+    println!("Test score: {:.3}", test_feedback.score);
+    if let Some(feedback) = test_feedback.feedback {
+        println!("Feedback: {}", feedback.feedback);
     }
-
-    // Test optimized module on a new example
-    println!("\nTesting Optimized Module:");
-    let test_example = example! {
-        "text": "input" => "This product changed my life! Absolutely amazing!",
-        "expected_sentiment": "input" => "positive"
-    };
-
-    let test_prediction = module.call(test_example.clone()).await?.into_inner();
-    let test_feedback = module
-        .feedback_metric(&test_example, &test_prediction)
-        .await;
-
-    println!(
-        "  Test prediction: {}",
-        test_prediction.get("sentiment", None)
-    );
-    println!("  Test score: {:.3}", test_feedback.score);
-    println!("  Feedback:\n{}", test_feedback.feedback);
 
     Ok(())
 }

@@ -67,3 +67,46 @@ fn predicted_exposes_field_metadata() {
     let output = predicted.into_inner();
     assert_eq!(output, "Paris");
 }
+
+#[test]
+fn call_metadata_tracks_failed_checks_and_field_name_order() {
+    let mut field_meta = IndexMap::new();
+    field_meta.insert(
+        "reasoning".to_string(),
+        FieldMeta {
+            raw_text: "Because...".to_string(),
+            flags: Vec::new(),
+            checks: vec![ConstraintResult {
+                label: "non_empty".to_string(),
+                expression: "this.len() > 0".to_string(),
+                passed: true,
+            }],
+        },
+    );
+    field_meta.insert(
+        "answer".to_string(),
+        FieldMeta {
+            raw_text: "".to_string(),
+            flags: Vec::new(),
+            checks: vec![ConstraintResult {
+                label: "non_empty".to_string(),
+                expression: "this.len() > 0".to_string(),
+                passed: false,
+            }],
+        },
+    );
+
+    let metadata = CallMetadata::new(
+        "raw".to_string(),
+        LmUsage::default(),
+        Vec::new(),
+        Vec::new(),
+        None,
+        field_meta,
+    );
+
+    let names = metadata.field_names().collect::<Vec<_>>();
+    assert_eq!(names, vec!["reasoning", "answer"]);
+    assert!(metadata.has_failed_checks());
+    assert_eq!(metadata.field_raw("answer"), Some(""));
+}

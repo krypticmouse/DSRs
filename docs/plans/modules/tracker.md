@@ -1,12 +1,14 @@
 # Implementation Tracker
 
+> Historical note: entries in this file are an execution log. Older entries may reference removed APIs and are kept as archival context.
+
 ## Current State
-- **Slice**: 6 (V6 dynamic graph)
-- **Phase**: Post-Implementation Cleanup
+- **Slice**: 6 (V6 dynamic graph + Stage 1 cleanup)
+- **Phase**: Post-Implementation Cleanup (Stage 1 in progress)
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
-- **Roadmap**: V6 (dynamic graph) → Kill Pass (legacy deletion)
-- **Roadmap rationale**: V5 implementation + closure audit are complete; execution now advances to breadboard V6, then legacy deletion sweep.
+- **Roadmap**: Stage 1 cleanup (legacy kill pass + typed metric optimizer path) → remaining post-cleanup debt
+- **Roadmap rationale**: Slices 1-6 are implemented; active work is convergence cleanup and API/docs/test hardening.
 
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
@@ -52,19 +54,31 @@
 | `019c4582-c2dc-7f81-963c-2b2b2780005d` | Replacement stupidly implementable plan for Slice 6 (V6 dynamic graph) | 6 | Plan | Completed; produced `slice_6.md` with required sections, grounded signatures, and snapshot-then-fit-back contract from the resolved ambiguity (`from_module` immutable projection + `fit` mutable write-back) |
 | `019c458b-e671-7b13-9b7b-d3921607a791` | Plan refinery against ground truth for Slice 6 | 6 | Plan Refinery | Completed; produced `slice_6_refinery.md` and updated `slice_6.md` with fidelity corrections (`StrategyError`, `format_output_baml`, `insert_between` coverage, execution-order note, `from_parts` visibility tightening) plus two arbitration markers |
 | `019c45a4-fb62-7e62-8efa-b2d050d15e2c` | Adversarial review against ground truth for Slice 6 | 6 | Adversarial Review | Completed; produced `slice_6_review.md` with 6 findings (2 high, 3 medium, 1 low) used for Slice 6 arbitrate fixes |
+| `019c469b-8f1c-7313-9aa8-2f32cabbae39` | Stage 1 adversarial audit #1 (legacy residue) | 6 | Post-Implementation Cleanup | Completed; no P0/P1 code findings, flagged README stale optimizer docs (P2) |
+| `019c469b-8f42-74d1-b78b-811190ddfbf1` | Stage 1 adversarial audit #2 (typed API fidelity) | 6 | Post-Implementation Cleanup | Completed; flagged P1 doc/API mismatch (`README` + `gepa.mdx`) and confirmed runtime typed contract |
+| `019c469b-8f67-72d2-a0e8-74f56b9f0435` | Stage 1 adversarial audit #3 (typed test matrix) | 6 | Post-Implementation Cleanup | Completed; flagged targeted typed-path coverage gaps (partial-feedback GEPA, input-key conversion guard, nested walker paths, metadata parity) |
+| `019c46a5-b446-7c10-8291-ae7b41c09017` | Stage 1 adversarial re-audit A (docs/code consistency) | 6 | Post-Implementation Cleanup | Completed; no P0/P1 mismatches in tracker + closure + breadboard against current code |
+| `019c46a5-b46a-77a0-b29e-8a5c6e2e0965` | Stage 1 adversarial re-audit B (typed contract fidelity) | 6 | Post-Implementation Cleanup | Completed; contract validated; re-confirmed README + GEPA user-doc API drift as P1 docs-only debt |
+| `019c46a5-b490-7780-b7ee-88624e8ffee7` | Stage 1 adversarial re-audit C (typed coverage matrix) | 6 | Post-Implementation Cleanup | Completed; confirmed prior gaps mostly closed; flagged remaining optimizer parity gap (invalid input_keys guard missing for GEPA/MIPRO at audit start) |
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
+- **Stage 1 adversarial re-audit (2026-02-10):** Re-ran 3 independent explorer audits after restoring planner/spec detail updates (`tracker`, `slices_closure_audit`, `breadboard`); no new code-level P0/P1 findings.
+- **Stage 1 typed coverage hardening (2026-02-10):** Closed remaining optimizer input-key guard gap by adding invalid `input_keys` failure-path tests for both MIPRO and GEPA (`test_optimizer_typed_metric.rs`, `test_gepa_typed_metric_feedback.rs`) in addition to existing COPRO coverage.
+- **Stage 1 docs-risk note (2026-02-10):** Adversarial audits continue to flag user-facing API drift in `README.md` and `docs/docs/optimizers/gepa.mdx` (legacy evaluator/compile snippets); retained as explicit docs-only debt pending owner-approved wording pass.
+- **Stage 1 cleanup execution (2026-02-10):** Implemented one-shot removal of legacy optimizer/signature surfaces and migrated optimizer/evaluator APIs to typed metric path (`Optimizer::compile(&mut module, trainset, metric)`, `TypedMetric`, GEPA feedback-gated `compile`).
+- **Stage 1 docs convergence (2026-02-10):** Updated active user docs (`README`, optimizer docs) to remove legacy snippets and align examples to typed metric API.
+- **Stage 1 audit gates (2026-02-10):** Ran 3 adversarial subagent audits post-apply; resolved all reported P1 findings before closing validation gates.
 - **State transition (2026-02-10):** Advanced workflow to `Slice 5 / Research` after 4.5-lite completion; V5 is now the active slice.
-- **Slice 5 research arbitration (2026-02-10):** Accepted `slice_5_research.md` as implementation baseline. Locked V5 to struct-field walker recursion with explicit container errors (per N18 + S5 deferral), and carried forward the U50 API ambiguity (`metric` arg in breadboard vs current `Evaluator`-bound compile trait) into planning for explicit resolution.
+- **Slice 5 research arbitration (2026-02-10):** Accepted `slice_5_research.md` as implementation baseline. Locked V5 to struct-field walker recursion with explicit container errors (per N18 + S5 deferral), and carried forward the U50 API ambiguity (`metric` arg in breadboard vs then-current `Evaluator`-bound compile trait) into planning for explicit resolution. This ambiguity is now closed by Stage 1 cleanup (typed metric compile contract landed).
 - **Execution heuristic (2026-02-10):** For ambiguous V5 details, follow spec spirit while choosing the shortest correct implementation path; avoid adding migration scaffolding unless required for green builds, and record every shortcut as explicit cleanup debt for post-slice reconciliation.
-- **Slice 5 plan review (2026-02-10):** Accepted plan direction for F6/F8 core deliverables and quick-path migration strategy; plan refinery must still arbitrate strict U50/C4 fidelity (typed evaluator replacement vs temporary `Evaluator` carryover) and concrete Facet attribute payload syntax for `PredictAccessorFns`.
-- **Slice 5 plan refinery arbitration (2026-02-10):** Resolved all `NEEDS ARBITRATION` markers in `slice_5.md`. Chosen path for this slice: land F6/F8 (`DynPredictor` + walker + optimizer rewiring) with minimal churn by keeping the current `Evaluator` metric boundary temporarily, while explicitly recording C4 typed-evaluator replacement as migration debt for the cleanup pass after V5/V6.
+- **Slice 5 plan review (2026-02-10):** Accepted plan direction for F6/F8 core deliverables and quick-path migration strategy; at that time, plan refinery still needed to arbitrate strict U50/C4 fidelity (typed evaluator replacement vs temporary `Evaluator` carryover) and concrete Facet attribute payload syntax for `PredictAccessorFns`.
+- **Slice 5 plan refinery arbitration (2026-02-10):** Resolved all `NEEDS ARBITRATION` markers in `slice_5.md`. Chosen path for that slice window: land F6/F8 (`DynPredictor` + walker + optimizer rewiring) with minimal churn by keeping the `Evaluator` metric boundary temporarily, while explicitly recording C4 typed-evaluator replacement as migration debt for post-V5/V6 cleanup. This temporary decision has since been superseded by Stage 1 cleanup.
 - **Slice 5 implementation validation (2026-02-10):** `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test -p dspy-rs --lib --tests` all pass after V5 rewiring (`named_parameters`, `DynPredictor`, optimizer integrations, and new V5 regression tests).
 - **Slice 5 mechanism audit (2026-02-10):** Queried Facet indexed resources via Nia to validate S2 Mechanism A (`define_attr_grammar!` + typed attr decode). Attempted direct `#[facet(dsrs::parameter = ...)]` payload path and hit compile blockers for generic function-pointer payload attachment (`E0401`) in current derive expansion. Kept registry-backed accessor mapping for this slice as the shortest correct path and recorded as migration debt for cleanup.
 - **Slice 5 smoke test (2026-02-10):** Added and ran `crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs` against `openai:gpt-5.2` with `.env` loaded; walker discovered `named_parameters: [\"predictor\"]`, instruction mutation took effect, and call returned `answer: smoke-ok`.
 - **Slice 5 adversarial arbitration (2026-02-10):** Agreed and fixed finding on pointer/Box container guard gap (`Def::Pointer` now errors as container when it encloses parameter leaves) and agreed on expanding V5 regression coverage (state dump/load roundtrip + deterministic multi-leaf ordering tests).
-- **Slice 5 adversarial arbitration (2026-02-10):** Deferred both high findings: (1) S2 Mechanism A attr-payload discovery remains blocked by generic derive constraints in current implementation and is tracked as migration debt; (2) U50 typed metric surface (`compile(..., metric)`) remains deferred per prior C4 decision to avoid duplicate migration churn before cleanup.
+- **Slice 5 adversarial arbitration (2026-02-10):** Deferred both high findings at the time: (1) S2 Mechanism A attr-payload discovery remains blocked by generic derive constraints in current implementation and is tracked as migration debt; (2) U50 typed metric surface (`compile(..., metric)`) was temporarily deferred per prior C4 decision to avoid duplicate migration churn before cleanup. Item (2) is now resolved by Stage 1 cleanup.
 - **Slice 5 adversarial arbitration (2026-02-10):** Deferred GEPA uniform-entrypoint finding and legacy surface cleanup as post-V5/V6 cleanup work; no stale `NEEDS ARBITRATION` markers remain in Slice 5 docs.
 - **Slice 5 post-fix smoke rerun (2026-02-10):** Re-ran `94-smoke-slice5-optimizer-interface` against `openai:gpt-5.2` after arbitrate fixes; still passes with `answer: smoke-ok`.
 - **Slice 5 commit (2026-02-10):** Change `ovrlqprm` / `89d83af6` — "slice5: implement optimizer interface with dyn predictor walker".
@@ -182,9 +196,8 @@
 
 ## Open Questions
 <!-- Unresolved issues to revisit -->
-- `Post-Implementation Cleanup` remaining scope: strict typed `Module` bounds, generic-helper/`__phantom` ergonomics, and Option-C legacy-surface cutover (`MetaSignature`/`LegacyPredict`) are still large migrations with broad compatibility impact.
-- `V5 Implement`: complete walker discoverability for wrapper/combinator module trees as the canonical replacement for legacy `Optimizable` traversal.
-- Untyped `Example`/`Prediction` example policy and evaluator/feedback migration boundary are clarified in the kickoff doc; execution remains open under C2/C3/C4 gates.
+- `Post-Implementation Cleanup` remaining scope: generic-helper/`__phantom` ergonomics plus S2/S8 mechanism debt (predict-accessor fallback and graph edge-annotation registry) remain non-trivial migrations with broad compatibility impact.
+- Typed metric/evaluator migration boundary is now closed in code (`Optimizer::compile(..., metric)` + `TypedMetric` + GEPA feedback gate); remaining open question is only how aggressively to prune or annotate historical planning notes so they cannot be misread as active API guidance.
 - Decision matrix and sequencing for cleanup kickoff are now centralized in `docs/plans/modules/phase_4_5_cleanup_kickoff.md`.
 - ~~`V6`: resolve `ProgramGraph::from_module` mutability contract~~ → **Resolved.** See decision entry below.
 - `V6`: define v1 graph output contract for multi-sink graphs (single terminal node requirement vs aggregate-output shape).
@@ -192,5 +205,4 @@
 ## Migration Debt
 <!-- Compatibility shims and legacy bridges left in place during slices. Each gets removed in Post-Implementation Cleanup. -->
 - **V5-S2 accessor fallback:** `crates/dspy-rs/src/core/dyn_predictor.rs` uses runtime `register_predict_accessor(shape.id -> fn)` plus `shape.type_identifier == "Predict"` detection instead of shape-local `dsrs::parameter` payload extraction. Exit criteria: implement attr-driven accessor payload (Mechanism A) or equivalent audited replacement without runtime registry.
-- **V5-C4 evaluator bridge:** `Optimizer::compile` remains coupled to legacy `Evaluator` (`Module<Input=Example, Output=Prediction>`) instead of typed metric surface. Exit criteria: land typed evaluator/metric entrypoint and remove legacy IO bound from optimizer compile path.
-- **Legacy optimizer surfaces:** `MetaSignature`/`Optimizable` are still present as compatibility shims while DynPredictor path lands. Exit criteria: remove duplicate optimization surface once typed optimizer compile flow is complete and examples are migrated.
+- **Resolved in Stage 1 (2026-02-10):** V5-C4 evaluator bridge removed (typed metric entrypoint landed) and legacy optimizer surfaces deleted.

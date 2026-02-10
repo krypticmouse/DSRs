@@ -1,9 +1,8 @@
 use futures::stream::{self, StreamExt};
-use indexmap::IndexMap;
 use kdam::{BarExt, tqdm};
 use tracing::debug;
 
-use crate::{BamlType, Facet, PredictError, Predicted, core::MetaSignature};
+use crate::{BamlType, Facet, PredictError, Predicted};
 
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
@@ -76,17 +75,4 @@ where
         .collect::<Vec<_>>();
     debug!(outcomes = outcomes.len(), "forward_all completed");
     outcomes
-}
-
-#[allow(unused_variables)]
-pub trait Optimizable {
-    fn get_signature(&self) -> &dyn MetaSignature {
-        todo!()
-    }
-
-    fn parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable>;
-
-    fn update_signature_instruction(&mut self, instruction: String) -> anyhow::Result<()> {
-        todo!()
-    }
 }

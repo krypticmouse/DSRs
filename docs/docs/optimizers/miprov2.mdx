@@ -73,8 +73,11 @@ let optimizer = MIPROv2::builder()
     .minibatch_size(25)
     .build();
 
+// Typed metric implementing TypedMetric<MyModule>
+let metric = ExactMatchMetric;
+
 // Optimize your module
-optimizer.compile(&mut module, train_examples).await?;
+optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
 ## Comparison: COPRO vs MIPROv2 vs GEPA

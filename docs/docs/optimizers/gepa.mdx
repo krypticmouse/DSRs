@@ -46,37 +46,33 @@ Can optimize at test time, not just training time.
 
 ## Quick Start
 
-### 1. Implement FeedbackEvaluator
+### 1. Implement a Typed Metric with Feedback
 
 ```rust
 use dspy_rs::*;
 
-#[derive(Builder, Optimizable)]
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
 struct MyModule {
-    #[parameter]
-    predictor: Predict,
+    predictor: Predict<MySignature>,
 }
 
 impl Module for MyModule {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        self.predictor.forward(inputs).await
+    type Input = MySignatureInput;
+    type Output = MySignatureOutput;
+
+    async fn forward(&self, inputs: MySignatureInput) -> Result<Predicted<MySignatureOutput>, PredictError> {
+        self.predictor.call(inputs).await
     }
 }
 
-// Implement regular Evaluator for non-GEPA optimizers
-impl Evaluator for MyModule {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let feedback = self.feedback_metric(example, prediction).await;
-        feedback.score
-    }
-}
+struct MyMetric;
 
-// Implement FeedbackEvaluator for GEPA
-impl FeedbackEvaluator for MyModule {
-    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) 
-        -> FeedbackMetric 
+impl TypedMetric<MyModule> for MyMetric {
+    async fn evaluate(&self, example: &Example, prediction: &Predicted<MySignatureOutput>)
+        -> Result<MetricOutcome>
     {
-        let predicted = prediction.get("answer", None).as_str().unwrap_or("");
+        let predicted = prediction.answer.as_str();
         let expected = example.get("expected", None).as_str().unwrap_or("");
         
         let correct = predicted == expected;
@@ -88,7 +84,7 @@ impl FeedbackEvaluator for MyModule {
             format!("Incorrect\n  Expected: {}\n  Predicted: {}", expected, predicted)
         };
         
-        FeedbackMetric::new(score, feedback)
+        Ok(MetricOutcome::with_feedback(score, FeedbackMetric::new(score, feedback)))
     }
 }
 ```
@@ -105,7 +101,7 @@ let gepa = GEPA::builder()
     .maybe_max_rollouts(Some(500))  // Budget control
     .build();
 
-let result = gepa.compile_with_feedback(&mut module, trainset).await?;
+let result = gepa.compile(&mut module, trainset, &metric).await?;
 
 println!("Best score: {:.3}", result.best_candidate.average_score());
 println!("Best instruction: {}", result.best_candidate.instruction);
@@ -188,7 +184,7 @@ GEPA::builder()
 ## Understanding GEPA Results
 
 ```rust
-let result = gepa.compile_with_feedback(&mut module, trainset).await?;
+let result = gepa.compile(&mut module, trainset, &metric).await?;
 
 // Best candidate found
 println!("Best instruction: {}", result.best_candidate.instruction);
@@ -222,7 +218,7 @@ pub struct FeedbackMetric {
 ```rust
 pub struct ExecutionTrace {
     pub inputs: Example,
-    pub outputs: Option<Prediction>,
+    pub outputs: Option<BamlValue>,
     pub feedback: Option<FeedbackMetric>,
     pub intermediate_steps: Vec<(String, serde_json::Value)>,
     pub errors: Vec<String>,
@@ -263,7 +259,7 @@ pub struct GEPACandidate {
 
 ## Implementing Feedback Metrics
 
-A well-designed metric is central to GEPA's sample efficiency. The DSRs implementation expects the metric to return a `FeedbackMetric` struct with both a score and rich textual feedback.
+A well-designed metric is central to GEPA's sample efficiency. The DSRs implementation expects the metric to return a `MetricOutcome`; for GEPA that means `MetricOutcome::with_feedback(score, FeedbackMetric { ... })`.
 
 ### Practical Recipe for GEPA-Friendly Feedback
 
@@ -357,18 +353,20 @@ GEPA::builder()
 
 ## Troubleshooting
 
-### Issue: "GEPA requires FeedbackEvaluator trait"
+### Issue: "GEPA requires feedback for every evaluated example"
 ```rust
-// Solution: Implement both Evaluator and FeedbackEvaluator
-impl Evaluator for MyModule {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        self.feedback_metric(example, prediction).await.score
+// Solution: Return MetricOutcome::with_feedback(...) from TypedMetric::evaluate
+impl TypedMetric<MyModule> for MyMetric {
+    async fn evaluate(
+        &self,
+        example: &Example,
+        prediction: &Predicted<MySignatureOutput>,
+    ) -> Result<MetricOutcome> {
+        Ok(MetricOutcome::with_feedback(
+            1.0,
+            FeedbackMetric::new(1.0, "detailed textual feedback"),
+        ))
     }
-}
-
-impl FeedbackEvaluator for MyModule {
-    async fn feedback_metric(&self, example: &Example, prediction: &Prediction) 
-        -> FeedbackMetric { ... }
 }
 ```
 
@@ -401,7 +399,7 @@ let gepa = GEPA::builder()
     .maybe_valset(Some(my_tasks.clone()))
     .build();
 
-let result = gepa.compile_with_feedback(&mut module, my_tasks).await?;
+let result = gepa.compile(&mut module, my_tasks, &metric).await?;
 
 // Access per-task best scores and outputs
 let best_scores = result.highest_score_achieved_per_val_task;

@@ -57,13 +57,16 @@ impl Eq for PredictAccessorFns {}
 static ACCESSOR_REGISTRY: OnceLock<Mutex<HashMap<ConstTypeId, PredictAccessorFns>>> =
     OnceLock::new();
 
+fn accessor_registry() -> &'static Mutex<HashMap<ConstTypeId, PredictAccessorFns>> {
+    ACCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 pub fn register_predict_accessor(
     shape: &'static Shape,
     accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
     accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 ) {
-    let registry = ACCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = registry
+    let mut guard = accessor_registry()
         .lock()
         .expect("predict accessor registry lock poisoned");
     guard.entry(shape.id).or_insert(PredictAccessorFns {
@@ -76,7 +79,9 @@ pub fn register_predict_accessor(
 pub enum NamedParametersError {
     #[error("container `{ty}` at `{path}` contains a parameter leaf")]
     Container { path: String, ty: &'static str },
-    #[error("parameter marker at `{path}` is missing a registered accessor")]
+    #[error(
+        "parameter-like leaf at `{path}` is missing a registered accessor (S2 fallback is active; exit criteria: shape-local accessor payloads)"
+    )]
     MissingAttr { path: String },
 }
 
@@ -88,7 +93,7 @@ where
     M: for<'a> Facet<'a>,
 {
     let mut raw_handles = Vec::<(String, *mut dyn DynPredictor)>::new();
-    walk_value_mut(Peek::new(&*module), "", &mut raw_handles)?;
+    walk_value::<MutableAccess>(Peek::new(&*module), "", &mut raw_handles)?;
 
     let mut handles = Vec::with_capacity(raw_handles.len());
     for (path, ptr) in raw_handles {
@@ -108,7 +113,7 @@ where
     M: for<'a> Facet<'a>,
 {
     let mut raw_handles = Vec::<(String, *const dyn DynPredictor)>::new();
-    walk_value_ref(Peek::new(module), "", &mut raw_handles)?;
+    walk_value::<SharedAccess>(Peek::new(module), "", &mut raw_handles)?;
 
     let mut handles = Vec::with_capacity(raw_handles.len());
     for (path, ptr) in raw_handles {
@@ -120,22 +125,48 @@ where
     Ok(handles)
 }
 
-fn walk_value_mut(
-    value: Peek<'_, '_>,
-    path: &str,
-    out: &mut Vec<(String, *mut dyn DynPredictor)>,
-) -> std::result::Result<(), NamedParametersError> {
-    let shape = value.shape();
-    if is_parameter_shape(shape) {
-        let accessor =
-            registered_accessor(shape).ok_or_else(|| NamedParametersError::MissingAttr {
-                path: display_path(path),
-            })?;
+trait WalkAccess {
+    type RawPtr;
+
+    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr;
+}
+
+struct MutableAccess;
+
+impl WalkAccess for MutableAccess {
+    type RawPtr = *mut dyn DynPredictor;
+
+    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr {
         // SAFETY: `named_parameters` has exclusive access to `module` for the full traversal.
         // We only cast to a mutable pointer after the read-only walk has located the leaf.
-        let ptr = (accessor.accessor_mut)((value.data().as_byte_ptr() as *mut u8).cast::<()>());
-        out.push((path.to_string(), ptr));
+        (accessor.accessor_mut)((value.data().as_byte_ptr() as *mut u8).cast::<()>())
+    }
+}
+
+struct SharedAccess;
+
+impl WalkAccess for SharedAccess {
+    type RawPtr = *const dyn DynPredictor;
+
+    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr {
+        (accessor.accessor_ref)(value.data().as_byte_ptr().cast::<()>())
+    }
+}
+
+fn walk_value<Access: WalkAccess>(
+    value: Peek<'_, '_>,
+    path: &str,
+    out: &mut Vec<(String, Access::RawPtr)>,
+) -> std::result::Result<(), NamedParametersError> {
+    let shape = value.shape();
+    if let Some(accessor) = lookup_registered_predict_accessor(shape) {
+        out.push((path.to_string(), Access::pointer(accessor, value)));
         return Ok(());
+    }
+    if is_predict_type_name(shape) {
+        return Err(NamedParametersError::MissingAttr {
+            path: display_path(path),
+        });
     }
 
     if matches!(shape.ty, Type::User(UserType::Struct(_))) {
@@ -152,7 +183,7 @@ fn walk_value_mut(
                 .map_err(|_| NamedParametersError::MissingAttr {
                     path: display_path(&field_path),
                 })?;
-            walk_value_mut(child, &field_path, out)?;
+            walk_value::<Access>(child, &field_path, out)?;
         }
         return Ok(());
     }
@@ -160,7 +191,7 @@ fn walk_value_mut(
     match shape.def {
         Def::Option(_) => {
             if let Some(inner) = value.into_option().expect("shape says option").value() {
-                walk_value_mut(inner, path, out)?;
+                walk_value::<Access>(inner, path, out)?;
             }
             Ok(())
         }
@@ -172,7 +203,7 @@ fn walk_value_mut(
                 .enumerate()
             {
                 let child_path = push_index(path, idx);
-                walk_value_mut(child, &child_path, out)?;
+                walk_value::<Access>(child, &child_path, out)?;
             }
             Ok(())
         }
@@ -194,7 +225,7 @@ fn walk_value_mut(
             entries.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
             for (key, child) in entries {
                 let child_path = push_map_key(path, &key);
-                walk_value_mut(child, &child_path, out)?;
+                walk_value::<Access>(child, &child_path, out)?;
             }
             Ok(())
         }
@@ -205,7 +236,7 @@ fn walk_value_mut(
                     .expect("shape says pointer")
                     .borrow_inner()
                 {
-                    walk_value_mut(inner, path, out)?;
+                    walk_value::<Access>(inner, path, out)?;
                 }
                 Ok(())
             }
@@ -224,7 +255,7 @@ fn walk_value_mut(
 }
 
 fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>) -> bool {
-    if is_parameter_shape(shape) {
+    if is_parameter_shape(shape) || is_predict_type_name(shape) {
         return true;
     }
 
@@ -261,114 +292,18 @@ fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>
     found
 }
 
-fn walk_value_ref(
-    value: Peek<'_, '_>,
-    path: &str,
-    out: &mut Vec<(String, *const dyn DynPredictor)>,
-) -> std::result::Result<(), NamedParametersError> {
-    let shape = value.shape();
-    if is_parameter_shape(shape) {
-        let accessor =
-            registered_accessor(shape).ok_or_else(|| NamedParametersError::MissingAttr {
-                path: display_path(path),
-            })?;
-        let ptr = (accessor.accessor_ref)(value.data().as_byte_ptr().cast::<()>());
-        out.push((path.to_string(), ptr));
-        return Ok(());
-    }
-
-    if matches!(shape.ty, Type::User(UserType::Struct(_))) {
-        let struct_value = value.into_struct().expect("shape says struct");
-        for idx in 0..struct_value.field_count() {
-            let field = struct_value.ty().fields[idx];
-            if field.should_skip_deserializing() {
-                continue;
-            }
-
-            let field_path = push_field(path, field.name);
-            let child = struct_value
-                .field(idx)
-                .map_err(|_| NamedParametersError::MissingAttr {
-                    path: display_path(&field_path),
-                })?;
-            walk_value_ref(child, &field_path, out)?;
-        }
-        return Ok(());
-    }
-
-    match shape.def {
-        Def::Option(_) => {
-            if let Some(inner) = value.into_option().expect("shape says option").value() {
-                walk_value_ref(inner, path, out)?;
-            }
-            Ok(())
-        }
-        Def::List(_) | Def::Array(_) | Def::Slice(_) => {
-            for (idx, child) in value
-                .into_list_like()
-                .expect("shape says list-like")
-                .iter()
-                .enumerate()
-            {
-                let child_path = push_index(path, idx);
-                walk_value_ref(child, &child_path, out)?;
-            }
-            Ok(())
-        }
-        Def::Map(_) => {
-            let mut entries = value
-                .into_map()
-                .expect("shape says map")
-                .iter()
-                .map(|(key, value)| {
-                    key.as_str().map(|name| (name.to_string(), value)).ok_or(
-                        NamedParametersError::Container {
-                            path: display_path(path),
-                            ty: "HashMap",
-                        },
-                    )
-                })
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-
-            entries.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
-            for (key, child) in entries {
-                let child_path = push_map_key(path, &key);
-                walk_value_ref(child, &child_path, out)?;
-            }
-            Ok(())
-        }
-        Def::Pointer(pointer_def) => match pointer_def.known {
-            Some(KnownPointer::Box) => {
-                if let Some(inner) = value
-                    .into_pointer()
-                    .expect("shape says pointer")
-                    .borrow_inner()
-                {
-                    walk_value_ref(inner, path, out)?;
-                }
-                Ok(())
-            }
-            _ => {
-                if contains_parameter(shape, &mut HashSet::new()) {
-                    return Err(NamedParametersError::Container {
-                        path: display_path(path),
-                        ty: pointer_name(pointer_def.known),
-                    });
-                }
-                Ok(())
-            }
-        },
-        _ => Ok(()),
-    }
+fn is_parameter_shape(shape: &'static Shape) -> bool {
+    lookup_registered_predict_accessor(shape).is_some()
 }
 
-fn is_parameter_shape(shape: &'static Shape) -> bool {
-    // FIXME(dsrs-s2): Name-based leaf detection is intentionally temporary.
-    // Intended solution is shape-local accessor attr lookup (see links above).
+fn is_predict_type_name(shape: &'static Shape) -> bool {
+    // Temporary diagnostic-only guard: we never use this for successful dispatch.
+    // Success requires a registered accessor; this path exists to fail loudly when
+    // a Predict-like leaf appears without registration.
     shape.type_identifier == "Predict"
 }
 
-fn registered_accessor(shape: &'static Shape) -> Option<PredictAccessorFns> {
+fn lookup_registered_predict_accessor(shape: &'static Shape) -> Option<PredictAccessorFns> {
     let registry = ACCESSOR_REGISTRY.get()?;
     let guard = registry.lock().ok()?;
     guard.get(&shape.id).copied()

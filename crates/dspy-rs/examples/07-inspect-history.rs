@@ -1,5 +1,5 @@
 /*
-Script to inspect the history of an LM.
+Script to inspect LM history after a typed predictor call.
 
 Run with:
 ```
@@ -7,65 +7,39 @@ cargo run --example 07-inspect-history
 ```
 */
 
-#![allow(deprecated)]
+use anyhow::Result;
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, get_lm, init_tracing};
 
-use bon::Builder;
-use dspy_rs::{
-    CallMetadata, ChatAdapter, Example, LM, LegacyPredict, LegacySignature, LmError, Module,
-    PredictError, Predicted, Prediction, Predictor, configure, example, get_lm, init_tracing,
-};
-
-#[LegacySignature]
-struct QASignature {
+#[derive(Signature, Clone, Debug)]
+struct QA {
     #[input]
-    pub question: String,
+    question: String,
+
     #[output]
-    pub answer: String,
-}
-
-#[derive(Builder)]
-pub struct QARater {
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
-}
-
-impl Module for QARater {
-    type Input = Example;
-    type Output = Prediction;
-
-    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
-        match self.answerer.forward(inputs).await {
-            Ok(prediction) => Ok(Predicted::new(prediction, CallMetadata::default())),
-            Err(err) => Err(PredictError::Lm {
-                source: LmError::Provider {
-                    provider: "legacy_predict".to_string(),
-                    message: err.to_string(),
-                    source: None,
-                },
-            }),
-        }
-    }
+    answer: String,
 }
 
 #[tokio::main]
-async fn main() {
-    init_tracing().expect("failed to initialize tracing");
+async fn main() -> Result<()> {
+    init_tracing()?;
 
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
         .build()
-        .await
-        .unwrap();
+        .await?;
     configure(lm, ChatAdapter);
 
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-    };
-
-    let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.call(example.clone()).await.unwrap().into_inner();
-    println!("Prediction: {prediction:?}");
+    let predictor = Predict::<QA>::new();
+    let output = predictor
+        .call(QAInput {
+            question: "What is the capital of France?".to_string(),
+        })
+        .await?
+        .into_inner();
+    println!("prediction: {:?}", output.answer);
 
     let history = get_lm().inspect_history(1).await;
-    println!("History: {history:?}");
+    println!("history: {history:?}");
+
+    Ok(())
 }

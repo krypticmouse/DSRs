@@ -1,9 +1,7 @@
-use anyhow::Result;
 use bamltype::Shape;
 use facet::Facet;
-use serde_json::Value;
 
-use crate::{BamlType, Example, OutputFormatContent};
+use crate::{BamlType, OutputFormatContent};
 
 use super::{FieldMetadataSpec, SignatureSchema};
 
@@ -18,17 +16,6 @@ pub struct ConstraintSpec {
 pub enum ConstraintKind {
     Check,
     Assert,
-}
-
-pub trait MetaSignature: Send + Sync {
-    fn demos(&self) -> Vec<Example>;
-    fn set_demos(&mut self, demos: Vec<Example>) -> Result<()>;
-    fn instruction(&self) -> String;
-    fn input_fields(&self) -> Value;
-    fn output_fields(&self) -> Value;
-
-    fn update_instruction(&mut self, instruction: String) -> Result<()>;
-    fn append(&mut self, name: &str, value: Value) -> Result<()>;
 }
 
 pub trait Signature: Send + Sync + 'static {

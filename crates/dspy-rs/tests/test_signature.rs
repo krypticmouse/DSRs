@@ -1,44 +1,49 @@
-use dspy_rs::{LegacySignature, MetaSignature, field};
-use rstest::*;
+use dspy_rs::Signature;
 
-#[LegacySignature]
-struct InlineSignature {
-    #[input]
-    inp1: String,
-    #[input]
-    inp2: String,
-    #[output]
-    out1: String,
-    #[output]
-    out2: String,
+#[derive(Signature, Clone, Debug)]
+struct BasicSignature {
+    /// Provide a concise answer.
+
+    #[input(desc = "Question to answer")]
+    question: String,
+
+    #[output(desc = "Final answer")]
+    answer: String,
 }
 
-#[rstest]
-fn test_signature_from_string() {
-    let signature = InlineSignature::new();
+#[test]
+fn signature_instruction_and_schema_fields_are_exposed() {
+    let schema = BasicSignature::schema();
 
-    assert_eq!(signature.instruction, "");
-    assert_eq!(signature.input_fields_len(), 2);
-    assert_eq!(signature.output_fields_len(), 2);
+    let instruction = BasicSignature::instruction();
+    assert!(
+        instruction.is_empty() || instruction.contains("Provide a concise answer"),
+        "unexpected instruction rendering: {instruction:?}"
+    );
+    assert_eq!(schema.input_fields().len(), 1);
+    assert_eq!(schema.output_fields().len(), 1);
+
+    let input = &schema.input_fields()[0];
+    assert_eq!(input.rust_name, "question");
+    assert_eq!(input.lm_name, "question");
+    assert_eq!(input.docs, "Question to answer");
+
+    let output = &schema.output_fields()[0];
+    assert_eq!(output.rust_name, "answer");
+    assert_eq!(output.lm_name, "answer");
+    assert_eq!(output.docs, "Final answer");
 }
 
-#[rstest]
-fn test_signature_append() {
-    let mut signature = InlineSignature::new();
-    let field_obj = field! {
-        input => inp3 : String
-    };
-    let _ = signature.append("inp3", field_obj["inp3"].clone());
+#[test]
+fn signature_metadata_tables_match_schema_fields() {
+    let input_meta = BasicSignature::input_field_metadata();
+    let output_meta = BasicSignature::output_field_metadata();
 
-    assert_eq!(signature.input_fields_len(), 3);
-    assert_eq!(
-        signature.input_fields.get("inp3").unwrap()["__dsrs_field_type"],
-        "input"
-    );
-    assert_eq!(signature.input_fields.get("inp3").unwrap()["desc"], "");
-    assert_eq!(
-        signature.input_fields.get("inp1").unwrap()["__dsrs_field_type"],
-        "input"
-    );
-    assert_eq!(signature.input_fields.get("inp1").unwrap()["desc"], "");
+    assert_eq!(input_meta.len(), 1);
+    assert_eq!(output_meta.len(), 1);
+
+    assert_eq!(input_meta[0].rust_name, "question");
+    assert_eq!(output_meta[0].rust_name, "answer");
+    assert_eq!(input_meta[0].alias, None);
+    assert_eq!(output_meta[0].alias, None);
 }
