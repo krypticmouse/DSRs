@@ -66,13 +66,23 @@ pub fn register_predict_accessor(
     accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
     accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 ) {
+    let registration = PredictAccessorFns {
+        accessor_mut,
+        accessor_ref,
+    };
     let mut guard = accessor_registry()
         .lock()
         .expect("predict accessor registry lock poisoned");
-    guard.entry(shape.id).or_insert(PredictAccessorFns {
-        accessor_mut,
-        accessor_ref,
-    });
+    if let Some(existing) = guard.get(&shape.id) {
+        assert_eq!(
+            *existing, registration,
+            "conflicting predict accessor registration for shape id={:?} type_identifier={}",
+            shape.id,
+            shape.type_identifier
+        );
+        return;
+    }
+    guard.insert(shape.id, registration);
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -255,7 +265,7 @@ fn walk_value<Access: WalkAccess>(
 }
 
 fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>) -> bool {
-    if is_parameter_shape(shape) || is_predict_type_name(shape) {
+    if lookup_registered_predict_accessor(shape).is_some() || is_predict_type_name(shape) {
         return true;
     }
 
@@ -292,10 +302,6 @@ fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>
     found
 }
 
-fn is_parameter_shape(shape: &'static Shape) -> bool {
-    lookup_registered_predict_accessor(shape).is_some()
-}
-
 fn is_predict_type_name(shape: &'static Shape) -> bool {
     // Temporary diagnostic-only guard: we never use this for successful dispatch.
     // Success requires a registered accessor; this path exists to fail loudly when
@@ -305,7 +311,9 @@ fn is_predict_type_name(shape: &'static Shape) -> bool {
 
 fn lookup_registered_predict_accessor(shape: &'static Shape) -> Option<PredictAccessorFns> {
     let registry = ACCESSOR_REGISTRY.get()?;
-    let guard = registry.lock().ok()?;
+    let guard = registry
+        .lock()
+        .expect("predict accessor registry lock poisoned");
     guard.get(&shape.id).copied()
 }
 

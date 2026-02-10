@@ -3,11 +3,11 @@
 > Historical note: entries in this file are an execution log. Older entries may reference removed APIs and are kept as archival context.
 
 ## Current State
-- **Slice**: 6 (V6 dynamic graph + Stage 1 cleanup)
-- **Phase**: Post-Implementation Cleanup (Stage 1 in progress)
+- **Slice**: 6 (V6 dynamic graph + post-stage hardening)
+- **Phase**: Post-Implementation Cleanup (shape/breadboard hardening in progress)
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
-- **Roadmap**: Stage 1 cleanup (legacy kill pass + typed metric optimizer path) → remaining post-cleanup debt
+- **Roadmap**: Stage 1 cleanup (legacy kill pass + typed metric optimizer path) → Stage 2 runtime/docs hardening (shape/breadboard) → remaining post-cleanup debt
 - **Roadmap rationale**: Slices 1-6 are implemented; active work is convergence cleanup and API/docs/test hardening.
 
 ## Active Subagents
@@ -63,6 +63,7 @@
 
 ## Decisions & Architectural Notes
 <!-- Log every non-obvious decision, especially cross-slice implications -->
+- **Stage 2 shape/breadboard hardening (2026-02-10):** Removed global graph-edge annotation registration from active runtime surface in favor of explicit per-call annotations (`from_module_with_annotations`), kept `from_module` canonical, and expanded regression coverage around projection/fit invariants.
 - **Stage 1 adversarial re-audit (2026-02-10):** Re-ran 3 independent explorer audits after restoring planner/spec detail updates (`tracker`, `slices_closure_audit`, `breadboard`); no new code-level P0/P1 findings.
 - **Stage 1 typed coverage hardening (2026-02-10):** Closed remaining optimizer input-key guard gap by adding invalid `input_keys` failure-path tests for both MIPRO and GEPA (`test_optimizer_typed_metric.rs`, `test_gepa_typed_metric_feedback.rs`) in addition to existing COPRO coverage.
 - **Stage 1 docs-risk note (2026-02-10):** Adversarial audits continue to flag user-facing API drift in `README.md` and `docs/docs/optimizers/gepa.mdx` (legacy evaluator/compile snippets); retained as explicit docs-only debt pending owner-approved wording pass.
@@ -196,7 +197,7 @@
 
 ## Open Questions
 <!-- Unresolved issues to revisit -->
-- `Post-Implementation Cleanup` remaining scope: generic-helper/`__phantom` ergonomics plus S2/S8 mechanism debt (predict-accessor fallback and graph edge-annotation registry) remain non-trivial migrations with broad compatibility impact.
+- `Post-Implementation Cleanup` remaining scope: generic-helper/`__phantom` ergonomics plus remaining S2 mechanism debt (predict-accessor fallback) and TypeIR assignability breadth remain non-trivial migrations with broad compatibility impact.
 - Typed metric/evaluator migration boundary is now closed in code (`Optimizer::compile(..., metric)` + `TypedMetric` + GEPA feedback gate); remaining open question is only how aggressively to prune or annotate historical planning notes so they cannot be misread as active API guidance.
 - Decision matrix and sequencing for cleanup kickoff are now centralized in `docs/plans/modules/phase_4_5_cleanup_kickoff.md`.
 - ~~`V6`: resolve `ProgramGraph::from_module` mutability contract~~ → **Resolved.** See decision entry below.
@@ -205,4 +206,6 @@
 ## Migration Debt
 <!-- Compatibility shims and legacy bridges left in place during slices. Each gets removed in Post-Implementation Cleanup. -->
 - **V5-S2 accessor fallback:** `crates/dspy-rs/src/core/dyn_predictor.rs` uses runtime `register_predict_accessor(shape.id -> fn)` plus `shape.type_identifier == "Predict"` detection instead of shape-local `dsrs::parameter` payload extraction. Exit criteria: implement attr-driven accessor payload (Mechanism A) or equivalent audited replacement without runtime registry.
+- **V6-TypeIR assignability breadth:** `TypeIR::is_assignable_to` remains intentionally conservative (exact match, nullable widening, simple unions, and structural list/map/tuple checks). Exit criteria: fuller subtyping semantics for richer unions/aliases/classes without destabilizing edge validation.
+- **Resolved in Stage 2 (2026-02-10):** S8 global edge-annotation registry debt is closed; active projection surface is explicit per-call annotations (`from_module_with_annotations`) with no ambient global annotation state.
 - **Resolved in Stage 1 (2026-02-10):** V5-C4 evaluator bridge removed (typed metric entrypoint landed) and legacy optimizer surfaces deleted.

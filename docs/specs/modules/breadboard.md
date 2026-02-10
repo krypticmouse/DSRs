@@ -120,10 +120,10 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U40** | P4 | `dyn_module` | `dyn_module.predictors()` / `predictors_mut()` | call | — | → Vec\<(&str, &dyn DynPredictor)\> | F9 |
 | **U41** | P4 | `graph` | `ProgramGraph::new()` | construct | → S5, → S6 | — | F10 |
 | **U42** | P4 | `graph` | `graph.add_node(name, node)` | call | → S5 | → Result | F10 |
-| **U43** | P4 | `graph` | `graph.connect(from, from_field, to, to_field)` | call | → N24, → S6 | → Result | F10 |
+| **U43** | P4 | `graph` | `graph.connect(from, from_field, to, to_field)` (`from == "input"` reserved for pseudo-node root wiring; user nodes cannot be named `"input"`; duplicate edges are rejected explicitly) | call | → N24, → S6 | → Result | F10 |
 | **U44** | P4 | `graph` | `graph.replace_node(name, node)` | call | → S5, → N24 | → Result | F10 |
 | **U45** | P4 | `graph` | `graph.execute(input).await` | call | → N25, → N26 | → Result\<BamlValue\> | F10 |
-| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` / `ProgramGraph::from_module_with_annotations(&module, annotations)` | call | → N18 (reuses F6 walker) | → ProgramGraph | F10 |
+| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` / `ProgramGraph::from_module_with_annotations(&module, annotations)` (explicit per-call annotation projection; no global annotation registry) | call | → N18 (reuses F6 walker) | → Result\<ProgramGraph\> | F10 |
 
 ---
 
@@ -265,10 +265,18 @@ U43 (graph.connect("input", "question", "cot", "question"))
   → N24 (TypeIR::is_assignable_to) → S6 (edge stored if valid)
 
 U44 (graph.replace_node("cot", new_node)) → S5, re-validates via N24
-U46 (ProgramGraph::from_module(&module)) → N18 (reuses F6 walker) → auto-populates S5/S6 with inferred edges
+U46 (ProgramGraph::from_module(&module))
+  → N18 (reuses F6 walker) → projects S5; then uses schema/path inference to populate S6
+  → multi-node projections with no resolvable edges return an explicit projection error
   or
 U46 (ProgramGraph::from_module_with_annotations(&module, annotations))
-  → N18 (reuses F6 walker) → auto-populates S5/S6 with explicit per-call edge wiring
+  → N18 (reuses F6 walker) → applies explicit per-call annotations first
+  → if `annotations` is empty, falls back to the same inference path as `from_module`
+  → no global/ambient annotation registry influences projection
+
+graph.fit(&mut module)
+  → applies graph predictor state back to typed predictors by canonical path
+  → enforces strict 1:1 path mapping and surfaces projection mismatch on divergence
 
 U45 (graph.execute(input))
   → N25 (topological sort from S5 + S6)

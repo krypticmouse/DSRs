@@ -228,6 +228,43 @@ async fn program_graph_execute_cycle_errors() {
 }
 
 #[tokio::test]
+async fn program_graph_execute_errors_when_graph_has_no_sink() {
+    let graph = ProgramGraph::new();
+    let input = BamlValue::Class("EmptyInput".to_string(), IndexMap::new());
+
+    let err = graph
+        .execute(input)
+        .await
+        .expect_err("empty graph should not have a sink");
+    assert!(matches!(err, GraphError::NoSink));
+}
+
+#[tokio::test]
+async fn program_graph_execute_errors_when_graph_has_multiple_sinks() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToEnriched>()))
+        .unwrap();
+
+    let input = BamlValue::Class(
+        "QuestionToAnswerInput".to_string(),
+        IndexMap::from([(
+            "question".to_string(),
+            BamlValue::String("ambiguous".to_string()),
+        )]),
+    );
+
+    let err = graph
+        .execute(input)
+        .await
+        .expect_err("disconnected graph should produce ambiguous sinks");
+    assert!(matches!(err, GraphError::AmbiguousSink { .. }));
+}
+
+#[tokio::test]
 async fn program_graph_execute_accepts_input_pseudonode_edges() {
     let mut graph = ProgramGraph::new();
     graph

@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use facet::Facet;
 use indexmap::IndexMap;
@@ -52,6 +52,15 @@ pub struct Edge {
     pub to_field: String,
 }
 
+impl Edge {
+    fn matches_endpoints(&self, from: &str, from_field: &str, to: &str, to_field: &str) -> bool {
+        self.from_node == from
+            && self.from_field == from_field
+            && self.to_node == to
+            && self.to_field == to_field
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphEdgeAnnotation {
     pub from_node: String,
@@ -64,6 +73,8 @@ pub struct GraphEdgeAnnotation {
 pub enum GraphError {
     #[error("duplicate node `{name}`")]
     DuplicateNode { name: String },
+    #[error("node name `{name}` is reserved for graph input wiring")]
+    ReservedNodeName { name: String },
     #[error("missing node `{name}`")]
     MissingNode { name: String },
     #[error("missing field `{field}` on node `{node}` ({side})")]
@@ -74,6 +85,13 @@ pub enum GraphError {
     },
     #[error("edge type mismatch `{from_node}.{from_field}` -> `{to_node}.{to_field}`")]
     TypeMismatch {
+        from_node: String,
+        from_field: String,
+        to_node: String,
+        to_field: String,
+    },
+    #[error("duplicate edge `{from_node}.{from_field}` -> `{to_node}.{to_field}`")]
+    DuplicateEdge {
         from_node: String,
         from_field: String,
         to_node: String,
@@ -195,6 +213,12 @@ fn projection_mismatch(path: impl Into<String>, reason: impl Into<String>) -> Gr
     }
 }
 
+fn reserved_node_name(name: &str) -> GraphError {
+    GraphError::ReservedNodeName {
+        name: name.to_string(),
+    }
+}
+
 fn missing_node(name: &str) -> GraphError {
     GraphError::MissingNode {
         name: name.to_string(),
@@ -206,6 +230,15 @@ fn missing_field(node: &str, field: &str, side: &'static str) -> GraphError {
         node: node.to_string(),
         field: field.to_string(),
         side,
+    }
+}
+
+fn duplicate_edge(from: &str, from_field: &str, to: &str, to_field: &str) -> GraphError {
+    GraphError::DuplicateEdge {
+        from_node: from.to_string(),
+        from_field: from_field.to_string(),
+        to_node: to.to_string(),
+        to_field: to_field.to_string(),
     }
 }
 
@@ -240,6 +273,9 @@ impl ProgramGraph {
         node: impl Into<Node>,
     ) -> Result<(), GraphError> {
         let name = name.into();
+        if name == INPUT_NODE {
+            return Err(reserved_node_name(&name));
+        }
         if self.nodes.contains_key(&name) {
             return Err(GraphError::DuplicateNode { name });
         }
@@ -267,6 +303,13 @@ impl ProgramGraph {
         to_field: &str,
     ) -> Result<(), GraphError> {
         self.validate_edge(from, from_field, to, to_field)?;
+        if self
+            .edges
+            .iter()
+            .any(|edge| edge.matches_endpoints(from, from_field, to, to_field))
+        {
+            return Err(duplicate_edge(from, from_field, to, to_field));
+        }
         self.edges.push(Edge {
             from_node: from.to_string(),
             from_field: from_field.to_string(),
@@ -277,6 +320,9 @@ impl ProgramGraph {
     }
 
     pub fn replace_node(&mut self, name: &str, node: impl Into<Node>) -> Result<(), GraphError> {
+        if name == INPUT_NODE {
+            return Err(reserved_node_name(name));
+        }
         if !self.nodes.contains_key(name) {
             return Err(missing_node(name));
         }
@@ -320,6 +366,9 @@ impl ProgramGraph {
         to_field: &str,
     ) -> Result<(), GraphError> {
         let inserted_name = inserted_name.into();
+        if inserted_name == INPUT_NODE {
+            return Err(reserved_node_name(&inserted_name));
+        }
         if self.nodes.contains_key(&inserted_name) {
             return Err(GraphError::DuplicateNode {
                 name: inserted_name,
@@ -329,18 +378,16 @@ impl ProgramGraph {
         let edge_index = self
             .edges
             .iter()
-            .position(|edge| {
-                edge.from_node == from
-                    && edge.to_node == to
-                    && edge.from_field == from_field
-                    && edge.to_field == to_field
-            })
+            .position(|edge| edge.matches_endpoints(from, from_field, to, to_field))
             .ok_or_else(|| {
                 projection_mismatch(
                     format!("{from}.{from_field}->{to}.{to_field}"),
                     "edge not found for insert_between",
                 )
             })?;
+
+        let mut inserted_node = inserted_node;
+        sync_node_schema(&mut inserted_node);
 
         let inserted_input = inserted_node
             .schema
@@ -358,6 +405,13 @@ impl ProgramGraph {
             })?
             .rust_name
             .clone();
+        if inserted_node.schema.input_fields().len() != 1 || inserted_node.schema.output_fields().len() != 1
+        {
+            return Err(projection_mismatch(
+                inserted_name,
+                "insert_between requires inserted node to expose exactly one input and one output field",
+            ));
+        }
 
         self.nodes.insert(inserted_name.clone(), inserted_node);
 
@@ -382,10 +436,12 @@ impl ProgramGraph {
         ) {
             self.nodes.shift_remove(&inserted_name);
             self.edges.retain(|edge| {
-                !(edge.from_node == direct_edge.from_node
-                    && edge.to_node == inserted_name
-                    && edge.from_field == direct_edge.from_field
-                    && edge.to_field == inserted_input)
+                !edge.matches_endpoints(
+                    &direct_edge.from_node,
+                    &direct_edge.from_field,
+                    &inserted_name,
+                    &inserted_input,
+                )
             });
             self.edges.insert(edge_index, direct_edge);
             return Err(err);
@@ -502,10 +558,19 @@ impl ProgramGraph {
 
             let mut dyn_module: Box<dyn DynModule> =
                 Box::new(crate::core::PredictDynModule::new(predictor.schema().clone()));
-            let leaves = dyn_module.predictors_mut();
-            let Some((_, dyn_predictor)) = leaves.into_iter().next() else {
-                return Err(projection_mismatch(path, "dynamic module has no predictor leaves"));
-            };
+            let mut leaves = dyn_module.predictors_mut();
+            if leaves.len() != 1 {
+                return Err(projection_mismatch(
+                    path,
+                    format!(
+                        "dynamic module must expose exactly one predictor leaf, found {}",
+                        leaves.len()
+                    ),
+                ));
+            }
+            let (_, dyn_predictor) = leaves
+                .pop()
+                .expect("non-empty after explicit predictor count check");
             dyn_predictor
                 .load_state(state)
                 .map_err(|err| projection_mismatch(path.clone(), err.to_string()))?;
@@ -541,24 +606,54 @@ impl ProgramGraph {
     {
         let mut destination =
             named_parameters(module).map_err(|err| projection_mismatch("<module>", err.to_string()))?;
+        let destination_index = destination
+            .iter()
+            .enumerate()
+            .map(|(idx, (path, _))| (path.clone(), idx))
+            .collect::<HashMap<_, _>>();
+        let mut matched_destinations = HashSet::with_capacity(destination.len());
 
         for (node_name, node) in &self.nodes {
             let mut node_predictors = node.module.predictors();
-            let Some((_, predictor)) = node_predictors.pop() else {
-                continue;
-            };
+            if node_predictors.len() != 1 {
+                return Err(projection_mismatch(
+                    node_name.clone(),
+                    format!(
+                        "graph node must expose exactly one predictor leaf, found {}",
+                        node_predictors.len()
+                    ),
+                ));
+            }
+            let (_, predictor) = node_predictors
+                .pop()
+                .expect("non-empty after explicit predictor count check");
             let state: PredictState = predictor.dump_state();
 
-            let Some((_, target)) = destination.iter_mut().find(|(path, _)| path == node_name)
-            else {
+            let Some(&destination_idx) = destination_index.get(node_name) else {
                 return Err(projection_mismatch(
                     node_name.clone(),
                     "graph node has no matching typed predictor path",
                 ));
             };
+            matched_destinations.insert(destination_idx);
+            let (_, target) = destination
+                .get_mut(destination_idx)
+                .expect("index derived from current destination vector");
             target
                 .load_state(state)
                 .map_err(|err| projection_mismatch(node_name.clone(), err.to_string()))?;
+        }
+
+        if matched_destinations.len() != destination.len() {
+            let missing_path = destination
+                .iter()
+                .enumerate()
+                .find_map(|(idx, (path, _))| (!matched_destinations.contains(&idx)).then_some(path))
+                .expect("mismatch implies at least one destination path is unmatched");
+            return Err(projection_mismatch(
+                missing_path.clone(),
+                "typed predictor path has no matching graph node",
+            ));
         }
 
         Ok(())
@@ -591,14 +686,6 @@ impl ProgramGraph {
                             continue;
                         }
                         if !from_field.type_ir.is_assignable_to(&to_field.type_ir) {
-                            continue;
-                        }
-                        if self.edges.iter().any(|edge| {
-                            edge.from_node == *from_name
-                                && edge.from_field == from_field.rust_name
-                                && edge.to_node == *to_name
-                                && edge.to_field == to_field.rust_name
-                        }) {
                             continue;
                         }
                         inferred.push((

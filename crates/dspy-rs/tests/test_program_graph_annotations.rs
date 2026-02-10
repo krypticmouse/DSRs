@@ -91,6 +91,38 @@ fn from_module_with_annotations_rejects_invalid_field_paths() {
 }
 
 #[test]
+fn from_module_with_annotations_rejects_unknown_nodes() {
+    let module = PlainModule {
+        source: Predict::<ProduceAnswer>::new(),
+        sink: Predict::<ConsumeAnswer>::new(),
+    };
+
+    let annotations = [GraphEdgeAnnotation {
+        from_node: "missing".to_string(),
+        from_field: "answer".to_string(),
+        to_node: "sink".to_string(),
+        to_field: "answer".to_string(),
+    }];
+
+    let err = ProgramGraph::from_module_with_annotations(&module, &annotations)
+        .expect_err("unknown annotation nodes should fail projection");
+    assert!(matches!(err, GraphError::MissingNode { .. }));
+}
+
+#[test]
+fn from_module_with_annotations_rejects_duplicate_explicit_edges() {
+    let module = PlainModule {
+        source: Predict::<ProduceAnswer>::new(),
+        sink: Predict::<ConsumeAnswer>::new(),
+    };
+
+    let annotation = source_to_sink_annotation();
+    let err = ProgramGraph::from_module_with_annotations(&module, &[annotation.clone(), annotation])
+        .expect_err("duplicate explicit annotations should fail projection");
+    assert!(matches!(err, GraphError::DuplicateEdge { .. }));
+}
+
+#[test]
 fn from_module_without_annotations_falls_back_to_inference() {
     let module = PlainModule {
         source: Predict::<ProduceAnswer>::new(),

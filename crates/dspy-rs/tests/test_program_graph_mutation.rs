@@ -36,6 +36,22 @@ struct AnswerPassthrough {
 
 #[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
 #[facet(crate = facet)]
+struct MultiPortPassthrough {
+    #[input]
+    answer: String,
+
+    #[input]
+    aux: String,
+
+    #[output]
+    answer_out: String,
+
+    #[output]
+    aux_out: String,
+}
+
+#[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
+#[facet(crate = facet)]
 struct CountToFinal {
     #[input]
     count: i64,
@@ -147,6 +163,15 @@ fn node_for(schema: &SignatureSchema) -> Node {
     }
 }
 
+fn node_with_stale_schema(actual_schema: &SignatureSchema, stale_schema: &SignatureSchema) -> Node {
+    Node {
+        schema: stale_schema.clone(),
+        module: Box::new(NoopDynModule {
+            schema: actual_schema.clone(),
+        }),
+    }
+}
+
 fn schema_with_input_type(
     schema: &'static SignatureSchema,
     rust_name: &str,
@@ -189,6 +214,36 @@ fn program_graph_connect_rejects_type_mismatch() {
         .connect("a", "answer", "b", "count")
         .expect_err("incompatible edge should be rejected");
     assert!(matches!(err, GraphError::TypeMismatch { .. }));
+}
+
+#[test]
+fn program_graph_connect_rejects_duplicate_edges() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToFinal>()))
+        .unwrap();
+    graph.connect("a", "answer", "b", "answer").unwrap();
+
+    let err = graph
+        .connect("a", "answer", "b", "answer")
+        .expect_err("duplicate edges should be rejected");
+    assert!(matches!(err, GraphError::DuplicateEdge { .. }));
+}
+
+#[test]
+fn program_graph_connect_rejects_empty_input_pseudonode_field() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+
+    let err = graph
+        .connect("input", "   ", "a", "question")
+        .expect_err("input pseudo-node field must be non-empty");
+    assert!(matches!(err, GraphError::ProjectionMismatch { .. }));
 }
 
 #[test]
@@ -406,6 +461,40 @@ fn program_graph_replace_node_revalidates_incident_edges() {
 }
 
 #[test]
+fn program_graph_remove_node_drops_incident_edges() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToFinal>()))
+        .unwrap();
+    graph.connect("a", "answer", "b", "answer").unwrap();
+
+    let removed = graph.remove_node("b").expect("existing node should remove");
+    assert!(removed.schema.input_field_by_rust("answer").is_some());
+    assert!(graph.nodes().contains_key("a"));
+    assert!(!graph.nodes().contains_key("b"));
+    assert!(
+        graph.edges().is_empty(),
+        "removing a node should prune all incident edges"
+    );
+}
+
+#[test]
+fn program_graph_remove_node_errors_for_unknown_node() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+
+    let err = graph
+        .remove_node("missing")
+        .expect_err("missing nodes should return GraphError::MissingNode");
+    assert!(matches!(err, GraphError::MissingNode { .. }));
+}
+
+#[test]
 fn program_graph_insert_between_rewires_edge_and_preserves_validity() {
     let mut graph = ProgramGraph::new();
     graph
@@ -445,6 +534,46 @@ fn program_graph_insert_between_rewires_edge_and_preserves_validity() {
             .edges()
             .iter()
             .all(|edge| !(edge.from_node == "a" && edge.to_node == "b"))
+    );
+}
+
+#[test]
+fn program_graph_insert_between_uses_module_schema_not_stale_node_schema() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToFinal>()))
+        .unwrap();
+    graph.connect("a", "answer", "b", "answer").unwrap();
+
+    graph
+        .insert_between(
+            "a",
+            "b",
+            "middle",
+            node_with_stale_schema(
+                SignatureSchema::of::<AnswerPassthrough>(),
+                SignatureSchema::of::<CountToFinal>(),
+            ),
+            "answer",
+            "answer",
+        )
+        .expect("insert_between should validate against the module's live schema");
+
+    assert_eq!(graph.edges().len(), 2);
+    assert!(
+        graph
+            .edges()
+            .iter()
+            .any(|edge| edge.from_node == "a" && edge.to_node == "middle")
+    );
+    assert!(
+        graph
+            .edges()
+            .iter()
+            .any(|edge| edge.from_node == "middle" && edge.to_node == "b")
     );
 }
 
@@ -489,4 +618,72 @@ fn program_graph_insert_between_missing_fields_is_atomic() {
             .iter()
             .any(|edge| edge.from_node == "a" && edge.to_node == "b")
     );
+}
+
+#[test]
+fn program_graph_rejects_reserved_input_node_name() {
+    let mut graph = ProgramGraph::new();
+    let err = graph
+        .add_node("input", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .expect_err("`input` is reserved for pseudo-node wiring");
+    assert!(matches!(err, GraphError::ReservedNodeName { .. }));
+}
+
+#[test]
+fn program_graph_insert_between_requires_single_input_single_output_node() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToFinal>()))
+        .unwrap();
+    graph.connect("a", "answer", "b", "answer").unwrap();
+
+    let err = graph
+        .insert_between(
+            "a",
+            "b",
+            "multi",
+            node_for(SignatureSchema::of::<MultiPortPassthrough>()),
+            "answer",
+            "answer",
+        )
+        .expect_err("insert_between should reject multi-port nodes");
+    assert!(matches!(err, GraphError::ProjectionMismatch { .. }));
+
+    assert!(graph.nodes().contains_key("a"));
+    assert!(graph.nodes().contains_key("b"));
+    assert!(!graph.nodes().contains_key("multi"));
+    assert!(
+        graph
+            .edges()
+            .iter()
+            .any(|edge| edge.from_node == "a" && edge.to_node == "b"),
+        "failed insertion should leave original edge untouched"
+    );
+}
+
+#[test]
+fn program_graph_insert_between_rejects_reserved_inserted_node_name() {
+    let mut graph = ProgramGraph::new();
+    graph
+        .add_node("a", node_for(SignatureSchema::of::<QuestionToAnswer>()))
+        .unwrap();
+    graph
+        .add_node("b", node_for(SignatureSchema::of::<AnswerToFinal>()))
+        .unwrap();
+    graph.connect("a", "answer", "b", "answer").unwrap();
+
+    let err = graph
+        .insert_between(
+            "a",
+            "b",
+            "input",
+            node_for(SignatureSchema::of::<AnswerPassthrough>()),
+            "answer",
+            "answer",
+        )
+        .expect_err("`input` is reserved for pseudo-node wiring");
+    assert!(matches!(err, GraphError::ReservedNodeName { .. }));
 }
