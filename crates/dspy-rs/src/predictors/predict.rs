@@ -67,6 +67,12 @@ pub struct Predict<S: Signature> {
 
 impl<S: Signature> Predict<S> {
     pub fn new() -> Self {
+        // TODO(dsrs-s2): Remove explicit registration after switching to shape-local
+        // `PredictAccessorFns` attr payload lookup in the walker.
+        // Upstream:
+        // - https://github.com/facet-rs/facet/issues/2039
+        // - https://github.com/facet-rs/facet/pull/2040
+        // - https://github.com/facet-rs/facet/pull/2041
         register_predict_accessor(
             <Self as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
