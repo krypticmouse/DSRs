@@ -1,12 +1,12 @@
 # Implementation Tracker
 
 ## Current State
-- **Slice**: 5 (V5 optimizer interface)
-- **Phase**: Commit
+- **Slice**: 6 (V6 dynamic graph)
+- **Phase**: Research
 - **Primary kickoff doc**: `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
 - **Current deferred-ledger source**: `docs/plans/modules/slices_closure_audit.md`
-- **Roadmap**: V5 (optimizer interface) → V6 (dynamic graph) → Kill Pass (legacy deletion)
-- **Roadmap rationale**: 4.5-lite prerequisites are complete; remaining execution follows breadboard V5→V6, then legacy deletion sweep.
+- **Roadmap**: V6 (dynamic graph) → Kill Pass (legacy deletion)
+- **Roadmap rationale**: V5 implementation + closure audit are complete; execution now advances to breadboard V6, then legacy deletion sweep.
 
 ## Active Subagents
 | ID | Purpose | Slice | Phase | Status | Notes |
@@ -62,6 +62,9 @@
 - **Slice 5 adversarial arbitration (2026-02-10):** Deferred both high findings: (1) S2 Mechanism A attr-payload discovery remains blocked by generic derive constraints in current implementation and is tracked as migration debt; (2) U50 typed metric surface (`compile(..., metric)`) remains deferred per prior C4 decision to avoid duplicate migration churn before cleanup.
 - **Slice 5 adversarial arbitration (2026-02-10):** Deferred GEPA uniform-entrypoint finding and legacy surface cleanup as post-V5/V6 cleanup work; no stale `NEEDS ARBITRATION` markers remain in Slice 5 docs.
 - **Slice 5 post-fix smoke rerun (2026-02-10):** Re-ran `94-smoke-slice5-optimizer-interface` against `openai:gpt-5.2` after arbitrate fixes; still passes with `answer: smoke-ok`.
+- **Slice 5 commit (2026-02-10):** Change `ovrlqprm` / `89d83af6` — "slice5: implement optimizer interface with dyn predictor walker".
+- **Slice 5 closure audit (2026-02-10):** Updated `docs/plans/modules/slices_closure_audit.md` with V5 requirement accounting, explicit implemented/deferred classification (`U50`, S2 mechanism, GEPA entrypoint), and validation evidence including Slice 5 GPT-5.2 smoke.
+- **State transition (2026-02-10):** Advanced tracker from Slice 5 closure to `Slice 6 / Research` per closure-audit transition rule (`slice < 6`).
 - **Calling convention revision (2026-02-09):** Replaced `CallOutcome<O>` with `Result<Predicted<O>, PredictError>` for typed module calls. `Predicted<O>` implements `Deref<Target = O>` for direct field access and carries `CallMetadata` (like DSPy's `Prediction`). Rationale: `CallOutcome` required `.into_result()?` on stable Rust, violating P1 ergonomics. Nightly `try_trait_v2` has no stabilization timeline. `Predicted<O>` + `Result` gives DSPy-parity ergonomics on stable: `module.call(input).await?.answer`. Canonical user entrypoint is `Module::call`; module authors implement `forward` as the hook.
 - **Interpretation note:** historical entries below may still reference `CallOutcome` because they log pre-revision milestones. Treat those references as superseded unless an entry explicitly says otherwise.
 - **Phase 4.5-lite completion (2026-02-10):** Exit gates passed. `cargo check -p dspy-rs`, `cargo check -p dspy-rs --examples`, and `cargo test` are green after C1/C5/C6 execution.
