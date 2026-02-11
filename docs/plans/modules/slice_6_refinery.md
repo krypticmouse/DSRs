@@ -1,5 +1,13 @@
 # Slice 6 Plan Refinery (Ground-Truth Check)
 
+## Current Scope Addendum (2026-02-11)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+All content below is preserved as a historical implementation record.
+
 Verified against:
 - `/Users/darin/src/personal/DSRs/docs/specs/modules/breadboard.md` (including V6)
 - `/Users/darin/src/personal/DSRs/docs/specs/modules/shapes.md`

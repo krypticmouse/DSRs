@@ -10,7 +10,7 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::__macro_support::bamltype::facet;
-use dspy_rs::{Predict, Signature, init_tracing, named_parameters, named_parameters_ref};
+use dspy_rs::{Predict, Signature, init_tracing, named_parameters};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -56,12 +56,12 @@ struct NestedModule {
     extra: Predict<QA>,
 }
 
-fn print_instructions<T>(label: &str, module: &T) -> Result<()>
+fn print_instructions<T>(label: &str, module: &mut T) -> Result<()>
 where
     T: for<'a> facet::Facet<'a>,
 {
     println!("{label}");
-    let params = named_parameters_ref(module)?;
+    let params = named_parameters(module)?;
     for (path, predictor) in params {
         println!("  {path} -> {}", predictor.instruction());
     }
@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
             predictor.set_instruction(format!("Updated instruction for `{path}`"));
         }
     }
-    print_instructions("single module", &qa_rater)?;
+    print_instructions("single module", &mut qa_rater)?;
 
     let mut nested = NestedModule::builder().build();
     {
@@ -88,7 +88,7 @@ async fn main() -> Result<()> {
             predictor.set_instruction(format!("Deep updated: `{path}`"));
         }
     }
-    print_instructions("nested module", &nested)?;
+    print_instructions("nested module", &mut nested)?;
 
     Ok(())
 }

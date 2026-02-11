@@ -13,7 +13,7 @@ use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing, named_parameters_ref,
+    init_tracing, named_parameters,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -75,8 +75,8 @@ impl TypedMetric<SimpleQA> for ExactMatchMetric {
     }
 }
 
-fn answerer_instruction(module: &SimpleQA) -> Result<String> {
-    let params = named_parameters_ref(module)?;
+fn answerer_instruction(module: &mut SimpleQA) -> Result<String> {
+    let params = named_parameters(module)?;
     let (_, predictor) = params
         .iter()
         .find(|(path, _)| path == "answerer")
@@ -109,7 +109,7 @@ async fn main() -> Result<()> {
     let mut qa_module = SimpleQA::builder().build();
 
     println!("Initial instruction:");
-    println!("  \"{}\"\n", answerer_instruction(&qa_module)?);
+    println!("  \"{}\"\n", answerer_instruction(&mut qa_module)?);
 
     println!("Evaluating baseline performance...");
     let baseline_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
         .await?;
 
     println!("\nOptimized instruction:");
-    println!("  \"{}\"\n", answerer_instruction(&qa_module)?);
+    println!("  \"{}\"\n", answerer_instruction(&mut qa_module)?);
 
     println!("Evaluating optimized performance...");
     let optimized_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);

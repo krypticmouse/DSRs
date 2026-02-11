@@ -5,7 +5,7 @@ use anyhow::Result;
 use bamltype::facet_reflect::Peek;
 use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 
-use crate::{BamlValue, Example, PredictError, Predicted, SignatureSchema};
+use crate::{Example, SignatureSchema};
 
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
@@ -28,10 +28,6 @@ use crate::{BamlValue, Example, PredictError, Predicted, SignatureSchema};
 /// Normal users never touch this — you pass your module to `optimizer.compile()`
 /// and it uses `DynPredictor` internally.
 ///
-/// Note: [`forward_untyped`](DynPredictor::forward_untyped) goes through a
-/// `BamlValue → typed → LM call → typed → BamlValue` round-trip. Fine for
-/// optimizer eval loops, but not the fast path for production calls.
-#[async_trait::async_trait]
 pub trait DynPredictor: Send + Sync {
     /// Returns the [`SignatureSchema`] for this predictor's signature.
     fn schema(&self) -> &SignatureSchema;
@@ -62,12 +58,6 @@ pub trait DynPredictor: Send + Sync {
     ///
     /// Returns an error if the demos can't be converted to the predictor's typed format.
     fn load_state(&mut self, state: PredictState) -> Result<()>;
-
-    /// Runs the predictor with untyped input/output for optimizer evaluation loops.
-    async fn forward_untyped(
-        &self,
-        input: BamlValue,
-    ) -> std::result::Result<Predicted<BamlValue>, PredictError>;
 }
 
 /// Serializable snapshot of a [`crate::Predict`]'s mutable state.
@@ -87,13 +77,11 @@ pub struct PredictState {
 #[facet(opaque)]
 pub struct PredictAccessorFns {
     pub accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
-    pub accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 }
 
 impl PartialEq for PredictAccessorFns {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::fn_addr_eq(self.accessor_mut, other.accessor_mut)
-            && std::ptr::fn_addr_eq(self.accessor_ref, other.accessor_ref)
     }
 }
 
@@ -119,12 +107,8 @@ fn accessor_registry() -> &'static Mutex<HashMap<ConstTypeId, PredictAccessorFns
 pub fn register_predict_accessor(
     shape: &'static Shape,
     accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
-    accessor_ref: fn(*const ()) -> *const dyn DynPredictor,
 ) {
-    let registration = PredictAccessorFns {
-        accessor_mut,
-        accessor_ref,
-    };
+    let registration = PredictAccessorFns { accessor_mut };
     let mut guard = accessor_registry()
         .lock()
         .expect("predict accessor registry lock poisoned");
@@ -206,29 +190,6 @@ where
     Ok(handles)
 }
 
-/// Like [`named_parameters`], but with shared `&` access (read-only).
-///
-/// Useful for inspecting parameter state without exclusive access.
-#[tracing::instrument(level = "debug", name = "dsrs.named_parameters_ref", skip(module))]
-pub fn named_parameters_ref<M>(
-    module: &M,
-) -> std::result::Result<Vec<(String, &dyn DynPredictor)>, NamedParametersError>
-where
-    M: for<'a> Facet<'a>,
-{
-    let mut raw_handles = Vec::<(String, *const dyn DynPredictor)>::new();
-    walk_value::<SharedAccess>(Peek::new(module), "", &mut raw_handles)?;
-
-    let mut handles = Vec::with_capacity(raw_handles.len());
-    for (path, ptr) in raw_handles {
-        // SAFETY: pointers are created from a shared traversal over `module`.
-        let handle = unsafe { &*ptr };
-        handles.push((path, handle));
-    }
-
-    Ok(handles)
-}
-
 trait WalkAccess {
     type RawPtr;
 
@@ -244,16 +205,6 @@ impl WalkAccess for MutableAccess {
         // SAFETY: `named_parameters` has exclusive access to `module` for the full traversal.
         // We only cast to a mutable pointer after the read-only walk has located the leaf.
         (accessor.accessor_mut)((value.data().as_byte_ptr() as *mut u8).cast::<()>())
-    }
-}
-
-struct SharedAccess;
-
-impl WalkAccess for SharedAccess {
-    type RawPtr = *const dyn DynPredictor;
-
-    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr {
-        (accessor.accessor_ref)(value.data().as_byte_ptr().cast::<()>())
     }
 }
 

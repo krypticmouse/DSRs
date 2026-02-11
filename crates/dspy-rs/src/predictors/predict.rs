@@ -52,17 +52,6 @@ where
     dyn_ref as *mut dyn DynPredictor
 }
 
-fn predict_dyn_accessor_ref<S>(value: *const ()) -> *const dyn DynPredictor
-where
-    S: Signature,
-{
-    // SAFETY: this function is only called via `register_predict_accessor` for
-    // `Predict<S>`'s own shape, so `value` points at a valid `Predict<S>`.
-    let typed = unsafe { &*(value.cast::<Predict<S>>()) };
-    let dyn_ref: &dyn DynPredictor = typed;
-    dyn_ref as *const dyn DynPredictor
-}
-
 /// The leaf module. The only thing in the system that actually calls the LM.
 ///
 /// One `Predict` = one prompt template = one LM call. It takes a [`Signature`]'s fields
@@ -123,7 +112,6 @@ impl<S: Signature> Predict<S> {
         register_predict_accessor(
             <Self as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
-            predict_dyn_accessor_ref::<S>,
         );
         Self {
             tools: Vec::new(),
@@ -364,7 +352,6 @@ impl<S: Signature> PredictBuilder<S> {
         register_predict_accessor(
             <Predict<S> as facet::Facet<'static>>::SHAPE,
             predict_dyn_accessor::<S>,
-            predict_dyn_accessor_ref::<S>,
         );
         Predict {
             tools: self.tools,
@@ -516,40 +503,6 @@ where
     }
 }
 
-impl<S> Predict<S>
-where
-    S: Signature,
-    S::Input: BamlType,
-    S::Output: BamlType,
-{
-    #[tracing::instrument(
-        name = "dsrs.predict.forward_untyped",
-        level = "debug",
-        skip(self, input),
-        fields(signature = std::any::type_name::<S>())
-    )]
-    pub async fn forward_untyped(
-        &self,
-        input: BamlValue,
-    ) -> Result<Predicted<BamlValue>, PredictError> {
-        let typed_input = match S::Input::try_from_baml_value(input.clone()) {
-            Ok(typed_input) => typed_input,
-            Err(err) => {
-                debug!(error = %err, "untyped input conversion failed");
-                return Err(PredictError::Conversion {
-                    source: err.into(),
-                    parsed: input,
-                });
-            }
-        };
-        let predicted = self.call(typed_input).await?;
-        let (output, metadata) = predicted.into_parts();
-        debug!("typed predict forward_untyped complete");
-        Ok(Predicted::new(output.to_baml_value(), metadata))
-    }
-}
-
-#[async_trait::async_trait]
 impl<S> DynPredictor for Predict<S>
 where
     S: Signature,
@@ -598,12 +551,5 @@ where
         self.set_demos_from_examples(state.demos)?;
         self.instruction_override = state.instruction_override;
         Ok(())
-    }
-
-    async fn forward_untyped(
-        &self,
-        input: BamlValue,
-    ) -> std::result::Result<Predicted<BamlValue>, PredictError> {
-        Predict::forward_untyped(self, input).await
     }
 }

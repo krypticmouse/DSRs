@@ -2,7 +2,7 @@ use anyhow::Result;
 use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     COPRO, CallMetadata, DynPredictor, Example, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, named_parameters_ref,
+    PredictError, Predicted, Signature, TypedMetric, named_parameters,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -77,7 +77,7 @@ async fn optimizer_mutates_predictor_instruction_via_named_parameters() {
         .await
         .expect("COPRO compile should succeed");
 
-    let params = named_parameters_ref(&module).expect("predictor should be discoverable");
+    let params = named_parameters(&mut module).expect("predictor should be discoverable");
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].0, "predictor");
 

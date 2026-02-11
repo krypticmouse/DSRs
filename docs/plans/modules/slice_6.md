@@ -1,3 +1,11 @@
+## Current Scope Addendum (2026-02-11)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+All content below is preserved as a historical implementation record.
+
 ### Summary
 Slice 6 delivers the full V6 dynamic graph path on top of Slice 5: [NEW] `DynModule` + [NEW] strategy registry/factories, [NEW] `ProgramGraph` mutation/validation/execution, and typed-module projection with the locked snapshot-then-fit-back contract: [NEW] immutable `from_module(&module)` built on [NEW] `named_parameters_ref`, followed by [NEW] `graph.fit(&mut module)` for mutable write-back. This explicitly resolves the current API tension between existing mutable discovery (`/Users/darin/src/personal/DSRs/crates/dspy-rs/src/core/dyn_predictor.rs:72`) and design-time immutable projection, while keeping C8 locked to annotation-first edge derivation (no trace-inferred wiring in this slice). The implementation path stays shortest-correct: reuse the existing accessor bridge where possible, and record all spec-divergent shortcuts as migration debt.
 

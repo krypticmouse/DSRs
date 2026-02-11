@@ -1,5 +1,13 @@
 # Calling Convention Revision: `CallOutcome<O>` -> `Result<Predicted<O>, PredictError>`
 
+## Current Scope Addendum (2026-02-11)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+All content below is preserved as a historical implementation record.
+
 Date: 2026-02-09
 Status: Approved and integrated (spec updates applied 2026-02-10)
 Scope: Spec-only changes across `breadboard.md`, `design_reference.md`, `shapes.md`

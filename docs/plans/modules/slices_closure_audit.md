@@ -1,5 +1,13 @@
 # Slices 1-6 Closure Audit
 
+## Current Scope Addendum (2026-02-11)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+All content below is preserved as a historical implementation record.
+
 Date: 2026-02-10  
 Scope: Breadboard vertical slices `V1`, `V2`, `V3`, `V4`, `V5`, `V6` from `docs/specs/modules/breadboard.md`.
 

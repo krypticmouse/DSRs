@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use dspy_rs::__macro_support::bamltype::facet;
-use dspy_rs::{NamedParametersError, Predict as DsPredict, Signature, named_parameters, named_parameters_ref};
+use dspy_rs::{NamedParametersError, Predict as DsPredict, Signature, named_parameters};
 
 #[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
 #[facet(crate = facet)]
@@ -80,33 +80,7 @@ fn named_parameters_skips_none_option() {
 }
 
 #[test]
-fn named_parameters_ref_matches_mutable_with_containers() {
-    let mut module = ContainerModule {
-        maybe: Some(DsPredict::<QA>::new()),
-        predictors: vec![DsPredict::<QA>::new(), DsPredict::<QA>::new()],
-        by_name: HashMap::from([
-            ("z".to_string(), DsPredict::<QA>::new()),
-            ("a".to_string(), DsPredict::<QA>::new()),
-        ]),
-        boxed: Box::new(DsPredict::<QA>::new()),
-    };
-
-    let mutable_paths = named_parameters(&mut module)
-        .expect("mutable traversal should succeed")
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect::<Vec<_>>();
-    let ref_paths = named_parameters_ref(&module)
-        .expect("shared traversal should succeed")
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect::<Vec<_>>();
-
-    assert_eq!(ref_paths, mutable_paths);
-}
-
-#[test]
-fn named_parameters_container_path_order_is_stable_across_mut_and_ref_runs() {
+fn named_parameters_container_path_order_is_stable_across_runs() {
     let mut module = ContainerModule {
         maybe: Some(DsPredict::<QA>::new()),
         predictors: vec![DsPredict::<QA>::new(), DsPredict::<QA>::new()],
@@ -118,13 +92,8 @@ fn named_parameters_container_path_order_is_stable_across_mut_and_ref_runs() {
         boxed: Box::new(DsPredict::<QA>::new()),
     };
 
-    let expected_mut_paths = named_parameters(&mut module)
+    let expected_paths = named_parameters(&mut module)
         .expect("initial mutable traversal should succeed")
-        .into_iter()
-        .map(|(path, _)| path)
-        .collect::<Vec<_>>();
-    let expected_ref_paths = named_parameters_ref(&module)
-        .expect("initial shared traversal should succeed")
         .into_iter()
         .map(|(path, _)| path)
         .collect::<Vec<_>>();
@@ -135,14 +104,7 @@ fn named_parameters_container_path_order_is_stable_across_mut_and_ref_runs() {
             .into_iter()
             .map(|(path, _)| path)
             .collect::<Vec<_>>();
-        let ref_paths = named_parameters_ref(&module)
-            .expect("shared traversal should remain stable")
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect::<Vec<_>>();
-        assert_eq!(mut_paths, expected_mut_paths);
-        assert_eq!(ref_paths, expected_ref_paths);
-        assert_eq!(ref_paths, mut_paths);
+        assert_eq!(mut_paths, expected_paths);
     }
 }
 
@@ -224,31 +186,8 @@ fn named_parameters_missing_accessor_reports_predict_like_leaf_path() {
         NamedParametersError::MissingAttr { path } => {
             assert_eq!(path, "predictor");
             assert!(
-                message.contains("S2 fallback"),
-                "diagnostic should mention fallback status"
-            );
-        }
-        other => panic!("expected MissingAttr, got {other:?}"),
-    }
-}
-
-#[test]
-fn named_parameters_ref_missing_accessor_reports_predict_like_leaf_path() {
-    let module = FakePredictModule {
-        predictor: Predict { marker: 7 },
-    };
-
-    let err = match named_parameters_ref(&module) {
-        Ok(_) => panic!("predict-like shapes should fail without accessor registration"),
-        Err(err) => err,
-    };
-    let message = err.to_string();
-    match err {
-        NamedParametersError::MissingAttr { path } => {
-            assert_eq!(path, "predictor");
-            assert!(
-                message.contains("S2 fallback"),
-                "diagnostic should mention fallback status"
+                message.contains("no registered accessor"),
+                "diagnostic should mention missing accessor registration"
             );
         }
         other => panic!("expected MissingAttr, got {other:?}"),

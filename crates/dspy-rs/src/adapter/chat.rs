@@ -387,22 +387,6 @@ impl ChatAdapter {
         result
     }
 
-    pub fn format_input_baml(&self, schema: &crate::SignatureSchema, input: &BamlValue) -> String {
-        let mut result = String::new();
-        for field_spec in schema.input_fields() {
-            if let Some(value) = value_for_path_relaxed(input, field_spec.path()) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
-                result.push_str(&format_baml_value_for_prompt_typed(
-                    value,
-                    schema.output_format(),
-                    field_spec.format,
-                ));
-                result.push_str("\n\n");
-            }
-        }
-        result
-    }
-
     pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
     where
         S::Output: BamlType,
@@ -429,26 +413,6 @@ impl ChatAdapter {
         let mut result = sections.join("\n\n");
         result.push_str("\n\n[[ ## completed ## ]]\n");
 
-        result
-    }
-
-    pub fn format_output_baml(
-        &self,
-        schema: &crate::SignatureSchema,
-        output: &BamlValue,
-    ) -> String {
-        let mut sections = Vec::new();
-        for field_spec in schema.output_fields() {
-            if let Some(value) = value_for_path_relaxed(output, field_spec.path()) {
-                sections.push(format!(
-                    "[[ ## {} ## ]]\n{}",
-                    field_spec.lm_name,
-                    format_baml_value_for_prompt(value)
-                ));
-            }
-        }
-        let mut result = sections.join("\n\n");
-        result.push_str("\n\n[[ ## completed ## ]]\n");
         result
     }
 
@@ -662,128 +626,6 @@ impl ChatAdapter {
         O: BamlType + for<'a> facet::Facet<'a>,
     {
         let (output, _) = self.parse_output_with_meta::<O>(schema, response)?;
-        Ok(output)
-    }
-
-    #[allow(clippy::result_large_err)]
-    pub fn parse_output_baml_with_meta(
-        &self,
-        schema: &crate::SignatureSchema,
-        response: &Message,
-    ) -> std::result::Result<(BamlValue, IndexMap<String, FieldMeta>), ParseError> {
-        let content = response.content();
-        let output_format = schema.output_format();
-        let sections = parse_sections(&content);
-
-        let mut metas = IndexMap::new();
-        let mut errors = Vec::new();
-        let mut output_map = bamltype::baml_types::BamlMap::new();
-
-        for field in schema.output_fields() {
-            let rust_name = field.rust_name.clone();
-            let type_ir = field.type_ir.clone();
-
-            let raw_text = match sections.get(field.lm_name) {
-                Some(text) => text.clone(),
-                None => {
-                    errors.push(ParseError::MissingField {
-                        field: rust_name.clone(),
-                        raw_response: content.to_string(),
-                    });
-                    continue;
-                }
-            };
-
-            let parsed: BamlValueWithFlags =
-                match jsonish::from_str(output_format, &type_ir, &raw_text, true) {
-                    Ok(value) => value,
-                    Err(err) => {
-                        errors.push(ParseError::CoercionFailed {
-                            field: rust_name.clone(),
-                            expected_type: type_ir.diagnostic_repr().to_string(),
-                            raw_text: raw_text.clone(),
-                            source: JsonishError::from(err),
-                        });
-                        continue;
-                    }
-                };
-
-            let baml_value: BamlValue = parsed.clone().into();
-            let mut flags = Vec::new();
-            collect_flags_recursive(&parsed, &mut flags);
-
-            let mut checks = Vec::new();
-            match run_user_checks(&baml_value, &type_ir) {
-                Ok(results) => {
-                    for (constraint, passed) in results {
-                        let label = constraint.label.as_deref().unwrap_or_else(|| {
-                            if constraint.level == ConstraintLevel::Assert {
-                                "assert"
-                            } else {
-                                "check"
-                            }
-                        });
-                        let expression = constraint.expression.to_string();
-                        if constraint.level == ConstraintLevel::Assert && !passed {
-                            errors.push(ParseError::AssertFailed {
-                                field: rust_name.clone(),
-                                label: label.to_string(),
-                                expression: expression.clone(),
-                                value: baml_value.clone(),
-                            });
-                        }
-                        if constraint.level == ConstraintLevel::Check {
-                            checks.push(ConstraintResult {
-                                label: label.to_string(),
-                                expression,
-                                passed,
-                            });
-                        }
-                    }
-                }
-                Err(err) => {
-                    errors.push(ParseError::ExtractionFailed {
-                        field: rust_name.clone(),
-                        raw_response: content.to_string(),
-                        reason: err.to_string(),
-                    });
-                    continue;
-                }
-            }
-
-            metas.insert(
-                rust_name.clone(),
-                FieldMeta {
-                    raw_text,
-                    flags,
-                    checks,
-                },
-            );
-            insert_baml_at_path(&mut output_map, field.path(), baml_value);
-        }
-
-        if !errors.is_empty() {
-            let partial = if output_map.is_empty() {
-                None
-            } else {
-                Some(BamlValue::Class("DynamicOutput".to_string(), output_map))
-            };
-            return Err(ParseError::Multiple { errors, partial });
-        }
-
-        Ok((
-            BamlValue::Class("DynamicOutput".to_string(), output_map),
-            metas,
-        ))
-    }
-
-    #[allow(clippy::result_large_err)]
-    pub fn parse_output_baml(
-        &self,
-        schema: &crate::SignatureSchema,
-        response: &Message,
-    ) -> std::result::Result<BamlValue, ParseError> {
-        let (output, _) = self.parse_output_baml_with_meta(schema, response)?;
         Ok(output)
     }
 

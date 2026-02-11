@@ -1,5 +1,13 @@
 # DSRs Module System — Breadboard
 
+## Current Scope Addendum (2026-02-11)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+All content below is preserved as a historical implementation record.
+
 > Shape F: Facet-native typed modules with dynamic graph escape hatch
 > Parts: F1–F12 (see [shapes.md](./shapes.md))
 > Procedure: Designing from Shaped Parts (breadboarding skill)

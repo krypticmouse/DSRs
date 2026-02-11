@@ -13,7 +13,7 @@ use dspy_rs::__macro_support::bamltype::facet;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing, named_parameters_ref,
+    init_tracing, named_parameters,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -63,8 +63,8 @@ impl TypedMetric<QAModule> for ExactMatchMetric {
     }
 }
 
-fn answerer_instruction(module: &QAModule) -> Result<String> {
-    let params = named_parameters_ref(module)?;
+fn answerer_instruction(module: &mut QAModule) -> Result<String> {
+    let params = named_parameters(module)?;
     let (_, predictor) = params
         .iter()
         .find(|(path, _)| path == "answerer")
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
 
     let baseline = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("baseline score: {baseline:.3}");
-    println!("baseline instruction: {}", answerer_instruction(&module)?);
+    println!("baseline instruction: {}", answerer_instruction(&mut module)?);
 
     let optimizer = COPRO::builder().breadth(10).depth(1).build();
     optimizer
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
-    println!("optimized instruction: {}", answerer_instruction(&module)?);
+    println!("optimized instruction: {}", answerer_instruction(&mut module)?);
 
     Ok(())
 }
