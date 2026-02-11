@@ -10,6 +10,12 @@ use bamltype::internal_baml_jinja::types::OutputFormatContent;
 
 use crate::{Constraint, ConstraintKind, ConstraintSpec, Signature};
 
+/// Dotted path to a field within a signature, accounting for `#[flatten]` nesting.
+///
+/// A field `answer` at the top level has path `["answer"]`. A field `reasoning` inside
+/// a flattened `WithReasoning` wrapper has path `["inner", "reasoning"]` (or however the
+/// flatten tree is structured). Used by the adapter for path-aware parsing and by
+/// [`SignatureSchema`] for field lookup.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FieldPath {
     parts: Vec<&'static str>,
@@ -39,23 +45,43 @@ impl FieldPath {
     }
 }
 
+/// Static metadata for a single signature field, emitted by `#[derive(Signature)]`.
+///
+/// Carries the Rust field name, optional LM-facing alias, constraint specs, and
+/// format hints. Fed into [`SignatureSchema`] construction alongside Facet shape data.
 #[derive(Debug, Clone, Copy)]
 pub struct FieldMetadataSpec {
+    /// The Rust field name as written in the signature struct.
     pub rust_name: &'static str,
+    /// Optional alias for the LM prompt (e.g. `#[rename = "query"]` on a `question` field).
     pub alias: Option<&'static str>,
+    /// Constraint specs from `#[check(...)]` and `#[assert(...)]` attributes.
     pub constraints: &'static [ConstraintSpec],
+    /// Optional format hint (e.g. `#[format = "json"]`).
     pub format: Option<&'static str>,
 }
 
+/// Complete schema for a single field in a signature, combining Facet shape data with metadata.
+///
+/// Used by the adapter for prompt formatting and response parsing, and by the dynamic graph
+/// for edge type validation.
 #[derive(Debug, Clone)]
 pub struct FieldSchema {
+    /// The field name shown to the LM (may differ from Rust name via aliasing).
     pub lm_name: &'static str,
+    /// The dotted Rust path (e.g. `"inner.reasoning"` for flattened fields).
     pub rust_name: String,
+    /// Documentation extracted from the field's doc comment.
     pub docs: String,
+    /// Type representation used for edge validation and output format generation.
     pub type_ir: TypeIR,
+    /// The Facet shape of this field's type.
     pub shape: &'static Shape,
+    /// Path through the flatten tree to reach this field.
     pub path: FieldPath,
+    /// Constraints declared on this field.
     pub constraints: &'static [ConstraintSpec],
+    /// Optional format hint.
     pub format: Option<&'static str>,
 }
 
@@ -69,6 +95,19 @@ impl FieldSchema {
     }
 }
 
+/// Cached field-level schema for a [`Signature`], built from Facet shapes.
+///
+/// The shared backbone of the system. Every path that needs to know about a signature's
+/// fields reads from here — the adapter formatting prompts, the graph validating edges,
+/// optimizers inspecting structure. Built once per `Signature` type (keyed by `TypeId`),
+/// leaked into `'static`, never mutated after init.
+///
+/// Contains the flattened list of input and output fields with their LM-facing names,
+/// Rust paths (accounting for `#[flatten]`), type info, docs, and constraints. Derived
+/// from Facet shape metadata at runtime, not from macro-emitted static arrays — Facet
+/// is the single source of truth for type structure.
+///
+/// Access via [`SignatureSchema::of::<S>()`](SignatureSchema::of) or [`Signature::schema()`].
 #[derive(Debug, Clone)]
 pub struct SignatureSchema {
     instruction: &'static str,
@@ -92,6 +131,11 @@ impl SignatureSchema {
         }
     }
 
+    /// Returns the cached schema for signature `S`, building it on first access.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the schema can't be built (e.g. the input/output shapes aren't structs).
     pub fn of<S: Signature>() -> &'static Self {
         static CACHE: OnceLock<Mutex<HashMap<TypeId, &'static SignatureSchema>>> = OnceLock::new();
 

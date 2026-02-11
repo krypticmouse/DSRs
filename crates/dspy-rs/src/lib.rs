@@ -32,6 +32,19 @@ pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
 pub use facet::Facet;
 
+/// Pre-built signature for use in doc examples. Not part of the public API.
+#[doc(hidden)]
+pub mod doctest {
+    #[derive(crate::Signature, Clone, Debug)]
+    /// Answer questions accurately and concisely.
+    pub struct QA {
+        #[input]
+        pub question: String,
+        #[output]
+        pub answer: String,
+    }
+}
+
 #[doc(hidden)]
 pub mod __macro_support {
     pub use anyhow;

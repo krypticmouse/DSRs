@@ -4,7 +4,25 @@ use crate::{BamlType, Facet, PredictError, Predicted};
 
 use super::Module;
 
+/// Output transformation combinators for any [`Module`].
+///
+/// Post-process a module's output without writing a full `impl Module`. This is
+/// the intermediate step between "use a library module" and "author your own" —
+/// if you just need to reshape the output, a closure is enough.
+///
+/// The inner module's [`crate::Predict`] leaves remain visible to the Facet walker,
+/// so optimizer discovery works through these wrappers.
+///
+/// ```ignore
+/// // Transform output without impl Module
+/// let confident = cot.map(|r| ConfidentAnswer {
+///     answer: r.answer.clone(),
+///     confidence: 0.9,
+/// });
+/// let result = confident.call(input).await?;
+/// ```
 pub trait ModuleExt: Module + Sized {
+    /// Transforms the output with an infallible closure. Returns a [`Map`] wrapper.
     fn map<F, T>(self, map: F) -> Map<Self, T>
     where
         F: Fn(Self::Output) -> T + Send + Sync + 'static,
@@ -16,6 +34,7 @@ pub trait ModuleExt: Module + Sized {
         }
     }
 
+    /// Transforms the output with a fallible closure. Returns an [`AndThen`] wrapper.
     fn and_then<F, T>(self, and_then: F) -> AndThen<Self, T>
     where
         F: Fn(Self::Output) -> Result<T, PredictError> + Send + Sync + 'static,
@@ -30,6 +49,12 @@ pub trait ModuleExt: Module + Sized {
 
 impl<M: Module> ModuleExt for M {}
 
+/// Output transformation wrapper created by [`ModuleExt::map`].
+///
+/// Delegates to the inner module, then applies the closure to the output.
+/// The inner module's [`crate::Predict`] leaves remain visible to Facet reflection
+/// (the `inner` field is a real struct field), so optimizers can still discover and
+/// tune parameters through this wrapper.
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
 pub struct Map<M, T: 'static>
@@ -57,6 +82,9 @@ where
     }
 }
 
+/// Fallible output transformation wrapper created by [`ModuleExt::and_then`].
+///
+/// Like [`Map`], but the closure returns `Result<T, PredictError>`.
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
 pub struct AndThen<M, T: 'static>

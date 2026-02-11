@@ -7,24 +7,79 @@ use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 
 use crate::{BamlValue, Example, PredictError, Predicted, SignatureSchema};
 
+/// Type-erased optimizer handle to a [`crate::Predict`] leaf.
+///
+/// Optimizers need to inspect and mutate Predict parameters (demos, instructions)
+/// without knowing the concrete signature type. This trait bridges that gap. An
+/// optimizer iterates over `(path, &mut dyn DynPredictor)` pairs from
+/// [`named_parameters`] and works entirely through this interface:
+///
+/// ```
+/// use dspy_rs::*;
+/// use dspy_rs::doctest::*;
+///
+/// let mut predict = Predict::<QA>::new();
+/// for (path, predictor) in named_parameters(&mut predict).unwrap() {
+///     let demos = predictor.demos_as_examples();
+///     predictor.set_instruction("Be concise.".into());
+/// }
+/// ```
+///
+/// Normal users never touch this — you pass your module to `optimizer.compile()`
+/// and it uses `DynPredictor` internally.
+///
+/// Note: [`forward_untyped`](DynPredictor::forward_untyped) goes through a
+/// `BamlValue → typed → LM call → typed → BamlValue` round-trip. Fine for
+/// optimizer eval loops, but not the fast path for production calls.
 #[async_trait::async_trait]
 pub trait DynPredictor: Send + Sync {
+    /// Returns the [`SignatureSchema`] for this predictor's signature.
     fn schema(&self) -> &SignatureSchema;
+
+    /// Returns the current instruction (override or default from the signature).
     fn instruction(&self) -> String;
+
+    /// Overrides the instruction for this predictor.
     fn set_instruction(&mut self, instruction: String);
+
+    /// Returns current demos as type-erased [`Example`]s.
     fn demos_as_examples(&self) -> Vec<Example>;
+
+    /// Sets demos from type-erased [`Example`]s, converting to typed `Demo<S>` internally.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any example can't be converted to the predictor's typed
+    /// `Demo<S>` (schema mismatch).
     fn set_demos_from_examples(&mut self, demos: Vec<Example>) -> Result<()>;
+
+    /// Snapshots the predictor's mutable state (demos + instruction override).
     fn dump_state(&self) -> PredictState;
+
+    /// Restores predictor state from a snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the demos can't be converted to the predictor's typed format.
     fn load_state(&mut self, state: PredictState) -> Result<()>;
+
+    /// Runs the predictor with untyped input/output for optimizer evaluation loops.
     async fn forward_untyped(
         &self,
         input: BamlValue,
     ) -> std::result::Result<Predicted<BamlValue>, PredictError>;
 }
 
+/// Serializable snapshot of a [`crate::Predict`]'s mutable state.
+///
+/// Contains demos (as type-erased [`Example`]s) and the instruction override.
+/// Used by [`DynPredictor::dump_state`]/[`DynPredictor::load_state`] for
+/// saving and restoring optimized parameters.
 #[derive(Clone, Debug, Default)]
 pub struct PredictState {
+    /// The demos as type-erased examples.
     pub demos: Vec<Example>,
+    /// The instruction override, if any.
     pub instruction_override: Option<String>,
 }
 
@@ -85,16 +140,52 @@ pub fn register_predict_accessor(
     guard.insert(shape.id, registration);
 }
 
+/// Error from [`named_parameters`] when the Facet walker encounters an unsupported structure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum NamedParametersError {
+    /// A `Predict` leaf was found inside an unsupported container (`Rc`, `Arc`, etc.).
     #[error("container `{ty}` at `{path}` contains a parameter leaf")]
     Container { path: String, ty: &'static str },
+
+    /// A `Predict`-like leaf was found but hasn't registered its accessor functions.
+    /// This means `Predict::new()` or `Predict::builder().build()` was never called for
+    /// this concrete `Predict<S>`.
+    // NOTE(dsrs-s2): Error message will simplify once Facet supports shape-local
+    // accessor payloads and the global registry workaround is removed.
     #[error(
-        "parameter-like leaf at `{path}` is missing a registered accessor (S2 fallback is active; exit criteria: shape-local accessor payloads)"
+        "parameter-like leaf at `{path}` has no registered accessor — was `Predict::new()` or `.build()` called for this concrete type?"
     )]
     MissingAttr { path: String },
 }
 
+/// Discovers all [`crate::Predict`] leaves in a module by walking its struct fields.
+///
+/// Returns `(dotted_path, &mut dyn DynPredictor)` pairs. Paths reflect the field
+/// hierarchy: a `ChainOfThought` inside field `answer` yields `"answer.predictor"`.
+///
+/// Takes exclusive `&mut` — you can't `call()` the module during discovery. This is
+/// intentional: optimization needs to mutate state without races.
+///
+/// The walker follows struct fields and common containers (`Option`, `Vec`,
+/// `HashMap<String, _>`, `Box`). It does not follow `Rc`, `Arc`, or other smart
+/// pointers — those error explicitly. If a `Predict` leaf exists but wasn't
+/// constructed via `new()`/`build()`, you get [`NamedParametersError::MissingAttr`]
+/// (the accessor wasn't registered — see [`crate::Predict`] doc on construction).
+///
+/// # Errors
+///
+/// - [`Container`](NamedParametersError::Container): `Predict` inside unsupported container
+/// - [`MissingAttr`](NamedParametersError::MissingAttr): `Predict` without registered accessor
+///
+/// ```
+/// use dspy_rs::*;
+/// use dspy_rs::doctest::*;
+///
+/// let mut predict = Predict::<QA>::new();
+/// for (path, predictor) in named_parameters(&mut predict).unwrap() {
+///     println!("{}: {} demos", path, predictor.demos_as_examples().len());
+/// }
+/// ```
 #[tracing::instrument(level = "debug", name = "dsrs.named_parameters", skip(module))]
 pub fn named_parameters<M>(
     module: &mut M,
@@ -115,6 +206,9 @@ where
     Ok(handles)
 }
 
+/// Like [`named_parameters`], but with shared `&` access (read-only).
+///
+/// Useful for inspecting parameter state without exclusive access.
 #[tracing::instrument(level = "debug", name = "dsrs.named_parameters_ref", skip(module))]
 pub fn named_parameters_ref<M>(
     module: &M,

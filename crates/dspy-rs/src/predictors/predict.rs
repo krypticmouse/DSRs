@@ -13,6 +13,21 @@ use crate::{
     LmUsage, PredictError, Predicted, Prediction, SignatureSchema,
 };
 
+/// A typed input/output pair for few-shot prompting.
+///
+/// Demos are formatted as user/assistant exchanges in the prompt, showing the LM
+/// what good responses look like. The types enforce that demos match the signature —
+/// you can't accidentally pass a `QAOutput` demo to a `Predict<SummarizeSig>`.
+///
+/// ```
+/// use dspy_rs::*;
+/// use dspy_rs::doctest::*;
+///
+/// let demo = Demo::<QA>::new(
+///     QAInput { question: "What is 2+2?".into() },
+///     QAOutput { answer: "4".into() },
+/// );
+/// ```
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
 pub struct Demo<S: Signature> {
@@ -48,6 +63,49 @@ where
     dyn_ref as *const dyn DynPredictor
 }
 
+/// The leaf module. The only thing in the system that actually calls the LM.
+///
+/// One `Predict` = one prompt template = one LM call. It takes a [`Signature`]'s fields
+/// and instruction, formats them into a prompt (with any demos and tools), calls the
+/// configured LM, and parses the response back into `S::Output`. Every other module —
+/// [`ChainOfThought`](crate::ChainOfThought), `ReAct`, custom pipelines — ultimately
+/// delegates to one or more `Predict` leaves.
+///
+/// This is also the unit of optimization. When an optimizer tunes your program, it's
+/// adjusting `Predict` leaves: their demos (few-shot examples) and instructions.
+/// The optimizer's Facet walker discovers leaves automatically from struct fields —
+/// no `#[parameter]` annotations or manual traversal needed.
+///
+/// # Construction side effect
+///
+/// `new()` and `builder().build()` register an accessor function in a global registry.
+/// This is a workaround — ideally the type system would handle it, but Facet doesn't
+/// yet support shape-local typed attr payloads on generic containers. If you construct
+/// a `Predict<S>` without going through `new()`/`build()` (e.g. via unsafe or manual
+/// field init), [`named_parameters`](crate::named_parameters) will error when it finds
+/// the unregistered leaf.
+///
+/// ```no_run
+/// # async fn example() -> Result<(), dspy_rs::PredictError> {
+/// use dspy_rs::*;
+/// use dspy_rs::doctest::*;
+///
+/// // Minimal
+/// let predict = Predict::<QA>::new();
+/// let result = predict.call(QAInput { question: "What is 2+2?".into() }).await?;
+/// println!("{}", result.answer);
+///
+/// // With demos and custom instruction
+/// let predict = Predict::<QA>::builder()
+///     .demo(Demo::new(
+///         QAInput { question: "What is 1+1?".into() },
+///         QAOutput { answer: "2".into() },
+///     ))
+///     .instruction("Answer in one word.")
+///     .build();
+/// # Ok(())
+/// # }
+/// ```
 #[derive(facet::Facet)]
 #[facet(crate = facet, opaque)]
 pub struct Predict<S: Signature> {
@@ -250,6 +308,16 @@ impl<S: Signature> Default for Predict<S> {
     }
 }
 
+/// Builder for [`Predict`] with demos, tools, and instruction override.
+///
+/// ```ignore
+/// let predict = Predict::<QA>::builder()
+///     .demo(demo1)
+///     .demo(demo2)
+///     .instruction("Answer in one word.")
+///     .add_tool(my_tool)
+///     .build();
+/// ```
 pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<Demo<S>>,

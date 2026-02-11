@@ -4,6 +4,10 @@ use crate::core::{Module, Signature};
 use crate::predictors::{Demo, Predict, PredictBuilder};
 use crate::{BamlType, PredictError, Predicted};
 
+/// Augmentation that prepends a `reasoning: String` field to a signature's output.
+///
+/// This is the "think step by step" primitive. The LM sees the field in its output
+/// format and generates reasoning text before answering. Used by [`ChainOfThought`].
 #[derive(Augmentation, Clone, Debug)]
 #[augment(output, prepend)]
 pub struct Reasoning {
@@ -11,8 +15,35 @@ pub struct Reasoning {
     pub reasoning: String,
 }
 
+/// Convenience alias for `ChainOfThought`'s output type.
 pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 
+/// Asks the LM to reason step-by-step before producing the answer.
+///
+/// The simplest strategy upgrade from bare [`Predict`]. Internally
+/// just `Predict<Augmented<S, Reasoning>>` — the prompt includes a `reasoning` field
+/// before the regular output fields, and the LM fills it in. The reasoning text is a
+/// real output field, not hidden metadata.
+///
+/// ```no_run
+/// # async fn example() -> Result<(), dspy_rs::PredictError> {
+/// use dspy_rs::*;
+/// use dspy_rs::doctest::*;
+///
+/// let cot = ChainOfThought::<QA>::new();
+/// let result = cot.call(QAInput { question: "What is 2+2?".into() }).await?;
+/// println!("{}", result.reasoning);  // the LM's chain of thought
+/// println!("{}", result.answer);     // the actual answer, via Deref
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Swapping `Predict<QA>` → `ChainOfThought<QA>` changes the output type from
+/// `QAOutput` to [`WithReasoning<QAOutput>`]. The compiler catches every downstream
+/// site that needs updating — that's the strategy swap working as designed.
+///
+/// This is not multi-turn conversation. Reasoning and answer are produced in a single
+/// LM call. The LM is simply asked to show its work before answering.
 #[derive(Default, facet::Facet)]
 #[facet(crate = facet)]
 pub struct ChainOfThought<S: Signature> {
@@ -74,6 +105,7 @@ where
     }
 }
 
+/// Builder for [`ChainOfThought`] with demos, tools, and instruction override.
 pub struct ChainOfThoughtBuilder<S: Signature> {
     inner: PredictBuilder<Augmented<S, Reasoning>>,
 }
