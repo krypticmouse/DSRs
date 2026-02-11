@@ -9,9 +9,10 @@ use tracing::{debug, trace};
 
 use crate::core::{DynPredictor, Module, PredictState, Signature, register_predict_accessor};
 use crate::{
-    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Example, GLOBAL_SETTINGS, LmError,
-    LmUsage, PredictError, Predicted, Prediction, SignatureSchema,
+    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
+    PredictError, Predicted, Prediction, SignatureSchema,
 };
+use crate::data::example::Example as RawExample;
 
 /// A typed input/output pair for few-shot prompting.
 ///
@@ -23,19 +24,19 @@ use crate::{
 /// use dspy_rs::*;
 /// use dspy_rs::doctest::*;
 ///
-/// let demo = Demo::<QA>::new(
+/// let example = Example::<QA>::new(
 ///     QAInput { question: "What is 2+2?".into() },
 ///     QAOutput { answer: "4".into() },
 /// );
 /// ```
-#[derive(facet::Facet)]
+#[derive(Clone, Debug, facet::Facet)]
 #[facet(crate = facet)]
-pub struct Demo<S: Signature> {
+pub struct Example<S: Signature> {
     pub input: S::Input,
     pub output: S::Output,
 }
 
-impl<S: Signature> Demo<S> {
+impl<S: Signature> Example<S> {
     pub fn new(input: S::Input, output: S::Output) -> Self {
         Self { input, output }
     }
@@ -71,7 +72,7 @@ where
 /// This is a workaround — ideally the type system would handle it, but Facet doesn't
 /// yet support shape-local typed attr payloads on generic containers. If you construct
 /// a `Predict<S>` without going through `new()`/`build()` (e.g. via unsafe or manual
-/// field init), [`named_parameters`](crate::named_parameters) will error when it finds
+/// field init), `named_parameters` will error when it finds
 /// the unregistered leaf.
 ///
 /// ```no_run
@@ -86,7 +87,7 @@ where
 ///
 /// // With demos and custom instruction
 /// let predict = Predict::<QA>::builder()
-///     .demo(Demo::new(
+///     .demo(Example::new(
 ///         QAInput { question: "What is 1+1?".into() },
 ///         QAOutput { answer: "2".into() },
 ///     ))
@@ -101,13 +102,18 @@ pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
     #[facet(skip, opaque)]
-    demos: Vec<Demo<S>>,
+    demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
 
 impl<S: Signature> Predict<S> {
+    /// Creates a new `Predict` with no demos, no instruction override, and no tools.
+    ///
+    /// Registers the accessor function for this concrete `Predict<S>` type so the
+    /// optimizer walker can discover it. See the struct-level doc on construction
+    /// side effects.
     pub fn new() -> Self {
         register_predict_accessor(
             <Self as facet::Facet<'static>>::SHAPE,
@@ -121,10 +127,15 @@ impl<S: Signature> Predict<S> {
         }
     }
 
+    /// Returns a builder for configuring demos, instruction, and tools.
     pub fn builder() -> PredictBuilder<S> {
         PredictBuilder::new()
     }
 
+    /// Calls the LM with this predictor's signature, demos, and tools.
+    ///
+    /// Delegates to [`forward`](Predict::forward). Both exist for symmetry with the
+    /// [`Module`] trait; `call` is what you use, `forward` is the implementation.
     #[tracing::instrument(
         name = "dsrs.predict.call",
         level = "debug",
@@ -145,6 +156,20 @@ impl<S: Signature> Predict<S> {
         self.forward(input).await
     }
 
+    /// Builds the prompt, calls the LM, and parses the response.
+    ///
+    /// The full pipeline:
+    /// 1. Format system message from the signature's schema and instruction override
+    /// 2. Format demo examples as user/assistant exchanges
+    /// 3. Format the input as the final user message
+    /// 4. Call the LM (with any tools attached)
+    /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
+    /// 6. Record a trace node if inside a [`trace()`](crate::trace::trace) scope
+    ///
+    /// # Errors
+    ///
+    /// - [`PredictError::Lm`] if the LM call fails (network, rate limit, timeout)
+    /// - [`PredictError::Parse`] if the response can't be parsed into the output fields
     pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
     where
         S::Input: BamlType,
@@ -308,7 +333,7 @@ impl<S: Signature> Default for Predict<S> {
 /// ```
 pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
-    demos: Vec<Demo<S>>,
+    demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     _marker: PhantomData<S>,
 }
@@ -323,31 +348,37 @@ impl<S: Signature> PredictBuilder<S> {
         }
     }
 
-    pub fn demo(mut self, demo: Demo<S>) -> Self {
+    /// Adds a single demo (few-shot example) to the predictor.
+    pub fn demo(mut self, demo: Example<S>) -> Self {
         self.demos.push(demo);
         self
     }
 
-    pub fn with_demos(mut self, demos: impl IntoIterator<Item = Demo<S>>) -> Self {
+    /// Adds multiple demos from an iterator.
+    pub fn with_demos(mut self, demos: impl IntoIterator<Item = Example<S>>) -> Self {
         self.demos.extend(demos);
         self
     }
 
+    /// Adds a tool the LM can invoke during this call.
     pub fn add_tool(mut self, tool: impl ToolDyn + 'static) -> Self {
         self.tools.push(Arc::new(tool));
         self
     }
 
+    /// Adds multiple tools from an iterator.
     pub fn with_tools(mut self, tools: impl IntoIterator<Item = Arc<dyn ToolDyn>>) -> Self {
         self.tools.extend(tools);
         self
     }
 
+    /// Overrides the signature's default instruction for this predictor.
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction_override = Some(instruction.into());
         self
     }
 
+    /// Builds the [`Predict`] and registers its accessor for optimizer discovery.
     pub fn build(self) -> Predict<S> {
         register_predict_accessor(
             <Predict<S> as facet::Facet<'static>>::SHAPE,
@@ -377,7 +408,7 @@ fn baml_map_from_example_keys(
     Ok(map)
 }
 
-fn input_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
+fn input_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> {
     if example.input_keys.is_empty() {
         S::schema()
             .input_fields()
@@ -389,7 +420,7 @@ fn input_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
     }
 }
 
-fn output_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
+fn output_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> {
     if example.output_keys.is_empty() {
         S::schema()
             .output_fields()
@@ -401,7 +432,7 @@ fn output_keys_for_signature<S: Signature>(example: &Example) -> Vec<String> {
     }
 }
 
-fn input_from_example<S: Signature>(example: &Example) -> Result<S::Input>
+fn input_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Input>
 where
     S::Input: BamlType,
 {
@@ -411,7 +442,7 @@ where
     S::Input::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
-fn output_from_example<S: Signature>(example: &Example) -> Result<S::Output>
+fn output_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Output>
 where
     S::Output: BamlType,
 {
@@ -421,23 +452,23 @@ where
     S::Output::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
 }
 
-fn demo_from_example<S: Signature>(example: Example) -> Result<Demo<S>>
+fn typed_example_from_raw<S: Signature>(example: RawExample) -> Result<Example<S>>
 where
     S::Input: BamlType,
     S::Output: BamlType,
 {
-    let input = input_from_example::<S>(&example)?;
-    let output = output_from_example::<S>(&example)?;
-    Ok(Demo::new(input, output))
+    let input = input_from_raw_example::<S>(&example)?;
+    let output = output_from_raw_example::<S>(&example)?;
+    Ok(Example::new(input, output))
 }
 
-fn example_from_demo<S: Signature>(demo: &Demo<S>) -> Result<Example>
+fn raw_example_from_typed<S: Signature>(example: &Example<S>) -> Result<RawExample>
 where
     S::Input: BamlType,
     S::Output: BamlType,
 {
-    let input_value = serde_json::to_value(demo.input.to_baml_value())?;
-    let output_value = serde_json::to_value(demo.output.to_baml_value())?;
+    let input_value = serde_json::to_value(example.input.to_baml_value())?;
+    let output_value = serde_json::to_value(example.output.to_baml_value())?;
 
     let input_map = input_value
         .as_object()
@@ -455,7 +486,7 @@ where
     data.extend(input_map);
     data.extend(output_map);
 
-    Ok(Example::new(data, input_keys, output_keys))
+    Ok(RawExample::new(data, input_keys, output_keys))
 }
 
 fn prediction_from_output<S: Signature>(
@@ -523,19 +554,20 @@ where
         self.instruction_override = Some(instruction);
     }
 
-    fn demos_as_examples(&self) -> Vec<Example> {
+    fn demos_as_examples(&self) -> Vec<RawExample> {
         self.demos
             .iter()
-            .map(|demo| {
-                example_from_demo::<S>(demo).expect("typed Predict demo conversion should succeed")
+            .map(|example| {
+                raw_example_from_typed::<S>(example)
+                    .expect("typed Predict demo conversion should succeed")
             })
             .collect()
     }
 
-    fn set_demos_from_examples(&mut self, demos: Vec<Example>) -> Result<()> {
+    fn set_demos_from_examples(&mut self, demos: Vec<RawExample>) -> Result<()> {
         self.demos = demos
             .into_iter()
-            .map(demo_from_example::<S>)
+            .map(typed_example_from_raw::<S>)
             .collect::<Result<Vec<_>>>()?;
         Ok(())
     }
@@ -551,5 +583,81 @@ where
         self.set_demos_from_examples(state.demos)?;
         self.instruction_override = state.instruction_override;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[derive(crate::Signature, Clone, Debug)]
+    struct PredictConversionSig {
+        #[input]
+        prompt: String,
+
+        #[output]
+        answer: String,
+    }
+
+    fn typed_row(prompt: &str, answer: &str) -> Example<PredictConversionSig> {
+        Example::new(
+            PredictConversionSigInput {
+                prompt: prompt.to_string(),
+            },
+            PredictConversionSigOutput {
+                answer: answer.to_string(),
+            },
+        )
+    }
+
+    #[test]
+    fn typed_and_raw_example_round_trip_preserves_fields() {
+        let typed = typed_row("question", "response");
+        let raw = raw_example_from_typed::<PredictConversionSig>(&typed)
+            .expect("typed example should convert to raw example");
+
+        assert_eq!(raw.input_keys, vec!["prompt".to_string()]);
+        assert_eq!(raw.output_keys, vec!["answer".to_string()]);
+        assert_eq!(raw.data.get("prompt"), Some(&json!("question")));
+        assert_eq!(raw.data.get("answer"), Some(&json!("response")));
+
+        let round_trip = typed_example_from_raw::<PredictConversionSig>(raw)
+            .expect("raw example should convert back to typed example");
+        assert_eq!(round_trip.input.prompt, "question");
+        assert_eq!(round_trip.output.answer, "response");
+    }
+
+    #[test]
+    fn typed_example_from_raw_uses_schema_keys_when_key_lists_missing() {
+        let raw = RawExample::new(
+            HashMap::from([
+                ("prompt".to_string(), json!("schema-input")),
+                ("answer".to_string(), json!("schema-output")),
+            ]),
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let typed = typed_example_from_raw::<PredictConversionSig>(raw)
+            .expect("schema key fallback should parse typed example");
+        assert_eq!(typed.input.prompt, "schema-input");
+        assert_eq!(typed.output.answer, "schema-output");
+    }
+
+    #[test]
+    fn dyn_predictor_set_demos_from_examples_round_trips_raw_rows() {
+        let typed = typed_row("demo-input", "demo-output");
+        let raw = raw_example_from_typed::<PredictConversionSig>(&typed)
+            .expect("typed demo should convert to raw demo");
+        let mut predictor = Predict::<PredictConversionSig>::new();
+
+        DynPredictor::set_demos_from_examples(&mut predictor, vec![raw])
+            .expect("predictor should accept raw demos");
+
+        let demos = DynPredictor::demos_as_examples(&predictor);
+        assert_eq!(demos.len(), 1);
+        assert_eq!(demos[0].data.get("prompt"), Some(&json!("demo-input")));
+        assert_eq!(demos[0].data.get("answer"), Some(&json!("demo-output")));
     }
 }

@@ -1,10 +1,12 @@
 # DSRs Module System — Technical Design Reference
 
-## Current Scope Addendum (2026-02-11)
+## Current Scope Addendum (2026-02-12)
 
 V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
 
 Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred.
 
 All content below is preserved as a historical implementation record.
 
@@ -720,6 +722,8 @@ The `insert_at_path` function creates nested BamlValue::Class entries as needed.
 ---
 
 ## 9. DynPredictor: The Optimizer Bridge (F8)
+
+**Current-scope note (2026-02-12):** The code excerpt below is preserved as historical design context. In active V1–V5 typed-only scope, `DynPredictor` remains internal and no longer includes `forward_untyped`; current runtime only exposes schema/instruction/demo/state mutation internally for optimizer use.
 
 ```rust
 pub trait DynPredictor: Send + Sync {

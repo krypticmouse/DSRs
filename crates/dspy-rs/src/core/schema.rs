@@ -63,8 +63,8 @@ pub struct FieldMetadataSpec {
 
 /// Complete schema for a single field in a signature, combining Facet shape data with metadata.
 ///
-/// Used by the adapter for prompt formatting and response parsing, and by the dynamic graph
-/// for edge type validation.
+/// Used by the adapter for prompt formatting and response parsing, and by the optimizer
+/// for field inspection.
 #[derive(Debug, Clone)]
 pub struct FieldSchema {
     /// The field name shown to the LM (may differ from Rust name via aliasing).

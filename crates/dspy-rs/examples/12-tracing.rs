@@ -10,10 +10,11 @@ cargo run --example 12-tracing
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, Example, LM, LmUsage, Module, Predict, PredictError, Predicted,
-    Prediction, Signature, configure, init_tracing,
+    CallMetadata, ChatAdapter, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
+    Signature, configure, init_tracing,
     trace::{self, Executor},
 };
+use dspy_rs::data::RawExample;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -119,7 +120,7 @@ async fn main() -> Result<()> {
 
     println!("\nExecuting graph replay...");
     let executor = Executor::new(graph);
-    let replay_input = Example::new(
+    let replay_input = RawExample::new(
         HashMap::from([(
             "question".to_string(),
             json!("What is the capital of Germany?"),

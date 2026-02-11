@@ -1,7 +1,8 @@
 use dspy_rs::{
     ChainOfThought, ChatAdapter, LM, LMClient, Module, Predict, Reasoning, Signature,
-    TestCompletionModel, WithReasoning, configure, named_parameters,
+    TestCompletionModel, WithReasoning, configure,
 };
+use facet;
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use std::sync::LazyLock;
@@ -40,8 +41,8 @@ async fn configure_test_lm(responses: Vec<String>) {
     configure(lm, ChatAdapter {});
 }
 
-#[derive(Signature, Clone, Debug, PartialEq, dspy_rs::__macro_support::bamltype::facet::Facet)]
-#[facet(crate = dspy_rs::__macro_support::bamltype::facet)]
+#[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]
+#[facet(crate = facet)]
 struct QA {
     #[input]
     question: String,
@@ -75,16 +76,4 @@ async fn chain_of_thought_swaps_and_returns_with_reasoning() {
     assert_eq!(result.answer, "Paris");
 
     let _predict = Predict::<dspy_rs::Augmented<QA, Reasoning>>::new();
-}
-
-#[test]
-fn chain_of_thought_named_parameters_exposes_predictor() {
-    let mut cot = ChainOfThought::<QA>::new();
-    let mut params = named_parameters(&mut cot).expect("walker should expose predictor");
-
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].0, "predictor".to_string());
-
-    params[0].1.set_instruction("updated instruction".to_string());
-    assert_eq!(params[0].1.instruction(), "updated instruction");
 }

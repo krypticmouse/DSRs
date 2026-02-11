@@ -16,9 +16,10 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, Demo, Example, LM, LmError, Module, Predict, PredictError,
-    Predicted, Prediction, configure, init_tracing,
+    CallMetadata, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError, Predicted,
+    Prediction, configure, init_tracing,
 };
+use dspy_rs::data::RawExample;
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
@@ -58,10 +59,10 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    type Input = Example;
+    type Input = RawExample;
     type Output = Prediction;
 
-    async fn forward(&self, inputs: Example) -> Result<Predicted<Prediction>, PredictError> {
+    async fn forward(&self, inputs: RawExample) -> Result<Predicted<Prediction>, PredictError> {
         // Step 1: Convert module input into typed predictor input.
         let question = match inputs.data.get("question").and_then(|value| value.as_str()) {
             Some(question) => question.to_string(),
@@ -162,8 +163,8 @@ async fn main() -> Result<()> {
 
     let qa_rater = QARater::builder().build();
 
-    // Create an Example for Module::forward()
-    let mut example = Example::default();
+    // Create an untyped row for Module::forward()
+    let mut example = RawExample::default();
     example
         .data
         .insert("question".into(), "Why is the sky blue?".into());
@@ -182,7 +183,7 @@ async fn main() -> Result<()> {
 
     let predict_with_demos = Predict::<QA>::builder()
         .instruction(QA_INSTRUCTION)
-        .demo(Demo::new(
+        .demo(Example::new(
             QAInput {
                 question: "What is 2+2?".to_string(),
             },
@@ -192,7 +193,7 @@ async fn main() -> Result<()> {
                 answer: "4".to_string(),
             },
         ))
-        .demo(Demo::new(
+        .demo(Example::new(
             QAInput {
                 question: "What color is grass?".to_string(),
             },

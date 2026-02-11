@@ -1,4 +1,4 @@
-use dspy_rs::{Augmented, ChatAdapter, Demo, Message, Reasoning, Signature, WithReasoning};
+use dspy_rs::{Augmented, ChatAdapter, Example, Message, Reasoning, Signature, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -12,7 +12,7 @@ struct QA {
 #[test]
 fn augmented_demo_roundtrips_through_adapter() {
     let adapter = ChatAdapter;
-    let demo = Demo::<Augmented<QA, Reasoning>>::new(
+    let demo = Example::<Augmented<QA, Reasoning>>::new(
         QAInput {
             question: "What is 2+2?".to_string(),
         },

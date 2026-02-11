@@ -1,5 +1,5 @@
-use dspy_rs::__macro_support::bamltype::facet::{self, Type, UserType};
 use dspy_rs::{ChainOfThought, Facet, ModuleExt, PredictError, ReAct, Signature};
+use facet::{self, Type, UserType};
 
 #[derive(Signature, Clone, Debug, facet::Facet)]
 #[facet(crate = facet)]

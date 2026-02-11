@@ -16,6 +16,18 @@ use crate::{
     TypeIR,
 };
 
+/// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
+///
+/// The adapter is stateless — all state comes from the [`SignatureSchema`](crate::SignatureSchema)
+/// passed to each method. Two usage patterns:
+///
+/// - **High-level** (what [`Predict`](crate::Predict) uses): `format_system_message_typed`,
+///   `format_user_message_typed`, `parse_response_typed` — all parameterized by `S: Signature`.
+/// - **Building blocks** (for module authors): `build_system`, `format_input`, `format_output`,
+///   `parse_output`, `parse_sections` — parameterized by `&SignatureSchema`, not a Signature type.
+///
+/// The building blocks exist so module authors can compose custom prompt flows (e.g.
+/// ReAct's action/extract loop) without reimplementing the delimiter protocol.
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
@@ -250,6 +262,9 @@ impl ChatAdapter {
         self.format_response_instructions_schema(S::schema())
     }
 
+    /// Builds the system message for a signature using its default instruction.
+    ///
+    /// Shorthand for `format_system_message_typed_with_instruction::<S>(None)`.
     pub fn format_system_message_typed<S: Signature>(&self) -> Result<String> {
         self.format_system_message_typed_with_instruction::<S>(None)
     }
@@ -263,6 +278,13 @@ impl ChatAdapter {
             instruction_override = instruction_override.is_some()
         )
     )]
+    /// Builds the system message for a signature with an optional instruction override.
+    ///
+    /// The system message includes:
+    /// 1. Field descriptions (names, types, doc comments)
+    /// 2. Field structure template (the `[[ ## field ## ]]` layout the LM should follow)
+    /// 3. Response instructions (which fields to produce, in what order)
+    /// 4. Task description (the signature's instruction or the override)
     pub fn format_system_message_typed_with_instruction<S: Signature>(
         &self,
         instruction_override: Option<&str>,
@@ -270,6 +292,15 @@ impl ChatAdapter {
         self.build_system(S::schema(), instruction_override)
     }
 
+    /// Builds a system message from a [`SignatureSchema`](crate::SignatureSchema) directly.
+    ///
+    /// The schema-based equivalent of [`format_system_message_typed_with_instruction`](ChatAdapter::format_system_message_typed_with_instruction).
+    /// Use this when you have a schema but not a concrete `S: Signature` type (e.g.
+    /// in dynamic or schema-transformed contexts).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output format rendering fails (malformed type IR).
     pub fn build_system(
         &self,
         schema: &crate::SignatureSchema,
@@ -357,6 +388,11 @@ impl ChatAdapter {
         self.format_field_structure_schema(S::schema())
     }
 
+    /// Formats a typed input value as a user message with `[[ ## field ## ]]` delimiters.
+    ///
+    /// Each input field is serialized via `BamlType::to_baml_value()` and formatted
+    /// according to its field path (handling flattened fields). Appends the response
+    /// instructions telling the LM which output fields to produce.
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
     where
         S::Input: BamlType,
@@ -364,6 +400,13 @@ impl ChatAdapter {
         self.format_input(S::schema(), input)
     }
 
+    /// Formats an input value using a schema — the building-block version of
+    /// [`format_user_message_typed`](ChatAdapter::format_user_message_typed).
+    ///
+    /// Navigates the `BamlValue` using each field's [`FieldPath`](crate::FieldPath) to
+    /// handle flattened structs correctly. A field with path `["inner", "question"]` is
+    /// extracted from the nested structure but rendered as a flat `[[ ## question ## ]]`
+    /// section in the prompt.
     pub fn format_input<I>(&self, schema: &crate::SignatureSchema, input: &I) -> String
     where
         I: BamlType + for<'a> facet::Facet<'a>,
@@ -387,6 +430,11 @@ impl ChatAdapter {
         result
     }
 
+    /// Formats a typed output value as an assistant message for few-shot demos.
+    ///
+    /// Each output field is serialized and delimited with `[[ ## field ## ]]` markers,
+    /// ending with `[[ ## completed ## ]]`. Used internally by [`Predict`](crate::Predict)
+    /// to format demo assistant messages.
     pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
     where
         S::Output: BamlType,
@@ -394,6 +442,8 @@ impl ChatAdapter {
         self.format_output(S::schema(), output)
     }
 
+    /// Formats an output value using a schema — the building-block version of
+    /// [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
     pub fn format_output<O>(&self, schema: &crate::SignatureSchema, output: &O) -> String
     where
         O: BamlType + for<'a> facet::Facet<'a>,
@@ -416,9 +466,13 @@ impl ChatAdapter {
         result
     }
 
+    /// Formats a demo example as a (user_message, assistant_message) pair.
+    ///
+    /// Convenience method that calls [`format_user_message_typed`](ChatAdapter::format_user_message_typed)
+    /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
     pub fn format_demo_typed<S: Signature>(
         &self,
-        demo: &crate::predictors::Demo<S>,
+        demo: &crate::predictors::Example<S>,
     ) -> (String, String)
     where
         S::Input: BamlType,
@@ -439,6 +493,26 @@ impl ChatAdapter {
             output_field_count = S::schema().output_fields().len()
         )
     )]
+    /// Parses an LM response into a typed output with per-field metadata.
+    ///
+    /// The full parsing pipeline:
+    /// 1. Split the response into `[[ ## field ## ]]` sections
+    /// 2. For each output field in the schema, find its section by LM name
+    /// 3. Coerce the raw text to the field's type via jsonish
+    /// 4. Run `#[check]` and `#[assert]` constraints
+    /// 5. Assemble the flat fields into the nested typed output via field paths
+    ///
+    /// Returns the typed output and a map of [`FieldMeta`] with
+    /// per-field raw text, parse flags, and constraint results.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] variants:
+    /// - `MissingField` — an output field's `[[ ## field ## ]]` section wasn't found
+    /// - `CoercionFailed` — jsonish couldn't parse the raw text into the expected type
+    /// - `AssertFailed` — a `#[assert(...)]` constraint failed
+    /// - `ExtractionFailed` — the assembled BamlValue couldn't convert to the typed output
+    /// - `Multiple` — several of the above; includes a partial BamlValue if some fields parsed
     pub fn parse_response_typed<S: Signature>(
         &self,
         response: &Message,
@@ -447,6 +521,14 @@ impl ChatAdapter {
     }
 
     #[allow(clippy::result_large_err)]
+    /// Parses an LM response against a schema, returning typed output and field metadata.
+    ///
+    /// Schema-based equivalent of [`parse_response_typed`](ChatAdapter::parse_response_typed).
+    /// Use when you have a schema but not a `S: Signature` type.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`parse_response_typed`](ChatAdapter::parse_response_typed).
     pub fn parse_output_with_meta<O>(
         &self,
         schema: &crate::SignatureSchema,
@@ -617,6 +699,9 @@ impl ChatAdapter {
     }
 
     #[allow(clippy::result_large_err)]
+    /// Parses an LM response into a typed output, discarding field metadata.
+    ///
+    /// Convenience wrapper around [`parse_output_with_meta`](ChatAdapter::parse_output_with_meta).
     pub fn parse_output<O>(
         &self,
         schema: &crate::SignatureSchema,
@@ -629,10 +714,24 @@ impl ChatAdapter {
         Ok(output)
     }
 
+    /// Splits raw LM response text into named sections by `[[ ## field ## ]]` delimiters.
+    ///
+    /// Returns an ordered map of field_name → section_content. The `completed` marker
+    /// is included as a section (usually empty). Duplicate section names keep the first
+    /// occurrence. Content before the first delimiter is discarded.
     pub fn parse_sections(content: &str) -> IndexMap<String, String> {
         crate::adapter::chat::parse_sections(content)
     }
 
+    /// Parses a raw [`Message`] into a [`Predicted<S::Output>`](crate::Predicted).
+    ///
+    /// Convenience wrapper that calls [`parse_response_typed`](ChatAdapter::parse_response_typed)
+    /// and wraps the result in [`Predicted`] with default metadata
+    /// (zero usage, no tool calls). Useful for testing or replaying saved responses.
+    ///
+    /// # Errors
+    ///
+    /// Parse failures are wrapped as [`PredictError::Parse`].
     pub fn parse_response_with_schema<S: Signature>(
         &self,
         response: Message,

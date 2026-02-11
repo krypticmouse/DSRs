@@ -1,5 +1,15 @@
 # Rust Rewrite Implications
 
+## Current Scope Addendum (2026-02-12)
+
+This file is preserved as historical design exploration. Active canonical runtime scope is V1–V5 typed-only.
+
+For current API contracts, prefer:
+- `docs/specs/modules/design_reference.md`
+- `docs/specs/modules/breadboard.md`
+
+In current scope, module calls are typed and return `Result<Predicted<O>, PredictError>`, and optimizer parameter discovery is internal via Facet walking (not a public `named_parameters` API).
+
 ## What DSPy's Module System Actually Is
 
 Strip away the Python dynamism and DSPy's module system is:
@@ -65,26 +75,20 @@ Python does this by walking `__dict__` and checking `isinstance`. Rust doesn't h
 
 **Options**:
 
-**Option A: Explicit children** (recommended)
+**Option A: Explicit children** (historical exploration)
 ```rust
 trait Module {
-    fn forward(&self, inputs: HashMap<String, Value>) -> Result<Prediction>;
-    fn named_parameters(&self) -> Vec<(String, &dyn Parameter)>;
-    fn named_sub_modules(&self) -> Vec<(String, &dyn Module)>;
-}
+    type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
+    type Output: BamlType + for<'a> Facet<'a> + Send + Sync;
 
-trait Parameter: Module {
-    fn demos(&self) -> &[Example];
-    fn set_demos(&mut self, demos: Vec<Example>);
-    fn signature(&self) -> &Signature;
-    fn set_signature(&mut self, sig: Signature);
-    fn dump_state(&self) -> serde_json::Value;
-    fn load_state(&mut self, state: &serde_json::Value);
-    fn reset(&mut self);
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
+    async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.forward(input).await
+    }
 }
 ```
 
-Each module explicitly returns its children. ChainOfThought returns `[("predict", &self.predict)]`. ReAct returns `[("react", &self.react), ("extract.predict", &self.extract.predict)]`.
+Current implementation does not expose public `named_parameters` traversal; optimizer discovery is internal and Facet-driven.
 
 **Option B: Derive macro**
 ```rust
@@ -99,7 +103,7 @@ A proc macro generates `named_parameters()` by inspecting fields marked with `#[
 
 **Option C: Inventory/registry** -- each module registers itself. More complex, probably overkill.
 
-**Recommendation**: Start with Option A (explicit). It's simple, correct, and makes the tree structure obvious. Add a derive macro later if the boilerplate becomes painful.
+**Current recommendation**: keep typed `Module` surface canonical and keep traversal internals non-public.
 
 ### 3. The `_compiled` Freeze Flag
 
@@ -267,7 +271,7 @@ Python signatures carry Python types (Pydantic models, etc.). Rust signatures wi
 - **Partially typed** (generics for common cases, `Value` for complex) -- more Rusty but more complex
 - **Schema-driven** (JSON Schema as the universal type description) -- pragmatic, works with any LM
 
-**Recommendation**: Start fully dynamic. The type safety that matters here is at the *LM boundary* (parsing), not at compile time. You're dealing with strings from an LM no matter what.
+**Current recommendation**: keep signature-first typed contracts as canonical and restrict dynamic/untyped surfaces to internal/deferred paths.
 
 ### 2. Ownership of Demos and Signatures
 
@@ -276,13 +280,13 @@ In Python, optimizers freely mutate `predictor.demos` and `predictor.signature`.
 - **Interior mutability**: Use `RefCell<Vec<Example>>` for demos
 - **Clone + replace**: Clone the whole program, modify the clone, return it (matches Python's `reset_copy()` pattern)
 
-**Recommendation**: Clone + replace. It matches the Python pattern where optimizers always copy the student first, and it avoids fighting the borrow checker.
+**Current recommendation**: mutate typed modules in place through `&mut` optimizer compile flow.
 
 ### 3. Async vs Sync
 
 LM calls are inherently async (HTTP requests). The question is whether `forward()` should be async.
 
-**Recommendation**: Make it async from the start. `async fn forward(&self, ...) -> Result<Prediction>`. Easier than retrofitting later.
+**Recommendation**: keep async typed module calls as canonical. `async fn forward(&self, ...) -> Result<Predicted<Output>, PredictError>` (with `Module::call` as the stable entry point).
 
 ### 4. Error Types
 

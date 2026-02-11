@@ -175,19 +175,13 @@ let lm = LM::builder()
 ```rust
 struct ExactMatchMetric;
 
-impl TypedMetric<MyModule> for ExactMatchMetric {
+impl TypedMetric<MySignature, MyModule> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<MySignature>,
         prediction: &Predicted<MySignatureOutput>,
     ) -> Result<MetricOutcome> {
-        let expected = example
-            .data
-            .get("answer")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }

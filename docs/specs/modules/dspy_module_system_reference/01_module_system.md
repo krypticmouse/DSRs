@@ -1,5 +1,18 @@
 # The Module System: BaseModule, Module, Parameter
 
+## Current Scope Addendum (2026-02-12)
+
+This document is historical DSPy/Python reference material, preserved for context.
+
+It is not the active Rust runtime contract for `dspy-rs`. In current V1–V5 typed scope:
+- Public module calls are typed and return `Result<Predicted<O>, PredictError>`.
+- `_compiled`, `BaseModule`, and public `named_parameters()` are not part of the active Rust API surface.
+- Optimizer discovery is internal via Facet-based predictor walking.
+
+Refer to the active contracts in:
+- `docs/specs/modules/design_reference.md`
+- `docs/specs/modules/breadboard.md`
+
 ## Three Layers
 
 The module system has three layers, each adding capabilities:

@@ -1,18 +1,21 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-/// Pareto frontier management for GEPA optimizer
-///
-/// Implements per-example dominance tracking and coverage-weighted sampling
-/// as described in the GEPA paper.
 use std::collections::{HashMap, HashSet};
 
 use crate::optimizer::gepa::GEPACandidate;
 
-/// Pareto frontier maintaining candidates that excel on different examples
+/// Per-example dominance frontier for [`GEPA`](crate::GEPA)'s evolutionary search.
 ///
-/// A candidate is on the Pareto frontier if it achieves the highest score
-/// on at least one evaluation example. This ensures diversity and prevents
-/// premature convergence to local optima.
+/// The key insight: optimizing for average score across examples lets the optimizer
+/// overfit to easy examples while ignoring hard ones. The Pareto frontier prevents
+/// this by keeping every candidate that's the *best on at least one example*. A
+/// candidate that scores 0.3 average but is the only one to crack example #7 stays
+/// on the frontier alongside a candidate that scores 0.9 average but fails #7.
+///
+/// [`GEPA`](crate::GEPA) samples parents from this frontier proportional to coverage
+/// (how many examples they win on), so well-rounded candidates get sampled more often
+/// but specialists aren't eliminated. Candidates that are dominated on every example
+/// get pruned automatically.
 #[derive(Debug, Clone)]
 pub struct ParetoFrontier {
     /// All candidates currently on the frontier
@@ -31,7 +34,6 @@ pub struct ParetoFrontier {
 }
 
 impl ParetoFrontier {
-    /// Create a new empty Pareto frontier
     pub fn new() -> Self {
         Self {
             candidates: Vec::new(),
@@ -41,29 +43,23 @@ impl ParetoFrontier {
         }
     }
 
-    /// Get the number of candidates on the frontier
     pub fn len(&self) -> usize {
         self.candidates.len()
     }
 
-    /// Check if frontier is empty
     pub fn is_empty(&self) -> bool {
         self.candidates.is_empty()
     }
 
-    /// Get all candidates on the frontier
     pub fn candidates(&self) -> &[GEPACandidate] {
         &self.candidates
     }
 
-    /// Add or update a candidate based on its scores
+    /// Adds a candidate if it achieves the best score on at least one example.
     ///
-    /// # Arguments
-    /// * `candidate` - The candidate to add
-    /// * `scores` - Score for each example in the evaluation set
-    ///
-    /// # Returns
-    /// `true` if the candidate made it onto the frontier
+    /// Returns `true` if the candidate made it onto the frontier (won or tied on
+    /// at least one example). Candidates already on the frontier that no longer
+    /// win on any example are pruned.
     pub fn add_candidate(&mut self, mut candidate: GEPACandidate, scores: &[f32]) -> bool {
         // Assign ID to new candidate
         candidate.id = self.next_id;
@@ -146,7 +142,6 @@ impl ParetoFrontier {
         true
     }
 
-    /// Remove candidates that don't win on any example
     fn prune_dominated(&mut self) {
         let mut still_winning: HashSet<usize> = HashSet::new();
 
@@ -159,11 +154,11 @@ impl ParetoFrontier {
             .retain(|id, _| still_winning.contains(id));
     }
 
-    /// Sample a candidate from the frontier with probability proportional to coverage
+    /// Samples a parent candidate, weighted by how many examples it wins on.
     ///
-    /// Candidates that win on more examples have higher probability of being selected.
-    /// This balances exploration (sampling diverse candidates) with exploitation
-    /// (sampling successful candidates).
+    /// Well-rounded candidates get sampled more often, but specialists that only
+    /// win on one hard example still get a chance. This prevents the search from
+    /// collapsing onto a single high-average candidate.
     pub fn sample_proportional_to_coverage(&self) -> Option<&GEPACandidate> {
         if self.candidates.is_empty() {
             return None;
@@ -203,7 +198,11 @@ impl ParetoFrontier {
         self.candidates.last()
     }
 
-    /// Get the best candidate by average score
+    /// Returns the candidate with the highest average score across all examples.
+    ///
+    /// This is what [`GEPA`](crate::GEPA) installs as the final instruction — the
+    /// Pareto frontier preserves diversity during search, but the winner is still
+    /// picked by average.
     pub fn best_by_average(&self) -> Option<&GEPACandidate> {
         self.candidates.iter().max_by(|a, b| {
             let avg_a = a.average_score();
@@ -212,7 +211,6 @@ impl ParetoFrontier {
         })
     }
 
-    /// Get statistics about the frontier
     pub fn statistics(&self) -> ParetoStatistics {
         let num_candidates = self.candidates.len();
         let num_examples_covered = self.example_to_best.len();
@@ -254,21 +252,24 @@ impl Default for ParetoFrontier {
     }
 }
 
-/// Statistics about the Pareto frontier
+/// Snapshot of the Pareto frontier at a point in the search.
+///
+/// Useful for plotting convergence. A healthy search has `num_candidates` growing
+/// slowly (diversity is maintained) while `avg_coverage` increases (candidates are
+/// getting more robust). If `num_candidates` is 1, the search has collapsed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParetoStatistics {
-    /// Number of candidates on the frontier
+    /// Candidates currently on the frontier. 1 means the search has converged
+    /// (or collapsed) to a single instruction.
     pub num_candidates: usize,
-
-    /// Number of examples covered by at least one candidate
+    /// Examples where at least one frontier candidate is the best. Should approach
+    /// total eval set size as the search progresses.
     pub num_examples_covered: usize,
-
-    /// Average number of examples won by each candidate
+    /// Mean examples won per candidate. Higher means candidates are more robust;
+    /// lower means more specialization.
     pub avg_coverage: f32,
-
-    /// Maximum coverage (most examples won by any candidate)
+    /// Most examples won by any single candidate.
     pub max_coverage: usize,
-
-    /// Minimum coverage (fewest examples won by any candidate)
+    /// Fewest examples won by any frontier candidate (always >= 1 by construction).
     pub min_coverage: usize,
 }

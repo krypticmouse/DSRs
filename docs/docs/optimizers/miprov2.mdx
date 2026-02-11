@@ -11,10 +11,10 @@ MIPROv2 (Multi-prompt Instruction Proposal Optimizer v2) is an optimizer that us
 ### Stage 1: Trace Generation
 
 ```rust
-async fn generate_traces<M>(
+async fn generate_traces<S, M>(
     &self,
     module: &M,
-    examples: &[Example],
+    examples: &[Example<S>],
 ) -> Result<Vec<Trace>>
 ```
 
@@ -73,7 +73,7 @@ let optimizer = MIPROv2::builder()
     .minibatch_size(25)
     .build();
 
-// Typed metric implementing TypedMetric<MyModule>
+// Typed metric implementing TypedMetric<MySignature, MyModule>
 let metric = ExactMatchMetric;
 
 // Optimize your module

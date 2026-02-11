@@ -9,14 +9,12 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
     ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
-use serde_json::json;
-use std::collections::HashMap;
 
 #[derive(Signature, Clone, Debug)]
 struct MathWordProblem {
@@ -75,24 +73,14 @@ struct LlmJudgeMetric {
     judge: Predict<MathJudge>,
 }
 
-impl TypedMetric<MathSolver> for LlmJudgeMetric {
+impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<MathWordProblem>,
         prediction: &Predicted<MathWordProblemOutput>,
     ) -> Result<MetricOutcome> {
-        let problem = example
-            .data
-            .get("problem")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let expected = example
-            .data
-            .get("expected_answer")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
+        let problem = example.input.problem.clone();
+        let expected = example.output.answer.clone();
 
         let student_answer = prediction.answer.clone();
         let student_reasoning = prediction.reasoning.clone();
@@ -147,14 +135,15 @@ impl TypedMetric<MathSolver> for LlmJudgeMetric {
     }
 }
 
-fn training_example(problem: &str, expected_answer: &str) -> Example {
+fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordProblem> {
     Example::new(
-        HashMap::from([
-            ("problem".to_string(), json!(problem)),
-            ("expected_answer".to_string(), json!(expected_answer)),
-        ]),
-        vec!["problem".to_string()],
-        vec![],
+        MathWordProblemInput {
+            problem: problem.to_string(),
+        },
+        MathWordProblemOutput {
+            reasoning: String::new(),
+            answer: expected_answer.to_string(),
+        },
     )
 }
 

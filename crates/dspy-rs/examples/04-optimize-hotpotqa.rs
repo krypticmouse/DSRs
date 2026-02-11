@@ -9,12 +9,13 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing, named_parameters,
+    PredictError, Predicted, Signature, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
+use dspy_rs::data::RawExample;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -45,31 +46,38 @@ impl Module for QAModule {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QAModule> for ExactMatchMetric {
+impl TypedMetric<QA, QAModule> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
     ) -> Result<MetricOutcome> {
-        let expected = example
-            .data
-            .get("answer")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
-fn answerer_instruction(module: &mut QAModule) -> Result<String> {
-    let params = named_parameters(module)?;
-    let (_, predictor) = params
-        .iter()
-        .find(|(path, _)| path == "answerer")
-        .ok_or_else(|| anyhow::anyhow!("answerer predictor not found"))?;
-    Ok(predictor.instruction())
+fn typed_hotpot_examples(raw_examples: Vec<RawExample>) -> Vec<Example<QA>> {
+    raw_examples
+        .into_iter()
+        .filter_map(|example| {
+            let question = example
+                .data
+                .get("question")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            let answer = example
+                .data
+                .get("answer")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            Some(Example::new(
+                QAInput { question },
+                QAOutput { answer },
+            ))
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -84,7 +92,7 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let examples = DataLoader::load_hf(
+    let raw_examples = DataLoader::load_hf(
         "hotpotqa/hotpot_qa",
         vec!["question".to_string()],
         vec!["answer".to_string()],
@@ -93,13 +101,13 @@ async fn main() -> Result<()> {
         true,
     )?[..10]
         .to_vec();
+    let examples = typed_hotpot_examples(raw_examples);
 
     let metric = ExactMatchMetric;
     let mut module = QAModule::builder().build();
 
     let baseline = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("baseline score: {baseline:.3}");
-    println!("baseline instruction: {}", answerer_instruction(&mut module)?);
 
     let optimizer = COPRO::builder().breadth(10).depth(1).build();
     optimizer
@@ -108,7 +116,6 @@ async fn main() -> Result<()> {
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
-    println!("optimized instruction: {}", answerer_instruction(&mut module)?);
 
     Ok(())
 }

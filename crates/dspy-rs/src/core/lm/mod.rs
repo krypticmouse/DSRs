@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use tracing::{Instrument, debug, trace, warn};
 
 use crate::utils::cache::CacheEntry;
-use crate::{Cache, Example, Prediction, ResponseCache};
+use crate::{Cache, Prediction, RawExample, ResponseCache};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -597,7 +597,7 @@ impl DummyLM {
     )]
     pub async fn call(
         &self,
-        example: Example,
+        example: RawExample,
         messages: Chat,
         prediction: String,
     ) -> Result<LMResponse> {

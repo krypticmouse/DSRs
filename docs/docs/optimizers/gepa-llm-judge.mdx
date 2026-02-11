@@ -101,24 +101,14 @@ struct LlmJudgeMetric {
     judge: Predict<MathJudge>,
 }
 
-impl TypedMetric<MathSolver> for LlmJudgeMetric {
+impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
-        example: &Example,
-        prediction: &Predicted<MathWordProblemOutput>,
+        example: &Example<MathWordProblem>,
+        prediction: &Predicted<<MathSolver as Module>::Output>,
     ) -> Result<MetricOutcome> {
-        let problem = example
-            .data
-            .get("problem")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
-        let expected = example
-            .data
-            .get("expected_answer")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .to_string();
+        let problem = example.input.problem.clone();
+        let expected = example.output.answer.clone();
 
         let student_answer = prediction.answer.clone();
         let student_reasoning = prediction.reasoning.clone();
@@ -242,11 +232,11 @@ GEPA::builder()
 Best results often come from combining explicit checks with LLM judging:
 
 ```rust
-impl TypedMetric<MyModule> for HybridMetric {
+impl TypedMetric<MySignature, MyModule> for HybridMetric {
     async fn evaluate(
         &self,
-        example: &Example,
-        prediction: &Predicted<MyModuleOutput>,
+        example: &Example<MySignature>,
+        prediction: &Predicted<<MyModule as Module>::Output>,
     ) -> Result<MetricOutcome> {
         let mut score = 1.0;
         let mut feedback_parts = vec![];

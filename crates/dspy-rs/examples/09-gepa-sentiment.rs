@@ -9,14 +9,12 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
     ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
-use serde_json::json;
-use std::collections::HashMap;
 
 #[derive(Signature, Clone, Debug)]
 struct SentimentSignature {
@@ -53,20 +51,14 @@ impl Module for SentimentAnalyzer {
 
 struct SentimentMetric;
 
-impl TypedMetric<SentimentAnalyzer> for SentimentMetric {
+impl TypedMetric<SentimentSignature, SentimentAnalyzer> for SentimentMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<SentimentSignature>,
         prediction: &Predicted<SentimentSignatureOutput>,
     ) -> Result<MetricOutcome> {
         let predicted = prediction.sentiment.trim().to_lowercase();
-        let expected = example
-            .data
-            .get("expected_sentiment")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let expected = example.output.sentiment.trim().to_lowercase();
 
         let score = (predicted == expected) as u8 as f32;
         let feedback = FeedbackMetric::new(
@@ -81,14 +73,15 @@ impl TypedMetric<SentimentAnalyzer> for SentimentMetric {
     }
 }
 
-fn sentiment_example(text: &str, expected: &str) -> Example {
+fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> {
     Example::new(
-        HashMap::from([
-            ("text".to_string(), json!(text)),
-            ("expected_sentiment".to_string(), json!(expected)),
-        ]),
-        vec!["text".to_string()],
-        vec![],
+        SentimentSignatureInput {
+            text: text.to_string(),
+        },
+        SentimentSignatureOutput {
+            sentiment: expected.to_string(),
+            reasoning: String::new(),
+        },
     )
 }
 

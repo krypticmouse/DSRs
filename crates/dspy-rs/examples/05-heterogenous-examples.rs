@@ -8,9 +8,8 @@ cargo run --example 05-heterogenous-examples
 */
 
 use anyhow::Result;
-use dspy_rs::{
-    ChatAdapter, Example, LM, Predict, Signature, configure, init_tracing, input_from_example,
-};
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, init_tracing};
+use dspy_rs::data::RawExample;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -38,7 +37,7 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let heterogeneous = Example::new(
+    let heterogeneous = RawExample::new(
         HashMap::from([
             ("number".to_string(), json!(10)),
             ("debug_note".to_string(), json!("metadata not used by the signature")),
@@ -48,7 +47,12 @@ async fn main() -> Result<()> {
         vec![],
     );
 
-    let input: NumberSignatureInput = input_from_example(&heterogeneous)?;
+    let number = heterogeneous
+        .data
+        .get("number")
+        .and_then(|value| value.as_i64())
+        .ok_or_else(|| anyhow::anyhow!("missing integer `number` field"))? as i32;
+    let input = NumberSignatureInput { number };
     let predictor = Predict::<NumberSignature>::new();
     let prediction = predictor.call(input).await?.into_inner();
 

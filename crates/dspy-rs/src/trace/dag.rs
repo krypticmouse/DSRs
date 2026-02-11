@@ -1,19 +1,25 @@
-use crate::{Example, Prediction};
+use crate::{Prediction, RawExample};
 use std::fmt;
 
+/// The kind of operation a trace node represents.
 #[derive(Clone)]
 pub enum NodeType {
-    Root, // Initial input
+    /// The entry point — holds the initial input data.
+    Root,
+    /// An LM call through [`Predict`](crate::Predict).
     Predict {
+        /// The `type_name::<S>()` of the signature.
         signature_name: String,
     },
+    /// A user-defined operation (custom module logic between Predict calls).
     Operator {
+        /// Human-readable name for the operation.
         name: String,
     },
+    /// A field-level data routing between nodes.
+    ///
+    /// Each entry maps an output field name to `(source_node_id, source_field_name)`.
     Map {
-        // Describes: for each field in output, where does it come from?
-        // Key: output field name
-        // Value: (Node Index, input field name)
         mapping: Vec<(String, (usize, String))>,
     },
 }
@@ -32,13 +38,23 @@ impl fmt::Debug for NodeType {
     }
 }
 
+/// A single node in the execution trace graph.
+///
+/// Nodes are created by [`record_node`](crate::trace::record_node) during a
+/// [`trace()`](crate::trace::trace) scope. Each node has a type, links to parent
+/// nodes (inputs), and optionally captures the output data.
 #[derive(Clone)]
 pub struct Node {
+    /// Unique ID within this graph (assigned sequentially).
     pub id: usize,
+    /// What kind of operation this node represents.
     pub node_type: NodeType,
-    pub inputs: Vec<usize>, // IDs of parent nodes
+    /// IDs of parent nodes whose outputs feed into this node.
+    pub inputs: Vec<usize>,
+    /// The output produced by this node (set after execution completes).
     pub output: Option<Prediction>,
-    pub input_data: Option<Example>,
+    /// The input data passed to this node (for Root nodes).
+    pub input_data: Option<RawExample>,
 }
 
 impl fmt::Debug for Node {
@@ -53,8 +69,17 @@ impl fmt::Debug for Node {
     }
 }
 
+/// A directed acyclic graph of execution trace nodes.
+///
+/// Built incrementally during a [`trace()`](crate::trace::trace) scope as each
+/// [`Predict`](crate::Predict) call records itself. Nodes are stored in insertion
+/// order, which is topological order by construction (a node is always recorded
+/// after its inputs).
+///
+/// This is a record of what actually happened, not a mutable program topology.
 #[derive(Debug, Clone, Default)]
 pub struct Graph {
+    /// Nodes in insertion (topological) order.
     pub nodes: Vec<Node>,
 }
 
@@ -63,11 +88,15 @@ impl Graph {
         Self::default()
     }
 
+    /// Appends a node and returns its ID.
+    ///
+    /// The ID is the node's index in the `nodes` vec. IDs in `inputs` must refer
+    /// to previously added nodes (this is not validated — the graph trusts the caller).
     pub fn add_node(
         &mut self,
         node_type: NodeType,
         inputs: Vec<usize>,
-        input_data: Option<Example>,
+        input_data: Option<RawExample>,
     ) -> usize {
         let id = self.nodes.len();
         self.nodes.push(Node {

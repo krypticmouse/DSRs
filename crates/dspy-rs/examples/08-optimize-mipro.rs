@@ -9,12 +9,13 @@ cargo run --example 08-optimize-mipro --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
     ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing, named_parameters,
+    PredictError, Predicted, Signature, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
+use dspy_rs::data::RawExample;
 
 #[derive(Signature, Clone, Debug)]
 struct QuestionAnswering {
@@ -48,19 +49,13 @@ impl Module for SimpleQA {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<SimpleQA> for ExactMatchMetric {
+impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<QuestionAnswering>,
         prediction: &Predicted<QuestionAnsweringOutput>,
     ) -> Result<MetricOutcome> {
-        let expected = example
-            .data
-            .get("answer")
-            .and_then(|value| value.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_lowercase();
+        let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
         let score = if expected == actual {
@@ -75,13 +70,26 @@ impl TypedMetric<SimpleQA> for ExactMatchMetric {
     }
 }
 
-fn answerer_instruction(module: &mut SimpleQA) -> Result<String> {
-    let params = named_parameters(module)?;
-    let (_, predictor) = params
-        .iter()
-        .find(|(path, _)| path == "answerer")
-        .ok_or_else(|| anyhow::anyhow!("answerer predictor not found"))?;
-    Ok(predictor.instruction())
+fn typed_hotpot_examples(raw_examples: Vec<RawExample>) -> Vec<Example<QuestionAnswering>> {
+    raw_examples
+        .into_iter()
+        .filter_map(|example| {
+            let question = example
+                .data
+                .get("question")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            let answer = example
+                .data
+                .get("answer")
+                .and_then(|value| value.as_str())?
+                .to_string();
+            Some(Example::new(
+                QuestionAnsweringInput { question },
+                QuestionAnsweringOutput { answer },
+            ))
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -93,7 +101,7 @@ async fn main() -> Result<()> {
     configure(LM::default(), ChatAdapter);
 
     println!("Loading training data from HuggingFace...");
-    let train_examples = DataLoader::load_hf(
+    let raw_train_examples = DataLoader::load_hf(
         "hotpotqa/hotpot_qa",
         vec!["question".to_string()],
         vec!["answer".to_string()],
@@ -101,15 +109,13 @@ async fn main() -> Result<()> {
         "validation",
         true,
     )?;
+    let train_examples = typed_hotpot_examples(raw_train_examples);
 
     let train_subset = train_examples[..15].to_vec();
     println!("Using {} training examples\n", train_subset.len());
 
     let metric = ExactMatchMetric;
     let mut qa_module = SimpleQA::builder().build();
-
-    println!("Initial instruction:");
-    println!("  \"{}\"\n", answerer_instruction(&mut qa_module)?);
 
     println!("Evaluating baseline performance...");
     let baseline_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
@@ -119,17 +125,12 @@ async fn main() -> Result<()> {
         .num_candidates(8)
         .num_trials(15)
         .minibatch_size(10)
-        .temperature(1.0)
-        .track_stats(true)
         .build();
 
     println!("Starting MIPROv2 optimization...");
     optimizer
         .compile(&mut qa_module, train_subset.clone(), &metric)
         .await?;
-
-    println!("\nOptimized instruction:");
-    println!("  \"{}\"\n", answerer_instruction(&mut qa_module)?);
 
     println!("Evaluating optimized performance...");
     let optimized_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);

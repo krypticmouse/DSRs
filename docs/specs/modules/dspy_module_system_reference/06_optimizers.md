@@ -1,5 +1,18 @@
 # Optimizers: How They Discover and Modify Modules
 
+## Current Scope Addendum (2026-02-12)
+
+This document is historical DSPy/Python reference material, preserved for context.
+
+It is not the active Rust optimizer/runtime contract for `dspy-rs`. In current V1–V5 typed scope:
+- Optimizers compile against typed trainsets (`Vec<Example<S>>`) and typed metrics.
+- Internal predictor discovery is Facet-driven and not a public `named_predictors()` surface.
+- `_compiled`, `reset_copy()`, and `settings.trace` are not active Rust API contracts.
+
+Refer to the active contracts in:
+- `docs/specs/modules/design_reference.md`
+- `docs/specs/modules/breadboard.md`
+
 ## The Contract
 
 The implicit contract between an optimizer and a module:

@@ -10,8 +10,24 @@ use std::io::Cursor;
 use std::{collections::HashMap, path::Path};
 use tracing::{Span, debug};
 
-use crate::{Example, is_url, string_record_to_example};
+use crate::{RawExample, is_url, string_record_to_example};
 
+/// Loads datasets from JSON, CSV, Parquet files, and HuggingFace Hub.
+///
+/// All methods return `Vec<RawExample>` — untyped key-value pairs. Specify
+/// `input_keys` and `output_keys` to tell the system which fields are inputs
+/// vs outputs (this metadata flows through to typed conversion later).
+///
+/// Supports both local file paths and HTTP(S) URLs for JSON and CSV.
+///
+/// ```ignore
+/// let examples = DataLoader::load_json(
+///     "data/hotpotqa.jsonl",
+///     true,  // JSON lines format
+///     vec!["question".into()],
+///     vec!["answer".into()],
+/// )?;
+/// ```
 pub struct DataLoader;
 
 impl DataLoader {
@@ -25,12 +41,21 @@ impl DataLoader {
             output_keys = output_keys.len()
         )
     )]
+    /// Loads examples from a JSON file or URL.
+    ///
+    /// When `lines` is `true`, treats each line as a separate JSON object (JSONL format).
+    /// When `false`, expects a single JSON object.
+    ///
+    /// # Errors
+    ///
+    /// - Network error if `path` is a URL and the request fails
+    /// - Parse error if the JSON is malformed
     pub fn load_json(
         path: &str,
         lines: bool,
         input_keys: Vec<String>,
         output_keys: Vec<String>,
-    ) -> Result<Vec<Example>> {
+    ) -> Result<Vec<RawExample>> {
         let source_is_url = is_url(path);
         let data = if source_is_url {
             let response = reqwest::blocking::get(path)?;
@@ -39,7 +64,7 @@ impl DataLoader {
             fs::read_to_string(path)?
         };
 
-        let examples: Vec<Example> = if lines {
+        let examples: Vec<RawExample> = if lines {
             let lines = data.lines().collect::<Vec<&str>>();
             let span = Span::current();
 
@@ -48,7 +73,7 @@ impl DataLoader {
                 .map(|line| {
                     let span = span.clone();
                     span.in_scope(|| {
-                        Example::new(
+                        RawExample::new(
                             serde_json::from_str(line).unwrap(),
                             input_keys.clone(),
                             output_keys.clone(),
@@ -57,7 +82,7 @@ impl DataLoader {
                 })
                 .collect()
         } else {
-            vec![Example::new(
+            vec![RawExample::new(
                 serde_json::from_str(&data).unwrap(),
                 input_keys.clone(),
                 output_keys.clone(),
@@ -73,7 +98,10 @@ impl DataLoader {
         skip(examples),
         fields(examples = examples.len())
     )]
-    pub fn save_json(path: &str, examples: Vec<Example>, lines: bool) -> Result<()> {
+    /// Saves examples to a JSON file.
+    ///
+    /// When `lines` is `true`, writes one JSON object per line (JSONL format).
+    pub fn save_json(path: &str, examples: Vec<RawExample>, lines: bool) -> Result<()> {
         let data = if lines {
             examples
                 .into_iter()
@@ -98,44 +126,91 @@ impl DataLoader {
             output_keys = output_keys.len()
         )
     )]
+    /// Loads examples from a CSV file or URL.
+    ///
+    /// When `has_headers` is `true`, uses the first row as field names. When `false`,
+    /// uses `input_keys` and `output_keys` as field names (falling back to `column_0`,
+    /// `column_1`, etc. if those are also empty).
+    ///
+    /// # Errors
+    ///
+    /// - Network error if `path` is a URL and the request fails
+    /// - Parse error if the CSV is malformed
     pub fn load_csv(
         path: &str,
         delimiter: char,
         input_keys: Vec<String>,
         output_keys: Vec<String>,
         has_headers: bool,
-    ) -> Result<Vec<Example>> {
+    ) -> Result<Vec<RawExample>> {
+        let mut fallback_field_names = input_keys.clone();
+        fallback_field_names.extend(output_keys.clone());
+
         let source_is_url = is_url(path);
-        let records = if source_is_url {
+        let (records, header_field_names) = if source_is_url {
             let response = reqwest::blocking::get(path)?.bytes()?.to_vec();
             let cursor = Cursor::new(response);
 
-            let records: Vec<_> = ReaderBuilder::new()
+            let mut reader = ReaderBuilder::new()
                 .delimiter(delimiter as u8)
                 .has_headers(has_headers)
-                .from_reader(cursor)
-                .into_records()
-                .collect::<Result<Vec<_>, _>>()?;
+                .from_reader(cursor);
 
-            records
+            let header_field_names = if has_headers {
+                Some(
+                    reader
+                        .headers()?
+                        .iter()
+                        .map(|header| header.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            } else if !fallback_field_names.is_empty() {
+                Some(fallback_field_names.clone())
+            } else {
+                None
+            };
+
+            let records: Vec<_> = reader.into_records().collect::<Result<Vec<_>, _>>()?;
+
+            (records, header_field_names)
         } else {
-            let records: Vec<_> = ReaderBuilder::new()
+            let mut reader = ReaderBuilder::new()
                 .delimiter(delimiter as u8)
                 .has_headers(has_headers)
-                .from_path(path)?
-                .into_records()
-                .collect::<Result<Vec<_>, _>>()?;
+                .from_path(path)?;
 
-            records
+            let header_field_names = if has_headers {
+                Some(
+                    reader
+                        .headers()?
+                        .iter()
+                        .map(|header| header.to_string())
+                        .collect::<Vec<_>>(),
+                )
+            } else if !fallback_field_names.is_empty() {
+                Some(fallback_field_names.clone())
+            } else {
+                None
+            };
+
+            let records: Vec<_> = reader.into_records().collect::<Result<Vec<_>, _>>()?;
+
+            (records, header_field_names)
         };
         let span = Span::current();
+        let header_field_names = header_field_names.as_deref();
 
-        let examples: Vec<Example> = records
+        let examples: Vec<RawExample> = records
             .par_iter()
             .map(|row| {
                 let span = span.clone();
                 span.in_scope(|| {
-                    string_record_to_example(row.clone(), input_keys.clone(), output_keys.clone())
+                    string_record_to_example(
+                        row.clone(),
+                        header_field_names,
+                        input_keys.clone(),
+                        output_keys.clone(),
+                    )
                 })
             })
             .collect();
@@ -150,7 +225,8 @@ impl DataLoader {
         skip(examples),
         fields(examples = examples.len())
     )]
-    pub fn save_csv(path: &str, examples: Vec<Example>, delimiter: char) -> Result<()> {
+    /// Saves examples to a CSV file with the given delimiter.
+    pub fn save_csv(path: &str, examples: Vec<RawExample>, delimiter: char) -> Result<()> {
         let mut writer = WriterBuilder::new()
             .delimiter(delimiter as u8)
             .from_path(path)?;
@@ -176,11 +252,22 @@ impl DataLoader {
         skip(input_keys, output_keys),
         fields(input_keys = input_keys.len(), output_keys = output_keys.len())
     )]
+    /// Loads examples from a local Parquet file.
+    ///
+    /// Only reads string columns — other column types are silently skipped. Rows
+    /// where all columns are null are skipped.
+    ///
+    /// Does not support URLs — use [`load_hf`](DataLoader::load_hf) for remote datasets.
+    ///
+    /// # Errors
+    ///
+    /// - File not found or I/O error
+    /// - Invalid Parquet format
     pub fn load_parquet(
         path: &str,
         input_keys: Vec<String>,
         output_keys: Vec<String>,
-    ) -> Result<Vec<Example>> {
+    ) -> Result<Vec<RawExample>> {
         let file_path = Path::new(path);
 
         let file = fs::File::open(file_path)?;
@@ -210,7 +297,7 @@ impl DataLoader {
                 }
 
                 if !data.is_empty() {
-                    examples.push(Example::new(data, input_keys.clone(), output_keys.clone()));
+                    examples.push(RawExample::new(data, input_keys.clone(), output_keys.clone()));
                 }
             }
         }
@@ -224,6 +311,22 @@ impl DataLoader {
         skip(input_keys, output_keys),
         fields(input_keys = input_keys.len(), output_keys = output_keys.len())
     )]
+    /// Loads examples from a HuggingFace Hub dataset.
+    ///
+    /// Downloads and caches the dataset locally using `hf_hub`, then loads each
+    /// file (Parquet, JSON, JSONL, or CSV) that matches the `subset` and `split`
+    /// filters. Files are loaded in parallel via rayon.
+    ///
+    /// # Known issue: silent file errors
+    ///
+    /// Individual file load errors are silently swallowed (`.ok()`). If a Parquet
+    /// file is corrupted or a JSON file is malformed, it's skipped without error and
+    /// you get fewer examples than expected. Check `examples.len()` against your
+    /// expectations. Set `verbose = true` to see which files are being loaded.
+    ///
+    /// # Errors
+    ///
+    /// - HuggingFace API error (auth, dataset not found)
     pub fn load_hf(
         dataset_id: &str,
         input_keys: Vec<String>,
@@ -231,7 +334,7 @@ impl DataLoader {
         subset: &str,
         split: &str,
         verbose: bool,
-    ) -> Result<Vec<Example>> {
+    ) -> Result<Vec<RawExample>> {
         let api = Api::new()?;
         let repo = api.dataset(dataset_id.to_string());
 

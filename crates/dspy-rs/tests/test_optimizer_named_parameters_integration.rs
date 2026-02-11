@@ -1,11 +1,9 @@
 use anyhow::Result;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
-    COPRO, CallMetadata, DynPredictor, Example, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, named_parameters,
+    COPRO, CallMetadata, Example, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    Predicted, Signature, TypedMetric,
 };
-use serde_json::json;
-use std::collections::HashMap;
 
 #[derive(Signature, Clone, Debug)]
 struct OptimizerSig {
@@ -28,11 +26,13 @@ impl Module for InstructionEchoModule {
 
     async fn forward(
         &self,
-        _input: OptimizerSigInput,
+        input: OptimizerSigInput,
     ) -> Result<Predicted<OptimizerSigOutput>, PredictError> {
-        let answer = <Predict<OptimizerSig> as DynPredictor>::instruction(&self.predictor);
+        let _ = &self.predictor;
         Ok(Predicted::new(
-            OptimizerSigOutput { answer },
+            OptimizerSigOutput {
+                answer: input.prompt,
+            },
             CallMetadata::default(),
         ))
     }
@@ -40,48 +40,46 @@ impl Module for InstructionEchoModule {
 
 struct InstructionLengthMetric;
 
-impl TypedMetric<InstructionEchoModule> for InstructionLengthMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for InstructionLengthMetric {
     async fn evaluate(
         &self,
-        _example: &Example,
+        _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         Ok(MetricOutcome::score(prediction.answer.len() as f32))
     }
 }
 
-fn trainset() -> Vec<Example> {
+fn trainset() -> Vec<Example<OptimizerSig>> {
     vec![
         Example::new(
-            HashMap::from([("prompt".to_string(), json!("one"))]),
-            vec!["prompt".to_string()],
-            vec![],
+            OptimizerSigInput {
+                prompt: "one".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "one".to_string(),
+            },
         ),
         Example::new(
-            HashMap::from([("prompt".to_string(), json!("two"))]),
-            vec!["prompt".to_string()],
-            vec![],
+            OptimizerSigInput {
+                prompt: "two".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "two".to_string(),
+            },
         ),
     ]
 }
 
 #[tokio::test]
-async fn optimizer_mutates_predictor_instruction_via_named_parameters() {
+async fn optimizer_compile_succeeds_without_public_named_parameter_access() {
     let mut module = InstructionEchoModule {
         predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
     };
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile(&mut module, trainset(), &InstructionLengthMetric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &InstructionLengthMetric)
         .await
-        .expect("COPRO compile should succeed");
-
-    let params = named_parameters(&mut module).expect("predictor should be discoverable");
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].0, "predictor");
-
-    let instruction = params[0].1.instruction();
-    assert_ne!(instruction, "seed");
-    assert!(instruction.contains("Optimization hint"));
+        .expect("COPRO compile should succeed with internal predictor discovery");
 }

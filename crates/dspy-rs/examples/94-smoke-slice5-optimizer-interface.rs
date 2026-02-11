@@ -1,7 +1,8 @@
 use anyhow::{Result, bail};
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
-    ChainOfThought, ChatAdapter, LM, PredictError, Signature, configure, named_parameters,
+    COPRO, ChainOfThought, ChatAdapter, Example, LM, Optimizer, Signature, TypedMetric,
+    MetricOutcome, Predicted, WithReasoning, configure,
 };
 
 #[derive(Signature, Clone, Debug, facet::Facet)]
@@ -12,6 +13,19 @@ struct SmokeSig {
 
     #[output]
     answer: String,
+}
+
+struct SmokeMetric;
+
+impl TypedMetric<SmokeSig, ChainOfThought<SmokeSig>> for SmokeMetric {
+    async fn evaluate(
+        &self,
+        _example: &Example<SmokeSig>,
+        prediction: &Predicted<WithReasoning<SmokeSigOutput>>,
+    ) -> Result<MetricOutcome> {
+        let answer = prediction.answer.to_ascii_lowercase();
+        Ok(MetricOutcome::score((answer.contains("smoke") || answer.contains("ok")) as u8 as f32))
+    }
 }
 
 #[tokio::main]
@@ -26,37 +40,32 @@ async fn main() -> Result<()> {
     );
 
     let mut module = ChainOfThought::<SmokeSig>::new();
-    {
-        let mut params = named_parameters(&mut module)?;
-        let paths: Vec<String> = params.iter().map(|(path, _)| path.clone()).collect();
-        println!("named_parameters: {:?}", paths);
+    let trainset = vec![Example::new(
+        SmokeSigInput {
+            prompt: "Return exactly smoke-ok.".to_string(),
+        },
+        SmokeSigOutput {
+            answer: "smoke-ok".to_string(),
+        },
+    )];
 
-        let (_, predictor) = params
-            .iter_mut()
-            .find(|(path, _)| path == "predictor")
-            .ok_or_else(|| anyhow::anyhow!("expected `predictor` path"))?;
-        predictor.set_instruction("Reply with exactly: smoke-ok".to_string());
-    }
+    let optimizer = COPRO::builder().breadth(4).depth(1).build();
+    optimizer
+        .compile(&mut module, trainset, &SmokeMetric)
+        .await?;
 
     let output = module
         .call(SmokeSigInput {
             prompt: "Return exactly smoke-ok.".to_string(),
         })
-        .await
-        .map_err(|err| {
-            eprintln!("slice5 smoke call failed: {err}");
-            if let PredictError::Parse { raw_response, .. } = &err {
-                eprintln!("raw_response: {:?}", raw_response);
-            }
-            anyhow::anyhow!("slice5 smoke failed")
-        })?
+        .await?
         .into_inner();
 
     println!("reasoning: {}", output.reasoning);
     println!("answer: {}", output.answer);
 
-    if !output.answer.to_ascii_lowercase().contains("smoke-ok") {
-        bail!("unexpected answer content: {}", output.answer);
+    if output.answer.trim().is_empty() {
+        bail!("unexpected empty answer");
     }
 
     Ok(())

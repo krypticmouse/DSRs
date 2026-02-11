@@ -1,11 +1,9 @@
 use anyhow::Result;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
-    CallMetadata, DynPredictor, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedMetric,
+    CallMetadata, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedMetric,
 };
-use serde_json::json;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -30,11 +28,13 @@ impl Module for InstructionEchoModule {
 
     async fn forward(
         &self,
-        _input: OptimizerSigInput,
+        input: OptimizerSigInput,
     ) -> Result<Predicted<OptimizerSigOutput>, PredictError> {
-        let answer = <Predict<OptimizerSig> as DynPredictor>::instruction(&self.predictor);
+        let _ = &self.predictor;
         Ok(Predicted::new(
-            OptimizerSigOutput { answer },
+            OptimizerSigOutput {
+                answer: input.prompt,
+            },
             CallMetadata::default(),
         ))
     }
@@ -42,10 +42,10 @@ impl Module for InstructionEchoModule {
 
 struct FeedbackMetricImpl;
 
-impl TypedMetric<InstructionEchoModule> for FeedbackMetricImpl {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for FeedbackMetricImpl {
     async fn evaluate(
         &self,
-        _example: &Example,
+        _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         let score = prediction.answer.len() as f32;
@@ -58,10 +58,10 @@ impl TypedMetric<InstructionEchoModule> for FeedbackMetricImpl {
 
 struct ScoreOnlyMetric;
 
-impl TypedMetric<InstructionEchoModule> for ScoreOnlyMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for ScoreOnlyMetric {
     async fn evaluate(
         &self,
-        _example: &Example,
+        _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         Ok(MetricOutcome::score(prediction.answer.len() as f32))
@@ -70,20 +70,15 @@ impl TypedMetric<InstructionEchoModule> for ScoreOnlyMetric {
 
 struct PartialFeedbackMetric;
 
-impl TypedMetric<InstructionEchoModule> for PartialFeedbackMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for PartialFeedbackMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         let score = prediction.answer.len() as f32;
-        let prompt = example
-            .data
-            .get("prompt")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
 
-        if prompt == "one" {
+        if example.input.prompt == "one" {
             Ok(MetricOutcome::with_feedback(
                 score,
                 FeedbackMetric::new(score, "only first example has feedback"),
@@ -108,10 +103,10 @@ impl FeedbackThenScoreMetric {
     }
 }
 
-impl TypedMetric<InstructionEchoModule> for FeedbackThenScoreMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for FeedbackThenScoreMetric {
     async fn evaluate(
         &self,
-        _example: &Example,
+        _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
@@ -131,18 +126,13 @@ struct RecordingFeedbackMetric {
     seen_prompts: Arc<Mutex<Vec<String>>>,
 }
 
-impl TypedMetric<InstructionEchoModule> for RecordingFeedbackMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for RecordingFeedbackMetric {
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
-        let prompt = example
-            .data
-            .get("prompt")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .to_string();
+        let prompt = example.input.prompt.clone();
         self.seen_prompts
             .lock()
             .expect("metric lock should not be poisoned")
@@ -160,37 +150,35 @@ impl TypedMetric<InstructionEchoModule> for RecordingFeedbackMetric {
     }
 }
 
-fn trainset() -> Vec<Example> {
+fn trainset() -> Vec<Example<OptimizerSig>> {
     vec![
         Example::new(
-            HashMap::from([("prompt".to_string(), json!("one"))]),
-            vec!["prompt".to_string()],
-            vec![],
+            OptimizerSigInput {
+                prompt: "one".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "one".to_string(),
+            },
         ),
         Example::new(
-            HashMap::from([("prompt".to_string(), json!("two"))]),
-            vec!["prompt".to_string()],
-            vec![],
+            OptimizerSigInput {
+                prompt: "two".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "two".to_string(),
+            },
         ),
     ]
 }
 
-fn trainset_with_invalid_input_keys() -> Vec<Example> {
+fn valset_for_gepa() -> Vec<Example<OptimizerSig>> {
     vec![Example::new(
-        HashMap::from([
-            ("prompt".to_string(), json!("one")),
-            ("wrong_input".to_string(), json!("unused")),
-        ]),
-        vec!["wrong_input".to_string()],
-        vec![],
-    )]
-}
-
-fn valset_for_gepa() -> Vec<Example> {
-    vec![Example::new(
-        HashMap::from([("prompt".to_string(), json!("val-only"))]),
-        vec!["prompt".to_string()],
-        vec![],
+        OptimizerSigInput {
+            prompt: "val-only".to_string(),
+        },
+        OptimizerSigOutput {
+            answer: "val-only".to_string(),
+        },
     )]
 }
 
@@ -208,7 +196,7 @@ async fn gepa_compile_succeeds_when_feedback_present() {
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect("GEPA compile should succeed when feedback is present");
 
@@ -229,7 +217,7 @@ async fn gepa_compile_fails_without_feedback() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect_err("GEPA should reject score-only metrics");
 
@@ -251,36 +239,13 @@ async fn gepa_compile_fails_when_feedback_is_partial() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect_err("GEPA should reject partially-populated feedback outcomes");
 
     let message = err.to_string();
     assert!(message.contains("GEPA requires feedback for every evaluated example"));
     assert!(message.contains("module=`predictor`"));
-}
-
-#[tokio::test]
-async fn gepa_compile_respects_example_input_keys_for_typed_conversion() {
-    let metric = FeedbackMetricImpl;
-    let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
-    };
-
-    let optimizer = GEPA::builder()
-        .num_iterations(1)
-        .minibatch_size(1)
-        .build();
-
-    let err = optimizer
-        .compile(&mut module, trainset_with_invalid_input_keys(), &metric)
-        .await
-        .expect_err("compile should fail when input_keys omits required typed fields");
-
-    assert!(
-        err.to_string().contains("prompt"),
-        "error should mention missing required field: {err}"
-    );
 }
 
 #[tokio::test]
@@ -301,7 +266,7 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect_err("GEPA should fail once feedback becomes unavailable mid-loop");
 
@@ -311,7 +276,7 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
 }
 
 #[tokio::test]
-async fn gepa_compile_uses_valset_and_tracks_best_outputs_when_enabled() {
+async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabled() {
     let seen_prompts = Arc::new(Mutex::new(Vec::new()));
     let metric = RecordingFeedbackMetric {
         seen_prompts: Arc::clone(&seen_prompts),
@@ -325,11 +290,15 @@ async fn gepa_compile_uses_valset_and_tracks_best_outputs_when_enabled() {
         .num_iterations(0)
         .minibatch_size(1)
         .track_best_outputs(true)
-        .valset(valset.clone())
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_with_valset::<OptimizerSig, _, _>(
+            &mut module,
+            trainset(),
+            Some(valset.clone()),
+            &metric,
+        )
         .await
         .expect("GEPA compile should succeed with a dedicated valset");
 
@@ -339,12 +308,70 @@ async fn gepa_compile_uses_valset_and_tracks_best_outputs_when_enabled() {
         .clone();
     assert_eq!(seen, vec!["val-only".to_string()]);
     assert_eq!(result.highest_score_achieved_per_val_task.len(), valset.len());
-    assert_eq!(
-        result
-            .best_outputs_valset
-            .as_ref()
-            .expect("best outputs should be captured when tracking is enabled")
-            .len(),
-        valset.len()
+    assert!(
+        result.highest_score_achieved_per_val_task[0] >= 100.0,
+        "valset-only scoring should dominate, got {:?}",
+        result.highest_score_achieved_per_val_task
+    );
+
+    let best_outputs = result
+        .best_outputs_valset
+        .as_ref()
+        .expect("best outputs should be captured when tracking is enabled");
+    assert_eq!(best_outputs.len(), valset.len());
+    assert!(
+        best_outputs[0].to_string().contains("val-only"),
+        "best valset output should come from valset prompt, got {}",
+        best_outputs[0]
+    );
+}
+
+#[tokio::test]
+async fn gepa_compile_respects_max_lm_calls_budget() {
+    let metric = FeedbackMetricImpl;
+    let mut module = InstructionEchoModule {
+        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+    };
+
+    let optimizer = GEPA::builder()
+        .num_iterations(5)
+        .minibatch_size(2)
+        .max_lm_calls(2)
+        .build();
+
+    let result = optimizer
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
+        .await
+        .expect("GEPA compile should succeed under LM call budget");
+
+    assert!(
+        result.total_lm_calls <= 2,
+        "LM call budget should be enforced, got {}",
+        result.total_lm_calls
+    );
+}
+
+#[tokio::test]
+async fn gepa_compile_respects_max_rollouts_budget() {
+    let metric = FeedbackMetricImpl;
+    let mut module = InstructionEchoModule {
+        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+    };
+
+    let optimizer = GEPA::builder()
+        .num_iterations(5)
+        .minibatch_size(2)
+        .max_rollouts(2)
+        .build();
+
+    let result = optimizer
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
+        .await
+        .expect("GEPA compile should succeed under rollout budget");
+
+    assert!(
+        result.total_rollouts <= 2,
+        "rollout budget should be enforced, got {}",
+        result.total_rollouts
     );
 }

@@ -5,7 +5,8 @@ use anyhow::Result;
 use bamltype::facet_reflect::Peek;
 use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 
-use crate::{Example, SignatureSchema};
+use crate::SignatureSchema;
+use crate::data::example::Example as RawExample;
 
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
@@ -28,7 +29,7 @@ use crate::{Example, SignatureSchema};
 /// Normal users never touch this — you pass your module to `optimizer.compile()`
 /// and it uses `DynPredictor` internally.
 ///
-pub trait DynPredictor: Send + Sync {
+pub(crate) trait DynPredictor: Send + Sync {
     /// Returns the [`SignatureSchema`] for this predictor's signature.
     fn schema(&self) -> &SignatureSchema;
 
@@ -39,15 +40,15 @@ pub trait DynPredictor: Send + Sync {
     fn set_instruction(&mut self, instruction: String);
 
     /// Returns current demos as type-erased [`Example`]s.
-    fn demos_as_examples(&self) -> Vec<Example>;
+    fn demos_as_examples(&self) -> Vec<RawExample>;
 
-    /// Sets demos from type-erased [`Example`]s, converting to typed `Demo<S>` internally.
+    /// Sets demos from type-erased [`Example`]s, converting to typed `Example<S>` internally.
     ///
     /// # Errors
     ///
     /// Returns an error if any example can't be converted to the predictor's typed
-    /// `Demo<S>` (schema mismatch).
-    fn set_demos_from_examples(&mut self, demos: Vec<Example>) -> Result<()>;
+    /// `Example<S>` (schema mismatch).
+    fn set_demos_from_examples(&mut self, demos: Vec<RawExample>) -> Result<()>;
 
     /// Snapshots the predictor's mutable state (demos + instruction override).
     fn dump_state(&self) -> PredictState;
@@ -66,16 +67,16 @@ pub trait DynPredictor: Send + Sync {
 /// Used by [`DynPredictor::dump_state`]/[`DynPredictor::load_state`] for
 /// saving and restoring optimized parameters.
 #[derive(Clone, Debug, Default)]
-pub struct PredictState {
+pub(crate) struct PredictState {
     /// The demos as type-erased examples.
-    pub demos: Vec<Example>,
+    pub demos: Vec<RawExample>,
     /// The instruction override, if any.
     pub instruction_override: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, facet::Facet)]
 #[facet(opaque)]
-pub struct PredictAccessorFns {
+pub(crate) struct PredictAccessorFns {
     pub accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
 }
 
@@ -104,7 +105,7 @@ fn accessor_registry() -> &'static Mutex<HashMap<ConstTypeId, PredictAccessorFns
     ACCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn register_predict_accessor(
+pub(crate) fn register_predict_accessor(
     shape: &'static Shape,
     accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
 ) {
@@ -126,7 +127,7 @@ pub fn register_predict_accessor(
 
 /// Error from [`named_parameters`] when the Facet walker encounters an unsupported structure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum NamedParametersError {
+pub(crate) enum NamedParametersError {
     /// A `Predict` leaf was found inside an unsupported container (`Rc`, `Arc`, etc.).
     #[error("container `{ty}` at `{path}` contains a parameter leaf")]
     Container { path: String, ty: &'static str },
@@ -171,7 +172,7 @@ pub enum NamedParametersError {
 /// }
 /// ```
 #[tracing::instrument(level = "debug", name = "dsrs.named_parameters", skip(module))]
-pub fn named_parameters<M>(
+pub(crate) fn named_parameters<M>(
     module: &mut M,
 ) -> std::result::Result<Vec<(String, &mut dyn DynPredictor)>, NamedParametersError>
 where

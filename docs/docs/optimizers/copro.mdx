@@ -31,7 +31,7 @@ let copro = COPRO::builder()
 ```rust
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::__macro_support::bamltype::facet;
+use facet;
 use dspy_rs::{
     COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric, configure, init_tracing,
@@ -64,9 +64,9 @@ impl Module for MyModule {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<MyModule> for ExactMatchMetric {
-    async fn evaluate(&self, example: &Example, prediction: &Predicted<QAOutput>) -> Result<MetricOutcome> {
-        let expected = example.get("answer", None).as_str().unwrap_or("").trim().to_lowercase();
+impl TypedMetric<QA, MyModule> for ExactMatchMetric {
+    async fn evaluate(&self, example: &Example<QA>, prediction: &Predicted<QAOutput>) -> Result<MetricOutcome> {
+        let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
@@ -86,6 +86,24 @@ async fn main() -> Result<()> {
     );
     
     let mut module = MyModule::builder().build();
+    let trainset = vec![
+        Example::new(
+            QAInput {
+                question: "What is 2+2?".to_string(),
+            },
+            QAOutput {
+                answer: "4".to_string(),
+            },
+        ),
+        Example::new(
+            QAInput {
+                question: "Capital of France?".to_string(),
+            },
+            QAOutput {
+                answer: "Paris".to_string(),
+            },
+        ),
+    ];
     
     let copro = COPRO::builder()
         .breadth(10)
@@ -93,7 +111,7 @@ async fn main() -> Result<()> {
         .build();
     let metric = ExactMatchMetric;
     
-    copro.compile(&mut module, trainset, &metric).await?;
+    copro.compile::<QA, _, _>(&mut module, trainset, &metric).await?;
     
     Ok(())
 }

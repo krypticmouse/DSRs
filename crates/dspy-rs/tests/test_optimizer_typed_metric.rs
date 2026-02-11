@@ -1,11 +1,10 @@
-use anyhow::Result;
-use dspy_rs::__macro_support::bamltype::facet;
+use anyhow::{Result, anyhow};
+use facet;
 use dspy_rs::{
-    COPRO, CallMetadata, DynPredictor, Example, MIPROv2, MetricOutcome, Module, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedMetric,
+    COPRO, CallMetadata, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedMetric,
 };
-use serde_json::json;
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 #[derive(Signature, Clone, Debug)]
@@ -29,11 +28,13 @@ impl Module for InstructionEchoModule {
 
     async fn forward(
         &self,
-        _input: OptimizerSigInput,
+        input: OptimizerSigInput,
     ) -> Result<Predicted<OptimizerSigOutput>, PredictError> {
-        let answer = <Predict<OptimizerSig> as DynPredictor>::instruction(&self.predictor);
+        let _ = &self.predictor;
         Ok(Predicted::new(
-            OptimizerSigOutput { answer },
+            OptimizerSigOutput {
+                answer: input.prompt,
+            },
             CallMetadata::default(),
         ))
     }
@@ -43,10 +44,10 @@ struct RecordingMetric {
     seen_answers: Arc<Mutex<Vec<String>>>,
 }
 
-impl TypedMetric<InstructionEchoModule> for RecordingMetric {
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for RecordingMetric {
     async fn evaluate(
         &self,
-        _example: &Example,
+        example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
     ) -> Result<MetricOutcome> {
         self.seen_answers
@@ -54,41 +55,42 @@ impl TypedMetric<InstructionEchoModule> for RecordingMetric {
             .expect("metric lock should not be poisoned")
             .push(prediction.answer.clone());
 
-        Ok(MetricOutcome::score(prediction.answer.len() as f32))
+        let score = (prediction.answer == example.input.prompt) as u8 as f32;
+        Ok(MetricOutcome::score(score))
     }
 }
 
-fn trainset() -> Vec<Example> {
-    vec![
-        Example::new(
-            HashMap::from([
-                ("prompt".to_string(), json!("one")),
-                ("answer".to_string(), json!("seed")),
-            ]),
-            vec!["prompt".to_string()],
-            vec!["answer".to_string()],
-        ),
-        Example::new(
-            HashMap::from([
-                ("prompt".to_string(), json!("two")),
-                ("answer".to_string(), json!("seed")),
-            ]),
-            vec!["prompt".to_string()],
-            vec!["answer".to_string()],
-        ),
-    ]
+struct FailingMetric;
+
+impl TypedMetric<OptimizerSig, InstructionEchoModule> for FailingMetric {
+    async fn evaluate(
+        &self,
+        _example: &Example<OptimizerSig>,
+        _prediction: &Predicted<OptimizerSigOutput>,
+    ) -> Result<MetricOutcome> {
+        Err(anyhow!("metric failure"))
+    }
 }
 
-fn trainset_with_invalid_input_keys() -> Vec<Example> {
-    vec![Example::new(
-        HashMap::from([
-            ("prompt".to_string(), json!("one")),
-            ("wrong_input".to_string(), json!("unused")),
-            ("answer".to_string(), json!("seed")),
-        ]),
-        vec!["wrong_input".to_string()],
-        vec!["answer".to_string()],
-    )]
+fn trainset() -> Vec<Example<OptimizerSig>> {
+    vec![
+        Example::new(
+            OptimizerSigInput {
+                prompt: "one".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "one".to_string(),
+            },
+        ),
+        Example::new(
+            OptimizerSigInput {
+                prompt: "two".to_string(),
+            },
+            OptimizerSigOutput {
+                answer: "two".to_string(),
+            },
+        ),
+    ]
 }
 
 #[tokio::test]
@@ -104,7 +106,7 @@ async fn copro_compile_uses_typed_metric_predictions() {
 
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
     optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect("COPRO compile should succeed on typed metric");
 
@@ -112,7 +114,10 @@ async fn copro_compile_uses_typed_metric_predictions() {
         .lock()
         .expect("metric lock should not be poisoned");
     assert!(!seen.is_empty(), "metric should receive typed predictions");
-    assert!(seen.iter().all(|answer| !answer.is_empty()));
+    let expected_prompts = HashSet::from(["one".to_string(), "two".to_string()]);
+    assert!(seen.iter().all(|answer| expected_prompts.contains(answer)));
+    assert!(seen.iter().any(|answer| answer == "one"));
+    assert!(seen.iter().any(|answer| answer == "two"));
 }
 
 #[tokio::test]
@@ -133,7 +138,7 @@ async fn mipro_compile_uses_typed_metric_predictions() {
         .build();
 
     optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect("MIPRO compile should succeed on typed metric");
 
@@ -141,39 +146,32 @@ async fn mipro_compile_uses_typed_metric_predictions() {
         .lock()
         .expect("metric lock should not be poisoned");
     assert!(!seen.is_empty(), "metric should receive typed predictions");
-    assert!(seen.iter().all(|answer| !answer.is_empty()));
+    let expected_prompts = HashSet::from(["one".to_string(), "two".to_string()]);
+    assert!(seen.iter().all(|answer| expected_prompts.contains(answer)));
+    assert!(seen.iter().any(|answer| answer == "one"));
+    assert!(seen.iter().any(|answer| answer == "two"));
 }
 
 #[tokio::test]
-async fn copro_compile_respects_example_input_keys_for_typed_conversion() {
-    let metric = RecordingMetric {
-        seen_answers: Arc::new(Mutex::new(Vec::new())),
-    };
+async fn copro_compile_propagates_metric_errors() {
     let mut module = InstructionEchoModule {
         predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
     };
-
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
-    let err = optimizer
-        .compile(&mut module, trainset_with_invalid_input_keys(), &metric)
-        .await
-        .expect_err("compile should fail when input_keys omits required typed fields");
 
-    assert!(
-        err.to_string().contains("prompt"),
-        "error should mention missing required field: {err}"
-    );
+    let err = optimizer
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &FailingMetric)
+        .await
+        .expect_err("COPRO should propagate typed metric errors");
+
+    assert!(err.to_string().contains("metric failure"));
 }
 
 #[tokio::test]
-async fn mipro_compile_respects_example_input_keys_for_typed_conversion() {
-    let metric = RecordingMetric {
-        seen_answers: Arc::new(Mutex::new(Vec::new())),
-    };
+async fn mipro_compile_propagates_metric_errors() {
     let mut module = InstructionEchoModule {
         predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
     };
-
     let optimizer = MIPROv2::builder()
         .num_candidates(4)
         .num_trials(2)
@@ -181,12 +179,9 @@ async fn mipro_compile_respects_example_input_keys_for_typed_conversion() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset_with_invalid_input_keys(), &metric)
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &FailingMetric)
         .await
-        .expect_err("compile should fail when input_keys omits required typed fields");
+        .expect_err("MIPRO should propagate typed metric errors");
 
-    assert!(
-        err.to_string().contains("prompt"),
-        "error should mention missing required field: {err}"
-    );
+    assert!(err.to_string().contains("metric failure"));
 }

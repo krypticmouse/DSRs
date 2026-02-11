@@ -1,12 +1,16 @@
 use anyhow::{Result, anyhow};
-use bamltype::baml_types::BamlMap;
 
 use crate::core::Module;
-use crate::data::example::Example;
-use crate::{BamlType, BamlValue, Predicted};
+use crate::{Predicted, Signature};
+use crate::predictors::Example;
 
 use super::FeedbackMetric;
 
+/// Result of evaluating a single example: a score and optional textual feedback.
+///
+/// Score-only metrics use [`MetricOutcome::score()`]. Feedback-aware metrics (required
+/// by [`GEPA`](crate::GEPA)) use [`MetricOutcome::with_feedback()`] to include a [`FeedbackMetric`]
+/// explaining *why* the example scored the way it did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MetricOutcome {
     pub score: f32,
@@ -14,6 +18,10 @@ pub struct MetricOutcome {
 }
 
 impl MetricOutcome {
+    /// Creates an outcome with only a numerical score.
+    ///
+    /// Sufficient for [`COPRO`](crate::COPRO) and [`MIPROv2`](crate::MIPROv2).
+    /// [`GEPA`](crate::GEPA) will error if it receives outcomes without feedback.
     pub fn score(score: f32) -> Self {
         Self {
             score,
@@ -21,6 +29,10 @@ impl MetricOutcome {
         }
     }
 
+    /// Creates an outcome with a score and textual feedback.
+    ///
+    /// Required by [`GEPA`](crate::GEPA), which appends the feedback text to candidate
+    /// instructions during evolutionary mutation.
     pub fn with_feedback(score: f32, feedback: FeedbackMetric) -> Self {
         Self {
             score,
@@ -29,66 +41,80 @@ impl MetricOutcome {
     }
 }
 
+/// How you tell the optimizer what "good" means.
+///
+/// Implement this to score a module's prediction against a ground-truth example.
+/// The trait is generic over `S` (signature) and `M` (module) so your metric sees
+/// fully typed data: the [`Example<S>`](crate::predictors::Example) with its typed
+/// input and expected output, and the [`Predicted<M::Output>`](crate::Predicted) which
+/// may be augmented (e.g. `WithReasoning<QAOutput>` for `ChainOfThought`).
+///
+/// Return [`MetricOutcome::score()`] for a numerical score (0.0–1.0 by convention).
+/// Return [`MetricOutcome::with_feedback()`] to include textual feedback explaining
+/// *why* — [`GEPA`](crate::GEPA) uses this to guide its search, other optimizers ignore it.
+///
+/// # Example
+///
+/// ```ignore
+/// struct ExactMatch;
+///
+/// impl TypedMetric<QA, Predict<QA>> for ExactMatch {
+///     async fn evaluate(
+///         &self,
+///         example: &Example<QA>,
+///         prediction: &Predicted<QAOutput>,
+///     ) -> Result<MetricOutcome> {
+///         let score = if prediction.answer == example.output.answer { 1.0 } else { 0.0 };
+///         Ok(MetricOutcome::score(score))
+///     }
+/// }
+/// ```
 #[allow(async_fn_in_trait)]
-pub trait TypedMetric<M: Module>: Send + Sync {
+pub trait TypedMetric<S, M>: Send + Sync
+where
+    S: Signature,
+    M: Module<Input = S::Input>,
+{
     async fn evaluate(
         &self,
-        example: &Example,
+        example: &Example<S>,
         prediction: &Predicted<M::Output>,
     ) -> Result<MetricOutcome>;
 }
 
-fn baml_map_from_example_keys(example: &Example, keys: &[String]) -> Result<BamlMap<String, BamlValue>> {
-    let mut map = BamlMap::new();
-    for key in keys {
-        if let Some(value) = example.data.get(key) {
-            let baml_value =
-                BamlValue::try_from(value.clone()).map_err(|err| anyhow!("{err}"))?;
-            map.insert(key.clone(), baml_value);
-        }
-    }
-    Ok(map)
-}
-
-pub fn input_keys_from_example(example: &Example) -> Vec<String> {
-    if !example.input_keys.is_empty() {
-        return example.input_keys.clone();
-    }
-
-    if !example.output_keys.is_empty() {
-        return example
-            .data
-            .keys()
-            .filter(|key| !example.output_keys.contains(*key))
-            .cloned()
-            .collect();
-    }
-
-    example.data.keys().cloned().collect()
-}
-
-pub fn input_from_example<I>(example: &Example) -> Result<I>
-where
-    I: BamlType,
-{
-    let keys = input_keys_from_example(example);
-    let map = baml_map_from_example_keys(example, &keys)?;
-    I::try_from_baml_value(BamlValue::Map(map)).map_err(|err| anyhow!("{err}"))
-}
-
-pub async fn evaluate_trainset<M, MT>(
+/// Runs a module on every example in a trainset and scores each with a metric.
+///
+/// Returns one [`MetricOutcome`] per example, in trainset order. Individual LM call
+/// failures are propagated (not swallowed) — if any call fails, the whole evaluation
+/// fails. For fault-tolerant batching, use [`forward_all`](crate::forward_all) instead.
+///
+/// This runs sequentially (one example at a time). Optimizers call this internally;
+/// you can also use it directly to benchmark your module:
+///
+/// ```ignore
+/// let outcomes = evaluate_trainset(&module, &trainset, &metric).await?;
+/// println!("Average: {:.3}", average_score(&outcomes));
+/// ```
+///
+/// # Errors
+///
+/// - Any [`Module::call`] failure propagates immediately
+/// - Any [`TypedMetric::evaluate`] failure propagates immediately
+pub async fn evaluate_trainset<S, M, MT>(
     module: &M,
-    trainset: &[Example],
+    trainset: &[Example<S>],
     metric: &MT,
 ) -> Result<Vec<MetricOutcome>>
 where
-    M: Module,
-    MT: TypedMetric<M>,
+    S: Signature,
+    S::Input: Clone,
+    M: Module<Input = S::Input>,
+    MT: TypedMetric<S, M>,
 {
     let mut outcomes = Vec::with_capacity(trainset.len());
 
     for example in trainset {
-        let input = input_from_example::<M::Input>(example)?;
+        let input = example.input.clone();
         let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
         outcomes.push(metric.evaluate(example, &predicted).await?);
     }
@@ -96,6 +122,9 @@ where
     Ok(outcomes)
 }
 
+/// Arithmetic mean of scores from a slice of [`MetricOutcome`]s.
+///
+/// Returns `0.0` for an empty slice.
 pub fn average_score(outcomes: &[MetricOutcome]) -> f32 {
     if outcomes.is_empty() {
         return 0.0;

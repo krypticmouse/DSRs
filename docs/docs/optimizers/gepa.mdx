@@ -68,12 +68,16 @@ impl Module for MyModule {
 
 struct MyMetric;
 
-impl TypedMetric<MyModule> for MyMetric {
-    async fn evaluate(&self, example: &Example, prediction: &Predicted<MySignatureOutput>)
+impl TypedMetric<MySignature, MyModule> for MyMetric {
+    async fn evaluate(
+        &self,
+        example: &Example<MySignature>,
+        prediction: &Predicted<<MyModule as Module>::Output>,
+    )
         -> Result<MetricOutcome>
     {
         let predicted = prediction.answer.as_str();
-        let expected = example.get("expected", None).as_str().unwrap_or("");
+        let expected = example.output.answer.as_str();
         
         let correct = predicted == expected;
         let score = if correct { 1.0 } else { 0.0 };
@@ -177,8 +181,15 @@ GEPA::builder()
     .maybe_max_rollouts(Some(500))   // Budget: max rollouts
     .maybe_max_lm_calls(Some(1000))  // Budget: max LM calls
     .maybe_prompt_model(Some(lm))    // Separate LM for meta-prompting
-    .maybe_valset(Some(examples))    // Validation set
     .build()
+```
+
+Pass validation data at compile time:
+
+```rust
+let result = gepa
+    .compile_with_valset(&mut module, trainset, Some(valset), &metric)
+    .await?;
 ```
 
 ## Understanding GEPA Results
@@ -356,11 +367,11 @@ GEPA::builder()
 ### Issue: "GEPA requires feedback for every evaluated example"
 ```rust
 // Solution: Return MetricOutcome::with_feedback(...) from TypedMetric::evaluate
-impl TypedMetric<MyModule> for MyMetric {
+impl TypedMetric<MySignature, MyModule> for MyMetric {
     async fn evaluate(
         &self,
-        example: &Example,
-        prediction: &Predicted<MySignatureOutput>,
+        example: &Example<MySignature>,
+        prediction: &Predicted<<MyModule as Module>::Output>,
     ) -> Result<MetricOutcome> {
         Ok(MetricOutcome::with_feedback(
             1.0,
@@ -396,10 +407,11 @@ GEPA can act as a test-time/inference search mechanism. By setting your `valset`
 let gepa = GEPA::builder()
     .track_stats(true)
     .track_best_outputs(true)
-    .maybe_valset(Some(my_tasks.clone()))
     .build();
 
-let result = gepa.compile(&mut module, my_tasks, &metric).await?;
+let result = gepa
+    .compile_with_valset(&mut module, my_tasks.clone(), Some(my_tasks), &metric)
+    .await?;
 
 // Access per-task best scores and outputs
 let best_scores = result.highest_score_achieved_per_val_task;

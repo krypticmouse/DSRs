@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, DynPredictor, Predict, Signature, SignatureSchema};
+use dspy_rs::{BamlType, Signature, SignatureSchema};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -86,18 +86,4 @@ fn schema_panics_on_flattened_lm_name_collision() {
         let _ = SignatureSchema::of::<CollisionSig>();
     });
     assert!(result.is_err(), "expected schema collision panic");
-}
-
-#[test]
-fn dyn_predictor_schema_uses_lm_names_for_flattened_fields() {
-    let predict = Predict::<NestedSig>::new();
-    let schema = <Predict<NestedSig> as DynPredictor>::schema(&predict);
-    let output_names = schema
-        .output_fields()
-        .iter()
-        .map(|field| field.lm_name)
-        .collect::<Vec<_>>();
-
-    assert_eq!(output_names, vec!["answer", "score"]);
-    assert!(!output_names.contains(&"result.answer"));
 }

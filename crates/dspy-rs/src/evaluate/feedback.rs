@@ -1,8 +1,26 @@
-use crate::{BamlValue, Example};
+use crate::{BamlValue, RawExample};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Rich evaluation metric with both score and textual feedback.
+/// Rich evaluation metric pairing a numerical score with textual feedback.
+///
+/// Used by [`GEPA`](crate::GEPA) to guide evolutionary instruction search. The
+/// `feedback` string is appended to candidate instructions during mutation, so
+/// it should explain *why* the score is what it is — not just restate the score.
+///
+/// Good feedback: "The answer correctly identifies the capital but misspells 'Canberra'"
+/// Bad feedback: "Score: 0.5"
+///
+/// // TODO(vector-feedback): `score` should be `Vec<f32>` (or a named score vector)
+/// // so metrics can express multi-dimensional quality (accuracy, fluency, brevity, etc.)
+/// // and the Pareto frontier can operate on the full vector instead of a scalar collapse.
+///
+/// ```
+/// use dspy_rs::FeedbackMetric;
+///
+/// let fb = FeedbackMetric::new(0.7, "Correct answer but verbose explanation");
+/// assert_eq!(fb.score, 0.7);
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FeedbackMetric {
     /// Numerical score (typically 0.0 to 1.0, but can be any range)
@@ -52,10 +70,18 @@ impl Default for FeedbackMetric {
     }
 }
 
-/// Execution trace capturing program behavior during evaluation/optimization.
+/// Execution trace capturing inputs, outputs, feedback, and errors from a single run.
+///
+/// Used internally by optimizers to record what happened during evaluation. The
+/// [`format_for_reflection`](ExecutionTrace::format_for_reflection) method produces a
+/// human-readable summary suitable for including in LM prompts (e.g. for GEPA's
+/// feedback-driven mutation).
+///
+/// Not related to the [`trace`](crate::trace) module's computation graph — this is
+/// a flat record of one evaluation, not a DAG of LM calls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionTrace {
-    pub inputs: Example,
+    pub inputs: RawExample,
     pub outputs: Option<BamlValue>,
     pub feedback: Option<FeedbackMetric>,
     pub intermediate_steps: Vec<(String, serde_json::Value)>,
@@ -64,7 +90,8 @@ pub struct ExecutionTrace {
 }
 
 impl ExecutionTrace {
-    pub fn simple(inputs: Example, outputs: BamlValue) -> Self {
+    /// Creates a trace with just inputs and outputs, no feedback or errors.
+    pub fn simple(inputs: RawExample, outputs: BamlValue) -> Self {
         Self {
             inputs,
             outputs: Some(outputs),
@@ -75,7 +102,7 @@ impl ExecutionTrace {
         }
     }
 
-    pub fn builder(inputs: Example) -> ExecutionTraceBuilder {
+    pub fn builder(inputs: RawExample) -> ExecutionTraceBuilder {
         ExecutionTraceBuilder::new(inputs)
     }
 
@@ -84,6 +111,7 @@ impl ExecutionTrace {
         self
     }
 
+    /// Returns `true` if the execution produced output and had no errors.
     pub fn is_successful(&self) -> bool {
         self.outputs.is_some() && self.errors.is_empty()
     }
@@ -92,6 +120,11 @@ impl ExecutionTrace {
         self.feedback.as_ref().map(|f| f.score)
     }
 
+    /// Formats the trace as a human-readable string for LM prompt inclusion.
+    ///
+    /// Includes inputs, execution steps, outputs, errors, and feedback score.
+    /// Suitable for appending to optimization prompts where the LM needs to
+    /// understand what happened in a previous evaluation.
     pub fn format_for_reflection(&self) -> String {
         let mut result = String::new();
 
@@ -134,7 +167,7 @@ pub struct ExecutionTraceBuilder {
 }
 
 impl ExecutionTraceBuilder {
-    pub fn new(inputs: Example) -> Self {
+    pub fn new(inputs: RawExample) -> Self {
         Self {
             trace: ExecutionTrace {
                 inputs,
@@ -202,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_execution_trace_builder() {
-        let inputs = Example::new(
+        let inputs = RawExample::new(
             [("question".to_string(), json!("What is 2+2?"))].into(),
             vec!["question".to_string()],
             vec![],
