@@ -36,7 +36,12 @@
 //!
 //! # async fn example() -> Result<(), PredictError> {
 //! // 1. Configure the LM
-//! dspy_rs::configure(LM::from_model("openai/gpt-4o-mini"));
+//! let lm = LM::builder()
+//!     .model("openai:gpt-4o-mini".to_string())
+//!     .build()
+//!     .await
+//!     .unwrap();
+//! dspy_rs::configure(lm, ChatAdapter);
 //!
 //! // 2. Pick a strategy
 //! let cot = ChainOfThought::<QA>::new();
@@ -60,7 +65,7 @@
 //!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
 //!   Everything here is statically typed, which is both the strength and the constraint.
 //! - **MIPRO is instruction-only.** It should also mutate demos per-predictor based on
-//!   trace data — Python DSPy does this — but it doesn't yet.
+//!   trace data — Python DSPy does this — but it doesn't yet (`TODO(trace-demos)`).
 //! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
 //!   The module trait and augmentation system are designed for them, but nobody's built
 //!   them yet.
@@ -68,8 +73,9 @@
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
 //! - **Container traversal is partial.** The optimizer walker handles `Option`, `Vec`,
-//!   `HashMap<String, _>`, and `Box`. `Rc`/`Arc` containing `Predict` leaves will error
-//!   explicitly, not silently skip.
+//!   `HashMap<String, _>`, and `Box`. `Rc`/`Arc` containing `Predict` leaves return
+//!   explicit container errors (not silent skips), and `Predict` discovery requires
+//!   a valid shape-local accessor payload (`TODO(dsrs-shared-ptr-policy)`).
 //!
 //! # Crate organization
 //!
@@ -83,6 +89,10 @@
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
 //! - [`trace`] — Execution graph recording for debugging
 //! - [`utils`] — Response caching
+
+// TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
+// extension-attr dispatch no longer triggers rust-lang/rust#52234 on in-crate usage.
+#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 
 extern crate self as dspy_rs;
 

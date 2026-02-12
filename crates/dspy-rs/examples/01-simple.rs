@@ -15,11 +15,11 @@ cargo run --example 01-simple
 
 use anyhow::Result;
 use bon::Builder;
+use dspy_rs::data::RawExample;
 use dspy_rs::{
     CallMetadata, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError, Predicted,
     Prediction, configure, init_tracing,
 };
-use dspy_rs::data::RawExample;
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";

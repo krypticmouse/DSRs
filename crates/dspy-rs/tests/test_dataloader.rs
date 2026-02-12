@@ -8,7 +8,6 @@ use dspy_rs::{
     PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
     average_score, evaluate_trainset,
 };
-use facet;
 use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
 use std::fs;
@@ -45,7 +44,10 @@ impl Module for EchoModule {
     type Input = LoaderSigInput;
     type Output = LoaderSigOutput;
 
-    async fn forward(&self, input: LoaderSigInput) -> Result<Predicted<LoaderSigOutput>, PredictError> {
+    async fn forward(
+        &self,
+        input: LoaderSigInput,
+    ) -> Result<Predicted<LoaderSigOutput>, PredictError> {
         let _ = &self.predictor;
         Ok(Predicted::new(
             LoaderSigOutput {
@@ -154,10 +156,7 @@ fn csv_unknown_extra_columns_ignored_by_default() -> Result<()> {
 fn csv_unknown_columns_error_when_policy_is_error() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("train.csv");
-    write_file(
-        &path,
-        "question,answer,notes\nWhat is 2+2?,4,math\n",
-    )?;
+    write_file(&path, "question,answer,notes\nWhat is 2+2?,4,math\n")?;
 
     let err = DataLoader::load_csv::<LoaderSig>(
         path.to_str().unwrap(),
@@ -314,10 +313,7 @@ fn json_mapper_overload_success() -> Result<()> {
 fn json_mapper_overload_error_includes_row_index() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("train.json");
-    write_file(
-        &path,
-        r#"[{"question":"What is 2+2?","answer":"4"}]"#,
-    )?;
+    write_file(&path, r#"[{"question":"What is 2+2?","answer":"4"}]"#)?;
 
     let err = DataLoader::load_json_with::<LoaderSig, _>(
         path.to_str().unwrap(),
@@ -358,10 +354,7 @@ fn jsonl_typed_success() -> Result<()> {
 fn json_type_mismatch_errors() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("bad.json");
-    write_file(
-        &path,
-        r#"[{"value":"not-an-int","doubled":2}]"#,
-    )?;
+    write_file(&path, r#"[{"value":"not-an-int","doubled":2}]"#)?;
 
     let err = DataLoader::load_json::<NumericSig>(
         path.to_str().unwrap(),
@@ -405,10 +398,8 @@ fn parquet_typed_success_path() -> Result<()> {
         &["4", "Paris"],
     )?;
 
-    let examples = DataLoader::load_parquet::<LoaderSig>(
-        path.to_str().unwrap(),
-        TypedLoadOptions::default(),
-    )?;
+    let examples =
+        DataLoader::load_parquet::<LoaderSig>(path.to_str().unwrap(), TypedLoadOptions::default())?;
 
     assert_eq!(examples.len(), 2);
     assert_eq!(examples[1].output.answer, "Paris");
@@ -504,10 +495,7 @@ fn parquet_numeric_round_trip_for_typed_conversion() -> Result<()> {
 async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("train.csv");
-    write_file(
-        &path,
-        "question,answer\none,one\ntwo,two\n",
-    )?;
+    write_file(&path, "question,answer\none,one\ntwo,two\n")?;
 
     let trainset = DataLoader::load_csv::<LoaderSig>(
         path.to_str().unwrap(),

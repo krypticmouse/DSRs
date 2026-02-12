@@ -9,7 +9,6 @@ cargo run --example 08-optimize-mipro --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use facet;
 use dspy_rs::{
     ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
@@ -93,7 +92,8 @@ async fn main() -> Result<()> {
     let mut qa_module = SimpleQA::builder().build();
 
     println!("Evaluating baseline performance...");
-    let baseline_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
+    let baseline_score =
+        average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
     println!("Baseline score: {:.3}\n", baseline_score);
 
     let optimizer = MIPROv2::builder()
@@ -108,7 +108,8 @@ async fn main() -> Result<()> {
         .await?;
 
     println!("Evaluating optimized performance...");
-    let optimized_score = average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
+    let optimized_score =
+        average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
     println!("Optimized score: {:.3}", optimized_score);
 
     let improvement = ((optimized_score - baseline_score) / baseline_score.max(1e-6)) * 100.0;

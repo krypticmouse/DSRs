@@ -16,6 +16,11 @@ Establish a concrete first-pass container traversal strategy for S5, grounded in
 - Facet primitives/capabilities (NIA evidence),
 - and explicit limits that affect path determinism and trait-object handling.
 
+## Current Behavior Addendum (2026-02-12)
+
+Hard cutover is complete for optimizer discovery handles: shape-local accessor payload extraction is the runtime behavior.
+Container traversal is implemented for `Option`/`Vec`/`HashMap<String, _>`/`Box<T>` with explicit unsupported-container errors for `Rc`/`Arc`.
+
 ## Questions
 
 | ID | Question |
@@ -29,7 +34,7 @@ Establish a concrete first-pass container traversal strategy for S5, grounded in
 
 ## Findings (with Evidence)
 
-1. Current optimizer discovery is still manual `Optimizable` recursion, not Facet walker recursion.
+1. At spike start, optimizer discovery was manual `Optimizable` recursion, not Facet walker recursion.
    - `Optimizable` requires `parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable>`: `crates/dspy-rs/src/core/module.rs:84`.
    - `#[derive(Optimizable)]` only includes fields tagged `#[parameter]` and recursively flattens by calling child `parameters()`; no explicit container branching logic exists in the derive: `crates/dsrs-macros/src/optim.rs:41`, `crates/dsrs-macros/src/optim.rs:50`, `crates/dsrs-macros/src/optim.rs:72`, `crates/dsrs-macros/src/optim.rs:92`.
    - Existing tests cover nested struct flattening only (`a`, `b.predictor`, `p.b.predictor`), not `Option`/`Vec`/`HashMap`: `crates/dspy-rs/tests/test_optimizable.rs:39`, `crates/dspy-rs/tests/test_optimizable.rs:64`, `crates/dspy-rs/tests/test_optimizable.rs:103`.
@@ -75,11 +80,11 @@ Establish a concrete first-pass container traversal strategy for S5, grounded in
 
 ## Decision
 
-**Deferred.** Container traversal (`Option`/`Vec`/`HashMap`/`Box`) is not needed for V1 library modules — all use struct-field recursion only (ChainOfThought has `predict: Predict<...>`, ReAct has `action: Predict<...>`, BestOfN wraps `module: M`). Container traversal will be implemented when a concrete use case requires it. The spike findings and tradeoff analysis are preserved below for when that happens.
+**Implemented (hard-cutover runtime).** Container traversal over `Option`/`Vec`/`HashMap<String, _>`/`Box<T>` is part of current optimizer discovery behavior. Runtime handle extraction uses shape-local accessor payloads (S2 Mechanism A) only. Unsupported pointer-like containers (`Rc`, `Arc`, trait-object pointers) return explicit errors.
 
-## Original Recommendation (not adopted)
+## Adopted Strategy
 
-The spike originally recommended Option C (hybrid walker):
+The spike recommends Option C (hybrid walker):
 
 Rationale:
 - S5 requires container *runtime* handling, not just type graph coverage.
@@ -120,7 +125,12 @@ Rationale:
 5. Add explicit unsupported handling for trait-object pointers (`Box<dyn Module>`) with clear compile/design-time diagnostics and dynamic-graph fallback guidance.
 6. Add cycle protection for pointer/self-referential graphs to avoid infinite recursion.
 7. Add tests for each matrix row: positive cases (`Option`, `Vec`, `HashMap<String, _>`, `Box<T>`) and negative trait-object coverage.
-8. Add compatibility shim from current `Optimizable::parameters()` callers to the new walker so optimizers can migrate incrementally.
+8. Add compatibility shim from legacy `Optimizable::parameters()` callers to the new walker so optimizers can migrate incrementally.
+
+## Explicit Limitations (Current Runtime)
+
+- Optimizer discovery does not traverse `Rc<T>` or `Arc<T>` containers (`TODO(dsrs-shared-ptr-policy)`).
+- Media conversion is unsupported in optimizer discovery/state flows (`TODO(dsrs-media)`).
 
 ## Acceptance
 

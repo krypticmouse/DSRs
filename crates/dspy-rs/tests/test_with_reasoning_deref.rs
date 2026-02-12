@@ -1,6 +1,10 @@
 use dspy_rs::{Signature, WithReasoning};
 
 #[derive(Signature, Clone, Debug, PartialEq)]
+#[expect(
+    dead_code,
+    reason = "Signature type drives generated QAOutput used in deref assertions."
+)]
 struct QA {
     #[input]
     question: String,

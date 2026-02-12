@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 
 use crate::core::Module;
-use crate::{Predicted, Signature};
 use crate::predictors::Example;
+use crate::{Predicted, Signature};
 
 use super::FeedbackMetric;
 

@@ -11,9 +11,8 @@ use tracing::{debug, trace};
 use super::Adapter;
 use crate::CallMetadata;
 use crate::{
-    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, JsonishError,
-    Message, OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions, Signature,
-    TypeIR,
+    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, JsonishError, Message,
+    OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions, Signature, TypeIR,
 };
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
@@ -107,6 +106,8 @@ fn render_type_name_for_prompt(
 }
 
 fn split_schema_definitions(schema: &str) -> Option<(String, String)> {
+    // TODO(post-hardening): This parser is intentionally heuristic. Keep this
+    // behavior covered by tests when schema rendering changes.
     let lines: Vec<&str> = schema.lines().collect();
     let mut index = 0;
     let mut definitions = Vec::new();
@@ -233,13 +234,6 @@ impl ChatAdapter {
         format!("In adhering to this structure, your objective is: {indented}")
     }
 
-    fn format_task_description_typed<S: Signature>(
-        &self,
-        instruction_override: Option<&str>,
-    ) -> String {
-        self.format_task_description_schema(S::schema(), instruction_override)
-    }
-
     fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
         let mut output_fields = schema.output_fields().iter();
         let Some(first_field) = output_fields.next() else {
@@ -256,10 +250,6 @@ impl ChatAdapter {
         message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
         message
-    }
-
-    fn format_response_instructions_typed<S: Signature>(&self) -> String {
-        self.format_response_instructions_schema(S::schema())
     }
 
     /// Builds the system message for a signature using its default instruction.
@@ -348,10 +338,6 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
-        self.format_field_descriptions_schema(S::schema())
-    }
-
     fn format_field_structure_schema(&self, schema: &crate::SignatureSchema) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
@@ -384,10 +370,6 @@ impl ChatAdapter {
         Ok(lines.join("\n"))
     }
 
-    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
-        self.format_field_structure_schema(S::schema())
-    }
-
     /// Formats a typed input value as a user message with `[[ ## field ## ]]` delimiters.
     ///
     /// Each input field is serialized via `BamlType::to_baml_value()` and formatted
@@ -406,7 +388,8 @@ impl ChatAdapter {
     /// Navigates the `BamlValue` using each field's [`FieldPath`](crate::FieldPath) to
     /// handle flattened structs correctly. A field with path `["inner", "question"]` is
     /// extracted from the nested structure but rendered as a flat `[[ ## question ## ]]`
-    /// section in the prompt.
+    /// section in the prompt. Appends response instructions so the LM sees
+    /// output-field ordering guidance in the latest user turn.
     pub fn format_input<I>(&self, schema: &crate::SignatureSchema, input: &I) -> String
     where
         I: BamlType + for<'a> facet::Facet<'a>,
@@ -427,6 +410,7 @@ impl ChatAdapter {
             }
         }
 
+        result.push_str(&self.format_response_instructions_schema(schema));
         result
     }
 
@@ -732,6 +716,10 @@ impl ChatAdapter {
     /// # Errors
     ///
     /// Parse failures are wrapped as [`PredictError::Parse`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Public API returns PredictError directly for downstream matching."
+    )]
     pub fn parse_response_with_schema<S: Signature>(
         &self,
         response: Message,
@@ -754,7 +742,6 @@ impl ChatAdapter {
         );
         Ok(Predicted::new(output, metadata))
     }
-
 }
 
 fn parse_sections(content: &str) -> IndexMap<String, String> {
@@ -783,6 +770,8 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
             continue;
         };
         if parsed.contains_key(&name) {
+            // TODO(post-hardening): We currently keep the first occurrence to avoid
+            // late duplicate markers silently overwriting earlier parsed fields.
             continue;
         }
         parsed.insert(name, lines.join("\n").trim().to_string());
@@ -806,12 +795,20 @@ fn value_for_path_relaxed<'a>(
                     idx += 1;
                     continue;
                 }
-                if idx + 1 < parts.len() {
-                    if let Some(next) = fields.get(parts[idx + 1]) {
-                        current = next;
-                        idx += 2;
-                        continue;
+                // Flattened wrappers may remove one or more intermediate path
+                // segments (`outer.inner.answer` serialized as `answer`), so
+                // probe ahead for the next segment visible at this level.
+                let mut matched = None;
+                for (look_ahead, part) in parts.iter().enumerate().skip(idx + 1) {
+                    if let Some(next) = fields.get(*part) {
+                        matched = Some((look_ahead, next));
+                        break;
                     }
+                }
+                if let Some((look_ahead, next)) = matched {
+                    current = next;
+                    idx = look_ahead + 1;
+                    continue;
                 }
                 return None;
             }

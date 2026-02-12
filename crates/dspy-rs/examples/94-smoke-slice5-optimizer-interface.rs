@@ -1,8 +1,7 @@
 use anyhow::{Result, bail};
-use facet;
 use dspy_rs::{
-    COPRO, ChainOfThought, ChatAdapter, Example, LM, Optimizer, Signature, TypedMetric,
-    MetricOutcome, Predicted, WithReasoning, configure,
+    COPRO, ChainOfThought, ChatAdapter, Example, LM, MetricOutcome, Optimizer, Predicted,
+    Signature, TypedMetric, WithReasoning, configure,
 };
 
 #[derive(Signature, Clone, Debug, facet::Facet)]
@@ -24,7 +23,9 @@ impl TypedMetric<SmokeSig, ChainOfThought<SmokeSig>> for SmokeMetric {
         prediction: &Predicted<WithReasoning<SmokeSigOutput>>,
     ) -> Result<MetricOutcome> {
         let answer = prediction.answer.to_ascii_lowercase();
-        Ok(MetricOutcome::score((answer.contains("smoke") || answer.contains("ok")) as u8 as f32))
+        Ok(MetricOutcome::score(
+            (answer.contains("smoke") || answer.contains("ok")) as u8 as f32,
+        ))
     }
 }
 

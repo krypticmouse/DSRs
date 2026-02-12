@@ -8,8 +8,8 @@ cargo run --example 05-heterogenous-examples
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, init_tracing};
 use dspy_rs::data::RawExample;
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, init_tracing};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -40,7 +40,10 @@ async fn main() -> Result<()> {
     let heterogeneous = RawExample::new(
         HashMap::from([
             ("number".to_string(), json!(10)),
-            ("debug_note".to_string(), json!("metadata not used by the signature")),
+            (
+                "debug_note".to_string(),
+                json!("metadata not used by the signature"),
+            ),
             ("tags".to_string(), json!(["math", "demo"])),
         ]),
         vec!["number".to_string()],

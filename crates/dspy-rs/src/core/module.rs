@@ -4,6 +4,8 @@ use tracing::debug;
 
 use crate::{BamlType, Facet, PredictError, Predicted};
 
+type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
+
 /// Strategy-swapping interface for prompting modules.
 ///
 /// Everything in dsrs is a Module — a bare LM call ([`crate::Predict`]),
@@ -145,7 +147,7 @@ where
         None
     };
 
-    let mut indexed_results: Vec<(usize, Result<Predicted<M::Output>, PredictError>)> =
+    let mut indexed_results: Vec<IndexedForwardResult<M::Output>> =
         stream::iter(inputs.into_iter().enumerate())
             .map(|(idx, input)| async move { (idx, module.call(input).await) })
             .buffer_unordered(max_concurrency)
@@ -159,10 +161,10 @@ where
 
     indexed_results.sort_by_key(|(idx, _)| *idx);
 
-    let outcomes = indexed_results
-        .into_iter()
-        .map(|(_, outcome)| outcome)
-        .collect::<Vec<_>>();
+    let mut outcomes = Vec::with_capacity(indexed_results.len());
+    for (_, outcome) in indexed_results {
+        outcomes.push(outcome);
+    }
     debug!(outcomes = outcomes.len(), "forward_all completed");
     outcomes
 }

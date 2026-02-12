@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow};
 use arrow::array::{
-    Array, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
-    Int64Array, StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
+    Array, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use bamltype::baml_types::BamlMap;
 use csv::{ReaderBuilder, StringRecord};
@@ -75,10 +75,13 @@ impl RowRecord {
         &self,
         key: &str,
     ) -> std::result::Result<T, DataLoadError> {
-        let value = self.values.get(key).ok_or_else(|| DataLoadError::MissingField {
-            row: self.row_index,
-            field: key.to_string(),
-        })?;
+        let value = self
+            .values
+            .get(key)
+            .ok_or_else(|| DataLoadError::MissingField {
+                row: self.row_index,
+                field: key.to_string(),
+            })?;
 
         match serde_json::from_value::<T>(value.clone()) {
             Ok(parsed) => Ok(parsed),
@@ -90,13 +93,12 @@ impl RowRecord {
                         serde_json::Value::Bool(flag) => flag.to_string(),
                         other => other.to_string(),
                     };
-                    return serde_json::from_value::<T>(serde_json::Value::String(coerced)).map_err(
-                        |fallback_err| DataLoadError::TypeMismatch {
+                    return serde_json::from_value::<T>(serde_json::Value::String(coerced))
+                        .map_err(|fallback_err| DataLoadError::TypeMismatch {
                             row: self.row_index,
                             field: key.to_string(),
                             message: fallback_err.to_string(),
-                        },
-                    );
+                        });
                 }
 
                 Err(DataLoadError::TypeMismatch {
@@ -216,7 +218,10 @@ impl DataLoader {
         let _ = opts;
         let rows = Self::load_json_rows(path, lines)?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
-        debug!(examples = examples.len(), "typed json examples loaded via mapper");
+        debug!(
+            examples = examples.len(),
+            "typed json examples loaded via mapper"
+        );
         Ok(examples)
     }
 
@@ -282,7 +287,10 @@ impl DataLoader {
         let _ = opts;
         let rows = Self::load_csv_rows(path, delimiter, has_headers)?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
-        debug!(examples = examples.len(), "typed csv examples loaded via mapper");
+        debug!(
+            examples = examples.len(),
+            "typed csv examples loaded via mapper"
+        );
         Ok(examples)
     }
 
@@ -335,7 +343,10 @@ impl DataLoader {
         let _ = opts;
         let rows = Self::load_parquet_rows(Path::new(path))?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
-        debug!(examples = examples.len(), "typed parquet examples loaded via mapper");
+        debug!(
+            examples = examples.len(),
+            "typed parquet examples loaded via mapper"
+        );
         Ok(examples)
     }
 
@@ -405,7 +416,10 @@ impl DataLoader {
         let _ = opts;
         let rows = Self::load_hf_rows(dataset_name, subset, split, verbose)?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
-        debug!(examples = examples.len(), "typed hf examples loaded via mapper");
+        debug!(
+            examples = examples.len(),
+            "typed hf examples loaded via mapper"
+        );
         Ok(examples)
     }
 
@@ -433,7 +447,10 @@ impl DataLoader {
     {
         let rows = Self::load_rows_from_parquet_files(&parquet_files)?;
         let examples = Self::rows_to_typed::<S>(rows, &opts)?;
-        debug!(examples = examples.len(), "typed hf parquet examples loaded");
+        debug!(
+            examples = examples.len(),
+            "typed hf parquet examples loaded"
+        );
         Ok(examples)
     }
 
@@ -477,7 +494,10 @@ impl DataLoader {
         }
     }
 
-    fn load_json_rows(path: &str, lines: bool) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+    fn load_json_rows(
+        path: &str,
+        lines: bool,
+    ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let data = Self::fetch_text(path)?;
 
         if lines {
@@ -486,16 +506,16 @@ impl DataLoader {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let value: serde_json::Value = serde_json::from_str(line)
-                    .map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+                let value: serde_json::Value =
+                    serde_json::from_str(line).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
                 rows.push(row_from_json_value(value, idx + 1)?);
             }
             debug!(rows = rows.len(), "jsonl rows loaded");
             return Ok(rows);
         }
 
-        let value: serde_json::Value = serde_json::from_str(&data)
-            .map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+        let value: serde_json::Value =
+            serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
 
         let rows = match value {
             serde_json::Value::Array(items) => items
@@ -577,14 +597,14 @@ impl DataLoader {
         let file = fs::File::open(path).map_err(|err| DataLoadError::Parquet(err.into()))?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
             .map_err(|err| DataLoadError::Parquet(err.into()))?;
-        let mut reader = builder
+        let reader = builder
             .build()
             .map_err(|err| DataLoadError::Parquet(err.into()))?;
 
         let mut rows = Vec::new();
         let mut row_index = 1usize;
 
-        while let Some(batch_result) = reader.next() {
+        for batch_result in reader {
             let batch = batch_result.map_err(|err| DataLoadError::Parquet(err.into()))?;
             let schema = batch.schema();
 
@@ -659,7 +679,9 @@ impl DataLoader {
                 continue;
             }
 
-            let file_path = repo.get(&file).map_err(|err| DataLoadError::Hf(err.into()))?;
+            let file_path = repo
+                .get(&file)
+                .map_err(|err| DataLoadError::Hf(err.into()))?;
             let path_str = file_path
                 .to_str()
                 .ok_or_else(|| DataLoadError::Io(anyhow!("invalid UTF-8 file path")))?;
@@ -694,7 +716,10 @@ impl DataLoader {
 }
 
 fn resolve_source_field<'a>(field: &'a str, opts: &'a TypedLoadOptions) -> &'a str {
-    opts.field_map.get(field).map(String::as_str).unwrap_or(field)
+    opts.field_map
+        .get(field)
+        .map(String::as_str)
+        .unwrap_or(field)
 }
 
 fn typed_example_from_row<S: Signature>(
@@ -776,11 +801,12 @@ fn baml_map_for_fields<'a>(
                 field: signature_field.to_string(),
             })?;
 
-        let baml_value = BamlValue::try_from(value.clone()).map_err(|err| DataLoadError::TypeMismatch {
-            row: row.row_index,
-            field: signature_field.to_string(),
-            message: err.to_string(),
-        })?;
+        let baml_value =
+            BamlValue::try_from(value.clone()).map_err(|err| DataLoadError::TypeMismatch {
+                row: row.row_index,
+                field: signature_field.to_string(),
+                message: err.to_string(),
+            })?;
 
         map.insert(signature_field.to_string(), baml_value);
         used_source_fields.insert(source_field.to_string());

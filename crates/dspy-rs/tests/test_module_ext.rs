@@ -49,6 +49,27 @@ impl Module for MaybeFails {
     }
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Tests ModuleExt::and_then using the crate's public PredictError type."
+)]
+fn transform_int_payload(value: IntPayload) -> Result<TextPayload, PredictError> {
+    if value.value >= 4 {
+        Ok(TextPayload {
+            value: value.value.to_string(),
+        })
+    } else {
+        Err(PredictError::Parse {
+            source: ParseError::MissingField {
+                field: "transformed".to_string(),
+                raw_response: "transform".to_string(),
+            },
+            raw_response: "transform".to_string(),
+            lm_usage: dspy_rs::LmUsage::default(),
+        })
+    }
+}
+
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn map_transforms_success_and_preserves_metadata() {
@@ -85,22 +106,8 @@ async fn map_transforms_success_and_preserves_metadata() {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn and_then_applies_fallible_transform_and_keeps_metadata() {
-    let module = MaybeFails.and_then(|value| {
-        if value.value >= 4 {
-            Ok(TextPayload {
-                value: value.value.to_string(),
-            })
-        } else {
-            Err(PredictError::Parse {
-                source: ParseError::MissingField {
-                    field: "transformed".to_string(),
-                    raw_response: "transform".to_string(),
-                },
-                raw_response: "transform".to_string(),
-                lm_usage: dspy_rs::LmUsage::default(),
-            })
-        }
-    });
+    let module = MaybeFails
+        .and_then(transform_int_payload as fn(IntPayload) -> Result<TextPayload, PredictError>);
 
     let success = module.call(IntPayload { value: 3 }).await.unwrap();
     assert_eq!(success.metadata().raw_response, "raw:3");

@@ -1,5 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use std::sync::{Mutex, OnceLock};
+use std::collections::HashSet;
+use std::ops::ControlFlow;
 
 use anyhow::Result;
 use bamltype::facet_reflect::Peek;
@@ -11,24 +11,12 @@ use crate::data::example::Example as RawExample;
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
 /// Optimizers need to inspect and mutate Predict parameters (demos, instructions)
-/// without knowing the concrete signature type. This trait bridges that gap. An
-/// optimizer iterates over `(path, &mut dyn DynPredictor)` pairs from
-/// [`named_parameters`] and works entirely through this interface:
-///
-/// ```
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
-///
-/// let mut predict = Predict::<QA>::new();
-/// for (path, predictor) in named_parameters(&mut predict).unwrap() {
-///     let demos = predictor.demos_as_examples();
-///     predictor.set_instruction("Be concise.".into());
-/// }
-/// ```
+/// without knowing the concrete signature type. Discovery uses
+/// [`visit_named_predictors_mut`], which walks the module tree and passes each
+/// discovered `(path, &mut dyn DynPredictor)` leaf to a selector callback.
 ///
 /// Normal users never touch this — you pass your module to `optimizer.compile()`
 /// and it uses `DynPredictor` internally.
-///
 pub(crate) trait DynPredictor: Send + Sync {
     /// Returns the [`SignatureSchema`] for this predictor's signature.
     fn schema(&self) -> &SignatureSchema;
@@ -74,155 +62,94 @@ pub(crate) struct PredictState {
     pub instruction_override: Option<String>,
 }
 
+type VisitMutFn =
+    fn(*mut (), &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>) -> ControlFlow<()>;
+
 #[derive(Clone, Copy, Debug, facet::Facet)]
 #[facet(opaque)]
 pub(crate) struct PredictAccessorFns {
-    pub accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
+    pub visit_mut: VisitMutFn,
 }
 
 impl PartialEq for PredictAccessorFns {
     fn eq(&self, other: &Self) -> bool {
-        std::ptr::fn_addr_eq(self.accessor_mut, other.accessor_mut)
+        std::ptr::fn_addr_eq(self.visit_mut, other.visit_mut)
     }
 }
 
 impl Eq for PredictAccessorFns {}
 
-// FIXME(dsrs-s2): Temporary bridge for S2 until Facet supports shape-local typed attr payloads
-// on generic containers (e.g. Predict<S>) without E0401 in macro-generated statics.
-// Intended solution:
-// 1. Read `PredictAccessorFns` directly from shape-local attrs on the discovered leaf shape.
-// 2. Delete this global registry and stop requiring explicit runtime registration.
-// Upstream tracking:
-// - Issue: https://github.com/facet-rs/facet/issues/2039
-// - PR: https://github.com/facet-rs/facet/pull/2040
-// - PR: https://github.com/facet-rs/facet/pull/2041
-// TODO(post-v6): Remove registry fallback once upstream lands and DSRs upgrades facet.
-static ACCESSOR_REGISTRY: OnceLock<Mutex<HashMap<ConstTypeId, PredictAccessorFns>>> =
-    OnceLock::new();
+facet::define_attr_grammar! {
+    ns "dsrs";
+    crate_path $crate::core::dyn_predictor;
 
-fn accessor_registry() -> &'static Mutex<HashMap<ConstTypeId, PredictAccessorFns>> {
-    ACCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn register_predict_accessor(
-    shape: &'static Shape,
-    accessor_mut: fn(*mut ()) -> *mut dyn DynPredictor,
-) {
-    let registration = PredictAccessorFns { accessor_mut };
-    let mut guard = accessor_registry()
-        .lock()
-        .expect("predict accessor registry lock poisoned");
-    if let Some(existing) = guard.get(&shape.id) {
-        assert_eq!(
-            *existing, registration,
-            "conflicting predict accessor registration for shape id={:?} type_identifier={}",
-            shape.id,
-            shape.type_identifier
-        );
-        return;
+    pub enum Attr {
+        PredictAccessor(Option<&'static PredictAccessorFns>),
     }
-    guard.insert(shape.id, registration);
 }
 
-/// Error from [`named_parameters`] when the Facet walker encounters an unsupported structure.
+/// Error from [`visit_named_predictors_mut`] when the Facet walker encounters an unsupported structure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum NamedParametersError {
     /// A `Predict` leaf was found inside an unsupported container (`Rc`, `Arc`, etc.).
     #[error("container `{ty}` at `{path}` contains a parameter leaf")]
     Container { path: String, ty: &'static str },
 
-    /// A `Predict`-like leaf was found but hasn't registered its accessor functions.
-    /// This means `Predict::new()` or `Predict::builder().build()` was never called for
-    /// this concrete `Predict<S>`.
-    // NOTE(dsrs-s2): Error message will simplify once Facet supports shape-local
-    // accessor payloads and the global registry workaround is removed.
+    /// A `Predict`-like leaf was found with missing or malformed shape-local accessor payload.
     #[error(
-        "parameter-like leaf at `{path}` has no registered accessor — was `Predict::new()` or `.build()` called for this concrete type?"
+        "parameter-like leaf at `{path}` is missing a valid shape-local accessor payload (`#[facet(dsrs::predict_accessor = ...)]`)"
     )]
     MissingAttr { path: String },
 }
 
-/// Discovers all [`crate::Predict`] leaves in a module by walking its struct fields.
+/// Visits all [`crate::Predict`] leaves in a module by walking struct fields and
+/// supported containers.
 ///
-/// Returns `(dotted_path, &mut dyn DynPredictor)` pairs. Paths reflect the field
-/// hierarchy: a `ChainOfThought` inside field `answer` yields `"answer.predictor"`.
+/// The callback acts as a selector: it receives each `(dotted_path, predictor)` pair
+/// and may return `ControlFlow::Break(())` to stop traversal early.
 ///
-/// Takes exclusive `&mut` — you can't `call()` the module during discovery. This is
-/// intentional: optimization needs to mutate state without races.
-///
-/// The walker follows struct fields and common containers (`Option`, `Vec`,
-/// `HashMap<String, _>`, `Box`). It does not follow `Rc`, `Arc`, or other smart
-/// pointers — those error explicitly. If a `Predict` leaf exists but wasn't
-/// constructed via `new()`/`build()`, you get [`NamedParametersError::MissingAttr`]
-/// (the accessor wasn't registered — see [`crate::Predict`] doc on construction).
-///
-/// # Errors
-///
-/// - [`Container`](NamedParametersError::Container): `Predict` inside unsupported container
-/// - [`MissingAttr`](NamedParametersError::MissingAttr): `Predict` without registered accessor
-///
-/// ```
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
-///
-/// let mut predict = Predict::<QA>::new();
-/// for (path, predictor) in named_parameters(&mut predict).unwrap() {
-///     println!("{}: {} demos", path, predictor.demos_as_examples().len());
-/// }
-/// ```
-#[tracing::instrument(level = "debug", name = "dsrs.named_parameters", skip(module))]
-pub(crate) fn named_parameters<M>(
+/// Safety model:
+/// - discovery has exclusive `&mut` access to `module` for the full traversal;
+/// - leaf access requires a valid shape-local accessor payload attached to the leaf;
+/// - unsupported shared-pointer containers (`Rc`, `Arc`) are rejected explicitly.
+#[tracing::instrument(
+    level = "debug",
+    name = "dsrs.visit_named_predictors_mut",
+    skip(module, visitor)
+)]
+pub(crate) fn visit_named_predictors_mut<M, F>(
     module: &mut M,
-) -> std::result::Result<Vec<(String, &mut dyn DynPredictor)>, NamedParametersError>
+    mut visitor: F,
+) -> std::result::Result<(), NamedParametersError>
 where
     M: for<'a> Facet<'a>,
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
 {
-    let mut raw_handles = Vec::<(String, *mut dyn DynPredictor)>::new();
-    walk_value::<MutableAccess>(Peek::new(&*module), "", &mut raw_handles)?;
-
-    let mut handles = Vec::with_capacity(raw_handles.len());
-    for (path, ptr) in raw_handles {
-        // SAFETY: pointers are created from a single exclusive traversal over `module`.
-        let handle = unsafe { &mut *ptr };
-        handles.push((path, handle));
-    }
-
-    Ok(handles)
+    let _ = walk_value(Peek::new(&*module), "", &mut visitor)?;
+    Ok(())
 }
 
-trait WalkAccess {
-    type RawPtr;
-
-    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr;
-}
-
-struct MutableAccess;
-
-impl WalkAccess for MutableAccess {
-    type RawPtr = *mut dyn DynPredictor;
-
-    fn pointer(accessor: PredictAccessorFns, value: Peek<'_, '_>) -> Self::RawPtr {
-        // SAFETY: `named_parameters` has exclusive access to `module` for the full traversal.
-        // We only cast to a mutable pointer after the read-only walk has located the leaf.
-        (accessor.accessor_mut)((value.data().as_byte_ptr() as *mut u8).cast::<()>())
-    }
-}
-
-fn walk_value<Access: WalkAccess>(
+fn walk_value<F>(
     value: Peek<'_, '_>,
     path: &str,
-    out: &mut Vec<(String, Access::RawPtr)>,
-) -> std::result::Result<(), NamedParametersError> {
+    visitor: &mut F,
+) -> std::result::Result<ControlFlow<()>, NamedParametersError>
+where
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
+{
     let shape = value.shape();
-    if let Some(accessor) = lookup_registered_predict_accessor(shape) {
-        out.push((path.to_string(), Access::pointer(accessor, value)));
-        return Ok(());
-    }
-    if is_predict_type_name(shape) {
-        return Err(NamedParametersError::MissingAttr {
-            path: display_path(path),
-        });
+    match resolve_predict_leaf(shape) {
+        PredictLeafResolution::Accessor(accessor) => {
+            let raw_ptr = (value.data().as_byte_ptr() as *mut u8).cast::<()>();
+            let mut forward = |predictor: &mut dyn DynPredictor| visitor(path, predictor);
+            return Ok((accessor.visit_mut)(raw_ptr, &mut forward));
+        }
+        PredictLeafResolution::Missing => {
+            return Err(NamedParametersError::MissingAttr {
+                path: display_path(path),
+            });
+        }
+        PredictLeafResolution::NotLeaf => {}
     }
 
     if matches!(shape.ty, Type::User(UserType::Struct(_))) {
@@ -239,17 +166,21 @@ fn walk_value<Access: WalkAccess>(
                 .map_err(|_| NamedParametersError::MissingAttr {
                     path: display_path(&field_path),
                 })?;
-            walk_value::<Access>(child, &field_path, out)?;
+            if let ControlFlow::Break(()) = walk_value(child, &field_path, visitor)? {
+                return Ok(ControlFlow::Break(()));
+            }
         }
-        return Ok(());
+        return Ok(ControlFlow::Continue(()));
     }
 
     match shape.def {
         Def::Option(_) => {
-            if let Some(inner) = value.into_option().expect("shape says option").value() {
-                walk_value::<Access>(inner, path, out)?;
+            if let Some(inner) = value.into_option().expect("shape says option").value()
+                && let ControlFlow::Break(()) = walk_value(inner, path, visitor)?
+            {
+                return Ok(ControlFlow::Break(()));
             }
-            Ok(())
+            Ok(ControlFlow::Continue(()))
         }
         Def::List(_) | Def::Array(_) | Def::Slice(_) => {
             for (idx, child) in value
@@ -259,9 +190,11 @@ fn walk_value<Access: WalkAccess>(
                 .enumerate()
             {
                 let child_path = push_index(path, idx);
-                walk_value::<Access>(child, &child_path, out)?;
+                if let ControlFlow::Break(()) = walk_value(child, &child_path, visitor)? {
+                    return Ok(ControlFlow::Break(()));
+                }
             }
-            Ok(())
+            Ok(ControlFlow::Continue(()))
         }
         Def::Map(_) => {
             let mut entries = value
@@ -281,9 +214,11 @@ fn walk_value<Access: WalkAccess>(
             entries.sort_by(|(left, _), (right, _)| left.as_bytes().cmp(right.as_bytes()));
             for (key, child) in entries {
                 let child_path = push_map_key(path, &key);
-                walk_value::<Access>(child, &child_path, out)?;
+                if let ControlFlow::Break(()) = walk_value(child, &child_path, visitor)? {
+                    return Ok(ControlFlow::Break(()));
+                }
             }
-            Ok(())
+            Ok(ControlFlow::Continue(()))
         }
         Def::Pointer(pointer_def) => match pointer_def.known {
             Some(KnownPointer::Box) => {
@@ -291,27 +226,29 @@ fn walk_value<Access: WalkAccess>(
                     .into_pointer()
                     .expect("shape says pointer")
                     .borrow_inner()
+                    && let ControlFlow::Break(()) = walk_value(inner, path, visitor)?
                 {
-                    walk_value::<Access>(inner, path, out)?;
+                    return Ok(ControlFlow::Break(()));
                 }
-                Ok(())
+                Ok(ControlFlow::Continue(()))
             }
             _ => {
+                // TODO(dsrs-shared-ptr-policy): define safe mutable-handle policy for Arc/Rc traversal.
                 if contains_parameter(shape, &mut HashSet::new()) {
                     return Err(NamedParametersError::Container {
                         path: display_path(path),
                         ty: pointer_name(pointer_def.known),
                     });
                 }
-                Ok(())
+                Ok(ControlFlow::Continue(()))
             }
         },
-        _ => Ok(()),
+        _ => Ok(ControlFlow::Continue(())),
     }
 }
 
 fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>) -> bool {
-    if lookup_registered_predict_accessor(shape).is_some() || is_predict_type_name(shape) {
+    if !matches!(resolve_predict_leaf(shape), PredictLeafResolution::NotLeaf) {
         return true;
     }
 
@@ -348,19 +285,57 @@ fn contains_parameter(shape: &'static Shape, visiting: &mut HashSet<ConstTypeId>
     found
 }
 
-fn is_predict_type_name(shape: &'static Shape) -> bool {
-    // Temporary diagnostic-only guard: we never use this for successful dispatch.
-    // Success requires a registered accessor; this path exists to fail loudly when
-    // a Predict-like leaf appears without registration.
-    shape.type_identifier == "Predict"
+enum PredictLeafResolution {
+    NotLeaf,
+    Accessor(PredictAccessorFns),
+    Missing,
 }
 
-fn lookup_registered_predict_accessor(shape: &'static Shape) -> Option<PredictAccessorFns> {
-    let registry = ACCESSOR_REGISTRY.get()?;
-    let guard = registry
-        .lock()
-        .expect("predict accessor registry lock poisoned");
-    guard.get(&shape.id).copied()
+fn resolve_predict_leaf(shape: &'static Shape) -> PredictLeafResolution {
+    let has_leaf_marker = is_predict_shape_identity(shape);
+    let mut accessor_count = 0usize;
+    let mut accessor = None;
+    let mut invalid = false;
+
+    for attr in shape.attributes {
+        if attr.ns != Some("dsrs") {
+            continue;
+        }
+
+        if attr.key == "predict_accessor" {
+            accessor_count += 1;
+            match attr.get_as::<Attr>() {
+                Some(Attr::PredictAccessor(Some(value))) => {
+                    if accessor.is_some() {
+                        invalid = true;
+                    } else {
+                        accessor = Some(**value);
+                    }
+                }
+                _ => invalid = true,
+            }
+        }
+    }
+
+    if !has_leaf_marker {
+        if accessor_count > 0 {
+            return PredictLeafResolution::Missing;
+        }
+        return PredictLeafResolution::NotLeaf;
+    }
+
+    if invalid || accessor_count != 1 {
+        return PredictLeafResolution::Missing;
+    }
+
+    match accessor {
+        Some(accessor) => PredictLeafResolution::Accessor(accessor),
+        None => PredictLeafResolution::Missing,
+    }
+}
+
+fn is_predict_shape_identity(shape: &'static Shape) -> bool {
+    shape.type_identifier == "Predict" && shape.module_path == Some("dspy_rs::predictors::predict")
 }
 
 fn push_field(path: &str, field: &str) -> String {
@@ -415,5 +390,161 @@ fn pointer_name(pointer: Option<KnownPointer>) -> &'static str {
         Some(KnownPointer::Rc) => "Rc",
         Some(KnownPointer::Arc) => "Arc",
         _ => "Pointer",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate as dsrs;
+    use crate::Signature;
+    use crate::predictors::Predict as RealPredict;
+    use std::ops::ControlFlow;
+    use std::rc::Rc;
+    use std::sync::Arc;
+
+    #[derive(Signature, Clone, Debug)]
+    struct DummySig {
+        #[input]
+        value: String,
+
+        #[output]
+        done: bool,
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct SharedPointerModule {
+        rc_predictor: Rc<RealPredict<DummySig>>,
+        arc_predictor: Arc<RealPredict<DummySig>>,
+    }
+
+    #[test]
+    fn named_parameters_rejects_shared_pointers() {
+        let mut module = SharedPointerModule {
+            rc_predictor: Rc::new(RealPredict::<DummySig>::new()),
+            arc_predictor: Arc::new(RealPredict::<DummySig>::new()),
+        };
+
+        match visit_named_predictors_mut(&mut module, |_path, _predictor| ControlFlow::Continue(()))
+        {
+            Err(NamedParametersError::Container { path, ty }) => {
+                assert_eq!(path, "rc_predictor");
+                assert_eq!(ty, "Rc");
+            }
+            Ok(_) => panic!("walk unexpectedly succeeded"),
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet, dsrs::predict_accessor)]
+    struct MalformedAccessorLeaf;
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct MalformedAccessorModule {
+        malformed: MalformedAccessorLeaf,
+    }
+
+    #[test]
+    fn named_parameters_rejects_malformed_predict_accessor_payload() {
+        let mut module = MalformedAccessorModule {
+            malformed: MalformedAccessorLeaf,
+        };
+
+        match visit_named_predictors_mut(&mut module, |_path, _predictor| ControlFlow::Continue(()))
+        {
+            Err(NamedParametersError::MissingAttr { path }) => {
+                assert_eq!(path, "malformed");
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("walk unexpectedly succeeded"),
+        }
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(
+        crate = facet,
+        dsrs::predict_accessor,
+        dsrs::predict_accessor
+    )]
+    struct DuplicateAccessorLeaf;
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct DuplicateAccessorModule {
+        duplicate: DuplicateAccessorLeaf,
+    }
+
+    #[test]
+    fn named_parameters_rejects_duplicate_predict_accessor_attrs() {
+        let mut module = DuplicateAccessorModule {
+            duplicate: DuplicateAccessorLeaf,
+        };
+
+        match visit_named_predictors_mut(&mut module, |_path, _predictor| ControlFlow::Continue(()))
+        {
+            Err(NamedParametersError::MissingAttr { path }) => {
+                assert_eq!(path, "duplicate");
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("walk unexpectedly succeeded"),
+        }
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet, dsrs::predict_accessor)]
+    struct AccessorOnlyLeaf;
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct AccessorOnlyModule {
+        leaf: AccessorOnlyLeaf,
+    }
+
+    #[test]
+    fn named_parameters_rejects_accessor_without_leaf_marker() {
+        let mut module = AccessorOnlyModule {
+            leaf: AccessorOnlyLeaf,
+        };
+
+        match visit_named_predictors_mut(&mut module, |_path, _predictor| ControlFlow::Continue(()))
+        {
+            Err(NamedParametersError::MissingAttr { path }) => {
+                assert_eq!(path, "leaf");
+            }
+            Err(other) => panic!("unexpected error: {other:?}"),
+            Ok(_) => panic!("walk unexpectedly succeeded"),
+        }
+    }
+
+    #[test]
+    fn real_predict_shape_has_strict_identity_marker() {
+        assert!(is_predict_shape_identity(RealPredict::<DummySig>::SHAPE));
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct Predict;
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct SameNameModule {
+        predictor: Predict,
+    }
+
+    #[test]
+    fn type_name_alone_is_not_treated_as_predict_leaf() {
+        let mut module = SameNameModule { predictor: Predict };
+        let mut paths = Vec::new();
+
+        visit_named_predictors_mut(&mut module, |path, _predictor| {
+            paths.push(path.to_string());
+            ControlFlow::Continue(())
+        })
+        .expect("walk should succeed");
+
+        assert!(paths.is_empty());
     }
 }

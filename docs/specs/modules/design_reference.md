@@ -443,7 +443,7 @@ struct RAG<A: Module<Input = AnswerInput>> {
 
 ```rust
 #[derive(Facet)]
-#[facet(dsrs::parameter)]  // marks for discovery by F6 walker
+#[facet(dsrs::predict_accessor = ...)]  // shape-local accessor payload for F6 walker
 pub struct Predict<S: Signature> {
     demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
@@ -554,36 +554,49 @@ impl<S: Signature> Predict<S> {
 ### The walker
 
 ```rust
-pub fn named_parameters<'a>(
-    root: &'a dyn Reflect,  // or: root with known Facet Shape
-) -> Vec<(String, /* handle to predictor */)> {
-    let mut results = Vec::new();
-    walk_value(root, "", &mut results);
-    results
+pub fn visit_named_predictors_mut<M, F>(
+    module: &mut M,
+    mut visitor: F,
+) -> Result<(), NamedParametersError>
+where
+    M: for<'a> Facet<'a>,
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
+{
+    walk_value(Peek::new(&*module), "", &mut visitor)?;
+    Ok(())
 }
 
-fn walk_value(value: /* Peek or similar */, path: &str, results: &mut Vec<...>) {
+fn walk_value<F>(
+    value: Peek<'_, '_>,
+    path: &str,
+    visitor: &mut F,
+) -> Result<ControlFlow<()>, NamedParametersError>
+where
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
+{
     let shape = value.shape();
 
-    // Check: is this a parameter leaf?
-    if has_dsrs_parameter(shape) {
-        results.push((path.to_string(), /* extract DynPredictor handle */));
-        return;  // don't recurse into Predict's internals
+    // Stop at Predict leaves with valid shape-local accessor payloads.
+    if let PredictLeafResolution::Accessor(accessor) = resolve_predict_leaf(shape) {
+        let raw_ptr = value.data().as_byte_ptr() as *mut ();
+        let mut forward = |predictor: &mut dyn DynPredictor| visitor(path, predictor);
+        return Ok((accessor.visit_mut)(raw_ptr, &mut forward));
     }
 
-    // Recurse based on shape.def
-    // V1: struct-field recursion only. Container traversal (Option/Vec/HashMap/Box)
-    // deferred (S5) — all V1 library modules use struct fields.
-    match shape.def {
-        Def::Struct(struct_type) => {
-            for field in struct_type.fields {
-                let child = value.field(field.name);
-                let child_path = format!("{}.{}", path, field.name);
-                walk_value(child, &child_path, results);
-            }
-        }
-        _ => {} // containers, primitives, enums — skip for V1
+    if matches!(shape.ty, Type::User(UserType::Struct(_))) {
+        // recurse through struct fields (excluding skip-deserializing fields)
     }
+
+    match shape.def {
+        Def::Option(_) => { /* recurse when Some */ }
+        Def::List(_) | Def::Array(_) | Def::Slice(_) => { /* recurse with [idx] */ }
+        Def::Map(_) => { /* recurse with ['key']; non-string keys -> explicit Container error */ }
+        Def::Pointer(def) if def.known == Some(KnownPointer::Box) => { /* recurse */ }
+        Def::Pointer(_) => { /* Rc/Arc etc. with predictor leaves -> explicit Container error */ }
+        _ => {}
+    }
+
+    Ok(ControlFlow::Continue(()))
 }
 ```
 
@@ -606,15 +619,15 @@ pub struct RAG {
 ]
 ```
 
-The walker recurses into `ChainOfThought<Answer>` (a struct with a `predict` field), finds the Predict inside, and reports the dotted path. Identical to DSPy's `named_parameters()` output.
+The walker recurses into `ChainOfThought<Answer>` (a struct with a `predict` field), finds the Predict inside, and reports the dotted path. Path semantics match DSPy's `named_parameters()` output even though the Rust API surface is callback-based.
 
 ### How the handle works (S2 resolved: Mechanism A)
 
-The walker finds a value whose Shape has `dsrs::parameter`. It needs to hand back something the optimizer can call `get_demos()`, `set_demos()`, `set_instruction()` on.
+The walker identifies a `Predict` leaf via strict shape identity (`type_identifier` + `module_path`) and then requires exactly one valid `dsrs::predict_accessor` payload. It needs to hand back something the optimizer can call `get_demos()`, `set_demos()`, `set_instruction()` on.
 
 S2 evaluated three mechanisms and selected **Mechanism A: shape-local accessor payload**. `Predict<S>` carries a `PredictAccessorFns` payload as a typed Facet attribute (fn-pointer based, `'static + Copy`). The walker extracts it via `attr.get_as::<PredictAccessorFns>()` — the same pattern already used by `WithAdapterFns` in `bamltype/src/facet_ext.rs`. The payload provides a direct cast to `&mut dyn DynPredictor` at the leaf, with one audited unsafe boundary.
 
-Global registry (Mechanism B) is deferred — only needed if cross-crate runtime loading is later required. Interior dyn-handle state (Mechanism C) was rejected for V1 (see `S2-dynpredictor-handle-discovery.md`).
+Global registry (Mechanism B) is not part of current runtime behavior. Interior dyn-handle state (Mechanism C) was rejected for V1 (see `S2-dynpredictor-handle-discovery.md`).
 
 ---
 
@@ -783,7 +796,7 @@ where S::Input: BamlType, S::Output: BamlType
 }
 ```
 
-**How the Facet walker obtains a `&dyn DynPredictor`** — S2 Mechanism A. The walker detects `dsrs::parameter` on the Shape, extracts the `PredictAccessorFns` payload via typed attr decoding, and uses it to cast the value to `&dyn DynPredictor` (or `&mut dyn DynPredictor` for mutation). See section 7 for walker details.
+**How the Facet walker obtains a `&dyn DynPredictor`** — S2 Mechanism A. The walker checks strict `Predict` shape identity (`type_identifier` + `module_path`), then extracts `PredictAccessorFns` from `dsrs::predict_accessor` via typed attr decoding, and uses it to cast the value to `&dyn DynPredictor` (or `&mut dyn DynPredictor` for mutation). See section 7 for walker details.
 
 **Type safety through the dynamic boundary:** The optimizer manipulates demos as untyped `Example` values, but `DynPredictor` is always backed by a concrete `Predict<S>` that knows its types at compile time. `set_demos_from_examples` converts `Example → Demo<S>` via `S::Input::try_from_baml_value()` / `S::Output::try_from_baml_value()` — if the data doesn't match the schema, this fails with an error, never silent data loss. The typed module is never replaced or wrapped by the optimizer; it reaches IN to the existing `Predict<S>` and mutates state. When the optimizer is done, the user's module still has correctly typed demos because the conversion gatekeeper enforced the schema at every write.
 
@@ -885,17 +898,24 @@ Topological sort → pipe BamlValues between nodes following edges. Each node's 
 
 ```rust
 impl ProgramGraph {
-    pub fn from_module<M: Facet>(module: &M) -> Self {
-        let params = named_parameters(module);  // F6 walker
+    pub fn from_module<M: Facet>(module: &mut M) -> Result<Self, GraphError> {
         let mut graph = ProgramGraph::new();
-        for (path, predictor_handle) in params {
-            graph.add_node(path, Node {
+        let mut add_err = None;
+        visit_named_predictors_mut(module, |path, predictor_handle| {
+            if let Err(err) = graph.add_node(path.to_string(), Node {
                 schema: predictor_handle.schema().clone(),
                 module: /* wrap predictor as DynModule */,
-            });
+            }) {
+                add_err = Some(err);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        })?;
+        if let Some(err) = add_err {
+            return Err(err);
         }
         // Edges: inferred from trace or explicit annotation
-        graph
+        Ok(graph)
     }
 }
 ```

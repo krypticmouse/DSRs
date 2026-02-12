@@ -1,5 +1,4 @@
 use anyhow::Result;
-use facet;
 use dspy_rs::{
     COPRO, CallMetadata, Example, MetricOutcome, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric,
@@ -74,7 +73,9 @@ fn trainset() -> Vec<Example<OptimizerSig>> {
 #[tokio::test]
 async fn optimizer_compile_succeeds_without_public_named_parameter_access() {
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();

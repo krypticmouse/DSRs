@@ -1,9 +1,7 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dspy_rs::{
-    ChatAdapter, LM, LMClient, Module, ReAct, Signature, TestCompletionModel, configure,
-};
+use dspy_rs::{ChatAdapter, LM, LMClient, ReAct, Signature, TestCompletionModel, configure};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use serde_json::Value;
@@ -170,4 +168,60 @@ async fn react_builder_executes_multi_tool_calculator_loop_and_extracts_output()
 
     let result: QAOutput = result;
     assert_eq!(result.answer, "66");
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn react_unknown_tool_name_does_not_execute_first_tool() {
+    let _lock = SETTINGS_LOCK.lock().await;
+
+    let action_1 = response_with_fields(&[
+        ("thought", "Try a missing tool"),
+        ("action", "missing_tool"),
+        ("action_input", "{\"a\":1,\"b\":2}"),
+    ]);
+    let action_2 = response_with_fields(&[
+        ("thought", "Stop after observing failure"),
+        ("action", "finish"),
+        ("action_input", "done"),
+    ]);
+    let extract = response_with_fields(&[("output", "{\"answer\":\"done\"}")]);
+    configure_test_lm(vec![action_1, action_2, extract]).await;
+
+    let add_calls = std::sync::Arc::new(AtomicUsize::new(0));
+    let add_calls_for_tool = add_calls.clone();
+
+    let react = ReAct::<QA>::builder()
+        .max_steps(3)
+        .tool("add", "Adds two integers {a,b}", move |args| {
+            let add_calls = add_calls_for_tool.clone();
+            async move {
+                add_calls.fetch_add(1, Ordering::SeqCst);
+                let (a, b) = parse_calculator_args(&args);
+                (a + b).to_string()
+            }
+        })
+        .build();
+
+    let predicted = react
+        .call(QAInput {
+            question: "Call a tool that does not exist.".to_string(),
+        })
+        .await
+        .expect("react call should succeed");
+    let (_, metadata) = predicted.into_parts();
+
+    assert_eq!(
+        add_calls.load(Ordering::SeqCst),
+        0,
+        "unknown tool actions should not run arbitrary registered tools"
+    );
+    assert!(
+        metadata
+            .tool_executions
+            .iter()
+            .any(|entry| entry.contains("tool_not_found: missing_tool")),
+        "trajectory should record missing-tool observation; got {:?}",
+        metadata.tool_executions
+    );
 }

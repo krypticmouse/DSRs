@@ -9,7 +9,6 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use facet;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,

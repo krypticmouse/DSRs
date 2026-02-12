@@ -24,12 +24,12 @@ struct QA {
 let predict = Predict::<QA>::new();
 
 // Call it with typed input
-let output: QA = predict.call(QAInput {
+let result = predict.call(QAInput {
     question: "What is the capital of France?".into(),
 }).await?;
 
-// Access typed output
-println!("{}", output.answer);  // "Paris"
+// Access typed output directly (Predicted<O> implements Deref<Target = O>)
+println!("{}", result.answer);  // "Paris"
 ```
 
 The turbofish `::<QA>` tells Rust which signature you're using. The macro generates `QAInput` from your `#[input]` fields.
@@ -55,19 +55,21 @@ This overrides the docstring instruction on the signature.
 ### With demos (few-shot)
 
 ```rust
+use dspy_rs::Example;
+
 let predict = Predict::<QA>::builder()
-    .demo(QA {
-        question: "What is 2+2?".into(),
-        answer: "4".into(),
-    })
-    .demo(QA {
-        question: "What color is grass?".into(),
-        answer: "Green".into(),
-    })
+    .demo(Example::<QA>::new(
+        QAInput { question: "What is 2+2?".into() },
+        QAOutput { answer: "4".into() },
+    ))
+    .demo(Example::<QA>::new(
+        QAInput { question: "What color is grass?".into() },
+        QAOutput { answer: "Green".into() },
+    ))
     .build();
 ```
 
-Demos are full signature structs - both input and output fields populated. They become few-shot examples in the prompt.
+Demos are `Example<S>` — typed input/output pairs. They become few-shot examples in the prompt.
 
 ### With tools
 
@@ -79,60 +81,52 @@ let predict = Predict::<QA>::builder()
 
 ## Calling predictors
 
-### `.call()` - Simple typed output
+`.call()` returns `Result<Predicted<Output>, PredictError>`.
+
+`Predicted<O>` wraps the output with call metadata and implements `Deref<Target = O>`, so you access fields directly:
 
 ```rust
-let output: QA = predict.call(QAInput {
+let result = predict.call(QAInput {
     question: "Why is the sky blue?".into(),
 }).await?;
 
-println!("{}", output.question);  // input is preserved
-println!("{}", output.answer);    // LLM's response
+// Direct field access via Deref
+println!("{}", result.answer);
 ```
 
-Returns the full signature struct with inputs + outputs.
+### Accessing metadata
 
-### `.call_with_meta()` - Output + metadata
+For token usage, raw response text, or per-field parse details, use `.metadata()`:
 
 ```rust
-let result = predict.call_with_meta(QAInput {
-    question: "Why is the sky blue?".into(),
-}).await?;
-
-// Typed output
-let output: &QA = &result.output;
-println!("{}", output.answer);
-
-// Raw text for a field (before parsing)
-println!("{:?}", result.field_raw("answer"));
-
-// Constraint check results
-for check in result.field_checks("confidence") {
-    println!("{}: {}", check.label, if check.passed { "ok" } else { "failed" });
-}
+let result = predict.call(input).await?;
 
 // Token usage
-println!("Tokens: {} in, {} out",
-    result.lm_usage.prompt_tokens,
-    result.lm_usage.completion_tokens
-);
+let usage = &result.metadata().lm_usage;
+println!("Tokens: {} in, {} out", usage.prompt_tokens, usage.completion_tokens);
+
+// Raw LM response text
+println!("Raw: {}", result.metadata().raw_response);
+
+// Per-field parse details (raw text, constraint results, flags)
+if let Some(field) = result.metadata().field_meta.get("answer") {
+    println!("Raw text for answer: {}", field.raw_text);
+    for check in &field.checks {
+        println!("{}: {}", check.label, if check.passed { "ok" } else { "failed" });
+    }
+}
 ```
 
-### `CallResult<S>` fields
+### `CallMetadata` fields
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `output` | `S` | The typed signature with all fields |
 | `raw_response` | `String` | Raw LLM response text |
 | `lm_usage` | `LmUsage` | Token counts |
-| `tool_calls` | `Vec<ToolCall>` | Any tool calls made |
+| `tool_calls` | `Vec<ToolCall>` | Tool calls the LM requested |
+| `tool_executions` | `Vec<String>` | Results from tool execution |
 | `node_id` | `Option<usize>` | Trace node ID if tracing |
-
-| Method | Returns | Description |
-|--------|---------|-------------|
-| `field_raw(name)` | `Option<&str>` | Raw text for a field |
-| `field_checks(name)` | `&[ConstraintResult]` | Soft constraint results |
-| `field_flags(name)` | `&[Flag]` | Parse flags (coercions, etc.) |
+| `field_meta` | `IndexMap<String, FieldMeta>` | Per-field raw text, flags, constraint results |
 
 ## Error handling
 
@@ -159,11 +153,14 @@ match predict.call(input).await {
 
 ## Predict implements Module
 
-`Predict<S>` implements the [`Module`](/docs/building-blocks/module) trait, so you can use it in composed pipelines:
+`Predict<S>` implements the [`Module`](/docs/building-blocks/module) trait with typed associated types:
 
 ```rust
-impl Module for Predict<S> {
-    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+impl<S: Signature> Module for Predict<S> {
+    type Input = S::Input;
+    type Output = S::Output;
+
+    async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>;
 }
 ```
 
@@ -200,26 +197,11 @@ let analysis = analyzer.call(AnalyzeInput {
 println!("Sentiment: {}", analysis.sentiment);
 ```
 
-## Current limitations
+## Prompting strategies
 
-<Warning>
-**Signature modification at runtime is not supported.**
+Instead of manually adding fields for chain-of-thought reasoning, use library modules that augment any signature:
 
-Unlike DSPy's `ChainOfThought` which dynamically adds a `reasoning` field to any signature, DSRs signatures are fixed at compile time. If you want chain-of-thought, add the reasoning field to your signature:
+- **`ChainOfThought<S>`** -- adds a `reasoning` field, accessible via `result.reasoning`
+- **`ReAct<S>`** -- adds tool-calling with an action/observation loop
 
-```rust
-#[derive(Signature, Clone, Debug)]
-struct QA {
-    #[input]
-    question: String,
-
-    #[output]
-    reasoning: String,  // add this explicitly
-
-    #[output]
-    answer: String,
-}
-```
-
-A more ergonomic solution for this is being worked on.
-</Warning>
+See [Modules](/docs/building-blocks/module) for details.

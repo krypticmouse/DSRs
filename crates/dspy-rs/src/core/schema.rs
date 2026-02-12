@@ -117,20 +117,6 @@ pub struct SignatureSchema {
 }
 
 impl SignatureSchema {
-    pub(crate) fn from_parts(
-        instruction: &'static str,
-        input_fields: Vec<FieldSchema>,
-        output_fields: Vec<FieldSchema>,
-        output_format: Arc<OutputFormatContent>,
-    ) -> Self {
-        Self {
-            instruction,
-            input_fields: input_fields.into_boxed_slice(),
-            output_fields: output_fields.into_boxed_slice(),
-            output_format,
-        }
-    }
-
     /// Returns the cached schema for signature `S`, building it on first access.
     ///
     /// # Panics
@@ -156,7 +142,7 @@ impl SignatureSchema {
         let leaked = Box::leak(Box::new(built));
 
         let mut guard = cache.lock().expect("schema cache lock poisoned");
-        *guard.entry(TypeId::of::<S>()).or_insert(leaked)
+        guard.entry(TypeId::of::<S>()).or_insert(leaked)
     }
 
     fn build<S: Signature>() -> Result<Self, String> {

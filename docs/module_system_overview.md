@@ -100,9 +100,10 @@ impl<M: Module> Module for BestOfN<M> where M::Input: Clone {
 ```rust
 optimizer.compile(&mut module, trainset, metric).await;
 // internally:
-let params = named_parameters(&mut module);
-// → [("module.predict", &mut dyn DynPredictor), ...]
-// mutate demos, instructions, dump/load state — all through DynPredictor handles
+visit_named_predictors_mut(&mut module, |path, predictor| {
+    // mutate demos, instructions, dump/load state — all through DynPredictor handles
+    ControlFlow::Continue(())
+})?;
 // after compile returns, module.call() uses optimized params — no code change
 ```
 
@@ -112,7 +113,7 @@ let params = named_parameters(&mut module);
 
 This is the paper's "Dynamic Workflow Optimization" — pipelines as executable graphs that can restructure themselves.
 
-**Current state:** the V5 walker (`named_parameters`) can enumerate all Predict leaves in a typed module. Everything else — `ProgramGraph`, `DynModule`, `StrategyFactory`, registry, type-validated edges, topological execution — is being built now in V6.
+**Current state:** the V5 walker (`visit_named_predictors_mut`) enumerates all Predict leaves in a typed module through callback traversal. Everything else — `ProgramGraph`, `DynModule`, `StrategyFactory`, registry, type-validated edges, topological execution — is being built now in V6.
 
 ```rust
 // Project a typed module into a mutable graph (snapshot — original untouched)
@@ -146,7 +147,7 @@ You're here          What you touch                What's invisible to you
 ─────────────────────────────────────────────────────────────────────────
 App developer        Signature, module.call()       Everything below
 Module author        #[derive(Module)], forward()   Discovery, graph
-Optimizer dev        named_parameters, DynPredictor  Graph, registry
+Optimizer dev        Optimizer::compile internals (`visit_named_predictors_mut`, DynPredictor)  Graph, registry
 Meta planner         ProgramGraph, registry          (bottom layer — Section 1.3)
 ```
 

@@ -6,8 +6,8 @@ use crate::evaluate::{TypedMetric, average_score};
 use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
-use crate::{Facet, Module, Signature};
 use crate::predictors::Example;
+use crate::{Facet, Module, Signature};
 
 /// Breadth-first instruction optimizer.
 ///
@@ -63,7 +63,9 @@ impl COPRO {
     where
         M: for<'a> Facet<'a>,
     {
-        with_named_predictor(module, predictor_name, |predictor| Ok(predictor.instruction()))
+        with_named_predictor(module, predictor_name, |predictor| {
+            Ok(predictor.instruction())
+        })
     }
 
     fn set_instruction<M>(module: &mut M, predictor_name: &str, instruction: String) -> Result<()>
@@ -90,9 +92,33 @@ impl COPRO {
         M: Module<Input = S::Input> + for<'a> Facet<'a>,
         MT: TypedMetric<S, M>,
     {
+        let original_state = with_named_predictor(module, predictor_name, |predictor| {
+            Ok(predictor.dump_state())
+        })?;
+
         Self::set_instruction(module, predictor_name, candidate_instruction.to_string())?;
-        let outcomes = evaluate_module_with_metric(&*module, trainset, metric).await?;
-        Ok(average_score(&outcomes))
+        let evaluation = evaluate_module_with_metric(&*module, trainset, metric).await;
+
+        match evaluation {
+            Ok(outcomes) => {
+                with_named_predictor(module, predictor_name, |predictor| {
+                    predictor.load_state(original_state.clone())
+                })?;
+                Ok(average_score(&outcomes))
+            }
+            Err(eval_err) => {
+                if let Err(restore_err) =
+                    with_named_predictor(module, predictor_name, |predictor| {
+                        predictor.load_state(original_state)
+                    })
+                {
+                    return Err(anyhow!(
+                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
+                    ));
+                }
+                Err(eval_err)
+            }
+        }
     }
 
     fn candidate_instructions(
@@ -181,5 +207,97 @@ impl Optimizer for COPRO {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Result, anyhow};
+
+    use super::*;
+    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+
+    #[derive(Signature, Clone, Debug)]
+    struct CoproStateSig {
+        #[input]
+        prompt: String,
+
+        #[output]
+        answer: String,
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct CoproStateModule {
+        predictor: Predict<CoproStateSig>,
+    }
+
+    impl Module for CoproStateModule {
+        type Input = CoproStateSigInput;
+        type Output = CoproStateSigOutput;
+
+        async fn forward(
+            &self,
+            input: CoproStateSigInput,
+        ) -> Result<Predicted<CoproStateSigOutput>, PredictError> {
+            Ok(Predicted::new(
+                CoproStateSigOutput {
+                    answer: input.prompt,
+                },
+                CallMetadata::default(),
+            ))
+        }
+    }
+
+    struct AlwaysFailMetric;
+
+    impl TypedMetric<CoproStateSig, CoproStateModule> for AlwaysFailMetric {
+        async fn evaluate(
+            &self,
+            _example: &Example<CoproStateSig>,
+            _prediction: &Predicted<CoproStateSigOutput>,
+        ) -> Result<MetricOutcome> {
+            Err(anyhow!("metric failure"))
+        }
+    }
+
+    fn trainset() -> Vec<Example<CoproStateSig>> {
+        vec![Example::new(
+            CoproStateSigInput {
+                prompt: "one".to_string(),
+            },
+            CoproStateSigOutput {
+                answer: "one".to_string(),
+            },
+        )]
+    }
+
+    #[tokio::test]
+    async fn score_candidate_restores_state_when_metric_errors() {
+        let optimizer = COPRO::builder().breadth(2).depth(1).build();
+        let mut module = CoproStateModule {
+            predictor: Predict::<CoproStateSig>::builder()
+                .instruction("seed-instruction")
+                .build(),
+        };
+
+        let err = optimizer
+            .score_candidate::<CoproStateSig, _, _>(
+                &mut module,
+                "predictor",
+                "candidate instruction",
+                &trainset(),
+                &AlwaysFailMetric,
+            )
+            .await
+            .expect_err("candidate scoring should propagate metric failure");
+        assert!(err.to_string().contains("metric failure"));
+
+        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
+            Ok(predictor.instruction())
+        })
+        .expect("predictor lookup should succeed");
+        assert_eq!(instruction, "seed-instruction");
     }
 }

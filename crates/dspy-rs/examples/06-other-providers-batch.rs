@@ -8,9 +8,7 @@ cargo run --example 06-other-providers-batch
 */
 
 use anyhow::Result;
-use dspy_rs::{
-    ChatAdapter, LM, Predict, Signature, configure, forward_all, init_tracing,
-};
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, forward_all, init_tracing};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -54,11 +52,10 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let anthropic = forward_all(&predictor, prompts(), 2)
-        .await
-        .into_iter()
-        .map(|outcome| outcome.map(|predicted| predicted.into_inner().answer))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut anthropic = Vec::new();
+    for outcome in forward_all(&predictor, prompts(), 2).await {
+        anthropic.push(outcome?.into_inner().answer);
+    }
     println!("Anthropic: {anthropic:?}");
 
     configure(
@@ -69,11 +66,10 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let gemini = forward_all(&predictor, prompts(), 2)
-        .await
-        .into_iter()
-        .map(|outcome| outcome.map(|predicted| predicted.into_inner().answer))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut gemini = Vec::new();
+    for outcome in forward_all(&predictor, prompts(), 2).await {
+        gemini.push(outcome?.into_inner().answer);
+    }
     println!("Gemini: {gemini:?}");
 
     Ok(())

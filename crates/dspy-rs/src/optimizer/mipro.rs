@@ -5,8 +5,8 @@ use crate::evaluate::{TypedMetric, average_score};
 use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
-use crate::{BamlType, BamlValue, Facet, Module, Signature, SignatureSchema};
 use crate::predictors::Example;
+use crate::{BamlType, BamlValue, Facet, Module, Signature, SignatureSchema};
 
 /// A single program execution trace: input, outputs, and score.
 ///
@@ -218,10 +218,7 @@ impl MIPROv2 {
         num_candidates: usize,
     ) -> Vec<String> {
         let tips = PromptingTips::default_tips();
-        let score_hint = traces
-            .iter()
-            .filter_map(|t| t.score)
-            .fold(0.0f32, f32::max);
+        let score_hint = traces.iter().filter_map(|t| t.score).fold(0.0f32, f32::max);
 
         (0..num_candidates)
             .map(|idx| {
@@ -237,10 +234,7 @@ impl MIPROv2 {
     }
 
     pub fn create_prompt_candidates(&self, instructions: Vec<String>) -> Vec<PromptCandidate> {
-        instructions
-            .into_iter()
-            .map(PromptCandidate::new)
-            .collect()
+        instructions.into_iter().map(PromptCandidate::new).collect()
     }
 
     async fn evaluate_candidate<S, M, MT>(
@@ -257,6 +251,10 @@ impl MIPROv2 {
         M: Module<Input = S::Input> + for<'a> Facet<'a>,
         MT: TypedMetric<S, M>,
     {
+        let original_state = with_named_predictor(module, predictor_name, |predictor| {
+            Ok(predictor.dump_state())
+        })?;
+
         with_named_predictor(module, predictor_name, |predictor| {
             predictor.set_instruction(candidate.instruction.clone());
             // TODO(trace-demos): derive per-predictor demos from successful traces.
@@ -266,8 +264,28 @@ impl MIPROv2 {
 
         let minibatch_end = eval_examples.len().min(self.minibatch_size);
         let minibatch = &eval_examples[..minibatch_end];
-        let outcomes = evaluate_module_with_metric(&*module, minibatch, metric).await?;
-        Ok(average_score(&outcomes))
+        let evaluation = evaluate_module_with_metric(&*module, minibatch, metric).await;
+
+        match evaluation {
+            Ok(outcomes) => {
+                with_named_predictor(module, predictor_name, |predictor| {
+                    predictor.load_state(original_state.clone())
+                })?;
+                Ok(average_score(&outcomes))
+            }
+            Err(eval_err) => {
+                if let Err(restore_err) =
+                    with_named_predictor(module, predictor_name, |predictor| {
+                        predictor.load_state(original_state)
+                    })
+                {
+                    return Err(anyhow!(
+                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
+                    ));
+                }
+                Err(eval_err)
+            }
+        }
     }
 
     async fn evaluate_and_select_best<S, M, MT>(
@@ -365,12 +383,11 @@ impl Optimizer for MIPROv2 {
                 })?
             };
 
-            let traces = self.generate_traces::<S, _, _>(module, &trainset, metric).await?;
-            let instructions = self.generate_candidate_instructions(
-                &signature_desc,
-                &traces,
-                self.num_candidates,
-            );
+            let traces = self
+                .generate_traces::<S, _, _>(module, &trainset, metric)
+                .await?;
+            let instructions =
+                self.generate_candidate_instructions(&signature_desc, &traces, self.num_candidates);
             let candidates = self.create_prompt_candidates(instructions);
             let best_candidate = self
                 .evaluate_and_select_best::<S, _, _>(
@@ -391,5 +408,102 @@ impl Optimizer for MIPROv2 {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Result, anyhow};
+
+    use super::*;
+    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+
+    #[derive(Signature, Clone, Debug)]
+    struct MiproStateSig {
+        #[input]
+        prompt: String,
+
+        #[output]
+        answer: String,
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct MiproStateModule {
+        predictor: Predict<MiproStateSig>,
+    }
+
+    impl Module for MiproStateModule {
+        type Input = MiproStateSigInput;
+        type Output = MiproStateSigOutput;
+
+        async fn forward(
+            &self,
+            input: MiproStateSigInput,
+        ) -> Result<Predicted<MiproStateSigOutput>, PredictError> {
+            Ok(Predicted::new(
+                MiproStateSigOutput {
+                    answer: input.prompt,
+                },
+                CallMetadata::default(),
+            ))
+        }
+    }
+
+    struct AlwaysFailMetric;
+
+    impl TypedMetric<MiproStateSig, MiproStateModule> for AlwaysFailMetric {
+        async fn evaluate(
+            &self,
+            _example: &Example<MiproStateSig>,
+            _prediction: &Predicted<MiproStateSigOutput>,
+        ) -> Result<MetricOutcome> {
+            Err(anyhow!("metric failure"))
+        }
+    }
+
+    fn trainset() -> Vec<Example<MiproStateSig>> {
+        vec![Example::new(
+            MiproStateSigInput {
+                prompt: "one".to_string(),
+            },
+            MiproStateSigOutput {
+                answer: "one".to_string(),
+            },
+        )]
+    }
+
+    #[tokio::test]
+    async fn evaluate_candidate_restores_state_when_metric_errors() {
+        let optimizer = MIPROv2::builder()
+            .num_candidates(2)
+            .num_trials(1)
+            .minibatch_size(1)
+            .build();
+        let mut module = MiproStateModule {
+            predictor: Predict::<MiproStateSig>::builder()
+                .instruction("seed-instruction")
+                .build(),
+        };
+        let candidate = PromptCandidate::new("candidate instruction".to_string());
+
+        let err = optimizer
+            .evaluate_candidate::<MiproStateSig, _, _>(
+                &mut module,
+                &candidate,
+                &trainset(),
+                "predictor",
+                &AlwaysFailMetric,
+            )
+            .await
+            .expect_err("candidate evaluation should propagate metric failure");
+        assert!(err.to_string().contains("metric failure"));
+
+        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
+            Ok(predictor.instruction())
+        })
+        .expect("predictor lookup should succeed");
+        assert_eq!(instruction, "seed-instruction");
     }
 }

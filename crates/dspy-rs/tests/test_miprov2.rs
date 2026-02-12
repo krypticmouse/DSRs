@@ -33,8 +33,11 @@ fn test_trace_formatting() {
 
 #[rstest]
 fn test_trace_formatting_without_score() {
-    let trace =
-        Trace::<TestSignature>::new(input("input"), BamlValue::String("result".to_string()), None);
+    let trace = Trace::<TestSignature>::new(
+        input("input"),
+        BamlValue::String("result".to_string()),
+        None,
+    );
     let formatted = trace.format_for_prompt();
 
     assert!(formatted.contains("Input:"));

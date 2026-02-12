@@ -114,12 +114,10 @@ where
             }
         }
 
-        if let Some(first_tool) = self.tools.first() {
-            return match first_tool.call(args).await {
-                Ok(result) => result,
-                Err(err) => format!("tool_error: {err}"),
-            };
-        }
+        // Keep unknown actions explicit in trajectory instead of silently invoking
+        // an arbitrary tool, which hides planner/output bugs from callers.
+        tracing::debug!(tool = %normalized, "react tool name not found");
+        let _ = args;
 
         format!("tool_not_found: {name}")
     }

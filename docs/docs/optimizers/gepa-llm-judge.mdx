@@ -46,14 +46,15 @@ Better Task LM prompt
 ### 1. Task Signature with Reasoning
 
 ```rust
-#[Signature(cot)]
+#[derive(Signature, Clone, Debug)]
+/// Solve math word problems step by step.
 struct MathWordProblem {
     #[input]
     pub problem: String,
-    
+
     #[output]
     pub reasoning: String,  // We want to optimize this too
-    
+
     #[output]
     pub answer: String,
 }
@@ -62,9 +63,9 @@ struct MathWordProblem {
 ### 2. Judge Signature
 
 ```rust
-#[Signature]
+#[derive(Signature, Clone, Debug)]
+/// You are an expert math teacher evaluating student work.
 struct MathJudge {
-    /// You are an expert math teacher evaluating student work.
     
     #[input]
     pub problem: String,
@@ -216,7 +217,7 @@ Budget accordingly:
 GEPA::builder()
     .num_iterations(3)           // Fewer iterations
     .minibatch_size(3)           // Smaller batches
-    .maybe_max_lm_calls(Some(100))  // Explicit limit
+    .max_lm_calls(Some(100))  // Explicit limit
     .build()
 ```
 

@@ -6,8 +6,8 @@ use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
 use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
-use crate::{BamlType, BamlValue, Facet, Module, Signature};
 use crate::predictors::Example;
+use crate::{BamlType, BamlValue, Facet, Module, Signature};
 
 use super::pareto::ParetoFrontier;
 
@@ -159,11 +159,7 @@ pub struct GEPA {
 }
 
 impl GEPA {
-    fn would_exceed_budget(
-        current: usize,
-        batch_cost: usize,
-        max_budget: Option<usize>,
-    ) -> bool {
+    fn would_exceed_budget(current: usize, batch_cost: usize, max_budget: Option<usize>) -> bool {
         max_budget.is_some_and(|max| current.saturating_add(batch_cost) > max)
     }
 
@@ -191,8 +187,30 @@ impl GEPA {
         M: Module<Input = S::Input> + for<'a> Facet<'a>,
         MT: TypedMetric<S, M>,
     {
+        let original_state =
+            with_named_predictor(module, module_name, |predictor| Ok(predictor.dump_state()))?;
+
         Self::set_instruction(module, module_name, instruction.to_string())?;
-        evaluate_module_with_metric(&*module, examples, metric).await
+        let evaluation = evaluate_module_with_metric(&*module, examples, metric).await;
+
+        match evaluation {
+            Ok(outcomes) => {
+                with_named_predictor(module, module_name, |predictor| {
+                    predictor.load_state(original_state.clone())
+                })?;
+                Ok(outcomes)
+            }
+            Err(eval_err) => {
+                if let Err(restore_err) = with_named_predictor(module, module_name, |predictor| {
+                    predictor.load_state(original_state)
+                }) {
+                    return Err(anyhow!(
+                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
+                    ));
+                }
+                Err(eval_err)
+            }
+        }
     }
 
     fn require_feedback(
@@ -427,7 +445,24 @@ impl GEPA {
         };
 
         let best_outputs_valset = if self.track_best_outputs {
-            Some(Self::collect_best_outputs::<S, _>(module, eval_set).await?)
+            if Self::would_exceed_budget(total_lm_calls, eval_set.len(), self.max_lm_calls)
+                || Self::would_exceed_budget(total_rollouts, eval_set.len(), self.max_rollouts)
+            {
+                tracing::debug!(
+                    eval_examples = eval_set.len(),
+                    total_lm_calls,
+                    total_rollouts,
+                    max_lm_calls = ?self.max_lm_calls,
+                    max_rollouts = ?self.max_rollouts,
+                    "skipping best output collection because budget would be exceeded"
+                );
+                None
+            } else {
+                let outputs = Self::collect_best_outputs::<S, _>(module, eval_set).await?;
+                total_lm_calls = total_lm_calls.saturating_add(eval_set.len());
+                total_rollouts = total_rollouts.saturating_add(eval_set.len());
+                Some(outputs)
+            }
         } else {
             None
         };
@@ -462,5 +497,97 @@ impl Optimizer for GEPA {
     {
         self.compile_with_valset::<S, _, _>(module, trainset, None, metric)
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Result, anyhow};
+
+    use super::*;
+    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+
+    #[derive(Signature, Clone, Debug)]
+    struct GepaStateSig {
+        #[input]
+        prompt: String,
+
+        #[output]
+        answer: String,
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct GepaStateModule {
+        predictor: Predict<GepaStateSig>,
+    }
+
+    impl Module for GepaStateModule {
+        type Input = GepaStateSigInput;
+        type Output = GepaStateSigOutput;
+
+        async fn forward(
+            &self,
+            input: GepaStateSigInput,
+        ) -> Result<Predicted<GepaStateSigOutput>, PredictError> {
+            Ok(Predicted::new(
+                GepaStateSigOutput {
+                    answer: input.prompt,
+                },
+                CallMetadata::default(),
+            ))
+        }
+    }
+
+    struct AlwaysFailMetric;
+
+    impl TypedMetric<GepaStateSig, GepaStateModule> for AlwaysFailMetric {
+        async fn evaluate(
+            &self,
+            _example: &Example<GepaStateSig>,
+            _prediction: &Predicted<GepaStateSigOutput>,
+        ) -> Result<MetricOutcome> {
+            Err(anyhow!("metric failure"))
+        }
+    }
+
+    fn eval_set() -> Vec<Example<GepaStateSig>> {
+        vec![Example::new(
+            GepaStateSigInput {
+                prompt: "one".to_string(),
+            },
+            GepaStateSigOutput {
+                answer: "one".to_string(),
+            },
+        )]
+    }
+
+    #[tokio::test]
+    async fn evaluate_candidate_restores_state_when_metric_errors() {
+        let optimizer = GEPA::builder().num_iterations(1).minibatch_size(1).build();
+        let mut module = GepaStateModule {
+            predictor: Predict::<GepaStateSig>::builder()
+                .instruction("seed-instruction")
+                .build(),
+        };
+
+        let err = optimizer
+            .evaluate_candidate::<GepaStateSig, _, _>(
+                &mut module,
+                "predictor",
+                "candidate instruction",
+                &eval_set(),
+                &AlwaysFailMetric,
+            )
+            .await
+            .expect_err("candidate evaluation should propagate metric failure");
+        assert!(err.to_string().contains("metric failure"));
+
+        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
+            Ok(predictor.instruction())
+        })
+        .expect("predictor lookup should succeed");
+        assert_eq!(instruction, "seed-instruction");
     }
 }

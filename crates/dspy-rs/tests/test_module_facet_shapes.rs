@@ -45,6 +45,10 @@ fn drop_reasoning(output: dspy_rs::WithReasoning<QAOutput>) -> QAOutput {
     output.inner
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "Test verifies ModuleExt::and_then shape with the crate's public PredictError."
+)]
 fn drop_reasoning_checked(
     output: dspy_rs::WithReasoning<QAOutput>,
 ) -> Result<QAOutput, PredictError> {
@@ -96,7 +100,8 @@ fn map_shape_exposes_inner_chain_of_thought_shape() {
 #[test]
 fn and_then_shape_exposes_inner_chain_of_thought_shape() {
     let chained = ChainOfThought::<QA>::new().and_then(
-        drop_reasoning_checked as fn(dspy_rs::WithReasoning<QAOutput>) -> Result<QAOutput, PredictError>,
+        drop_reasoning_checked
+            as fn(dspy_rs::WithReasoning<QAOutput>) -> Result<QAOutput, PredictError>,
     );
     let and_then_shape = shape_of(&chained);
     let inner = find_field(and_then_shape, "inner");

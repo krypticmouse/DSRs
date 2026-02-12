@@ -4,15 +4,17 @@ use rig::tool::ToolDyn;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 use tracing::{debug, trace};
 
-use crate::core::{DynPredictor, Module, PredictState, Signature, register_predict_accessor};
+use crate as dsrs;
+use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
+use crate::data::example::Example as RawExample;
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
     PredictError, Predicted, Prediction, SignatureSchema,
 };
-use crate::data::example::Example as RawExample;
 
 /// A typed input/output pair for few-shot prompting.
 ///
@@ -42,15 +44,32 @@ impl<S: Signature> Example<S> {
     }
 }
 
-fn predict_dyn_accessor<S>(value: *mut ()) -> *mut dyn DynPredictor
+fn predict_dyn_visit<S>(
+    value: *mut (),
+    visitor: &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>,
+) -> ControlFlow<()>
 where
     S: Signature,
 {
-    // SAFETY: this function is only called via `register_predict_accessor` for
-    // `Predict<S>`'s own shape, so `value` points at a valid `Predict<S>`.
+    // SAFETY: this function is only called through the shape-local
+    // `dsrs::predict_accessor` payload attached to a shape with strict
+    // `Predict` identity (`type_identifier` + `module_path`).
     let typed = unsafe { &mut *(value.cast::<Predict<S>>()) };
-    let dyn_ref: &mut dyn DynPredictor = typed;
-    dyn_ref as *mut dyn DynPredictor
+    visitor(typed)
+}
+
+type VisitPredictorMutFn =
+    fn(*mut (), &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>) -> ControlFlow<()>;
+
+trait PredictAccessorProvider {
+    const VISIT_MUT: VisitPredictorMutFn;
+}
+
+impl<S> PredictAccessorProvider for S
+where
+    S: Signature,
+{
+    const VISIT_MUT: VisitPredictorMutFn = predict_dyn_visit::<S>;
 }
 
 /// The leaf module. The only thing in the system that actually calls the LM.
@@ -66,14 +85,14 @@ where
 /// The optimizer's Facet walker discovers leaves automatically from struct fields —
 /// no `#[parameter]` annotations or manual traversal needed.
 ///
-/// # Construction side effect
+/// # Optimizer discovery
 ///
-/// `new()` and `builder().build()` register an accessor function in a global registry.
-/// This is a workaround — ideally the type system would handle it, but Facet doesn't
-/// yet support shape-local typed attr payloads on generic containers. If you construct
-/// a `Predict<S>` without going through `new()`/`build()` (e.g. via unsafe or manual
-/// field init), `named_parameters` will error when it finds
-/// the unregistered leaf.
+/// `Predict<S>` encodes shape-local discovery payloads:
+/// - strict shape identity (`type_identifier` + `module_path`) identifies the leaf
+/// - `dsrs::predict_accessor` stores the typed mutable accessor visitor
+///
+/// The optimizer walker consumes these through `visit_named_predictors_mut`.
+/// There is no runtime registration side effect in `new()` or `build()`.
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), dspy_rs::PredictError> {
@@ -98,6 +117,9 @@ where
 /// ```
 #[derive(facet::Facet)]
 #[facet(crate = facet, opaque)]
+#[facet(dsrs::predict_accessor = &PredictAccessorFns {
+    visit_mut: <S as PredictAccessorProvider>::VISIT_MUT,
+})]
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
@@ -110,15 +132,7 @@ pub struct Predict<S: Signature> {
 
 impl<S: Signature> Predict<S> {
     /// Creates a new `Predict` with no demos, no instruction override, and no tools.
-    ///
-    /// Registers the accessor function for this concrete `Predict<S>` type so the
-    /// optimizer walker can discover it. See the struct-level doc on construction
-    /// side effects.
     pub fn new() -> Self {
-        register_predict_accessor(
-            <Self as facet::Facet<'static>>::SHAPE,
-            predict_dyn_accessor::<S>,
-        );
         Self {
             tools: Vec::new(),
             demos: Vec::new(),
@@ -284,10 +298,7 @@ impl<S: Signature> Predict<S> {
             .count();
         debug!(
             output_fields = field_metas.len(),
-            checks_total,
-            checks_failed,
-            flagged_fields,
-            "typed parse completed"
+            checks_total, checks_failed, flagged_fields, "typed parse completed"
         );
 
         if let Some(id) = node_id {
@@ -378,12 +389,8 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
-    /// Builds the [`Predict`] and registers its accessor for optimizer discovery.
+    /// Builds the [`Predict`].
     pub fn build(self) -> Predict<S> {
-        register_predict_accessor(
-            <Predict<S> as facet::Facet<'static>>::SHAPE,
-            predict_dyn_accessor::<S>,
-        );
         Predict {
             tools: self.tools,
             demos: self.demos,

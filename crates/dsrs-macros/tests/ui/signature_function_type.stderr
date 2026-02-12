@@ -1,0 +1,5 @@
+error: function types are not supported in Signature fields; hint: use a concrete type
+ --> tests/ui/signature_function_type.rs:6:15
+  |
+6 |     callback: fn(i32) -> i32,
+  |               ^^^^^^^^^^^^^^

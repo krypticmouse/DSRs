@@ -273,6 +273,8 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         ));
     }
 
+    validate_signature_field_type(field)?;
+
     let doc_comment = collect_doc_comment(&field.attrs);
     let description = desc_override.unwrap_or(doc_comment);
 
@@ -359,12 +361,58 @@ fn parse_constraint_attr(
 fn normalize_constraint_expression(expression: &mut String) {
     // Accept common Rust-style logical operators in docs/examples and normalize
     // to the Jinja expression syntax expected by downstream evaluation.
-    let normalized = expression
-        .replace(" && ", " and ")
-        .replace(" || ", " or ")
-        .replace("&&", " and ")
-        .replace("||", " or ");
+    let segments = split_constraint_segments(expression);
+    let normalized: String = segments
+        .into_iter()
+        .map(|(segment, is_literal)| {
+            if is_literal {
+                segment
+            } else {
+                segment
+                    .replace(" && ", " and ")
+                    .replace(" || ", " or ")
+                    .replace("&&", " and ")
+                    .replace("||", " or ")
+            }
+        })
+        .collect();
     *expression = normalized;
+}
+
+fn split_constraint_segments(expression: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut buf = String::new();
+    let mut in_literal = false;
+    let mut prev_escape = false;
+
+    for ch in expression.chars() {
+        if ch == '"' && !prev_escape {
+            if in_literal {
+                buf.push(ch);
+                segments.push((buf.clone(), true));
+                buf.clear();
+                in_literal = false;
+            } else {
+                if !buf.is_empty() {
+                    segments.push((buf.clone(), false));
+                    buf.clear();
+                }
+                in_literal = true;
+                buf.push(ch);
+            }
+            prev_escape = false;
+            continue;
+        }
+
+        buf.push(ch);
+        prev_escape = ch == '\\' && !prev_escape;
+    }
+
+    if !buf.is_empty() {
+        segments.push((buf, in_literal));
+    }
+
+    segments
 }
 
 fn collect_doc_comment(attrs: &[Attribute]) -> String {
@@ -395,6 +443,158 @@ fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String
             "expected string literal; hint: wrap the value in quotes",
         )),
     }
+}
+
+// TODO(dsrs-derive-shared-validation): deduplicate type-validation logic with bamltype-derive.
+fn validate_signature_field_type(field: &syn::Field) -> syn::Result<()> {
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::BareFn(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "function types are not supported in Signature fields; hint: use a concrete type",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::TraitObject(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "trait objects are not supported in Signature fields; hint: use a concrete type",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::Tuple(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "tuple types are not supported in Signature fields; hint: use a struct with named fields or a list",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &is_serde_json_value_type) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "serde_json::Value is not supported in Signature fields; hint: use a concrete typed value",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &has_non_string_map_key) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "map keys must be String in Signature fields; hint: use HashMap<String, V> or BTreeMap<String, V>",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &is_unsupported_signature_int_type) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "unsupported integer width in Signature fields; hint: use i64/isize/u32 or a smaller integer type",
+        ));
+    }
+
+    Ok(())
+}
+
+fn find_type_match<'a, F>(ty: &'a syn::Type, predicate: &F) -> Option<&'a syn::Type>
+where
+    F: Fn(&syn::Type) -> bool,
+{
+    if predicate(ty) {
+        return Some(ty);
+    }
+
+    match ty {
+        syn::Type::Array(array) => find_type_match(&array.elem, predicate),
+        syn::Type::Group(group) => find_type_match(&group.elem, predicate),
+        syn::Type::Paren(paren) => find_type_match(&paren.elem, predicate),
+        syn::Type::Ptr(ptr) => find_type_match(&ptr.elem, predicate),
+        syn::Type::Reference(reference) => find_type_match(&reference.elem, predicate),
+        syn::Type::Slice(slice) => find_type_match(&slice.elem, predicate),
+        syn::Type::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                if let Some(found) = find_type_match(elem, predicate) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        syn::Type::Path(path) => {
+            for segment in &path.path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner) = arg
+                            && let Some(found) = find_type_match(inner, predicate)
+                        {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => {
+            path.path.segments.last().map(|s| &s.ident)
+        }
+        _ => None,
+    }
+}
+
+fn map_types(ty: &syn::Type) -> Option<(&syn::Type, &syn::Type)> {
+    if let syn::Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+        && (segment.ident == "HashMap" || segment.ident == "BTreeMap")
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        let mut iter = args.args.iter();
+        let key = match iter.next() {
+            Some(syn::GenericArgument::Type(t)) => t,
+            _ => return None,
+        };
+        let value = match iter.next() {
+            Some(syn::GenericArgument::Type(t)) => t,
+            _ => return None,
+        };
+        return Some((key, value));
+    }
+
+    None
+}
+
+fn is_string_type(ty: &syn::Type) -> bool {
+    type_ident(ty)
+        .map(|ident| ident == "String")
+        .unwrap_or(false)
+}
+
+fn has_non_string_map_key(ty: &syn::Type) -> bool {
+    map_types(ty)
+        .map(|(key, _)| !is_string_type(key))
+        .unwrap_or(false)
+}
+
+fn is_unsupported_signature_int_type(ty: &syn::Type) -> bool {
+    match type_ident(ty).map(|ident| ident.to_string()) {
+        Some(name) => matches!(name.as_str(), "u64" | "usize" | "i128" | "u128"),
+        None => false,
+    }
+}
+
+fn is_serde_json_value_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Value"
+    {
+        return path
+            .path
+            .segments
+            .iter()
+            .any(|seg| seg.ident == "serde_json");
+    }
+
+    false
 }
 
 fn generate_signature_code(
@@ -801,10 +1001,19 @@ fn generate_baml_delegation(
     for field in &parsed.all_fields {
         let field_name = field.ident.to_string();
         let ident = &field.ident;
+        let ty = &field.ty;
         to_value_inserts.push(quote! {
             fields.insert(
                 #field_name.to_string(),
-                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or(#runtime::BamlValue::Null),
+                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or_else(|err| {
+                    panic!(
+                        "Signature derive failed to convert field `{}` on `{}` (type `{}`) to BamlValue: {:?}",
+                        #field_name,
+                        stringify!(#name),
+                        ::std::any::type_name::<#ty>(),
+                        err,
+                    )
+                }),
             );
         });
     }

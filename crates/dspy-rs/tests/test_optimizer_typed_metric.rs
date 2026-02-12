@@ -1,8 +1,7 @@
 use anyhow::{Result, anyhow};
-use facet;
 use dspy_rs::{
-    COPRO, CallMetadata, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric,
+    COPRO, CallMetadata, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    Predicted, Signature, TypedMetric,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -101,7 +100,9 @@ async fn copro_compile_uses_typed_metric_predictions() {
     };
 
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
@@ -128,7 +129,9 @@ async fn mipro_compile_uses_typed_metric_predictions() {
     };
 
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = MIPROv2::builder()
@@ -155,7 +158,9 @@ async fn mipro_compile_uses_typed_metric_predictions() {
 #[tokio::test]
 async fn copro_compile_propagates_metric_errors() {
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
 
@@ -170,7 +175,9 @@ async fn copro_compile_propagates_metric_errors() {
 #[tokio::test]
 async fn mipro_compile_propagates_metric_errors() {
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
     let optimizer = MIPROv2::builder()
         .num_candidates(4)

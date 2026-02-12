@@ -9,7 +9,6 @@ cargo run --example 02-module-iteration-and-updation
 
 use anyhow::Result;
 use bon::Builder;
-use facet;
 use dspy_rs::{
     COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
@@ -43,7 +42,11 @@ impl Module for QAModule {
 struct ExactMatch;
 
 impl TypedMetric<QA, QAModule> for ExactMatch {
-    async fn evaluate(&self, example: &Example<QA>, prediction: &Predicted<QAOutput>) -> Result<MetricOutcome> {
+    async fn evaluate(
+        &self,
+        example: &Example<QA>,
+        prediction: &Predicted<QAOutput>,
+    ) -> Result<MetricOutcome> {
         let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(MetricOutcome::score((expected == actual) as u8 as f32))
@@ -91,7 +94,9 @@ async fn main() -> Result<()> {
     println!("baseline score: {baseline:.3}");
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
-    optimizer.compile(&mut module, trainset.clone(), &metric).await?;
+    optimizer
+        .compile(&mut module, trainset.clone(), &metric)
+        .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
     println!("optimized score: {optimized:.3}");

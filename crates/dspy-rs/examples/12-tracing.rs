@@ -9,12 +9,12 @@ cargo run --example 12-tracing
 
 use anyhow::Result;
 use bon::Builder;
+use dspy_rs::data::RawExample;
 use dspy_rs::{
     CallMetadata, ChatAdapter, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
     Signature, configure, init_tracing,
     trace::{self, Executor},
 };
-use dspy_rs::data::RawExample;
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -52,7 +52,10 @@ impl Module for QARater {
     type Input = QASignatureInput;
     type Output = Prediction;
 
-    async fn forward(&self, input: QASignatureInput) -> Result<Predicted<Prediction>, PredictError> {
+    async fn forward(
+        &self,
+        input: QASignatureInput,
+    ) -> Result<Predicted<Prediction>, PredictError> {
         let answer_predicted = self.answerer.call(input.clone()).await?;
         let answer_usage = answer_predicted.metadata().lm_usage.clone();
         let answer_output = answer_predicted.into_inner();
@@ -115,7 +118,10 @@ async fn main() -> Result<()> {
 
     println!("Graph nodes: {}", graph.nodes.len());
     for node in &graph.nodes {
-        println!("Node {}: type={:?}, inputs={:?}", node.id, node.node_type, node.inputs);
+        println!(
+            "Node {}: type={:?}, inputs={:?}",
+            node.id, node.node_type, node.inputs
+        );
     }
 
     println!("\nExecuting graph replay...");

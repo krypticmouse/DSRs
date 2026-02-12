@@ -1,5 +1,4 @@
 use anyhow::Result;
-use facet;
 use dspy_rs::{
     CallMetadata, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric,
@@ -186,7 +185,9 @@ fn valset_for_gepa() -> Vec<Example<OptimizerSig>> {
 async fn gepa_compile_succeeds_when_feedback_present() {
     let metric = FeedbackMetricImpl;
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = GEPA::builder()
@@ -208,35 +209,34 @@ async fn gepa_compile_succeeds_when_feedback_present() {
 async fn gepa_compile_fails_without_feedback() {
     let metric = ScoreOnlyMetric;
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
-    let optimizer = GEPA::builder()
-        .num_iterations(1)
-        .minibatch_size(2)
-        .build();
+    let optimizer = GEPA::builder().num_iterations(1).minibatch_size(2).build();
 
     let err = optimizer
         .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
         .await
         .expect_err("GEPA should reject score-only metrics");
 
-    assert!(err
-        .to_string()
-        .contains("GEPA requires feedback for every evaluated example"));
+    assert!(
+        err.to_string()
+            .contains("GEPA requires feedback for every evaluated example")
+    );
 }
 
 #[tokio::test]
 async fn gepa_compile_fails_when_feedback_is_partial() {
     let metric = PartialFeedbackMetric;
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
-    let optimizer = GEPA::builder()
-        .num_iterations(1)
-        .minibatch_size(2)
-        .build();
+    let optimizer = GEPA::builder().num_iterations(1).minibatch_size(2).build();
 
     let err = optimizer
         .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
@@ -256,7 +256,9 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
     // call 4+: child eval in generation 1 should fail GEPA feedback gate.
     let metric = FeedbackThenScoreMetric::new(4);
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = GEPA::builder()
@@ -272,7 +274,10 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
 
     let message = err.to_string();
     assert!(message.contains("GEPA requires feedback for every evaluated example"));
-    assert!(message.contains("generation=1"), "expected generation marker: {message}");
+    assert!(
+        message.contains("generation=1"),
+        "expected generation marker: {message}"
+    );
 }
 
 #[tokio::test]
@@ -282,7 +287,9 @@ async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabl
         seen_prompts: Arc::clone(&seen_prompts),
     };
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
     let valset = valset_for_gepa();
 
@@ -307,7 +314,10 @@ async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabl
         .expect("metric lock should not be poisoned")
         .clone();
     assert_eq!(seen, vec!["val-only".to_string()]);
-    assert_eq!(result.highest_score_achieved_per_val_task.len(), valset.len());
+    assert_eq!(
+        result.highest_score_achieved_per_val_task.len(),
+        valset.len()
+    );
     assert!(
         result.highest_score_achieved_per_val_task[0] >= 100.0,
         "valset-only scoring should dominate, got {:?}",
@@ -330,7 +340,9 @@ async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabl
 async fn gepa_compile_respects_max_lm_calls_budget() {
     let metric = FeedbackMetricImpl;
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = GEPA::builder()
@@ -355,7 +367,9 @@ async fn gepa_compile_respects_max_lm_calls_budget() {
 async fn gepa_compile_respects_max_rollouts_budget() {
     let metric = FeedbackMetricImpl;
     let mut module = InstructionEchoModule {
-        predictor: Predict::<OptimizerSig>::builder().instruction("seed").build(),
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
     };
 
     let optimizer = GEPA::builder()
@@ -373,5 +387,37 @@ async fn gepa_compile_respects_max_rollouts_budget() {
         result.total_rollouts <= 2,
         "rollout budget should be enforced, got {}",
         result.total_rollouts
+    );
+}
+
+#[tokio::test]
+async fn gepa_track_best_outputs_respects_lm_call_budget() {
+    let metric = FeedbackMetricImpl;
+    let mut module = InstructionEchoModule {
+        predictor: Predict::<OptimizerSig>::builder()
+            .instruction("seed")
+            .build(),
+    };
+
+    let optimizer = GEPA::builder()
+        .num_iterations(0)
+        .minibatch_size(2)
+        .track_best_outputs(true)
+        .max_lm_calls(2)
+        .build();
+
+    let result = optimizer
+        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
+        .await
+        .expect("GEPA compile should respect LM call budget when tracking outputs");
+
+    assert!(
+        result.total_lm_calls <= 2,
+        "LM call budget should be enforced, got {}",
+        result.total_lm_calls
+    );
+    assert!(
+        result.best_outputs_valset.is_none(),
+        "best outputs should be skipped when budget does not allow extra eval calls"
     );
 }

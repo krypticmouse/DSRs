@@ -6,7 +6,7 @@ V6/dynamic graph was implemented in-repo, then intentionally deferred; the runti
 
 Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
 
-MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred.
+MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred (`TODO(trace-demos)`).
 
 All content below is preserved as a historical implementation record.
 
@@ -46,7 +46,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 **Architectural invariants:**
 - **Dependency direction is acyclic:** P1 ← P2 ← P3 ← P4. Each layer sees the one below, never above. No cycles.
 - **S1 (SignatureSchema cache) is the shared backbone:** Written once (immutable after init), read by all Places. Immutable shared state across Places is coupling in name only — it's a computed property of types. If this invariant were ever violated (mutable schema), the whole Place decomposition would collapse.
-- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. **Current mechanism:** accessor fns are resolved through a runtime shape-id registry. Dispatch is registry-only; Predict-like leaves without registration now fail explicitly with `MissingAttr` diagnostics. **Tradeoff:** stable behavior now, explicit S2 migration debt until shape-local payload extraction is available. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
+- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. **Current mechanism:** accessor fns are extracted from shape-local `PredictAccessorFns` payloads (S2 Mechanism A). Predict-like leaves with missing/invalid payloads fail explicitly with diagnostics; runtime registry fallback is not used. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
 - **"Structure IS declaration" — with bounded container support.** The walker discovers Predict leaves by reflecting on struct fields. Module authors don't annotate `#[parameter]` or implement traversal. The current implementation traverses structs plus common containers (`Option`, list/array/slice, `HashMap<String, _>`, and `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) produce explicit N18 errors rather than silent skips.
 - **Module combinators must be Facet-transparent.** Any wrapper that composes modules (Map, AndThen, Pipe) must expose inner modules as struct fields visible to the F6 walker (N18), not behind trait objects. `Map<M, F>` requires a manual Facet impl walking only `inner: M` (closures are opaque to Facet derive). `BestOfN<M>` has `module: M` as a concrete typed field. If a combinator hides the inner module behind `Box<dyn Module>`, the walker cannot find Predict leaves inside — optimization breaks silently. **Path namespace consequence:** Wrapping a module changes path prefixes — `predict` becomes `inner.predict`. Serialized optimizer state (U36) is tied to the module tree shape. Changing the tree (adding/removing a wrapper) invalidates saved state with a clear error, not silent misapplication.
 
@@ -74,7 +74,12 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 
 **Deferred (acknowledged, out of scope for V1):**
 - ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `call()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
-- ⚠️ **Container traversal (remaining):** Common container traversal is implemented (`Option`, lists, maps, `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) still error explicitly in N18; broader pointer/container strategy remains tracked in S5.
+- ⚠️ **Container traversal (remaining):** Common container traversal is implemented (`Option`, lists, maps, `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) still error explicitly in N18 (`TODO(dsrs-shared-ptr-policy)`).
+- ⚠️ **Media conversion:** Unsupported in optimizer-facing discovery/state flows (`TODO(dsrs-media)`).
+
+**Explicit limitations (current runtime):**
+- Optimizer discovery does not traverse `Rc<T>`/`Arc<T>` containers; N18 returns explicit unsupported-container errors (`TODO(dsrs-shared-ptr-policy)`).
+- Media conversion is unsupported for optimizer-facing discovery/state flows (`TODO(dsrs-media)`).
 
 ---
 
@@ -116,8 +121,8 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U28** | P2 | — | `Predict<Augmented<S, A>>` as internal field | compile | — | — | F3, F5 |
 | **U29** | P2 | — | `#[derive(Facet)]` on module struct | compile | — | — | F6 |
 | | | | | | | | |
-| **U30** | P3 | `discovery` | `named_parameters(&mut module)` — takes exclusive `&mut` access | call | → N18 | → U31 | F6 |
-| **U31** | P3 | `discovery` | `Vec<(String, &mut dyn DynPredictor)>` return — mutable handles for optimizer mutation | access | → U32–U37 | ← N18 | F6 |
+| **U30** | P3 | `discovery` | `visit_named_predictors_mut(&mut module, visitor)` — takes exclusive `&mut` access | call | → N18 | → U31 | F6 |
+| **U31** | P3 | `discovery` | Callback receives `(path, &mut dyn DynPredictor)` handles and may short-circuit with `ControlFlow::Break(())` | access | → U32–U37 | ← N18 | F6 |
 | **U32** | P3 | `dyn_predictor` | `predictor.schema()` | call | — | → &SignatureSchema | F8 |
 | **U33** | P3 | `dyn_predictor` | `predictor.demos_as_examples()` | call | → N21 | → Vec\<Example\> | F8 |
 | **U34** | P3 | `dyn_predictor` | `predictor.set_demos_from_examples(demos)` | call | → N22 | → Result\<()\> | F8 |
@@ -151,7 +156,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **N15** | P2 | `signature` (macro) | Generic signature macro — `split_for_impl()`, generic param threading, flatten handling | compile | → U4, → U5 (generic variants) | — | F12 |
 | **N17** | P2/P4 | `dyn_module` | Schema transformation — factory modifies `SignatureSchema` (prepend reasoning, build action schema, etc.) | compute | → N3 | → U38 | F9 |
 | | | | | | | | |
-| **N18** | P3 | `discovery` | `walk_value()` — recursive Facet traversal over struct fields and supported containers (`Option`, list/array/slice, `HashMap<String, _>`, `Box`). Resolves `PredictAccessorFns` through runtime shape-id registration, then casts to `&mut dyn DynPredictor` (one audited unsafe boundary). Predict-like leaves without registration fail explicitly with path diagnostics (`MissingAttr`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) error explicitly with path/type diagnostics. Target state remains shape-local typed attr payload extraction. | walk | — | → U31 | F6, F8 |
+| **N18** | P3 | `discovery` | `walk_value()` — recursive Facet traversal over struct fields and supported containers (`Option`, list/array/slice, `HashMap<String, _>`, `Box`). Extracts shape-local `PredictAccessorFns` payloads and casts to `&mut dyn DynPredictor` (one audited unsafe boundary). Missing/invalid payloads fail explicitly with path diagnostics. Unsupported pointer-like containers (`Rc`, `Arc`, etc.) error explicitly with path/type diagnostics. | walk | — | → U31 | F6, F8 |
 | **N21** | P3 | `dyn_predictor` | `Demo<S> → Example` — `to_baml_value()` on input + output | convert | — | → U33 | F8 |
 | **N22** | P3 | `dyn_predictor` | `Example → Demo<S>` — `try_from_baml_value()` gatekeeper (type safety boundary) | convert | → N23 | → S2 | F8 |
 | **N23** | P3 | `dyn_predictor` | `S::Input::try_from_baml_value(input)` — typed conversion for forward_untyped | convert | → N8 | → U37 | F8 |
@@ -240,12 +245,12 @@ Inside forward(), module author calls:
 U50 (optimizer.compile(&mut module, trainset, metric))
   → exclusive &mut access — no concurrent forward() during optimization
 
-  U30 (named_parameters(&mut module))
+  U30 (visit_named_predictors_mut(&mut module, visitor))
     → N18 (walk_value: recurse through struct fields via Facet reflection,
-           resolve PredictAccessorFns via runtime shape-id registry,
-           fail explicit on unregistered Predict-like leaves,
+           extract shape-local PredictAccessorFns payloads,
+           fail explicit on missing/invalid payloads,
            cast to &mut dyn DynPredictor — one audited unsafe boundary)
-    → U31 (Vec<(path, &mut dyn DynPredictor)>)
+    → U31 (visitor callback receives each (path, &mut dyn DynPredictor))
 
   For each discovered predictor:
     U32 (predictor.schema()) → S1 (understand field structure)
@@ -300,7 +305,7 @@ U45 (graph.execute(input))
 ```
 P1 → P3: U50 (optimizer.compile(&mut module, trainset, metric)).
   Exclusive &mut borrow — P1 cannot call forward() during optimization.
-  Optimizer calls U30 (named_parameters), which uses N18 (walker)
+  Optimizer calls U30 (visit_named_predictors_mut), which uses N18 (walker)
   to reach INTO the P1 module's Predict leaves.
   N18 (walker) casts to &mut dyn DynPredictor — this is the P1→P3 boundary crossing.
   After optimization, S2/S3 are mutated but the typed module is unchanged.
@@ -460,7 +465,7 @@ let confident = cot.map(|r| ConfidentAnswer { answer: r.answer.clone(), confiden
 | # | Affordance | Slice Role |
 |---|------------|------------|
 | U50 | optimizer.compile(&mut module, trainset, metric) | P1→P3 entry |
-| U30, U31 | named_parameters, handle vec | Discovery |
+| U30, U31 | callback discovery visitor + mutable handle callback | Discovery |
 | U32 | predictor.schema() | Schema access |
 | U33, U34 | demos_as_examples / set_demos | Demo mutation |
 | U35 | instruction / set_instruction | Instruction mutation |
@@ -473,13 +478,21 @@ Demo program:
 ```rust
 let mut module = SimpleRAG::new();  // from V3
 
-// Discover all Predict leaves — no annotations needed
-let params = named_parameters(&mut module);
-assert_eq!(params.len(), 2);  // retrieve.predict + answer.predict
-
-// Mutate demos
-params[0].1.set_demos_from_examples(new_demos)?;
-params[1].1.set_instruction("Be concise.".into());
+// Discover/mutate Predict leaves — no annotations needed
+let mut seen = Vec::new();
+visit_named_predictors_mut(&mut module, |path, predictor| {
+    seen.push(path.to_string());
+    if path == "retrieve.predict" {
+        predictor
+            .set_demos_from_examples(new_demos.clone())
+            .expect("demo conversion must match schema");
+    }
+    if path == "answer.predict" {
+        predictor.set_instruction("Be concise.".into());
+    }
+    ControlFlow::Continue(())
+})?;
+assert_eq!(seen.len(), 2);  // retrieve.predict + answer.predict
 
 // Verify mutations took effect
 let result = module.call(input).await?;

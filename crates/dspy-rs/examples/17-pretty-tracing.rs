@@ -1,6 +1,6 @@
 use anyhow::Result;
-use dspy_rs::{Chat, DummyLM, Message, hashmap, init_tracing};
 use dspy_rs::data::RawExample;
+use dspy_rs::{Chat, DummyLM, Message, hashmap, init_tracing};
 
 #[tokio::main]
 async fn main() -> Result<()> {

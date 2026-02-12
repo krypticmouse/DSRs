@@ -11,6 +11,11 @@
 //! [`LmError`] — distinguishes LM failures from parse failures so callers can handle
 //! retries differently. [`LM`] is the language model client itself.
 //!
+//! Optimizer leaf discovery is internal (`visit_named_predictors_mut`) and currently
+//! traverses struct fields plus `Option`, `Vec`, `HashMap<String, _>`, and `Box`.
+//! `Rc`/`Arc` wrappers that contain `Predict` leaves are rejected with explicit
+//! container errors.
+//!
 //! Most users import these through the crate root (`use dspy_rs::*`). Module authors
 //! who need fine-grained prompt control also use [`SignatureSchema`] and the adapter
 //! building blocks directly.

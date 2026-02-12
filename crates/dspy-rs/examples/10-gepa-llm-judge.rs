@@ -9,7 +9,6 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 
 use anyhow::Result;
 use bon::Builder;
-use facet;
 use dspy_rs::{
     ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
@@ -151,10 +150,7 @@ fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordPro
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder().temperature(0.7).build().await?,
-        ChatAdapter,
-    );
+    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
 
     let trainset = vec![
         training_example(
@@ -195,7 +191,8 @@ async fn main() -> Result<()> {
     println!("Total LM calls: {}", result.total_lm_calls);
     println!("Best instruction: {}", result.best_candidate.instruction);
 
-    let test_problem = "A store sells pencils for $0.25 each. If you buy 8 pencils, what is the total?";
+    let test_problem =
+        "A store sells pencils for $0.25 each. If you buy 8 pencils, what is the total?";
     let test_predicted = module
         .call(MathWordProblemInput {
             problem: test_problem.to_string(),

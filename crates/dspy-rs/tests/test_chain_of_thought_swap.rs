@@ -2,7 +2,6 @@ use dspy_rs::{
     ChainOfThought, ChatAdapter, LM, LMClient, Module, Predict, Reasoning, Signature,
     TestCompletionModel, WithReasoning, configure,
 };
-use facet;
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use std::sync::LazyLock;

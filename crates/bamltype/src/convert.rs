@@ -91,10 +91,15 @@ enum MapKeyReprHint {
 
 /// Convert a BamlValue to a Rust type using facet reflection.
 pub fn from_baml_value<T: Facet<'static>>(value: BamlValue) -> Result<T, ConvertError> {
-    let partial = Partial::alloc::<T>()?;
+    let partial = Partial::alloc::<T>().map_err(|err| ConvertError::Reflect(err.into()))?;
     let partial = build_from_baml_value(partial, &value)?;
     let heap_value: HeapValue<'static> = partial.build()?;
-    Ok(heap_value.materialize::<T>()?)
+    heap_value
+        .materialize::<T>()
+        .map_err(|err| ConvertError::TypeMismatch {
+            expected: std::any::type_name::<T>(),
+            actual: err.to_string(),
+        })
 }
 
 /// Convert a BamlValueWithFlags to a Rust type.
@@ -174,7 +179,18 @@ fn build_from_baml_value_with_hints(
         }
         BamlValue::Float(f) => Ok(partial.parse_from_str(&f.to_string())?),
         BamlValue::Bool(b) => Ok(partial.set(*b)?),
-        BamlValue::Null => Ok(partial.set_default()?),
+        BamlValue::Null => {
+            let message = format!(
+                "null provided for required {}",
+                shape_diagnostics(partial.shape())
+            );
+            Err(ConvertError::Adapter(BamlConvertError::new(
+                Vec::new(),
+                expected_kind_for_shape(partial.shape()),
+                "null",
+                message,
+            )))
+        }
 
         // Class input: either enum object form, struct object form, or map object form.
         BamlValue::Class(_type_name, fields) => {
@@ -234,10 +250,12 @@ fn build_from_baml_value_with_hints(
         // Enum variant (unit-like representation).
         BamlValue::Enum(_type_name, variant_name) => select_enum_variant(partial, variant_name),
 
-        // Media - not yet supported.
-        BamlValue::Media(_media) => Err(ConvertError::Unsupported(
-            "Media type conversion not yet implemented".into(),
-        )),
+        // Media - intentionally unsupported for now.
+        // TODO(dsrs-media): define typed media contract and implement BamlValue::Media conversions end-to-end.
+        BamlValue::Media(_media) => Err(ConvertError::Unsupported(format!(
+            "TODO(dsrs-media): BamlValue::Media -> Rust conversion is deferred; failed to convert into target shape ({})",
+            shape_diagnostics(partial.shape())
+        ))),
     }
 }
 
@@ -296,6 +314,14 @@ fn build_object_fields(
         };
 
         let field = current_field(&partial, index);
+        if let Some(field) = field {
+            // Preserve facet(default) semantics when parsers materialize missing
+            // fields as explicit nulls.
+            if matches!(field_value, BamlValue::Null) && field.has_default() {
+                continue;
+            }
+        }
+
         if let Some(field) = field
             && let Some(with) = crate::facet_ext::with_adapter_fns(field.attributes)
         {
@@ -512,6 +538,13 @@ fn baml_value_kind(value: &BamlValue) -> String {
         BamlValue::Media(_) => "media",
     }
     .to_string()
+}
+
+fn shape_diagnostics(shape: &'static Shape) -> String {
+    format!(
+        "shape_id={:?}, type_identifier={}, def={:?}",
+        shape.id, shape.type_identifier, shape.def
+    )
 }
 
 // ============================================================================
@@ -821,6 +854,7 @@ fn select_enum_variant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use baml_types::{BamlMedia, BamlMediaType};
 
     #[test]
     fn test_primitives_to_baml() {
@@ -867,5 +901,40 @@ mod tests {
 
         assert_eq!(to_baml_value(&some_val).unwrap(), BamlValue::Int(42));
         assert_eq!(to_baml_value(&none_val).unwrap(), BamlValue::Null);
+    }
+
+    #[test]
+    fn null_to_required_errs() {
+        let err = from_baml_value::<i32>(BamlValue::Null).unwrap_err();
+        match err {
+            ConvertError::Adapter(inner) => {
+                assert_eq!(inner.expected, "int");
+                assert_eq!(inner.got, "null");
+                assert!(inner.message.starts_with("null provided for required"));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn null_into_option_succeeds() {
+        let value: Option<i32> = from_baml_value(BamlValue::Null).unwrap();
+        assert_eq!(value, None);
+    }
+
+    #[test]
+    fn media_conversion_error_includes_todo() {
+        let media = BamlMedia::url(
+            BamlMediaType::Image,
+            "https://example.com/img.png".to_string(),
+            Some("image/png".to_string()),
+        );
+        let err = from_baml_value::<i32>(BamlValue::Media(media)).unwrap_err();
+        match err {
+            ConvertError::Unsupported(message) => {
+                assert!(message.contains("TODO(dsrs-media)"));
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
     }
 }

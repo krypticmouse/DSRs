@@ -32,6 +32,13 @@ fn run_compile_fail_case(name: &str, source: &str) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn assert_not_masked_by_e0401(stderr: &str) {
+    assert!(
+        !stderr.contains("E0401"),
+        "expected failure in the external consumer crate, but got internal E0401 masking:\n{stderr}"
+    );
+}
+
 #[test]
 fn dyn_predictor_is_not_publicly_importable() {
     let stderr = run_compile_fail_case(
@@ -45,6 +52,7 @@ fn main() {
 "#,
     );
 
+    assert_not_masked_by_e0401(&stderr);
     assert!(
         stderr.contains("DynPredictor")
             && (stderr.contains("private") || stderr.contains("no `DynPredictor` in the root")),
@@ -65,6 +73,7 @@ fn main() {
 "#,
     );
 
+    assert_not_masked_by_e0401(&stderr);
     assert!(
         stderr.contains("named_parameters")
             && (stderr.contains("private") || stderr.contains("no `named_parameters` in the root")),
@@ -117,6 +126,7 @@ fn main() {
 "#,
     );
 
+    assert_not_masked_by_e0401(&stderr);
     assert!(
         stderr.contains("Module<Input = S::Input>")
             || stderr.contains("type mismatch")

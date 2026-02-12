@@ -611,6 +611,13 @@ struct CompatStruct {
 
 #[derive(Debug, PartialEq)]
 #[bamltype::BamlType]
+struct CompatDefaultInt {
+    #[baml(default)]
+    retries: i32,
+}
+
+#[derive(Debug, PartialEq)]
+#[bamltype::BamlType]
 enum CompatEnum {
     #[baml(alias = "go")]
     Start,
@@ -673,6 +680,20 @@ fn test_baml_skip_field_excluded_from_schema() {
     let schema = render_schema_default::<CompatStruct>().expect("schema");
     assert!(schema.contains("fullName"));
     assert!(!schema.contains("internal"));
+}
+
+#[test]
+fn test_baml_default_non_option_accepts_explicit_null() {
+    let mut fields = IndexMap::new();
+    fields.insert("retries".to_string(), BamlValue::Null);
+
+    let parsed: CompatDefaultInt = from_baml_value(BamlValue::Class(
+        <CompatDefaultInt as BamlType>::baml_internal_name().to_string(),
+        fields,
+    ))
+    .expect("explicit null should map to field default");
+
+    assert_eq!(parsed.retries, 0);
 }
 
 #[test]

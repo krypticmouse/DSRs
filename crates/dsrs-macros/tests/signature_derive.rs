@@ -23,6 +23,19 @@ struct NormalizedConstraintSig {
     score: f64,
 }
 
+#[derive(dsrs_macros::Signature, Clone, Debug)]
+struct LiteralConstraintSig {
+    #[input]
+    question: String,
+
+    #[output]
+    #[check(
+        "this == \"value||value\" && this != \"foo&&bar\"",
+        label = "literal_ops"
+    )]
+    answer: String,
+}
+
 #[derive(Clone, Debug)]
 #[BamlType]
 struct GenericCtx {
@@ -74,6 +87,17 @@ fn constraint_operator_normalization_is_preserved() {
     assert_eq!(
         output_metadata[0].constraints[0].expression,
         "this >= 0.0 and this <= 1.0"
+    );
+}
+
+#[test]
+fn literal_constraint_operators_are_preserved() {
+    let output_metadata = <LiteralConstraintSig as SignatureTrait>::output_field_metadata();
+    assert_eq!(output_metadata.len(), 1);
+    let expr = &output_metadata[0].constraints[0].expression;
+    assert_eq!(
+        expr,
+        &"this == \"value||value\" and this != \"foo&&bar\"".to_string()
     );
 }
 

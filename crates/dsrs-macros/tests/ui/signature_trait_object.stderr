@@ -1,0 +1,5 @@
+error: trait objects are not supported in Signature fields; hint: use a concrete type
+ --> tests/ui/signature_trait_object.rs:6:16
+  |
+6 |     value: Box<dyn std::fmt::Debug>,
+  |                ^^^^^^^^^^^^^^^^^^^

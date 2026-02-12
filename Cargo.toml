@@ -4,3 +4,8 @@ members = [
     "crates/*",
     "vendor/baml/crates/*",
 ]
+
+[patch.crates-io]
+# TODO(dsrs-facet-pin): switch back to upstream main/release once #2040/#2041 are merged and released.
+facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }
+facet-reflect = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }
