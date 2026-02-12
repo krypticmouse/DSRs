@@ -9,10 +9,9 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature, TypedMetric,
-    average_score, configure, evaluate_trainset, init_tracing,
+    ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
+    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
-use dspy_rs::data::RawExample;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -40,28 +39,6 @@ impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
     }
 }
 
-fn typed_hotpot_examples(raw_examples: Vec<RawExample>) -> Vec<Example<QA>> {
-    raw_examples
-        .into_iter()
-        .filter_map(|example| {
-            let question = example
-                .data
-                .get("question")
-                .and_then(|value| value.as_str())?
-                .to_string();
-            let answer = example
-                .data
-                .get("answer")
-                .and_then(|value| value.as_str())?
-                .to_string();
-            Some(Example::new(
-                QAInput { question },
-                QAOutput { answer },
-            ))
-        })
-        .collect()
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing()?;
@@ -74,16 +51,14 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let raw_examples = DataLoader::load_hf(
+    let examples = DataLoader::load_hf::<QA>(
         "hotpotqa/hotpot_qa",
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
         "fullwiki",
         "validation",
         true,
+        TypedLoadOptions::default(),
     )?[..64]
         .to_vec();
-    let examples = typed_hotpot_examples(raw_examples);
 
     let module = Predict::<QA>::builder()
         .instruction("Answer with a short, factual response.")

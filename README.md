@@ -242,6 +242,58 @@ let optimizer = MIPROv2::builder()
 optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
+#### 7. **Typed Data Loading** - Ingest Directly Into `Example<S>`
+
+`DataLoader` now provides typed loaders that return `Vec<Example<S>>` directly.
+Default behavior is:
+- Unknown source fields are ignored.
+- Missing signature-required fields return an error with row + field context.
+
+```rust
+use dspy_rs::{DataLoader, Signature, TypedLoadOptions};
+
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+let trainset = DataLoader::load_csv::<QA>(
+    "data/train.csv",
+    ',',
+    true,
+    TypedLoadOptions::default(),
+)?;
+```
+
+For custom source schemas, use mapper overloads:
+
+```rust
+let trainset = DataLoader::load_csv_with::<QA, _>(
+    "data/train.csv",
+    ',',
+    true,
+    TypedLoadOptions::default(),
+    |row| {
+        Ok(dspy_rs::Example::new(
+            QAInput {
+                question: row.get::<String>("prompt")?,
+            },
+            QAOutput {
+                answer: row.get::<String>("completion")?,
+            },
+        ))
+    },
+)?;
+```
+
+Migration note:
+- Removed legacy raw signatures that required `input_keys` / `output_keys`.
+- `save_json` / `save_csv` were removed from `DataLoader`.
+- Use typed `load_*` / `load_*_with` APIs.
+
 See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` feature).
 
 **Component Discovery:**

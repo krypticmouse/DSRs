@@ -111,11 +111,15 @@ async fn main() -> Result<()> {
         .build();
     let metric = ExactMatchMetric;
     
-    copro.compile::<QA, _, _>(&mut module, trainset, &metric).await?;
+copro.compile::<QA, _, _>(&mut module, trainset, &metric).await?;
     
     Ok(())
 }
 ```
+
+### Typed Data Loading
+
+Use the shared data ingress guide: [`DataLoader`](/docs/data/dataloader).
 
 ## When to Use COPRO
 

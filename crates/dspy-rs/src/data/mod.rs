@@ -1,18 +1,12 @@
-//! Data loading and example types.
+//! Data loading and runtime row types.
 //!
-//! Two example types serve different layers:
+//! Typed ingestion is now first-class:
 //!
-//! - **[`RawExample`]** (aliased from `example::Example`) — untyped key-value pairs with
-//!   explicit `input_keys`/`output_keys`. Used by the data loaders, the optimizer's
-//!   dynamic predictor bridge, and serialization. This is the wire format for examples.
+//! - [`DataLoader`] provides `load_*` methods that return
+//!   [`Example<S>`](crate::predictors::Example) directly.
+//! - Typed examples flow directly into evaluation and optimizer APIs.
 //!
-//! - **[`Example<S>`](crate::predictors::Example)** (in `predictors`) — typed input/output
-//!   pair anchored to a [`Signature`](crate::Signature). Used by [`Predict`](crate::Predict)
-//!   for demos and by [`TypedMetric`](crate::TypedMetric) for evaluation. This is what
-//!   users work with.
-//!
-//! [`DataLoader`] reads JSON, CSV, Parquet, and HuggingFace datasets into `Vec<RawExample>`.
-//! To use with typed modules, convert via the signature's schema.
+//! The untyped row type (`RawExample`) remains for internal runtime/tracing/cache bridges.
 
 pub mod dataloader;
 pub mod example;

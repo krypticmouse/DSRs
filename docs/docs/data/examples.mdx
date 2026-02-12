@@ -3,3 +3,32 @@ title: "Example"
 description: "Explore data currency that makes up DSRs."
 icon: "table"
 ---
+
+`Example<S>` is the typed training/evaluation row for a signature `S`.
+
+```rust
+use dspy_rs::{Example, Signature};
+
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+let row = Example::new(
+    QAInput {
+        question: "What is 2+2?".to_string(),
+    },
+    QAOutput {
+        answer: "4".to_string(),
+    },
+);
+```
+
+Use `Vec<Example<S>>` for:
+- `evaluate_trainset(...)`
+- `optimizer.compile::<S, _, _>(...)`
+
+For file/dataset ingestion, use [`DataLoader`](/docs/data/dataloader).

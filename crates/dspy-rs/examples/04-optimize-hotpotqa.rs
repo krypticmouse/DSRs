@@ -12,10 +12,9 @@ use bon::Builder;
 use facet;
 use dspy_rs::{
     COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure,
+    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
     evaluate_trainset, init_tracing,
 };
-use dspy_rs::data::RawExample;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -58,28 +57,6 @@ impl TypedMetric<QA, QAModule> for ExactMatchMetric {
     }
 }
 
-fn typed_hotpot_examples(raw_examples: Vec<RawExample>) -> Vec<Example<QA>> {
-    raw_examples
-        .into_iter()
-        .filter_map(|example| {
-            let question = example
-                .data
-                .get("question")
-                .and_then(|value| value.as_str())?
-                .to_string();
-            let answer = example
-                .data
-                .get("answer")
-                .and_then(|value| value.as_str())?
-                .to_string();
-            Some(Example::new(
-                QAInput { question },
-                QAOutput { answer },
-            ))
-        })
-        .collect()
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing()?;
@@ -92,16 +69,14 @@ async fn main() -> Result<()> {
         ChatAdapter,
     );
 
-    let raw_examples = DataLoader::load_hf(
+    let examples = DataLoader::load_hf::<QA>(
         "hotpotqa/hotpot_qa",
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
         "fullwiki",
         "validation",
         true,
+        TypedLoadOptions::default(),
     )?[..10]
         .to_vec();
-    let examples = typed_hotpot_examples(raw_examples);
 
     let metric = ExactMatchMetric;
     let mut module = QAModule::builder().build();

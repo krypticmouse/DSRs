@@ -1,0 +1,136 @@
+---
+title: "DataLoader"
+description: "Typed data ingestion into `Vec<Example<S>>`."
+icon: "database"
+---
+
+`DataLoader` is the canonical ingestion path for training and evaluation data.
+
+Every loader returns `Vec<Example<S>>` directly, so you can pass results into:
+- `evaluate_trainset`
+- `optimizer.compile::<S, _, _>(...)`
+
+No manual `RawExample -> Example<S>` conversion is required.
+
+## Core API
+
+```rust
+use dspy_rs::{DataLoader, Example, Signature, TypedLoadOptions};
+```
+
+Typed loaders:
+- `DataLoader::load_json::<S>(...)`
+- `DataLoader::load_csv::<S>(...)`
+- `DataLoader::load_parquet::<S>(...)`
+- `DataLoader::load_hf::<S>(...)`
+- `DataLoader::load_hf_from_parquet::<S>(...)` (deterministic/offline helper)
+
+Mapper overloads:
+- `DataLoader::load_json_with::<S, _>(...)`
+- `DataLoader::load_csv_with::<S, _>(...)`
+- `DataLoader::load_parquet_with::<S, _>(...)`
+- `DataLoader::load_hf_with::<S, _>(...)`
+
+## Default Behavior
+
+`TypedLoadOptions::default()`:
+- Ignores unknown source fields.
+- Errors on missing required signature fields.
+- Uses signature field names directly unless remapped.
+
+```rust
+use dspy_rs::{DataLoader, Signature, TypedLoadOptions};
+
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+let trainset = DataLoader::load_csv::<QA>(
+    "data/train.csv",
+    ',',
+    true,
+    TypedLoadOptions::default(),
+)?;
+```
+
+## Field Remapping
+
+Use `TypedLoadOptions.field_map` when source column names differ from signature names.
+
+```rust
+use std::collections::HashMap;
+use dspy_rs::{DataLoader, TypedLoadOptions, UnknownFieldPolicy};
+
+let mut field_map = HashMap::new();
+field_map.insert("question".to_string(), "prompt".to_string());
+field_map.insert("answer".to_string(), "completion".to_string());
+
+let trainset = DataLoader::load_csv::<QA>(
+    "data/custom.csv",
+    ',',
+    true,
+    TypedLoadOptions {
+        field_map,
+        unknown_fields: UnknownFieldPolicy::Ignore,
+    },
+)?;
+```
+
+## Custom Mapping
+
+Use mapper overloads for fully custom row conversion logic.
+
+```rust
+use dspy_rs::{DataLoader, Example, TypedLoadOptions};
+
+let trainset = DataLoader::load_json_with::<QA, _>(
+    "data/train.jsonl",
+    true,
+    TypedLoadOptions::default(),
+    |row| {
+        Ok(Example::new(
+            QAInput {
+                question: row.get::<String>("prompt")?,
+            },
+            QAOutput {
+                answer: row.get::<String>("gold")?,
+            },
+        ))
+    },
+)?;
+```
+
+Mapper errors are row-indexed and surfaced with `DataLoadError::Mapper`.
+
+## Unknown Field Policy
+
+`UnknownFieldPolicy` controls how extra source fields are handled:
+- `Ignore` (default): extra source fields are ignored.
+- `Error`: extra source fields fail load with row+field information.
+
+## Error Model
+
+Typed loader failures include row-level context where relevant:
+- `MissingField { row, field }`
+- `UnknownField { row, field }`
+- `TypeMismatch { row, field, message }`
+- `Mapper { row, message }`
+
+Source-level errors are wrapped with transport/format variants:
+- `Io`, `Csv`, `Json`, `Parquet`, `Hf`
+
+## Migration Note
+
+Removed raw loader signatures:
+- `load_json(path, input_keys, output_keys)`
+- `load_csv(path, delimiter, has_headers, input_keys, output_keys)`
+- `load_parquet(path, input_keys, output_keys)`
+- `load_hf(dataset_name, subset, split, input_keys, output_keys, verbose)`
+- `save_json(...)`
+- `save_csv(...)`
+
+Use the typed `load_*` / `load_*_with` APIs instead.
