@@ -1,4 +1,4 @@
-use dspy_rs::Signature;
+use dspy_rs::{InputRenderSpec, Signature};
 
 #[derive(Signature, Clone, Debug)]
 struct AliasAndFormatSignature {
@@ -24,19 +24,46 @@ fn signature_macro_emits_alias_and_format_metadata() {
     let input = &schema.input_fields()[0];
     assert_eq!(input.rust_name, "request_body");
     assert_eq!(input.lm_name, "payload");
-    assert_eq!(input.format, Some("json"));
+    assert_eq!(input.input_render, InputRenderSpec::Format("json"));
 
     let output = &schema.output_fields()[0];
     assert_eq!(output.rust_name, "answer");
     assert_eq!(output.lm_name, "result");
-    assert_eq!(output.format, None);
+    assert_eq!(output.input_render, InputRenderSpec::Default);
 
     let input_meta = AliasAndFormatSignature::input_field_metadata();
     assert_eq!(input_meta[0].alias, Some("payload"));
-    assert_eq!(input_meta[0].format, Some("json"));
+    assert_eq!(input_meta[0].input_render, InputRenderSpec::Format("json"));
 
     let output_meta = AliasAndFormatSignature::output_field_metadata();
     assert_eq!(output_meta[0].alias, Some("result"));
+    assert_eq!(output_meta[0].input_render, InputRenderSpec::Default);
+}
+
+#[derive(Signature, Clone, Debug)]
+struct RenderSignature {
+    #[input]
+    #[render(jinja = "{{ this }}")]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
+#[test]
+fn signature_macro_emits_render_metadata() {
+    let schema = RenderSignature::schema();
+    assert_eq!(schema.input_fields().len(), 1);
+    assert_eq!(
+        schema.input_fields()[0].input_render,
+        InputRenderSpec::Jinja("{{ this }}")
+    );
+
+    let input_meta = RenderSignature::input_field_metadata();
+    assert_eq!(
+        input_meta[0].input_render,
+        InputRenderSpec::Jinja("{{ this }}")
+    );
 }
 
 #[derive(Signature, Clone, Debug)]

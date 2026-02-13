@@ -1,0 +1,5 @@
+error: invalid Jinja syntax in #[render(jinja = "...")]
+ --> tests/ui/render_invalid_jinja.rs:6:5
+  |
+6 |     #[render(jinja = "{{ this ")]
+  |     ^

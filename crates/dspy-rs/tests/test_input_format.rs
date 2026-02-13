@@ -61,6 +61,74 @@ struct DefaultFormatSig {
     answer: String,
 }
 
+#[derive(Signature, Clone, Debug)]
+/// Render a context field using Jinja.
+struct RenderJinjaSig {
+    #[input]
+    question: String,
+
+    #[input]
+    #[alias("ctx")]
+    #[render(
+        jinja = "{{ this.text }} | {{ input.question }} | {{ input.ctx.text }} | {{ input.context.text }} | {{ field.name }} | {{ field.rust_name }}"
+    )]
+    context: Document,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render with strict undefined vars.
+struct RenderJinjaStrictSig {
+    #[input]
+    #[render(jinja = "{{ missing_var }}")]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render using field metadata and vars context.
+struct RenderJinjaFieldMetaSig {
+    #[input]
+    #[alias("ctx")]
+    #[render(
+        jinja = "{{ field.name }}|{{ field.rust_name }}|{{ field.type }}|{{ vars is defined }}"
+    )]
+    context: Document,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render non-string primitive fields.
+struct RenderPrimitiveSig {
+    #[input]
+    #[render(jinja = "{{ this }}")]
+    count: i64,
+
+    #[input]
+    #[render(jinja = "{{ this }}")]
+    is_ready: bool,
+
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render using contrib filters registered in the adapter Jinja environment.
+struct RenderContribFilterSig {
+    #[input]
+    #[render(jinja = "{{ this.text | truncate(length=5, killwords=true, leeway=0, end='') }}")]
+    context: Document,
+
+    #[output]
+    answer: String,
+}
+
 fn extract_field(message: &str, field_name: &str) -> String {
     let start_marker = format!("[[ ## {field_name} ## ]]");
     let start_pos = message
@@ -205,4 +273,87 @@ fn typed_input_appends_response_instruction_reminder() {
     assert!(message.contains("Respond with the corresponding output fields"));
     assert!(message.contains("[[ ## answer ## ]]"));
     assert!(message.contains("[[ ## completed ## ]]"));
+}
+
+#[test]
+fn typed_input_render_jinja_uses_context_values() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaSigInput {
+        question: "Question".to_string(),
+        context: Document {
+            text: "Hello".to_string(),
+        },
+    };
+
+    let message = adapter.format_user_message_typed::<RenderJinjaSig>(&input);
+    let context_value = extract_field(&message, "ctx");
+
+    assert_eq!(
+        context_value,
+        "Hello | Question | Hello | Hello | ctx | context"
+    );
+}
+
+#[test]
+fn typed_input_render_jinja_missing_var_panics() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaStrictSigInput {
+        question: "Question".to_string(),
+    };
+
+    let result = std::panic::catch_unwind(|| {
+        adapter.format_user_message_typed::<RenderJinjaStrictSig>(&input)
+    });
+    assert!(result.is_err(), "missing Jinja variables should panic");
+}
+
+#[test]
+fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
+    let adapter = ChatAdapter;
+    let input = RenderJinjaFieldMetaSigInput {
+        context: Document {
+            text: "Hello".to_string(),
+        },
+    };
+
+    let message = adapter.format_user_message_typed::<RenderJinjaFieldMetaSig>(&input);
+    let context_value = extract_field(&message, "ctx");
+    let parts: Vec<&str> = context_value.split('|').collect();
+
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0], "ctx");
+    assert_eq!(parts[1], "context");
+    assert!(parts[2].contains("Document"));
+    assert_eq!(parts[3].to_ascii_lowercase(), "true");
+}
+
+#[test]
+fn typed_input_render_jinja_non_string_primitives() {
+    let adapter = ChatAdapter;
+    let input = RenderPrimitiveSigInput {
+        count: 42,
+        is_ready: true,
+    };
+
+    let message = adapter.format_user_message_typed::<RenderPrimitiveSig>(&input);
+    let count_value = extract_field(&message, "count");
+    let ready_value = extract_field(&message, "is_ready");
+
+    assert_eq!(count_value, "42");
+    assert_eq!(ready_value.to_ascii_lowercase(), "true");
+}
+
+#[test]
+fn typed_input_render_jinja_supports_contrib_filters() {
+    let adapter = ChatAdapter;
+    let input = RenderContribFilterSigInput {
+        context: Document {
+            text: "abcdefg".to_string(),
+        },
+    };
+
+    let message = adapter.format_user_message_typed::<RenderContribFilterSig>(&input);
+    let context_value = extract_field(&message, "context");
+
+    assert_eq!(context_value, "abcde");
 }

@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, Facet, Signature as SignatureTrait, SignatureSchema};
+use dspy_rs::{BamlType, Facet, InputRenderSpec, Signature as SignatureTrait, SignatureSchema};
 
 /// Test instruction
 #[derive(dsrs_macros::Signature, Clone, Debug)]
@@ -33,6 +33,20 @@ struct LiteralConstraintSig {
         "this == \"value||value\" && this != \"foo&&bar\"",
         label = "literal_ops"
     )]
+    answer: String,
+}
+
+#[derive(dsrs_macros::Signature, Clone, Debug)]
+struct RenderSpecSig {
+    #[input]
+    #[render(jinja = "{{ this }}")]
+    template_input: String,
+
+    #[input]
+    #[format("yaml")]
+    yaml_input: String,
+
+    #[output]
     answer: String,
 }
 
@@ -120,4 +134,26 @@ fn derives_generic_helpers_and_flatten_paths() {
 
     let output_names: Vec<&str> = schema.output_fields().iter().map(|f| f.lm_name).collect();
     assert_eq!(output_names, vec!["answer"]);
+}
+
+#[test]
+fn emits_input_render_metadata() {
+    let input_meta = <RenderSpecSig as SignatureTrait>::input_field_metadata();
+    assert_eq!(input_meta.len(), 2);
+
+    assert_eq!(
+        input_meta
+            .iter()
+            .find(|field| field.rust_name == "template_input")
+            .map(|field| field.input_render),
+        Some(InputRenderSpec::Jinja("{{ this }}"))
+    );
+
+    assert_eq!(
+        input_meta
+            .iter()
+            .find(|field| field.rust_name == "yaml_input")
+            .map(|field| field.input_render),
+        Some(InputRenderSpec::Format("yaml"))
+    );
 }

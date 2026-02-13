@@ -1162,6 +1162,7 @@ dependencies = [
  "hf-hub",
  "indexmap",
  "kdam",
+ "minijinja",
  "parquet",
  "rand 0.8.5",
  "rayon",
@@ -1184,6 +1185,7 @@ name = "dsrs_macros"
 version = "0.7.2"
 dependencies = [
  "dspy-rs",
+ "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quote",

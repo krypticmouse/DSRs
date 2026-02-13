@@ -1,0 +1,8 @@
+error: #[format] and #[render] cannot be combined on the same field
+ --> tests/ui/format_render_conflict.rs:5:5
+  |
+5 | /     #[input]
+6 | |     #[format("json")]
+7 | |     #[render(jinja = "{{ this }}")]
+8 | |     context: String,
+  | |___________________^

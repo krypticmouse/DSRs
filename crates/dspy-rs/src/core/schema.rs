@@ -48,7 +48,17 @@ impl FieldPath {
 /// Static metadata for a single signature field, emitted by `#[derive(Signature)]`.
 ///
 /// Carries the Rust field name, optional LM-facing alias, constraint specs, and
-/// format hints. Fed into [`SignatureSchema`] construction alongside Facet shape data.
+/// input render hints. Fed into [`SignatureSchema`] construction alongside Facet shape data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputRenderSpec {
+    /// Default behavior: strings are raw, non-strings are rendered as JSON.
+    Default,
+    /// Explicit format hint (`#[format("json" | "yaml" | "toon")]`).
+    Format(&'static str),
+    /// Custom Jinja template (`#[render(jinja = "...")]`).
+    Jinja(&'static str),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FieldMetadataSpec {
     /// The Rust field name as written in the signature struct.
@@ -57,8 +67,8 @@ pub struct FieldMetadataSpec {
     pub alias: Option<&'static str>,
     /// Constraint specs from `#[check(...)]` and `#[assert(...)]` attributes.
     pub constraints: &'static [ConstraintSpec],
-    /// Optional format hint (e.g. `#[format = "json"]`).
-    pub format: Option<&'static str>,
+    /// Input rendering policy for this field.
+    pub input_render: InputRenderSpec,
 }
 
 /// Complete schema for a single field in a signature, combining Facet shape data with metadata.
@@ -81,8 +91,8 @@ pub struct FieldSchema {
     pub path: FieldPath,
     /// Constraints declared on this field.
     pub constraints: &'static [ConstraintSpec],
-    /// Optional format hint.
-    pub format: Option<&'static str>,
+    /// Input rendering policy.
+    pub input_render: InputRenderSpec,
 }
 
 impl FieldSchema {
@@ -329,7 +339,9 @@ fn emit_field(
     let lm_name = inherited
         .and_then(|meta| meta.alias)
         .unwrap_or_else(|| field.effective_name());
-    let format = inherited.and_then(|meta| meta.format);
+    let input_render = inherited
+        .map(|meta| meta.input_render)
+        .unwrap_or(InputRenderSpec::Default);
 
     out.push(FieldSchema {
         lm_name,
@@ -339,7 +351,7 @@ fn emit_field(
         shape: field.shape(),
         path,
         constraints,
-        format,
+        input_render,
     });
 
     Ok(())

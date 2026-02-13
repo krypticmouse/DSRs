@@ -1,0 +1,7 @@
+error: #[render] is only supported on #[input] fields
+  --> tests/ui/render_on_output.rs:8:5
+   |
+ 8 | /     #[output]
+ 9 | |     #[render(jinja = "{{ this }}")]
+10 | |     answer: String,
+   | |__________________^
