@@ -1,5 +1,6 @@
 use anyhow::Result;
-use dspy_rs::{Chat, DummyLM, Example, Message, hashmap, init_tracing};
+use dspy_rs::data::RawExample;
+use dspy_rs::{Chat, DummyLM, Message, hashmap, init_tracing};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -7,7 +8,7 @@ async fn main() -> Result<()> {
     init_tracing()?;
 
     let lm = DummyLM::new().await;
-    let example = Example::new(
+    let example = RawExample::new(
         hashmap! {
             "problem".to_string() => "What is 2 + 2?".to_string().into(),
         },

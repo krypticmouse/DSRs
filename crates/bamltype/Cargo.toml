@@ -8,8 +8,9 @@ description = "Facet-based BAML type generation"
 
 [dependencies]
 # Facet for reflection
-facet = { version = "0.43.2", default-features = false, features = ["std", "doc"] }
-facet-reflect = { version = "0.43.2", default-features = false, features = ["std"] }
+# Keep these direct pins in sync with workspace [patch.crates-io] for self-sufficient external path consumers.
+facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std", "doc"] }
+facet-reflect = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std"] }
 
 # BAML crates for schema/parsing
 anyhow = "1.0"

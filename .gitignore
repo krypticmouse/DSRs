@@ -38,3 +38,6 @@ target/
 
 # Local planning/decision docs
 thoughts/
+
+# Reference copies of upstream source
+reference/

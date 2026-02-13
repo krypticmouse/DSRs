@@ -1,0 +1,5 @@
+error: tuple types are not supported in Signature fields; hint: use a struct with named fields or a list
+ --> tests/ui/signature_tuple_type.rs:6:11
+  |
+6 |     pair: (i32, i32),
+  |           ^^^^^^^^^^

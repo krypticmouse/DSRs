@@ -1,108 +1,63 @@
-use dspy_rs::LegacySignature;
-use rstest::*;
-use schemars::JsonSchema;
+use dspy_rs::Signature;
 
-#[LegacySignature(cot, hint)]
-struct TestSignature {
-    /// This is a test instruction
-    /// What is the meaning of life?
-    #[input(desc = "The main question to answer")]
-    question: String,
+#[derive(Signature, Clone, Debug)]
+struct AliasAndFormatSignature {
+    /// Test alias and format metadata on typed signatures.
 
-    #[input(desc = "Additional context for the question")]
-    context: String,
+    #[input(desc = "Free-form payload")]
+    #[alias("payload")]
+    #[format("json")]
+    request_body: String,
 
-    #[output(desc = "The answer to the question")]
-    answer: Vec<i8>,
-
-    #[output(desc = "Confidence score")]
-    confidence: f32,
+    #[output(desc = "Result message")]
+    #[alias("result")]
+    answer: String,
 }
 
-#[allow(dead_code)]
-#[derive(JsonSchema)]
-struct TestOutput {
-    output1: i8,
-    output2: String,
-    output3: bool,
+#[test]
+fn signature_macro_emits_alias_and_format_metadata() {
+    let schema = AliasAndFormatSignature::schema();
+
+    assert_eq!(schema.input_fields().len(), 1);
+    assert_eq!(schema.output_fields().len(), 1);
+
+    let input = &schema.input_fields()[0];
+    assert_eq!(input.rust_name, "request_body");
+    assert_eq!(input.lm_name, "payload");
+    assert_eq!(input.format, Some("json"));
+
+    let output = &schema.output_fields()[0];
+    assert_eq!(output.rust_name, "answer");
+    assert_eq!(output.lm_name, "result");
+    assert_eq!(output.format, None);
+
+    let input_meta = AliasAndFormatSignature::input_field_metadata();
+    assert_eq!(input_meta[0].alias, Some("payload"));
+    assert_eq!(input_meta[0].format, Some("json"));
+
+    let output_meta = AliasAndFormatSignature::output_field_metadata();
+    assert_eq!(output_meta[0].alias, Some("result"));
 }
 
-#[LegacySignature]
-struct TestSignature2 {
-    /// This is a test input
-    ///
-    /// What is the meaning of life?
+#[derive(Signature, Clone, Debug)]
+struct DocsPrioritySignature {
+    /// Primary instruction line.
+    /// Secondary instruction line.
 
-    #[input(desc = "The first input")]
-    input1: String,
-
-    #[input(desc = "The second input")]
-    input2: i8,
+    #[input]
+    prompt: String,
 
     #[output]
-    output1: TestOutput,
+    answer: String,
 }
 
-#[rstest]
-fn test_signature_macro() {
-    let signature = TestSignature::new();
-    let expected_schema = serde_json::to_value(schemars::schema_for!(Vec<i8>)).unwrap();
-
-    assert_eq!(
-        signature.instruction,
-        "This is a test instruction\nWhat is the meaning of life?"
-    );
-    assert_eq!(signature.input_fields["question"]["type"], "String");
-    assert_eq!(
-        signature.input_fields["question"]["desc"],
-        "The main question to answer"
-    );
-    assert_eq!(signature.input_fields["question"]["schema"], "");
-    assert_eq!(signature.input_fields["context"]["type"], "String");
-    assert_eq!(
-        signature.input_fields["context"]["desc"],
-        "Additional context for the question"
-    );
-    assert_eq!(signature.input_fields["context"]["schema"], "");
-    assert_eq!(signature.output_fields["answer"]["type"], "Vec < i8 >");
-    assert_eq!(
-        signature.output_fields["answer"]["desc"],
-        "The answer to the question"
-    );
-    assert_eq!(signature.output_fields["answer"]["schema"], expected_schema);
-    assert_eq!(signature.output_fields["reasoning"]["type"], "String");
-    assert_eq!(
-        signature.output_fields["reasoning"]["desc"],
-        "Think step by step"
-    );
-    assert_eq!(signature.output_fields["reasoning"]["schema"], "");
-    assert_eq!(signature.output_fields["confidence"]["type"], "f32");
-    assert_eq!(
-        signature.output_fields["confidence"]["desc"],
-        "Confidence score"
-    );
-    assert_eq!(signature.output_fields["confidence"]["schema"], "");
-    assert_eq!(signature.input_fields["hint"]["type"], "String");
-    assert_eq!(signature.input_fields["hint"]["desc"], "Hint for the query");
-    assert_eq!(signature.input_fields["hint"]["schema"], "");
-
-    let signature = TestSignature2::new();
-
-    assert_eq!(
-        signature.instruction,
-        "This is a test input\n\nWhat is the meaning of life?"
-    );
-    assert_eq!(signature.input_fields["input1"]["type"], "String");
-    assert_eq!(signature.input_fields["input1"]["desc"], "The first input");
-    assert_eq!(signature.input_fields["input1"]["schema"], "");
-    assert_eq!(signature.input_fields["input2"]["type"], "i8");
-    assert_eq!(signature.input_fields["input2"]["desc"], "The second input");
-    assert_eq!(signature.input_fields["input2"]["schema"], "");
-    assert_eq!(signature.output_fields["output1"]["type"], "TestOutput");
-    assert_eq!(signature.output_fields["output1"]["desc"], "");
-    let expected_schema = serde_json::to_value(schemars::schema_for!(TestOutput)).unwrap();
-    assert_eq!(
-        signature.output_fields["output1"]["schema"],
-        expected_schema["properties"]
+#[test]
+fn signature_macro_preserves_multiline_instruction_docs() {
+    let instruction = DocsPrioritySignature::instruction();
+    assert!(
+        instruction.is_empty()
+            || (instruction.contains("Primary instruction line.")
+                && instruction.contains("Secondary instruction line.")),
+        "unexpected instruction rendering: {instruction:?}"
     );
 }

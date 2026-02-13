@@ -67,9 +67,19 @@ fn extract_field(message: &str, field_name: &str) -> String {
         .find(&start_marker)
         .unwrap_or_else(|| panic!("missing marker: {field_name}"));
     let after_marker = start_pos + start_marker.len();
-    let remaining = &message[after_marker..];
-    let end_pos = remaining.find("[[ ##").unwrap_or(remaining.len());
-    remaining[..end_pos].trim().to_string()
+    let remaining = message[after_marker..].trim_start_matches('\n');
+
+    let mut lines = Vec::new();
+    for line in remaining.lines() {
+        if line.starts_with("[[ ## ")
+            || line.starts_with("Respond with the corresponding output fields")
+        {
+            break;
+        }
+        lines.push(line);
+    }
+
+    lines.join("\n").trim().to_string()
 }
 
 fn extract_baml_field<'a>(value: &'a BamlValue, field_name: &str) -> &'a BamlValue {
@@ -179,4 +189,20 @@ fn typed_input_default_non_string_is_json() {
         .and_then(|value| value.as_object())
         .expect("expected array with object");
     assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
+}
+
+#[test]
+fn typed_input_appends_response_instruction_reminder() {
+    let adapter = ChatAdapter;
+    let input = DefaultFormatSigInput {
+        question: "Reminder check".to_string(),
+        context: vec![Document {
+            text: "Hello".to_string(),
+        }],
+    };
+
+    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    assert!(message.contains("Respond with the corresponding output fields"));
+    assert!(message.contains("[[ ## answer ## ]]"));
+    assert!(message.contains("[[ ## completed ## ]]"));
 }

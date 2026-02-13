@@ -15,7 +15,11 @@ cargo run --example 01-simple
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{ChatAdapter, Example, LM, Module, Predict, Prediction, configure, init_tracing};
+use dspy_rs::data::RawExample;
+use dspy_rs::{
+    CallMetadata, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError, Predicted,
+    Prediction, configure, init_tracing,
+};
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
@@ -55,39 +59,63 @@ pub struct QARater {
 }
 
 impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        // Step 1: Get the answer using the typed predictor
-        // Module::forward converts Example -> typed input automatically
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+    type Input = RawExample;
+    type Output = Prediction;
 
-        // Extract values from the prediction
-        let question = inputs.data.get("question").unwrap().clone();
-        let answer = answerer_prediction.data.get("answer").unwrap().clone();
-        let reasoning = answerer_prediction.data.get("reasoning").unwrap().clone();
-
-        // Step 2: Create input for the rater
-        // We can use the typed input struct directly with call() for cleaner code
-        let rate_input = RateInput {
-            question: question.to_string(),
-            answer: answer.to_string(),
+    async fn forward(&self, inputs: RawExample) -> Result<Predicted<Prediction>, PredictError> {
+        // Step 1: Convert module input into typed predictor input.
+        let question = match inputs.data.get("question").and_then(|value| value.as_str()) {
+            Some(question) => question.to_string(),
+            None => {
+                return Err(PredictError::Lm {
+                    source: LmError::Provider {
+                        provider: "QARater".to_string(),
+                        message: "missing required string field `question`".to_string(),
+                        source: None,
+                    },
+                });
+            }
         };
 
-        // Use call() for typed access to the result
-        let rate_result = self.rater.call(rate_input).await?;
+        let answer_predicted = self
+            .answerer
+            .call(QAInput {
+                question: question.clone(),
+            })
+            .await?;
+        let answer_usage = answer_predicted.metadata().lm_usage.clone();
+        let answerer_prediction = answer_predicted.into_inner();
 
-        // Step 3: Compose the final prediction with all fields
+        // Step 2: Rate the generated answer.
+        let rate_predicted = self
+            .rater
+            .call(RateInput {
+                question: question.clone(),
+                answer: answerer_prediction.answer.clone(),
+            })
+            .await?;
+        let rate_usage = rate_predicted.metadata().lm_usage.clone();
+        let rate_result = rate_predicted.into_inner();
+
+        // Step 3: Compose the final untyped prediction for module consumers.
         let mut combined = Prediction {
-            lm_usage: answerer_prediction.lm_usage.clone(),
+            lm_usage: answer_usage + rate_usage,
             ..Prediction::default()
         };
-        combined.data.insert("question".into(), question);
-        combined.data.insert("reasoning".into(), reasoning);
-        combined.data.insert("answer".into(), answer);
+        combined
+            .data
+            .insert("question".into(), question.clone().into());
+        combined
+            .data
+            .insert("reasoning".into(), answerer_prediction.reasoning.into());
+        combined
+            .data
+            .insert("answer".into(), answerer_prediction.answer.into());
         combined
             .data
             .insert("rating".into(), rate_result.rating.into());
 
-        Ok(combined)
+        Ok(Predicted::new(combined, CallMetadata::default()))
     }
 }
 
@@ -113,17 +141,20 @@ async fn main() -> Result<()> {
         question: "What is the capital of France?".to_string(),
     };
 
-    // call() returns the typed output struct
-    let output: QA = predict.call(input.clone()).await?;
-    println!("Question: {}", output.question);
+    // forward() returns Predicted<Output>; access the typed output directly.
+    let output = predict.call(input.clone()).await?.into_inner();
+    println!("Question: {}", input.question);
     println!("Reasoning: {}", output.reasoning);
     println!("Answer: {}", output.answer);
 
-    // call_with_meta() returns CallResult with metadata
-    let result = predict.call_with_meta(input).await?;
+    // Predicted carries both typed output and metadata.
+    let result = predict.call(input).await?;
     println!("\nWith metadata:");
-    println!("  Raw 'answer' field: {:?}", result.field_raw("answer"));
-    println!("  Token usage: {:?}", result.lm_usage);
+    println!(
+        "  Raw 'answer' field: {:?}",
+        result.metadata().field_raw("answer")
+    );
+    println!("  Token usage: {:?}", result.metadata().lm_usage);
 
     // =========================================================================
     // Example 2: Module composition (for complex pipelines)
@@ -132,13 +163,13 @@ async fn main() -> Result<()> {
 
     let qa_rater = QARater::builder().build();
 
-    // Create an Example for Module::forward()
-    let mut example = Example::default();
+    // Create an untyped row for Module::forward()
+    let mut example = RawExample::default();
     example
         .data
         .insert("question".into(), "Why is the sky blue?".into());
 
-    let prediction = qa_rater.forward(example).await?;
+    let prediction = qa_rater.call(example).await?.into_inner();
     println!("Composed pipeline result:");
     println!("  Question: {}", prediction.data.get("question").unwrap());
     println!("  Reasoning: {}", prediction.data.get("reasoning").unwrap());
@@ -152,26 +183,37 @@ async fn main() -> Result<()> {
 
     let predict_with_demos = Predict::<QA>::builder()
         .instruction(QA_INSTRUCTION)
-        .demo(QA {
-            question: "What is 2+2?".to_string(),
-            reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4.".to_string(),
-            answer: "4".to_string(),
-        })
-        .demo(QA {
-            question: "What color is grass?".to_string(),
-            reasoning: "Grass contains chlorophyll which reflects green light.".to_string(),
-            answer: "Green".to_string(),
-        })
+        .demo(Example::new(
+            QAInput {
+                question: "What is 2+2?".to_string(),
+            },
+            QAOutput {
+                reasoning: "2+2 is a basic arithmetic operation. Adding 2 to 2 gives 4."
+                    .to_string(),
+                answer: "4".to_string(),
+            },
+        ))
+        .demo(Example::new(
+            QAInput {
+                question: "What color is grass?".to_string(),
+            },
+            QAOutput {
+                reasoning: "Grass contains chlorophyll which reflects green light.".to_string(),
+                answer: "Green".to_string(),
+            },
+        ))
         .build();
 
+    let demo_question = "What is the largest planet in our solar system?".to_string();
     let output = predict_with_demos
         .call(QAInput {
-            question: "What is the largest planet in our solar system?".to_string(),
+            question: demo_question.clone(),
         })
-        .await?;
+        .await?
+        .into_inner();
 
     println!("With few-shot demos:");
-    println!("  Question: {}", output.question);
+    println!("  Question: {}", demo_question);
     println!("  Reasoning: {}", output.reasoning);
     println!("  Answer: {}", output.answer);
 

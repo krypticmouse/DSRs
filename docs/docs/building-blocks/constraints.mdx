@@ -90,27 +90,24 @@ this[0] == "first"   # first item equals "first"
 
 ## Inspecting Check Results
 
-Use `call_with_meta()` to access constraint results:
+`Predicted<O>` carries per-field metadata including constraint results. Access it via `.metadata()`:
 
 ```rust
 let predict = Predict::<QA>::new();
-let result = predict.call_with_meta(QAInput {
+let result = predict.call(QAInput {
     question: "What is the capital of France?".into(),
 }).await?;
 
-// Output is available even if checks failed
-println!("Answer: {}", result.output.answer);
+// Output fields are available directly via Deref
+println!("Answer: {}", result.answer);
 
-// See what passed/failed
-for check in result.field_checks("confidence") {
-    if !check.passed {
-        println!("Check '{}' failed", check.label);
+// Inspect per-field constraint results via metadata
+if let Some(field_meta) = result.metadata().field_meta.get("confidence") {
+    for check in &field_meta.checks {
+        if !check.passed {
+            println!("Check '{}' failed", check.label);
+        }
     }
-}
-
-// Quick check if anything failed
-if result.has_failed_checks() {
-    // maybe retry, log, or handle differently
 }
 ```
 
@@ -119,9 +116,9 @@ if result.has_failed_checks() {
 When an assert fails, you get a `PredictError`:
 
 ```rust
-match predict.call_with_meta(input).await {
+match predict.call(input).await {
     Ok(result) => {
-        println!("{}", result.output.answer);
+        println!("{}", result.answer);
     }
     Err(PredictError::Parse { source, .. }) => {
         // The LM returned something that violated an assertion

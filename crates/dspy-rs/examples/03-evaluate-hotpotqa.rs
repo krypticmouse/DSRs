@@ -1,67 +1,46 @@
 /*
-Script to evaluate the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
+Script to evaluate a typed QA predictor on a HotpotQA sample.
 
 Run with:
 ```
 cargo run --example 03-evaluate-hotpotqa --features dataloaders
 ```
-
-Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
-use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Evaluator, Example, LM, LegacyPredict, LegacySignature, Module, Optimizable,
-    Prediction, Predictor, configure, init_tracing,
+    ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
+    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
-use dspy_rs::DataLoader;
-
-#[LegacySignature(cot)]
-struct QASignature {
-    /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    /// Concisely answer the question, but be accurate.
 
     #[input]
-    pub question: String,
+    question: String,
 
     #[output(desc = "Answer in less than 5 words.")]
-    pub answer: String,
+    answer: String,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct QARater {
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
-}
+struct ExactMatchMetric;
 
-impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
+    async fn evaluate(
+        &self,
+        example: &Example<QA>,
+        prediction: &Predicted<QAOutput>,
+    ) -> Result<MetricOutcome> {
+        let expected = example.output.answer.trim().to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
 
-        Ok(answerer_prediction)
-    }
-}
-
-impl Evaluator for QARater {
-    const MAX_CONCURRENCY: usize = 16;
-    const DISPLAY_PROGRESS: bool = true;
-
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let answer = example.data.get("answer").unwrap().clone();
-        let prediction = prediction.data.get("answer").unwrap().clone();
-
-        if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
-            1.0
-        } else {
-            0.0
-        }
+        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     init_tracing()?;
 
     configure(
@@ -69,22 +48,27 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter {},
+        ChatAdapter,
     );
 
-    let examples = DataLoader::load_hf(
+    let examples = DataLoader::load_hf::<QA>(
         "hotpotqa/hotpot_qa",
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
         "fullwiki",
         "validation",
         true,
-    )?[..128]
+        TypedLoadOptions::default(),
+    )?[..64]
         .to_vec();
 
-    let evaluator = QARater::builder().build();
-    let metric = evaluator.evaluate(examples).await;
+    let module = Predict::<QA>::builder()
+        .instruction("Answer with a short, factual response.")
+        .build();
+    let metric = ExactMatchMetric;
 
-    println!("Metric: {metric}");
+    let outcomes = evaluate_trainset(&module, &examples, &metric).await?;
+    let score = average_score(&outcomes);
+
+    println!("evaluated {} examples", outcomes.len());
+    println!("average exact-match score: {score:.3}");
     Ok(())
 }

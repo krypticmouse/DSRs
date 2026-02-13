@@ -1,24 +1,93 @@
 ---
-title: "Introduction"
-description: "Explaining the paradigm"
+title: "How DSRs thinks"
+description: "The mental model behind typed LM programming"
 icon: "book"
 ---
 
-Okay so this is an opinionated way to think about how to interact with language models.
+This page explains how DSRs thinks about language models. Not the API -- the ideas underneath it. If the ideas land, the API will feel obvious when you see it.
 
-And what's the actual explanation here? Right, what the fuck does this mean? It's basically saying that your unit of interaction with the model is fundamentally typed. It consists of three things:
-1. Inputs
-2. Outputs
-3. Instructions
+## The spine: prompts are functions
 
-At the very simplest level, let's say you have a conversation. You're talking to ChatGPT. In this case, ChatGPT's instruction would be "You are a helpful assistant, please assist the user." The inputs would be the conversation so far and the system prompt. The output would be your message and the next turn of the conversation. A full chatbot conversation is like recursive right and all that jazz. The outputs feed into the inputs whatever. But it basically what we're doing here is asking you to represent the way that you're thinking about interacting with the models as composed of these three fundamental abstractions:
-1. Inputs
-2. Outputs
-3. Instructions  
+Every interaction with a language model has the same shape: some inputs go in, some outputs come out, and there's an instruction telling the model what to do. This is a function signature. DSRs takes that observation literally.
 
+Instead of writing prompts as strings, you declare what you want as a Rust struct -- typed inputs, typed outputs, a docstring for the instruction. The library compiles that declaration into a prompt, calls the model, and parses the response back into your types. You never write the prompt. You describe the *contract*, and the machinery handles the rest.
 
-The special part about DSRS is that these inputs and these outputs can take the full power and flexibility of the Rust type system. But let's not get into that yet, right? So what we basically do is we say, "Okay, you define your input structs, you define your output structs," and you say, "This is the instructions that you want," right? It's all in docstrings, it lives in your code. 
+This is the core idea. Everything else follows from it.
 
-And then what you do is you you describe exactly what you want instead of using words, you use types and docstrings. What happens is that all of this is compiled down into a nice universal prompt format and it's parsed really well. There's a robust parser arguably the best in the world and all of this is just machinery to say that the vast majority of prompts that you will ever want to write will be generic. The thing that makes your prompts prompts isn't the way that you word things, the thing that we are just forcing you to be explicit about your intent. Like what you really mean and we ask you to encode these into rich beautiful Rust types, like really take full advantage of the incredible Rust type system.
+## Why types instead of strings
 
+The conventional way to use an LM is to write a prompt string, send it, get text back, and then parse that text into whatever you actually needed. Every project reinvents the parsing. Every project has its own prompt template. Every project discovers that the model sometimes returns JSON with trailing commas, or wraps its answer in markdown fences, or adds a preamble before the actual output.
 
+DSRs eliminates this entire category of work. When you declare an output field as `Vec<String>`, the library renders a schema telling the model exactly what structure to produce, then uses a robust parser (BAML's jsonish) that handles all the edge cases -- malformed JSON, markdown fences, type coercion. You get back a `Vec<String>`, not a string you hope is a `Vec<String>`.
+
+The payoff is not just convenience. When your prompts are typed contracts, they compose. A module that takes `QAInput` and produces `QAOutput` can be plugged into any pipeline that needs that shape. Two modules with compatible types snap together without glue code. This is what Rust's type system is *for*.
+
+## Signatures: the unit of work
+
+A signature is a declaration of one LM interaction. It says: "given these inputs, produce these outputs, following this instruction." The instruction is the struct's docstring. The inputs and outputs are the struct's fields, tagged with `#[input]` and `#[output]`.
+
+A signature does not call the model. It does not format prompts. It is pure data -- a contract that says what you want, not how to get it. This separation matters because the same signature can be used with different prompting strategies, different models, and different optimization approaches. The "what" is stable; the "how" varies.
+
+Signatures support the full Rust type system. Your output can be an enum, a nested struct, a `Vec<Option<CustomType>>` -- anything you can describe with types and docstrings. The richer your types, the more precisely the model understands what you want, because the types get compiled into schema instructions in the prompt.
+
+## Predictors: signatures become calls
+
+A predictor takes a signature and actually calls the model. `Predict<QA>` holds a signature type `QA`, and when you call it, it formats the prompt, sends it to the LM, parses the response, and gives you back typed output.
+
+The separation between signature and predictor exists for a reason: predictors carry *state*. A predictor can have few-shot demos (example input/output pairs that become part of the prompt), an instruction override, and tools. Optimizers work by mutating this state -- adding better demos, rewriting instructions -- without touching your types or your code.
+
+## Modules: composition
+
+A module is anything that takes typed input and produces typed output via one or more LM calls. `Predict` is the simplest module -- one call. `ChainOfThought` wraps a `Predict` and adds a reasoning step. `ReAct` chains multiple calls with tool use. You can write your own modules by composing existing ones.
+
+The key design choice: modules are generic over signatures. `ChainOfThought<QA>` and `ChainOfThought<Summarize>` are different instantiations of the same strategy. Swapping from `Predict<QA>` to `ChainOfThought<QA>` is a type change at the call site -- one line. The compiler tells you exactly what downstream code needs to adapt.
+
+Module composition in DSRs is struct composition. A multi-step pipeline is a struct with predictor fields. There is no special composition language, no graph builder, no runtime wiring. It's just Rust structs calling each other. The optimizer can see inside your struct because the fields are reflected at runtime via Facet -- no manual annotations, no traversal boilerplate.
+
+## Optimization: the compiler metaphor
+
+This is where DSRs diverges most from typical LM tooling. Normally, you write a prompt, test it, manually tweak it, test again. DSRs automates this loop.
+
+An optimizer takes your module, a training set (input/output examples), and a metric (a function that scores how good the output is). It then systematically improves the prompts inside your module -- trying different instructions, selecting better few-shot demos -- until the metric improves. Your code doesn't change. The module's internal state changes.
+
+The analogy is a compiler: you write the program (your module), define what "correct" means (your metric), provide training data, and the optimizer produces a better version. This is why the entry point is called `compile`.
+
+Three optimizers exist, each with different tradeoffs:
+
+- **COPRO** iterates: generate candidate instructions, evaluate, refine, repeat. Fast, simple, good enough for straightforward tasks.
+- **MIPROv2** uses an LM to understand your program and generate candidates informed by prompting best practices. Slower, higher quality.
+- **GEPA** uses rich textual feedback (not just scores) to guide evolutionary search over a Pareto frontier of candidates. Best for complex tasks with subtle failure modes.
+
+The optimizer does not see your Rust code. It sees the predictor leaves inside your module -- their schemas, demos, and instructions -- and mutates only those. After optimization, you call your module exactly as before. The optimized state is invisible to your calling code.
+
+## Adapters: the hidden layer
+
+Between your types and the LM sits an adapter. It turns your signature into a prompt (with field markers, type schemas, and instructions) and parses the LM's response back into typed values. You almost never interact with it directly, but it determines the prompt format the model sees.
+
+The default adapter uses a marker protocol (field delimiters like `[[ ## answer ## ]]`) that lets the model mix natural language with structured output. Complex types get full schema rendering -- enums become value lists, nested structs become JSON-like schemas with inline docstrings. The parser handles the mess models actually produce: malformed JSON, markdown wrapping, missing quotes, type coercion.
+
+Understanding the adapter is optional for using DSRs. It matters when you're debugging unexpected model output or writing custom modules that need fine-grained control over the prompt.
+
+## Where this gets weird
+
+If you're coming from traditional prompt engineering, a few things will feel strange.
+
+**You don't write prompts.** The instruction is a docstring. The structure is your types. If you find yourself wanting to add "please format your response as JSON" to an instruction, that's the adapter's job -- it already does it. Your instruction should describe *what* you want, not *how* to format it.
+
+**You don't parse responses.** If the model returns bad output, you get a `PredictError` with the raw response and parse failure details. You don't write regex or string splitting. If you're parsing, you're fighting the library.
+
+**Optimization is not fine-tuning.** The model weights don't change. Optimization rewrites the prompts and selects better few-shot examples. It's the difference between tuning the compiler flags and rewriting the compiler. This makes it fast (no GPU needed), reversible (just load different state), and composable (optimize one module without affecting others).
+
+**The type system is the documentation.** When a model sees `confidence: f64` with `#[check("this >= 0.0 and this <= 1.0")]`, it produces a float in range. The type and constraint *are* the prompt. Docstrings add nuance, but the types carry the structural information. If you're writing long prompt strings to describe output format, you're working against the grain.
+
+## The layers
+
+Everything above forms a layered architecture. You pick the layer you need:
+
+**Layer 0 (Types):** Your Rust types with Facet and BamlType derives. Source of truth. Never serialized.
+
+**Layer 1 (Typed Modules):** Signatures, predictors, library modules (ChainOfThought, ReAct). Where 90% of programs live. Fully compile-time checked.
+
+**Layer 2 (Optimization Bridge):** The optimizer interface. Discovers predictors inside your modules, mutates their state. Minimal type erasure.
+
+Each layer only exists if you use it. A simple `Predict::<QA>::new().call(input).await?` touches Layers 0 and 1. You don't pay for optimization machinery unless you're optimizing.

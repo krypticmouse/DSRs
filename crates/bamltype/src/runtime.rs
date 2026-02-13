@@ -102,9 +102,19 @@ pub fn try_from_baml_value<T: Facet<'static>>(value: BamlValue) -> Result<T, Bam
     convert::from_baml_value(value).map_err(BamlConvertError::from)
 }
 
-/// Convert a Rust value into BamlValue, preserving legacy null-fallback behavior.
+/// Convert a Rust value into BamlValue.
+///
+/// This is fail-fast: conversion errors panic with type/error context instead of
+/// silently downgrading to `BamlValue::Null`.
+/// TODO(dsrs-fallible-to-baml): add fallible try_to_baml_value API and migrate callsites away from panic semantics.
 pub fn to_baml_value_lossy<T: Facet<'static>>(value: &T) -> BamlValue {
-    convert::to_baml_value(value).unwrap_or(BamlValue::Null)
+    convert::to_baml_value(value).unwrap_or_else(|err| {
+        panic!(
+            "to_baml_value failed for {}: {}",
+            std::any::type_name::<T>(),
+            err
+        )
+    })
 }
 
 /// Default streaming behavior helper.

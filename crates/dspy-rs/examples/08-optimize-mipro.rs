@@ -1,84 +1,70 @@
 /*
-Example: Optimize a QA module using MIPROv2
-
-This example demonstrates the advanced MIPROv2 optimizer, which uses a 3-stage process:
-1. Generate traces from your training data
-2. Use an LLM to generate candidate prompts with best practices
-3. Evaluate candidates and select the best one
-
-MIPROv2 is more sophisticated than COPRO and typically produces better results
-by leveraging prompting best practices and program understanding.
+Example: optimize a typed QA module using MIPROv2.
 
 Run with:
 ```
 cargo run --example 08-optimize-mipro --features dataloaders
 ```
-
-Note: The `dataloaders` feature is required for loading datasets.
 */
-
-#![allow(deprecated)]
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature, MIPROv2,
-    Module, Optimizable, Optimizer, Prediction, Predictor, configure, example, init_tracing,
+    ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
 
-#[LegacySignature]
+#[derive(Signature, Clone, Debug)]
 struct QuestionAnswering {
     /// Answer the question accurately and concisely.
 
     #[input]
-    pub question: String,
+    question: String,
 
     #[output]
-    pub answer: String,
+    answer: String,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct SimpleQA {
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QuestionAnswering::new()))]
-    pub answerer: LegacyPredict,
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct SimpleQA {
+    #[builder(default = Predict::<QuestionAnswering>::builder().instruction("Answer clearly.").build())]
+    answerer: Predict<QuestionAnswering>,
 }
 
 impl Module for SimpleQA {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        self.answerer.forward(inputs).await
+    type Input = QuestionAnsweringInput;
+    type Output = QuestionAnsweringOutput;
+
+    async fn forward(
+        &self,
+        input: QuestionAnsweringInput,
+    ) -> Result<Predicted<QuestionAnsweringOutput>, PredictError> {
+        self.answerer.call(input).await
     }
 }
 
-impl Evaluator for SimpleQA {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let expected = example
-            .data
-            .get("answer")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let predicted = prediction
-            .data
-            .get("answer")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+struct ExactMatchMetric;
 
-        // Normalize and compare
-        let expected_normalized = expected.to_lowercase().trim().to_string();
-        let predicted_normalized = predicted.to_lowercase().trim().to_string();
+impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
+    async fn evaluate(
+        &self,
+        example: &Example<QuestionAnswering>,
+        prediction: &Predicted<QuestionAnsweringOutput>,
+    ) -> Result<MetricOutcome> {
+        let expected = example.output.answer.trim().to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
 
-        if expected_normalized == predicted_normalized {
+        let score = if expected == actual {
             1.0
+        } else if expected.contains(&actual) || actual.contains(&expected) {
+            0.5
         } else {
-            // Partial credit for substring matches
-            if expected_normalized.contains(&predicted_normalized)
-                || predicted_normalized.contains(&expected_normalized)
-            {
-                0.5
-            } else {
-                0.0
-            }
-        }
+            0.0
+        };
+
+        Ok(MetricOutcome::score(score))
     }
 }
 
@@ -88,90 +74,58 @@ async fn main() -> Result<()> {
 
     println!("=== MIPROv2 Optimizer Example ===\n");
 
-    // Configure the LM
     configure(LM::default(), ChatAdapter);
 
-    // Load training data from HuggingFace
     println!("Loading training data from HuggingFace...");
-    let train_examples = DataLoader::load_hf(
+    let train_examples = DataLoader::load_hf::<QuestionAnswering>(
         "hotpotqa/hotpot_qa",
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
         "fullwiki",
         "validation",
         true,
+        TypedLoadOptions::default(),
     )?;
 
-    // Use a small subset for faster optimization
     let train_subset = train_examples[..15].to_vec();
     println!("Using {} training examples\n", train_subset.len());
 
-    // Create the module
+    let metric = ExactMatchMetric;
     let mut qa_module = SimpleQA::builder().build();
 
-    // Show initial instruction
-    println!("Initial instruction:");
-    println!(
-        "  \"{}\"\n",
-        qa_module.answerer.get_signature().instruction()
-    );
-
-    // Test baseline performance
     println!("Evaluating baseline performance...");
-    let baseline_score = qa_module.evaluate(train_subset[..5].to_vec()).await;
+    let baseline_score =
+        average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
     println!("Baseline score: {:.3}\n", baseline_score);
 
-    // Create MIPROv2 optimizer
     let optimizer = MIPROv2::builder()
-        .num_candidates(8) // Generate 8 candidate prompts
-        .num_trials(15) // Run 15 evaluation trials
-        .minibatch_size(10) // Evaluate on 10 examples per candidate
-        .temperature(1.0) // Temperature for prompt generation
-        .track_stats(true) // Display detailed statistics
+        .num_candidates(8)
+        .num_trials(15)
+        .minibatch_size(10)
         .build();
 
-    // Optimize the module
     println!("Starting MIPROv2 optimization...");
-    println!("This will:");
-    println!("  1. Generate execution traces");
-    println!("  2. Create a program description using LLM");
-    println!("  3. Generate {} candidate prompts with best practices", 8);
-    println!("  4. Evaluate each candidate");
-    println!("  5. Select and apply the best prompt\n");
-
     optimizer
-        .compile(&mut qa_module, train_subset.clone())
+        .compile(&mut qa_module, train_subset.clone(), &metric)
         .await?;
 
-    // Show optimized instruction
-    println!("\nOptimized instruction:");
-    println!(
-        "  \"{}\"\n",
-        qa_module.answerer.get_signature().instruction()
-    );
-
-    // Test optimized performance
     println!("Evaluating optimized performance...");
-    let optimized_score = qa_module.evaluate(train_subset[..5].to_vec()).await;
+    let optimized_score =
+        average_score(&evaluate_trainset(&qa_module, &train_subset[..5], &metric).await?);
     println!("Optimized score: {:.3}", optimized_score);
 
-    // Show improvement
-    let improvement = ((optimized_score - baseline_score) / baseline_score) * 100.0;
+    let improvement = ((optimized_score - baseline_score) / baseline_score.max(1e-6)) * 100.0;
     println!(
-        "\n✓ Improvement: {:.1}% ({:.3} -> {:.3})",
+        "\nImprovement: {:.1}% ({:.3} -> {:.3})",
         improvement, baseline_score, optimized_score
     );
 
-    // Test on a new example
-    println!("\n--- Testing on a new example ---");
-    let test_example = example! {
-        "question": "input" => "What is the capital of France?",
-    };
-
-    let result = qa_module.forward(test_example).await?;
+    let result = qa_module
+        .call(QuestionAnsweringInput {
+            question: "What is the capital of France?".to_string(),
+        })
+        .await?
+        .into_inner();
     println!("Question: What is the capital of France?");
-    println!("Answer: {}", result.get("answer", None));
+    println!("Answer: {}", result.answer);
 
-    println!("\n=== Example Complete ===");
     Ok(())
 }

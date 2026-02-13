@@ -107,7 +107,7 @@ You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-
 ## Global vs explicit usage
 
 - **Global:** `configure(lm, ChatAdapter)` sets the process-wide default used by predictors.
-- **Explicit:** Wrap the model in an `Arc` when you want to override the global instance: `let shared = Arc::new(lm); predictor.forward_with_config(inputs, Arc::clone(&shared)).await`.
+- **Per-call override:** Build a second `LM` and call `configure(lm, ChatAdapter)` before the specific call, or restructure into separate modules with different configurations.
 
 ## Async execution and sync entry
 
@@ -176,7 +176,7 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
 | `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
 | `max_tokens` | `u32`           | `512`                | Upper bound on completion tokens                                               |
-| `cache`      | `bool`          | `true`               | Enables response caching and `inspect_history` support                         |
+| `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
 
 ### Example with custom settings
 

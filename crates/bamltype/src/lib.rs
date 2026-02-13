@@ -101,6 +101,10 @@ pub trait BamlType: Sized + 'static {
     fn baml_internal_name() -> &'static str;
     fn baml_type_ir() -> TypeIR;
     fn try_from_baml_value(value: BamlValue) -> Result<Self, BamlConvertError>;
+    /// Convert `self` into `BamlValue`.
+    ///
+    /// This is fail-fast and currently panics on conversion errors.
+    /// TODO(dsrs-fallible-to-baml): add fallible try_to_baml_value API and migrate callsites away from panic semantics.
     fn to_baml_value(&self) -> BamlValue;
 }
 

@@ -198,11 +198,13 @@ struct SentimentAnalysis {
 Add examples to guide the LM:
 
 ```rust
+use dspy_rs::Example;
+
 let predict = Predict::<QA>::builder()
-    .demo(QA {
-        question: "What is 2+2?".into(),
-        answer: "4".into(),
-    })
+    .demo(Example::<QA>::new(
+        QAInput { question: "What is 2+2?".into() },
+        QAOutput { answer: "4".into() },
+    ))
     .build();
 ```
 
@@ -224,7 +226,7 @@ struct Rating {
 
 ### Multi-step pipelines
 
-Compose [modules](/docs/building-blocks/module) for complex workflows:
+Chain [predictors](/docs/building-blocks/predictors) for complex workflows:
 
 ```rust
 struct SummarizeAndRate {
@@ -232,10 +234,15 @@ struct SummarizeAndRate {
     rater: Predict<Rate>,
 }
 
-impl Module for SummarizeAndRate {
-    async fn forward(&self, inputs: Example) -> anyhow::Result<Prediction> {
-        let summary = self.summarizer.forward(inputs).await?;
-        // ... chain to rater
+impl SummarizeAndRate {
+    async fn run(&self, text: String) -> anyhow::Result<RateOutput> {
+        let summary = self.summarizer.call(SummarizeInput { text }).await?;
+        let rating = self.rater.call(RateInput {
+            summary: summary.summary,
+        }).await?;
+        Ok(rating.into_inner())
     }
 }
 ```
+
+See [Modules](/docs/building-blocks/module) for how to make this optimizer-compatible.

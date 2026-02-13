@@ -1,92 +1,95 @@
 /*
-Script to optimize the answerer of the QARater module for a tiny sample of the HotpotQA dataset.
+Script to optimize a typed QA module for a HotpotQA subset with COPRO.
 
 Run with:
 ```
 cargo run --example 04-optimize-hotpotqa --features dataloaders
 ```
-
-Note: The `dataloaders` feature is required for loading datasets.
 */
 
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Evaluator, Example, LM, LegacyPredict, LegacySignature, Module,
-    Optimizable, Optimizer, Prediction, Predictor, configure, init_tracing,
+    COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
 
-#[LegacySignature(cot)]
-struct QASignature {
-    /// Concisely answer the question but be accurate. If it's a yes no question, answer with yes or no.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    /// Concisely answer the question, but be accurate.
 
     #[input]
-    pub question: String,
+    question: String,
 
     #[output(desc = "Answer in less than 5 words.")]
-    pub answer: String,
+    answer: String,
 }
 
-#[derive(Builder, Optimizable)]
-pub struct QARater {
-    #[parameter]
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct QAModule {
+    #[builder(default = Predict::<QA>::builder().instruction("Answer clearly and briefly.").build())]
+    answerer: Predict<QA>,
 }
 
-impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        let answerer_prediction = self.answerer.forward(inputs.clone()).await?;
+impl Module for QAModule {
+    type Input = QAInput;
+    type Output = QAOutput;
 
-        Ok(answerer_prediction)
+    async fn forward(&self, input: QAInput) -> Result<Predicted<QAOutput>, PredictError> {
+        self.answerer.call(input).await
     }
 }
 
-impl Evaluator for QARater {
-    async fn metric(&self, example: &Example, prediction: &Prediction) -> f32 {
-        let answer = example.data.get("answer").unwrap().clone();
-        let prediction = prediction.data.get("answer").unwrap().clone();
-        println!("Answer: {answer}");
-        println!("Prediction: {prediction}");
-        if answer.to_string().to_lowercase() == prediction.to_string().to_lowercase() {
-            1.0
-        } else {
-            0.0
-        }
+struct ExactMatchMetric;
+
+impl TypedMetric<QA, QAModule> for ExactMatchMetric {
+    async fn evaluate(
+        &self,
+        example: &Example<QA>,
+        prediction: &Predicted<QAOutput>,
+    ) -> Result<MetricOutcome> {
+        let expected = example.output.answer.trim().to_lowercase();
+        let actual = prediction.answer.trim().to_lowercase();
+        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
     }
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     init_tracing()?;
 
     configure(
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await
-            .unwrap(),
-        ChatAdapter {},
+            .await?,
+        ChatAdapter,
     );
 
-    let examples = DataLoader::load_hf(
+    let examples = DataLoader::load_hf::<QA>(
         "hotpotqa/hotpot_qa",
-        vec!["question".to_string()],
-        vec!["answer".to_string()],
         "fullwiki",
         "validation",
         true,
+        TypedLoadOptions::default(),
     )?[..10]
         .to_vec();
 
-    let mut rater = QARater::builder().build();
+    let metric = ExactMatchMetric;
+    let mut module = QAModule::builder().build();
+
+    let baseline = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
+    println!("baseline score: {baseline:.3}");
+
     let optimizer = COPRO::builder().breadth(10).depth(1).build();
+    optimizer
+        .compile(&mut module, examples.clone(), &metric)
+        .await?;
 
-    println!("Rater: {:?}", rater.answerer.get_signature().instruction());
-
-    optimizer.compile(&mut rater, examples.clone()).await?;
-
-    println!("Rater: {:?}", rater.answerer.get_signature().instruction());
+    let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
+    println!("optimized score: {optimized:.3}");
 
     Ok(())
 }

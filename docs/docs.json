@@ -35,6 +35,7 @@
             "pages": [
               "docs/building-blocks/types",
               "docs/building-blocks/constraints",
+              "docs/data/dataloader",
               "docs/data/examples",
               "docs/data/prediction"
             ]

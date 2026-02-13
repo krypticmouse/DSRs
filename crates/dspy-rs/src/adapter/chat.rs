@@ -5,26 +5,33 @@ use bamltype::jsonish::deserializer::coercer::run_user_checks;
 use bamltype::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use indexmap::IndexMap;
 use regex::Regex;
-use rig::tool::ToolDyn;
-use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
-use tracing::{Instrument, debug, trace};
+use std::sync::LazyLock;
+use tracing::{debug, trace};
 
 use super::Adapter;
-use crate::serde_utils::get_iter_from_value;
-use crate::utils::cache::CacheEntry;
+use crate::CallMetadata;
 use crate::{
-    BamlType, BamlValue, Cache, Chat, ConstraintLevel, ConstraintResult, Example, FieldMeta, Flag,
-    JsonishError, LM, Message, MetaSignature, OutputFormatContent, ParseError, Prediction,
-    RenderOptions, Signature, TypeIR,
+    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, JsonishError, Message,
+    OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions, Signature, TypeIR,
 };
 
+/// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
+///
+/// The adapter is stateless — all state comes from the [`SignatureSchema`](crate::SignatureSchema)
+/// passed to each method. Two usage patterns:
+///
+/// - **High-level** (what [`Predict`](crate::Predict) uses): `format_system_message_typed`,
+///   `format_user_message_typed`, `parse_response_typed` — all parameterized by `S: Signature`.
+/// - **Building blocks** (for module authors): `build_system`, `format_input`, `format_output`,
+///   `parse_output`, `parse_sections` — parameterized by `&SignatureSchema`, not a Signature type.
+///
+/// The building blocks exist so module authors can compose custom prompt flows (e.g.
+/// ReAct's action/extract loop) without reimplementing the delimiter protocol.
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\[\[ ## (\w+) ## \]\]").unwrap());
+    LazyLock::new(|| Regex::new(r"^\[\[ ## ([^#]+?) ## \]\]").unwrap());
 
 fn render_field_type_schema(
     parent_format: &OutputFormatContent,
@@ -99,6 +106,8 @@ fn render_type_name_for_prompt(
 }
 
 fn split_schema_definitions(schema: &str) -> Option<(String, String)> {
+    // TODO(post-hardening): This parser is intentionally heuristic. Keep this
+    // behavior covered by tests when schema rendering changes.
     let lines: Vec<&str> = schema.lines().collect();
     let mut index = 0;
     let mut definitions = Vec::new();
@@ -191,20 +200,23 @@ fn format_schema_for_prompt(schema: &str) -> String {
 }
 
 impl ChatAdapter {
-    fn format_task_description_typed<S: Signature>(
+    fn format_task_description_schema(
         &self,
+        schema: &crate::SignatureSchema,
         instruction_override: Option<&str>,
     ) -> String {
-        let instruction = instruction_override.unwrap_or(S::instruction());
+        let instruction = instruction_override.unwrap_or(schema.instruction());
         let instruction = if instruction.is_empty() {
-            let input_fields = S::input_fields()
+            let input_fields = schema
+                .input_fields()
                 .iter()
-                .map(|field| format!("`{}`", field.name))
+                .map(|field| format!("`{}`", field.lm_name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let output_fields = S::output_fields()
+            let output_fields = schema
+                .output_fields()
                 .iter()
-                .map(|field| format!("`{}`", field.name))
+                .map(|field| format!("`{}`", field.lm_name))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("Given the fields {input_fields}, produce the fields {output_fields}.")
@@ -222,206 +234,27 @@ impl ChatAdapter {
         format!("In adhering to this structure, your objective is: {indented}")
     }
 
-    fn format_response_instructions_typed<S: Signature>(&self) -> String {
-        let mut output_fields = S::output_fields().iter();
+    fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
+        let mut output_fields = schema.output_fields().iter();
         let Some(first_field) = output_fields.next() else {
             return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
         };
 
         let mut message = format!(
             "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
-            first_field.name
+            first_field.lm_name
         );
         for field in output_fields {
-            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.name));
+            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.lm_name));
         }
         message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
 
         message
     }
 
-    fn get_field_attribute_list(
-        &self,
-        field_iter: impl Iterator<Item = (String, Value)>,
-    ) -> String {
-        let mut field_attributes = String::new();
-        for (i, (field_name, field)) in field_iter.enumerate() {
-            let data_type = field["type"].as_str().unwrap_or("String");
-            let desc = field["desc"].as_str().unwrap_or("");
-
-            field_attributes.push_str(format!("{}. `{field_name}` ({data_type})", i + 1).as_str());
-            if !desc.is_empty() {
-                field_attributes.push_str(format!(": {desc}").as_str());
-            }
-            field_attributes.push('\n');
-        }
-        field_attributes
-    }
-
-    fn get_field_structure(&self, field_iter: impl Iterator<Item = (String, Value)>) -> String {
-        let mut field_structure = String::new();
-        for (field_name, field) in field_iter {
-            let schema = &field["schema"];
-            let data_type = field["type"].as_str().unwrap_or("String");
-
-            // Handle schema as either string or JSON object
-            let schema_prompt = if let Some(s) = schema.as_str() {
-                if s.is_empty() && data_type == "String" {
-                    "".to_string()
-                } else if !s.is_empty() {
-                    format!("\t# note: the value you produce must adhere to the JSON schema: {s}")
-                } else {
-                    format!("\t# note: the value you produce must be a single {data_type} value")
-                }
-            } else if schema.is_object() || schema.is_array() {
-                // Convert JSON object/array to string for display
-                let schema_str = schema.to_string();
-                format!(
-                    "\t# note: the value you produce must adhere to the JSON schema: {schema_str}"
-                )
-            } else if data_type == "String" {
-                "".to_string()
-            } else {
-                format!("\t# note: the value you produce must be a single {data_type} value")
-            };
-
-            field_structure.push_str(
-                format!("[[ ## {field_name} ## ]]\n{field_name}{schema_prompt}\n\n").as_str(),
-            );
-        }
-        field_structure
-    }
-
-    fn format_system_message(&self, signature: &dyn MetaSignature) -> String {
-        let field_description = self.format_field_description(signature);
-        let field_structure = self.format_field_structure(signature);
-        let task_description = self.format_task_description(signature);
-
-        format!("{field_description}\n{field_structure}\n{task_description}")
-    }
-
-    fn format_field_description(&self, signature: &dyn MetaSignature) -> String {
-        let input_field_description =
-            self.get_field_attribute_list(get_iter_from_value(&signature.input_fields()));
-        let output_field_description =
-            self.get_field_attribute_list(get_iter_from_value(&signature.output_fields()));
-
-        format!(
-            "Your input fields are:\n{input_field_description}\nYour output fields are:\n{output_field_description}"
-        )
-    }
-
-    fn format_field_structure(&self, signature: &dyn MetaSignature) -> String {
-        let input_field_structure =
-            self.get_field_structure(get_iter_from_value(&signature.input_fields()));
-        let output_field_structure =
-            self.get_field_structure(get_iter_from_value(&signature.output_fields()));
-
-        format!(
-            "All interactions will be structured in the following way, with the appropriate values filled in.\n\n{input_field_structure}{output_field_structure}[[ ## completed ## ]]\n"
-        )
-    }
-
-    fn format_task_description(&self, signature: &dyn MetaSignature) -> String {
-        let instruction = if signature.instruction().is_empty() {
-            format!(
-                "Given the fields {}, produce the fields {}.",
-                signature
-                    .input_fields()
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .map(|k| format!("`{k}`"))
-                    .collect::<Vec<String>>()
-                    .join(", "),
-                signature
-                    .output_fields()
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .map(|k| format!("`{k}`"))
-                    .collect::<Vec<String>>()
-                    .join(", ")
-            )
-        } else {
-            signature.instruction().clone()
-        };
-
-        let mut indented = String::new();
-        for line in instruction.lines() {
-            indented.push('\n');
-            indented.push_str("        ");
-            indented.push_str(line);
-        }
-
-        format!("In adhering to this structure, your objective is: {indented}")
-    }
-
-    fn format_user_message(&self, signature: &dyn MetaSignature, inputs: &Example) -> String {
-        let mut input_str = String::new();
-        for (field_name, _) in get_iter_from_value(&signature.input_fields()) {
-            let field_value = inputs.get(field_name.as_str(), None);
-            // Extract the actual string value if it's a JSON string, otherwise use as is
-            let field_value_str = if let Some(s) = field_value.as_str() {
-                s.to_string()
-            } else {
-                field_value.to_string()
-            };
-
-            input_str
-                .push_str(format!("[[ ## {field_name} ## ]]\n{field_value_str}\n\n",).as_str());
-        }
-
-        let first_output_field = signature
-            .output_fields()
-            .as_object()
-            .unwrap()
-            .keys()
-            .next()
-            .unwrap()
-            .clone();
-        let mut user_message = format!(
-            "Respond with the corresponding output fields, starting with the field `[[ ## {first_output_field} ## ]]`,"
-        );
-        for (field_name, _) in get_iter_from_value(&signature.output_fields()).skip(1) {
-            user_message.push_str(format!(" then `[[ ## {field_name} ## ]]`,").as_str());
-        }
-        user_message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
-
-        format!("{input_str}{user_message}")
-    }
-
-    fn format_assistant_message(&self, signature: &dyn MetaSignature, outputs: &Example) -> String {
-        let mut sections = Vec::new();
-        for (field_name, _) in get_iter_from_value(&signature.output_fields()) {
-            let field_value = outputs.get(field_name.as_str(), None);
-            // Extract the actual string value if it's a JSON string, otherwise use as is
-            let field_value_str = if let Some(s) = field_value.as_str() {
-                s.to_string()
-            } else {
-                field_value.to_string()
-            };
-
-            sections.push(format!("[[ ## {field_name} ## ]]\n{field_value_str}"));
-        }
-        let mut assistant_message = sections.join("\n\n");
-        assistant_message.push_str("\n\n[[ ## completed ## ]]\n");
-        assistant_message
-    }
-
-    fn format_demos(&self, signature: &dyn MetaSignature, demos: &Vec<Example>) -> Chat {
-        let mut chat = Chat::new(vec![]);
-
-        for demo in demos {
-            let user_message = self.format_user_message(signature, demo);
-            let assistant_message = self.format_assistant_message(signature, demo);
-            chat.push("user", &user_message);
-            chat.push("assistant", &assistant_message);
-        }
-
-        chat
-    }
-
+    /// Builds the system message for a signature using its default instruction.
+    ///
+    /// Shorthand for `format_system_message_typed_with_instruction::<S>(None)`.
     pub fn format_system_message_typed<S: Signature>(&self) -> Result<String> {
         self.format_system_message_typed_with_instruction::<S>(None)
     }
@@ -435,46 +268,69 @@ impl ChatAdapter {
             instruction_override = instruction_override.is_some()
         )
     )]
+    /// Builds the system message for a signature with an optional instruction override.
+    ///
+    /// The system message includes:
+    /// 1. Field descriptions (names, types, doc comments)
+    /// 2. Field structure template (the `[[ ## field ## ]]` layout the LM should follow)
+    /// 3. Response instructions (which fields to produce, in what order)
+    /// 4. Task description (the signature's instruction or the override)
     pub fn format_system_message_typed_with_instruction<S: Signature>(
         &self,
         instruction_override: Option<&str>,
     ) -> Result<String> {
+        self.build_system(S::schema(), instruction_override)
+    }
+
+    /// Builds a system message from a [`SignatureSchema`](crate::SignatureSchema) directly.
+    ///
+    /// The schema-based equivalent of [`format_system_message_typed_with_instruction`](ChatAdapter::format_system_message_typed_with_instruction).
+    /// Use this when you have a schema but not a concrete `S: Signature` type (e.g.
+    /// in dynamic or schema-transformed contexts).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the output format rendering fails (malformed type IR).
+    pub fn build_system(
+        &self,
+        schema: &crate::SignatureSchema,
+        instruction_override: Option<&str>,
+    ) -> Result<String> {
         let parts = [
-            self.format_field_descriptions_typed::<S>(),
-            self.format_field_structure_typed::<S>()?,
-            self.format_response_instructions_typed::<S>(),
-            self.format_task_description_typed::<S>(instruction_override),
+            self.format_field_descriptions_schema(schema),
+            self.format_field_structure_schema(schema)?,
+            self.format_response_instructions_schema(schema),
+            self.format_task_description_schema(schema, instruction_override),
         ];
 
         let system = parts.join("\n\n");
-        trace!(system_len = system.len(), "formatted typed system prompt");
+        trace!(system_len = system.len(), "formatted schema system prompt");
         Ok(system)
     }
 
-    fn format_field_descriptions_typed<S: Signature>(&self) -> String {
-        let input_format = <S::Input as BamlType>::baml_output_format();
-        let output_format = S::output_format_content();
+    fn format_field_descriptions_schema(&self, schema: &crate::SignatureSchema) -> String {
+        let output_format = schema.output_format();
 
         let mut lines = Vec::new();
         lines.push("Your input fields are:".to_string());
-        for (i, field) in S::input_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(input_format));
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
+        for (i, field) in schema.input_fields().iter().enumerate() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, None);
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+            if !field.docs.is_empty() {
                 line.push_str(": ");
-                line.push_str(field.description);
+                line.push_str(&field.docs);
             }
             lines.push(line);
         }
 
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
-        for (i, field) in S::output_fields().iter().enumerate() {
-            let type_name = render_type_name_for_prompt(&(field.type_ir)(), Some(output_format));
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.name);
-            if !field.description.is_empty() {
+        for (i, field) in schema.output_fields().iter().enumerate() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, Some(output_format));
+            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+            if !field.docs.is_empty() {
                 line.push_str(": ");
-                line.push_str(field.description);
+                line.push_str(&field.docs);
             }
             lines.push(line);
         }
@@ -482,54 +338,69 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_structure_typed<S: Signature>(&self) -> Result<String> {
+    fn format_field_structure_schema(&self, schema: &crate::SignatureSchema) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
         ];
 
-        for field in S::input_fields() {
-            lines.push(format!("[[ ## {} ## ]]", field.name));
-            lines.push(field.name.to_string());
+        for field in schema.input_fields() {
+            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
+            lines.push(field.lm_name.to_string());
             lines.push(String::new());
         }
 
-        let parent_format = S::output_format_content();
-        for field in S::output_fields() {
-            let type_ir = (field.type_ir)();
-            let type_name = render_type_name_for_prompt(&type_ir, Some(parent_format));
-            let schema = render_field_type_schema(parent_format, &type_ir)?;
-            lines.push(format!("[[ ## {} ## ]]", field.name));
+        let parent_format = schema.output_format();
+        for field in schema.output_fields() {
+            let type_name = render_type_name_for_prompt(&field.type_ir, Some(parent_format));
+            let rendered_schema = render_field_type_schema(parent_format, &field.type_ir)?;
+            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
             lines.push(format!(
                 "Output field `{}` should be of type: {type_name}",
-                field.name
+                field.lm_name
             ));
-            if !schema.is_empty() && schema != type_name {
+            if !rendered_schema.is_empty() && rendered_schema != type_name {
                 lines.push(String::new());
-                lines.push(format_schema_for_prompt(&schema));
+                lines.push(format_schema_for_prompt(&rendered_schema));
             }
             lines.push(String::new());
         }
 
         lines.push("[[ ## completed ## ]]".to_string());
-
         Ok(lines.join("\n"))
     }
 
+    /// Formats a typed input value as a user message with `[[ ## field ## ]]` delimiters.
+    ///
+    /// Each input field is serialized via `BamlType::to_baml_value()` and formatted
+    /// according to its field path (handling flattened fields). Appends the response
+    /// instructions telling the LM which output fields to produce.
     pub fn format_user_message_typed<S: Signature>(&self, input: &S::Input) -> String
     where
         S::Input: BamlType,
     {
+        self.format_input(S::schema(), input)
+    }
+
+    /// Formats an input value using a schema — the building-block version of
+    /// [`format_user_message_typed`](ChatAdapter::format_user_message_typed).
+    ///
+    /// Navigates the `BamlValue` using each field's [`FieldPath`](crate::FieldPath) to
+    /// handle flattened structs correctly. A field with path `["inner", "question"]` is
+    /// extracted from the nested structure but rendered as a flat `[[ ## question ## ]]`
+    /// section in the prompt. Appends response instructions so the LM sees
+    /// output-field ordering guidance in the latest user turn.
+    pub fn format_input<I>(&self, schema: &crate::SignatureSchema, input: &I) -> String
+    where
+        I: BamlType + for<'a> facet::Facet<'a>,
+    {
         let baml_value = input.to_baml_value();
-        let Some(fields) = baml_value_fields(&baml_value) else {
-            return String::new();
-        };
-        let input_output_format = <S::Input as BamlType>::baml_output_format();
+        let input_output_format = <I as BamlType>::baml_output_format();
 
         let mut result = String::new();
-        for field_spec in S::input_fields() {
-            if let Some(value) = fields.get(field_spec.rust_name) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.name));
+        for field_spec in schema.input_fields() {
+            if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
+                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
                 result.push_str(&format_baml_value_for_prompt_typed(
                     value,
                     input_output_format,
@@ -539,24 +410,36 @@ impl ChatAdapter {
             }
         }
 
+        result.push_str(&self.format_response_instructions_schema(schema));
         result
     }
 
+    /// Formats a typed output value as an assistant message for few-shot demos.
+    ///
+    /// Each output field is serialized and delimited with `[[ ## field ## ]]` markers,
+    /// ending with `[[ ## completed ## ]]`. Used internally by [`Predict`](crate::Predict)
+    /// to format demo assistant messages.
     pub fn format_assistant_message_typed<S: Signature>(&self, output: &S::Output) -> String
     where
         S::Output: BamlType,
     {
+        self.format_output(S::schema(), output)
+    }
+
+    /// Formats an output value using a schema — the building-block version of
+    /// [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
+    pub fn format_output<O>(&self, schema: &crate::SignatureSchema, output: &O) -> String
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
         let baml_value = output.to_baml_value();
-        let Some(fields) = baml_value_fields(&baml_value) else {
-            return String::new();
-        };
 
         let mut sections = Vec::new();
-        for field_spec in S::output_fields() {
-            if let Some(value) = fields.get(field_spec.rust_name) {
+        for field_spec in schema.output_fields() {
+            if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
                 sections.push(format!(
                     "[[ ## {} ## ]]\n{}",
-                    field_spec.name,
+                    field_spec.lm_name,
                     format_baml_value_for_prompt(value)
                 ));
             }
@@ -567,14 +450,20 @@ impl ChatAdapter {
         result
     }
 
-    pub fn format_demo_typed<S: Signature>(&self, demo: S) -> (String, String)
+    /// Formats a demo example as a (user_message, assistant_message) pair.
+    ///
+    /// Convenience method that calls [`format_user_message_typed`](ChatAdapter::format_user_message_typed)
+    /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
+    pub fn format_demo_typed<S: Signature>(
+        &self,
+        demo: &crate::predictors::Example<S>,
+    ) -> (String, String)
     where
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        let (input, output) = demo.into_parts();
-        let user_msg = self.format_user_message_typed::<S>(&input);
-        let assistant_msg = self.format_assistant_message_typed::<S>(&output);
+        let user_msg = self.format_user_message_typed::<S>(&demo.input);
+        let assistant_msg = self.format_assistant_message_typed::<S>(&demo.output);
         (user_msg, assistant_msg)
     }
 
@@ -585,15 +474,55 @@ impl ChatAdapter {
         skip(self, response),
         fields(
             signature = std::any::type_name::<S>(),
-            output_field_count = S::output_fields().len()
+            output_field_count = S::schema().output_fields().len()
         )
     )]
+    /// Parses an LM response into a typed output with per-field metadata.
+    ///
+    /// The full parsing pipeline:
+    /// 1. Split the response into `[[ ## field ## ]]` sections
+    /// 2. For each output field in the schema, find its section by LM name
+    /// 3. Coerce the raw text to the field's type via jsonish
+    /// 4. Run `#[check]` and `#[assert]` constraints
+    /// 5. Assemble the flat fields into the nested typed output via field paths
+    ///
+    /// Returns the typed output and a map of [`FieldMeta`] with
+    /// per-field raw text, parse flags, and constraint results.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ParseError`] variants:
+    /// - `MissingField` — an output field's `[[ ## field ## ]]` section wasn't found
+    /// - `CoercionFailed` — jsonish couldn't parse the raw text into the expected type
+    /// - `AssertFailed` — a `#[assert(...)]` constraint failed
+    /// - `ExtractionFailed` — the assembled BamlValue couldn't convert to the typed output
+    /// - `Multiple` — several of the above; includes a partial BamlValue if some fields parsed
     pub fn parse_response_typed<S: Signature>(
         &self,
         response: &Message,
     ) -> std::result::Result<(S::Output, IndexMap<String, FieldMeta>), ParseError> {
+        self.parse_output_with_meta::<S::Output>(S::schema(), response)
+    }
+
+    #[allow(clippy::result_large_err)]
+    /// Parses an LM response against a schema, returning typed output and field metadata.
+    ///
+    /// Schema-based equivalent of [`parse_response_typed`](ChatAdapter::parse_response_typed).
+    /// Use when you have a schema but not a `S: Signature` type.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`parse_response_typed`](ChatAdapter::parse_response_typed).
+    pub fn parse_output_with_meta<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<(O, IndexMap<String, FieldMeta>), ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
         let content = response.content();
-        let output_format = S::output_format_content();
+        let output_format = schema.output_format();
         let sections = parse_sections(&content);
 
         let mut metas = IndexMap::new();
@@ -603,11 +532,11 @@ impl ChatAdapter {
         let mut checks_failed = 0usize;
         let mut asserts_failed = 0usize;
 
-        for field in S::output_fields() {
-            let rust_name = field.rust_name.to_string();
-            let type_ir = (field.type_ir)();
+        for field in schema.output_fields() {
+            let rust_name = field.rust_name.clone();
+            let type_ir = field.type_ir.clone();
 
-            let raw_text = match sections.get(field.name) {
+            let raw_text = match sections.get(field.lm_name) {
                 Some(text) => text.clone(),
                 None => {
                     debug!(field = %rust_name, "missing output field in response");
@@ -717,7 +646,7 @@ impl ChatAdapter {
                 },
             );
 
-            output_map.insert(rust_name, baml_value);
+            insert_baml_at_path(&mut output_map, field.path(), baml_value);
         }
 
         if !errors.is_empty() {
@@ -729,15 +658,15 @@ impl ChatAdapter {
                 None
             } else {
                 Some(BamlValue::Class(
-                    <S::Output as BamlType>::baml_internal_name().to_string(),
+                    <O as BamlType>::baml_internal_name().to_string(),
                     output_map,
                 ))
             };
             return Err(ParseError::Multiple { errors, partial });
         }
 
-        let typed_output = <S::Output as BamlType>::try_from_baml_value(BamlValue::Class(
-            <S::Output as BamlType>::baml_internal_name().to_string(),
+        let typed_output = <O as BamlType>::try_from_baml_value(BamlValue::Class(
+            <O as BamlType>::baml_internal_name().to_string(),
             output_map,
         ))
         .map_err(|err| ParseError::ExtractionFailed {
@@ -753,74 +682,65 @@ impl ChatAdapter {
         Ok((typed_output, metas))
     }
 
-    #[tracing::instrument(
-        name = "dsrs.adapter.chat.parse",
-        level = "debug",
-        skip(self, signature, response),
-        fields(
-            output_field_count = signature
-                .output_fields()
-                .as_object()
-                .map(|fields| fields.len())
-                .unwrap_or_default()
-        )
-    )]
-    fn parse_response_strict(
+    #[allow(clippy::result_large_err)]
+    /// Parses an LM response into a typed output, discarding field metadata.
+    ///
+    /// Convenience wrapper around [`parse_output_with_meta`](ChatAdapter::parse_output_with_meta).
+    pub fn parse_output<O>(
         &self,
-        signature: &dyn MetaSignature,
-        response: Message,
-    ) -> Result<HashMap<String, Value>> {
-        let mut output = HashMap::new();
-
-        let response_content = response.content();
-        let sections = parse_sections(&response_content);
-
-        for (field_name, field) in get_iter_from_value(&signature.output_fields()) {
-            let Some(field_value) = sections.get(&field_name) else {
-                debug!(
-                    field = %field_name,
-                    "legacy parse missing required output field"
-                );
-                return Err(anyhow::anyhow!(
-                    "missing required field `{}` in model output",
-                    field_name
-                ));
-            };
-            let extracted_field = field_value.as_str();
-            let data_type = field["type"].as_str().unwrap();
-            let schema = &field["schema"];
-
-            // Check if schema exists (as string or object)
-            let has_schema = if let Some(s) = schema.as_str() {
-                !s.is_empty()
-            } else {
-                schema.is_object() || schema.is_array()
-            };
-
-            if !has_schema && data_type == "String" {
-                output.insert(field_name.clone(), json!(extracted_field));
-            } else {
-                let value = serde_json::from_str(extracted_field).map_err(|err| {
-                    debug!(
-                        field = %field_name,
-                        data_type,
-                        raw_text_len = extracted_field.len(),
-                        error = %err,
-                        "legacy parse json coercion failed"
-                    );
-                    anyhow::anyhow!(
-                        "failed to parse field `{}` as {} from model output: {}",
-                        field_name,
-                        data_type,
-                        err
-                    )
-                })?;
-                output.insert(field_name.clone(), value);
-            }
-        }
-
-        debug!(parsed_fields = output.len(), "legacy parse completed");
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<O, ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
+        let (output, _) = self.parse_output_with_meta::<O>(schema, response)?;
         Ok(output)
+    }
+
+    /// Splits raw LM response text into named sections by `[[ ## field ## ]]` delimiters.
+    ///
+    /// Returns an ordered map of field_name → section_content. The `completed` marker
+    /// is included as a section (usually empty). Duplicate section names keep the first
+    /// occurrence. Content before the first delimiter is discarded.
+    pub fn parse_sections(content: &str) -> IndexMap<String, String> {
+        crate::adapter::chat::parse_sections(content)
+    }
+
+    /// Parses a raw [`Message`] into a [`Predicted<S::Output>`](crate::Predicted).
+    ///
+    /// Convenience wrapper that calls [`parse_response_typed`](ChatAdapter::parse_response_typed)
+    /// and wraps the result in [`Predicted`] with default metadata
+    /// (zero usage, no tool calls). Useful for testing or replaying saved responses.
+    ///
+    /// # Errors
+    ///
+    /// Parse failures are wrapped as [`PredictError::Parse`].
+    #[expect(
+        clippy::result_large_err,
+        reason = "Public API returns PredictError directly for downstream matching."
+    )]
+    pub fn parse_response_with_schema<S: Signature>(
+        &self,
+        response: Message,
+    ) -> std::result::Result<Predicted<S::Output>, PredictError> {
+        let raw_response = response.content();
+        let (output, field_meta) = self
+            .parse_response_typed::<S>(&response)
+            .map_err(|source| PredictError::Parse {
+                source,
+                raw_response: raw_response.clone(),
+                lm_usage: crate::LmUsage::default(),
+            })?;
+        let metadata = CallMetadata::new(
+            raw_response,
+            crate::LmUsage::default(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            field_meta,
+        );
+        Ok(Predicted::new(output, metadata))
     }
 }
 
@@ -830,7 +750,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if let Some(caps) = FIELD_HEADER_PATTERN.captures(trimmed) {
-            let header = caps.get(1).unwrap().as_str().to_string();
+            let header = caps.get(1).unwrap().as_str().trim().to_string();
             let marker = caps.get(0).unwrap();
             let remaining = trimmed[marker.end()..].trim();
 
@@ -850,6 +770,8 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
             continue;
         };
         if parsed.contains_key(&name) {
+            // TODO(post-hardening): We currently keep the first occurrence to avoid
+            // late duplicate markers silently overwriting earlier parsed fields.
             continue;
         }
         parsed.insert(name, lines.join("\n").trim().to_string());
@@ -858,14 +780,81 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     parsed
 }
 
-fn baml_value_fields(
-    value: &BamlValue,
-) -> Option<&bamltype::baml_types::BamlMap<String, BamlValue>> {
-    match value {
-        BamlValue::Class(_, fields) => Some(fields),
-        BamlValue::Map(fields) => Some(fields),
-        _ => None,
+fn value_for_path_relaxed<'a>(
+    value: &'a BamlValue,
+    path: &crate::FieldPath,
+) -> Option<&'a BamlValue> {
+    let mut current = value;
+    let parts: Vec<_> = path.iter().collect();
+    let mut idx = 0usize;
+    while idx < parts.len() {
+        match current {
+            BamlValue::Class(_, fields) | BamlValue::Map(fields) => {
+                if let Some(next) = fields.get(parts[idx]) {
+                    current = next;
+                    idx += 1;
+                    continue;
+                }
+                // Flattened wrappers may remove one or more intermediate path
+                // segments (`outer.inner.answer` serialized as `answer`), so
+                // probe ahead for the next segment visible at this level.
+                let mut matched = None;
+                for (look_ahead, part) in parts.iter().enumerate().skip(idx + 1) {
+                    if let Some(next) = fields.get(*part) {
+                        matched = Some((look_ahead, next));
+                        break;
+                    }
+                }
+                if let Some((look_ahead, next)) = matched {
+                    current = next;
+                    idx = look_ahead + 1;
+                    continue;
+                }
+                return None;
+            }
+            _ => return None,
+        }
     }
+    Some(current)
+}
+
+fn insert_baml_at_path(
+    root: &mut bamltype::baml_types::BamlMap<String, BamlValue>,
+    path: &crate::FieldPath,
+    value: BamlValue,
+) {
+    let parts: Vec<_> = path.iter().collect();
+    if parts.is_empty() {
+        return;
+    }
+    insert_baml_at_parts(root, &parts, value);
+}
+
+fn insert_baml_at_parts(
+    root: &mut bamltype::baml_types::BamlMap<String, BamlValue>,
+    parts: &[&'static str],
+    value: BamlValue,
+) {
+    if parts.len() == 1 {
+        root.insert(parts[0].to_string(), value);
+        return;
+    }
+
+    let key = parts[0].to_string();
+    let entry = root
+        .entry(key)
+        .or_insert_with(|| BamlValue::Map(bamltype::baml_types::BamlMap::new()));
+
+    if !matches!(entry, BamlValue::Map(_) | BamlValue::Class(_, _)) {
+        *entry = BamlValue::Map(bamltype::baml_types::BamlMap::new());
+    }
+
+    let child = match entry {
+        BamlValue::Map(map) | BamlValue::Class(_, map) => map,
+        _ => unreachable!(),
+    };
+
+    insert_baml_at_parts(child, &parts[1..], value);
 }
 
 fn format_baml_value_for_prompt(value: &BamlValue) -> String {
@@ -944,147 +933,4 @@ fn collect_from_conditions(conditions: &DeserializerConditions, flags: &mut Vec<
     flags.extend(conditions.flags.iter().cloned());
 }
 
-#[async_trait::async_trait]
-impl Adapter for ChatAdapter {
-    #[tracing::instrument(
-        name = "dsrs.adapter.chat.format",
-        level = "trace",
-        skip(self, signature, inputs),
-        fields(
-            input_fields = inputs.input_keys.len(),
-            output_fields = inputs.output_keys.len()
-        )
-    )]
-    fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat {
-        let system_message = self.format_system_message(signature);
-        let user_message = self.format_user_message(signature, &inputs);
-
-        let demo_examples = signature.demos();
-        let demos = self.format_demos(signature, &demo_examples);
-
-        let mut chat = Chat::new(vec![]);
-        chat.push("system", &system_message);
-        chat.push_all(&demos);
-        chat.push("user", &user_message);
-
-        trace!(
-            demo_count = demo_examples.len(),
-            system_len = system_message.len(),
-            user_len = user_message.len(),
-            message_count = chat.len(),
-            "legacy prompt formatted"
-        );
-
-        chat
-    }
-
-    fn parse_response(
-        &self,
-        signature: &dyn MetaSignature,
-        response: Message,
-    ) -> HashMap<String, Value> {
-        self.parse_response_strict(signature, response)
-            .unwrap_or_else(|err| panic!("legacy parse failed: {err}"))
-    }
-
-    #[tracing::instrument(
-        name = "dsrs.adapter.chat.call",
-        level = "debug",
-        skip(self, lm, signature, inputs, tools),
-        fields(
-            cache_enabled = lm.cache,
-            tool_count = tools.len(),
-            input_field_count = inputs.data.len()
-        )
-    )]
-    async fn call(
-        &self,
-        lm: Arc<LM>,
-        signature: &dyn MetaSignature,
-        inputs: Example,
-        tools: Vec<Arc<dyn ToolDyn>>,
-    ) -> Result<Prediction> {
-        // Check cache first (release lock immediately after checking)
-        if lm.cache
-            && let Some(cache) = lm.cache_handler.as_ref()
-        {
-            let cache_key = inputs.clone();
-            if let Some(cached) = cache.lock().await.get(cache_key).await? {
-                debug!(
-                    cache_hit = true,
-                    output_fields = cached.data.len(),
-                    "adapter cache hit"
-                );
-                return Ok(cached);
-            }
-            debug!(cache_hit = false, "adapter cache miss");
-        }
-        let messages = self.format(signature, inputs.clone());
-        trace!(message_count = messages.len(), "adapter formatted chat");
-        let response = lm.call(messages, tools).await?;
-        debug!(
-            prompt_tokens = response.usage.prompt_tokens,
-            completion_tokens = response.usage.completion_tokens,
-            total_tokens = response.usage.total_tokens,
-            tool_calls = response.tool_calls.len(),
-            "adapter lm call complete"
-        );
-        let prompt_str = response.chat.to_json().to_string();
-
-        let mut output = self.parse_response_strict(signature, response.output)?;
-        if !response.tool_calls.is_empty() {
-            output.insert(
-                "tool_calls".to_string(),
-                response
-                    .tool_calls
-                    .into_iter()
-                    .map(|call| json!(call))
-                    .collect::<Value>(),
-            );
-            output.insert(
-                "tool_executions".to_string(),
-                response
-                    .tool_executions
-                    .into_iter()
-                    .map(|execution| json!(execution))
-                    .collect::<Value>(),
-            );
-        }
-        debug!(output_fields = output.len(), "adapter parsed output");
-
-        let prediction = Prediction {
-            data: output,
-            lm_usage: response.usage,
-            node_id: None,
-        };
-
-        // Store in cache if enabled
-        if lm.cache
-            && let Some(cache) = lm.cache_handler.as_ref()
-        {
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            let cache_clone = cache.clone();
-            let inputs_clone = inputs.clone();
-
-            // Spawn the cache insert operation to avoid deadlock
-            tokio::spawn(
-                async move {
-                    let _ = cache_clone.lock().await.insert(inputs_clone, rx).await;
-                }
-                .instrument(tracing::Span::current()),
-            );
-            trace!("spawned async cache insert");
-
-            // Send the result to the cache
-            tx.send(CacheEntry {
-                prompt: prompt_str,
-                prediction: prediction.clone(),
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
-            trace!("sent prediction to cache insert task");
-        }
-
-        Ok(prediction)
-    }
-}
+impl Adapter for ChatAdapter {}

@@ -1,0 +1,5 @@
+error: map keys must be String in Signature fields; hint: use HashMap<String, V> or BTreeMap<String, V>
+ --> tests/ui/signature_non_string_map_key.rs:7:13
+  |
+7 |     values: HashMap<u32, String>,
+  |             ^^^^^^^^^^^^^^^^^^^^

@@ -82,14 +82,16 @@ async fn typed_prediction_happy_path_with_metadata() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let predicted = predict.call(input).await.unwrap();
+    let metadata = predicted.metadata().clone();
+    let result = predicted.into_inner();
 
-    assert_eq!(result.output.answer, "Paris");
-    assert!((result.output.confidence - 0.9).abs() < 1e-6);
-    assert!(result.field_raw("answer").is_some());
-    assert!(result.field_raw("confidence").is_some());
+    assert_eq!(result.answer, "Paris");
+    assert!((result.confidence - 0.9).abs() < 1e-6);
+    assert!(metadata.field_raw("answer").is_some());
+    assert!(metadata.field_raw("confidence").is_some());
 
-    let checks = result.field_checks("confidence");
+    let checks = metadata.field_checks("confidence");
     assert!(
         checks
             .iter()
@@ -109,15 +111,17 @@ async fn typed_prediction_check_failure_is_recorded() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let predicted = predict.call(input).await.unwrap();
+    let metadata = predicted.metadata().clone();
+    let _ = predicted.into_inner();
 
-    let checks = result.field_checks("confidence");
+    let checks = metadata.field_checks("confidence");
     let check = checks
         .iter()
         .find(|check| check.label == "valid_confidence")
         .expect("check constraint should be recorded");
     assert!(!check.passed);
-    assert!(result.has_failed_checks());
+    assert!(metadata.has_failed_checks());
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -132,10 +136,10 @@ async fn typed_prediction_missing_field_surfaces_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call_with_meta(input).await {
-        Ok(_) => panic!("expected missing field error"),
-        Err(err) => err,
-    };
+    let err = predict
+        .call(input)
+        .await
+        .expect_err("expected missing field error");
     match err {
         PredictError::Parse { source, .. } => match source {
             ParseError::Multiple { errors, .. } => {
@@ -164,10 +168,10 @@ async fn typed_prediction_assert_failure_raises_error() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let err = match predict.call_with_meta(input).await {
-        Ok(_) => panic!("expected assert failure error"),
-        Err(err) => err,
-    };
+    let err = predict
+        .call(input)
+        .await
+        .expect_err("expected assert failure error");
     match err {
         PredictError::Parse { source, .. } => match source {
             ParseError::Multiple { errors, .. } => {
@@ -210,8 +214,8 @@ async fn typed_i32_rating_parses_correctly() {
         answer: "The sky is blue because of Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
-    assert_eq!(result.output.rating, 8);
+    let result = predict.call(input).await.unwrap().into_inner();
+    assert_eq!(result.rating, 8);
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -228,9 +232,9 @@ async fn typed_i32_rating_parses_fraction() {
         answer: "Rayleigh scattering.".to_string(),
     };
 
-    let result = predict.call_with_meta(input).await.unwrap();
+    let result = predict.call(input).await.unwrap().into_inner();
     // 8/10 = 0.8, rounded to 1 as integer
-    assert_eq!(result.output.rating, 1);
+    assert_eq!(result.rating, 1);
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -248,7 +252,7 @@ async fn typed_i32_rating_parses_with_text() {
     };
 
     // This should fail to parse - demonstrates the limitation
-    let result = predict.call_with_meta(input).await;
+    let result = predict.call(input).await;
     assert!(
         result.is_err(),
         "Expected parse error for rating with surrounding text"

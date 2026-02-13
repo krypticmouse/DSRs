@@ -1,8 +1,6 @@
-#![allow(deprecated)]
-
 use dspy_rs::data::example::Example;
 use dspy_rs::data::serialize::{load_jsonl, save_examples_as_jsonl};
-use dspy_rs::{example, hashmap};
+use dspy_rs::hashmap;
 use rstest::*;
 
 #[rstest]
@@ -156,11 +154,15 @@ fn test_serialize() {
 }
 
 #[rstest]
-fn test_example_macro() {
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-        "answer": "output" => "Paris"
-    };
+fn test_example_new_with_input_and_output_keys() {
+    let example = Example::new(
+        hashmap! {
+            "question".to_string() => "What is the capital of France?".to_string().into(),
+            "answer".to_string() => "Paris".to_string().into(),
+        },
+        vec!["question".to_string()],
+        vec!["answer".to_string()],
+    );
     assert_eq!(
         example.data,
         hashmap! {
@@ -168,18 +170,6 @@ fn test_example_macro() {
             "answer".to_string() => "Paris".to_string().into(),
         }
     );
-
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-        "answer": "output" => "Paris"
-    };
     assert_eq!(example.input_keys, vec!["question".to_string()]);
     assert_eq!(example.output_keys, vec!["answer".to_string()]);
-    assert_eq!(
-        example.data,
-        hashmap! {
-            "question".to_string() => "What is the capital of France?".to_string().into(),
-            "answer".to_string() => "Paris".to_string().into(),
-        }
-    );
 }

@@ -1,4 +1,5 @@
-use dspy_rs::{Cache, Chat, DummyLM, Example, LM, LmUsage, Message, hashmap};
+use dspy_rs::data::RawExample;
+use dspy_rs::{Cache, Chat, DummyLM, LM, LmUsage, Message, hashmap};
 use rstest::*;
 
 #[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
@@ -11,7 +12,7 @@ async fn test_dummy_lm() {
         Message::user("Hello, world!"),
     ]);
 
-    let example = Example::new(
+    let example = RawExample::new(
         hashmap! {
             "input".to_string() => "test".to_string().into(),
         },
@@ -140,7 +141,8 @@ async fn test_lm_cache_direct_operations() {
     unsafe {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
-    use dspy_rs::{Example, Prediction};
+    use dspy_rs::Prediction;
+    use dspy_rs::data::RawExample;
     use std::collections::HashMap;
 
     // Create LM with cache enabled
@@ -163,7 +165,7 @@ async fn test_lm_cache_direct_operations() {
         "question".to_string(),
         serde_json::json!("What is the capital of France?"),
     );
-    let key = Example::new(input_data, vec!["question".to_string()], vec![]);
+    let key = RawExample::new(input_data, vec!["question".to_string()], vec![]);
 
     // Initially cache should be empty
     let cached = cache.lock().await.get(key.clone()).await.unwrap();
@@ -235,7 +237,8 @@ async fn test_cache_with_complex_inputs() {
     unsafe {
         std::env::set_var("OPENAI_API_KEY", "test");
     }
-    use dspy_rs::{Example, Prediction};
+    use dspy_rs::Prediction;
+    use dspy_rs::data::RawExample;
     use std::collections::HashMap;
 
     // Create LM with cache enabled
@@ -261,7 +264,7 @@ async fn test_cache_with_complex_inputs() {
     data.insert("format".to_string(), serde_json::json!("detailed"));
     data.insert("temperature".to_string(), serde_json::json!(0.7));
 
-    let key = Example::new(
+    let key = RawExample::new(
         data.clone(),
         vec![
             "context".to_string(),

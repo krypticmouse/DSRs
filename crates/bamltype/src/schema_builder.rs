@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use baml_types::{Constraint, StreamingMode, TypeIR, type_meta};
-use facet::{Attr, ConstTypeId, Def, Field, Shape, Type, UserType};
+use facet::{Attr, ConstTypeId, Def, Field, ScalarType, Shape, Type, UserType};
 use internal_baml_jinja::types::{Class, Enum, Name, OutputFormatContent};
 
 use crate::SchemaBundle;
@@ -14,6 +14,8 @@ use crate::facet_ext;
 use crate::schema_registry::SchemaRegistry;
 
 /// Build a SchemaBundle from a facet Shape.
+///
+/// TODO(dsrs-schema-result-api): expose non-panicking Result-returning schema build API publicly after downstream migration.
 pub fn build_schema_bundle(shape: &'static Shape) -> SchemaBundle {
     let mut builder = SchemaBuilder::new();
     let target = builder.build_type_ir(shape);
@@ -110,6 +112,13 @@ impl SchemaBuilder {
         }
     }
 
+    fn fail_unsupported_shape(context: &str, shape: &'static Shape) -> ! {
+        panic!(
+            "schema build failed: {context}; shape_id={:?}, type_identifier={}, def={:?}",
+            shape.id, shape.type_identifier, shape.def
+        );
+    }
+
     /// Build TypeIR from a facet Shape.
     fn build_type_ir(&mut self, shape: &'static Shape) -> TypeIR {
         // Check if already visited (handles recursion)
@@ -137,7 +146,10 @@ impl SchemaBuilder {
                 if let Some(pointee) = ptr_def.pointee {
                     self.build_type_ir(pointee)
                 } else {
-                    TypeIR::string()
+                    Self::fail_unsupported_shape(
+                        "pointer shape missing pointee while building TypeIR",
+                        shape,
+                    )
                 }
             }
             Def::Undefined => {
@@ -159,21 +171,59 @@ impl SchemaBuilder {
         match &shape.ty {
             Type::User(UserType::Struct(struct_type)) => self.build_struct_ir(shape, struct_type),
             Type::User(UserType::Enum(enum_type)) => self.build_enum_ir(shape, enum_type),
-            Type::Primitive(primitive) => self.build_primitive_ir(primitive),
-            _ => TypeIR::string(),
+            Type::Primitive(primitive) => self.build_primitive_ir(shape, primitive),
+            _ => Self::fail_unsupported_shape("unsupported shape type in build_from_type", shape),
         }
     }
 
     /// Build TypeIR for scalar/primitive shapes.
     fn build_scalar_ir(&self, shape: &'static Shape) -> TypeIR {
         match &shape.ty {
-            Type::Primitive(primitive) => self.build_primitive_ir(primitive),
-            _ => TypeIR::string(),
+            Type::Primitive(primitive) => self.build_primitive_ir(shape, primitive),
+            _ => Self::build_known_scalar_ir(shape).unwrap_or_else(|| {
+                Self::fail_unsupported_shape(
+                    "Def::Scalar shape is not a supported primitive/scalar",
+                    shape,
+                )
+            }),
+        }
+    }
+
+    fn build_known_scalar_ir(shape: &'static Shape) -> Option<TypeIR> {
+        match shape.scalar_type()? {
+            ScalarType::Bool => Some(TypeIR::bool()),
+            ScalarType::Char | ScalarType::Str => Some(TypeIR::string()),
+            ScalarType::F32 | ScalarType::F64 => Some(TypeIR::float()),
+            ScalarType::U8
+            | ScalarType::U16
+            | ScalarType::U32
+            | ScalarType::U64
+            | ScalarType::U128
+            | ScalarType::USize
+            | ScalarType::I8
+            | ScalarType::I16
+            | ScalarType::I32
+            | ScalarType::I64
+            | ScalarType::I128
+            | ScalarType::ISize => Some(TypeIR::int()),
+            ScalarType::ConstTypeId => Some(TypeIR::string()),
+            ScalarType::Unit => None,
+            _ => match shape.type_identifier {
+                "String" | "Cow<str>" | "Cow<'_, str>" | "Cow<'static, str>" => {
+                    Some(TypeIR::string())
+                }
+                "SocketAddr" | "IpAddr" | "Ipv4Addr" | "Ipv6Addr" => Some(TypeIR::string()),
+                _ => None,
+            },
         }
     }
 
     /// Build TypeIR for primitive types.
-    fn build_primitive_ir(&self, primitive: &facet::PrimitiveType) -> TypeIR {
+    fn build_primitive_ir(
+        &self,
+        shape: &'static Shape,
+        primitive: &facet::PrimitiveType,
+    ) -> TypeIR {
         use facet::{NumericType, PrimitiveType, TextualType};
 
         match primitive {
@@ -182,7 +232,10 @@ impl SchemaBuilder {
             PrimitiveType::Numeric(NumericType::Float) => TypeIR::float(),
             PrimitiveType::Textual(TextualType::Str) => TypeIR::string(),
             PrimitiveType::Textual(TextualType::Char) => TypeIR::string(),
-            PrimitiveType::Never => TypeIR::string(),
+            PrimitiveType::Never => Self::fail_unsupported_shape(
+                "PrimitiveType::Never cannot be represented in BAML schema",
+                shape,
+            ),
         }
     }
 
@@ -428,7 +481,10 @@ impl SchemaBuilder {
                 if let Some(pointee) = ptr_def.pointee {
                     Self::build_int_repr_ir(pointee, repr)
                 } else {
-                    TypeIR::string()
+                    Self::fail_unsupported_shape(
+                        "int_repr override encountered pointer shape without pointee",
+                        shape,
+                    )
                 }
             }
             _ => match repr {
@@ -458,7 +514,10 @@ impl SchemaBuilder {
                 if let Some(pointee) = ptr_def.pointee {
                     self.build_map_key_repr_ir(pointee, repr, entry_ctx)
                 } else {
-                    TypeIR::string()
+                    Self::fail_unsupported_shape(
+                        "map_key_repr override encountered pointer shape without pointee",
+                        shape,
+                    )
                 }
             }
             Def::Map(map_def) => match repr {

@@ -1,5 +1,15 @@
 # DSRs Module System — Shaping Document
 
+## Current Scope Addendum (2026-02-12)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred (`TODO(trace-demos)`).
+
+All content below is preserved as a historical implementation record.
+
 **Selected shape:** F (Facet-native typed modules with dynamic graph escape hatch)
 
 ---
@@ -57,13 +67,13 @@
 | **F1** | **Signature trait + derive macro** — `#[derive(Signature)]` on a struct with `#[input]`/`#[output]` fields generates `Input`/`Output` helper types, implements `Signature` trait. Supports generic type parameters and `#[flatten]` for composition. Doc comments become LM instructions/descriptions. | |
 | **F2** | **SignatureSchema (Facet-derived, cached)** — `SignatureSchema::of::<S>()` walks `S::Input` and `S::Output` Facet Shapes to produce an ordered flat field list with TypeIR, docs, constraints, and flatten paths. Cached in `OnceLock`. Used by adapter for prompt formatting/parsing AND by dynamic graph for edge validation. Replaces macro-emitted `FieldSpec` arrays. | |
 | **F3** | **Augmentation derive + combinator** — `#[derive(Augmentation)]` on a small struct (e.g. `Reasoning { reasoning: String }`) generates: a wrapper type (`WithReasoning<O>`) with `#[flatten]` on inner + `Deref` to inner, and the `Augmentation` trait impl. `Augmented<S, A>` is a generic signature combinator (same input, wrapped output). Eliminates per-augmentation signature boilerplate. | |
-| **F4** | **Module trait** — `trait Module { type Input; type Output; async fn forward(&self, input) -> Result<Output> }`. All prompting strategies implement this: `Predict<S>`, `ChainOfThought<S>`, `ReAct<S>`, `BestOfN<M>`, `Refine<M>`, user-defined modules. This is the swapping/composition interface. | |
-| **F5** | **Predict as leaf parameter** — `Predict<S: Signature>` holds typed demos `Vec<Demo<S>>`, optional instruction override, tools. Only thing that calls the LM. Marked with Facet attribute `dsrs::parameter` for automatic discovery. Implements both `Module` and `DynPredictor` (type-erased optimizer interface). | |
-| **F6** | **Facet-powered parameter discovery** — A walker reflects over any `Facet` value, recurses through struct fields, yields `(dotted_path, &dyn DynPredictor)` for every value whose Shape carries `dsrs::parameter`. No manual traversal code. Replaces `#[derive(Optimizable)]` + `#[parameter]`. Container traversal (`Option`/`Vec`/`HashMap`/`Box`) is deferred (S5) — struct-field recursion covers all V1 library modules. | |
+| **F4** | **Module trait** — `trait Module { type Input; type Output; async fn forward(&self, input) -> Result<Predicted<Output>, PredictError>; async fn call(&self, input) -> Result<Predicted<Output>, PredictError> { self.forward(input).await } }`. `call` is the canonical user-facing entrypoint; `forward` is the implementation hook/compatibility alias. `Predicted<O>` carries output + metadata with `Deref<Target = O>` for direct field access, mirroring DSPy's `Prediction` convention. `?` works directly on stable Rust because the outer return is `Result`. All prompting strategies implement this: `Predict<S>`, `ChainOfThought<S>`, `ReAct<S>`, `BestOfN<M>`, `Refine<M>`, user-defined modules. This is the swapping/composition interface. | |
+| **F5** | **Predict as leaf parameter** — `Predict<S: Signature>` holds typed demos `Vec<Demo<S>>`, optional instruction override, tools. Only thing that calls the LM. Implements both `Module` and `DynPredictor` (type-erased optimizer interface). Handle discovery is hard-cutover to shape-local `PredictAccessorFns` payload extraction (S2 Mechanism A). Missing/invalid payloads fail explicitly; runtime registry fallback is not used. | |
+| **F6** | **Facet-powered parameter discovery** — A walker reflects over any `Facet` value, recurses through struct fields, and yields `(dotted_path, &dyn DynPredictor)` for predictor leaves. No manual traversal code. Replaces `#[derive(Optimizable)]` + `#[parameter]`. Handle resolution uses strict shape-local typed attrs (S2 Mechanism A) only. Container traversal over `Option`/list/map/`Box` is implemented; `Rc`/`Arc` and other unsupported pointer-like containers error explicitly. | |
 | **F7** | **Adapter building blocks** — ChatAdapter exposes public composable functions: `build_system()`, `format_input()`, `parse_sections()`, `parse_output()`. Modules that need fine-grained control (ReAct action loop) call these directly. Standard modules go through the high-level `format_system_message_typed::<S>()` which calls building blocks internally. All operate on `SignatureSchema` (F2). | |
-| **F8** | **DynPredictor vtable** — Type-erased interface for optimizer operations on a Predict leaf: get/set demos (as `Vec<Example>`), get/set instruction, get schema, `forward_untyped(BamlValue) -> BamlValue`. Obtained via shape-local accessor payload: `Predict<S>` carries `PredictAccessorFns` as a typed Facet attribute, extracted at discovery time by the walker. Bridges typed Predict to untyped optimizer. | |
+| **F8** | **DynPredictor vtable** — Type-erased interface for optimizer operations on a Predict leaf: get/set demos (as `Vec<Example>`), get/set instruction, get schema, `forward_untyped(BamlValue) -> BamlValue`. Handles are obtained from shape-local accessor payload extraction (S2 Mechanism A) with no runtime registry fallback. Bridges typed Predict to untyped optimizer in both modes. | |
 | **F9** | **DynModule + StrategyFactory** — `DynModule` is the dynamic equivalent of `Module` (BamlValue in/out, exposes internal predictors). `StrategyFactory` creates a `DynModule` from a `SignatureSchema` + config. Each module type (ChainOfThought, ReAct, etc.) registers a factory. Factories perform schema transformations (prepend reasoning, build action schema from tools, etc.) on `SignatureSchema` directly. | |
-| **F10** | **ProgramGraph** — Dynamic graph of `Node` (holds `DynModule` + `SignatureSchema`) and `Edge` (from_node.field → to_node.field). Edges validated by TypeIR compatibility at insertion time. Supports `add_node`, `remove_node`, `replace_node`, `connect`, `insert_between`. Execution follows topological order, piping `BamlValue` between nodes. Typed modules can be projected into a graph (via F6 walker) and graph nodes can wrap typed modules internally. | |
+| **F10** | **ProgramGraph** — Dynamic graph of `Node` (holds `DynModule` + `SignatureSchema`) and `Edge` (from_node.field → to_node.field). Edges validated by TypeIR compatibility at insertion time. Supports `add_node`, `remove_node`, `replace_node`, `connect`, `insert_between`. `insert_between` is contract-strict (inserted node must expose exactly one input and one output) and synchronizes schema from the inserted module before validating rewires. Execution follows topological order, piping `BamlValue` between nodes. Typed modules can be projected into a graph (via F6 walker), with optional explicit per-call annotations through `from_module_with_annotations` (no global annotation registry), and graph nodes can wrap typed modules internally. The reserved node name `"input"` is the pseudo-root for runtime input wiring (user nodes cannot use that name), duplicate edge insertions are rejected to keep graph wiring deterministic, and `fit(&mut module)` enforces strict 1:1 path mapping when writing graph state back into typed predictors. | |
 | **F11** | **Library modules** — Concrete implementations of DSPy's module zoo: `ChainOfThought<S>` (F3 augmentation + Predict), `ReAct<S>` (two Predicts + tool loop + builder API), `BestOfN<M>` (wraps any Module), `Refine<M>` (BestOfN + feedback, scoped context mechanism TBD), `ProgramOfThought<S>` (three ChainOfThought + code interpreter), `MultiChainComparison<S>` (M sources + comparison Predict). Each is generic over Signature, implements Module, and is discoverable via F6. | ⚠️ |
 | **F12** | **Generic Signature derive** — `#[derive(Signature)]` works on structs with generic type parameters (e.g. `ActionStep<I: BamlType + Clone>`) and `#[flatten]` fields. The generated `Input`/`Output` types carry the generic parameters through. Required for module authors who define custom multi-field signatures. Implementation path: generic forwarding in macro + path-aware runtime metadata bridge + path-based adapter format/parse (see S1). | |
 
@@ -95,7 +105,7 @@
 
 **Notes:**
 - R2 satisfied by `Deref` coercion on wrapper types — `result.reasoning` is a direct field, `result.answer` resolves via Deref to inner type. S3 confirmed: auto-deref works through multiple layers for field reads and method calls. Pattern matching requires explicit layer-by-layer destructuring (acceptable — documented limitation).
-- R4 satisfied by Facet walker (F6) using shape-local accessor payloads (S2: Mechanism A). `#[derive(Facet)]` on the module struct is the only requirement. V1 walker recurses through struct fields only; container traversal deferred (S5).
+- R4 satisfied by Facet walker (F6) + DynPredictor handles (F8). Runtime discovery is hard-cutover to shape-local accessor payloads (S2 Mechanism A), with explicit diagnostics when payloads are missing/invalid. `#[derive(Facet)]` on the module struct is the only authoring requirement.
 - R8 satisfied by both paths using `SignatureSchema` (F2) → same adapter building blocks (F7) → same prompt format.
 
 ---
@@ -130,6 +140,17 @@ Each layer only exists if needed. A simple `Predict::<QA>::new().call(input)` to
 
 ---
 
+## Explicit Limitations (Current Runtime)
+
+- Optimizer discovery does not traverse `Rc<T>` or `Arc<T>`. Encountering either container in the module tree is an explicit error (`TODO(dsrs-shared-ptr-policy)`).
+- Media conversion is unsupported in optimizer discovery/state flows (`TODO(dsrs-media)`).
+- Workspace pinning remains on a forked Facet git revision until upstream release alignment is complete (`TODO(dsrs-facet-pin)`).
+- Signature derive type-validation logic is currently duplicated across macro/runtime layers and needs consolidation (`TODO(dsrs-derive-shared-validation)`).
+- Schema construction still uses fail-fast panic semantics for unsupported shapes on the public convenience API (`TODO(dsrs-schema-result-api)`).
+- Rust→Baml conversion currently panics on conversion failure instead of returning a fallible API (`TODO(dsrs-fallible-to-baml)`).
+
+---
+
 ## Spikes (Resolved)
 
 All spikes have been investigated and resolved. Full findings in `spikes/S{n}-*.md`.
@@ -137,10 +158,10 @@ All spikes have been investigated and resolved. Full findings in `spikes/S{n}-*.
 | # | Question | Decision | Spike doc |
 |---|----------|----------|-----------|
 | **S1** | Can `#[derive(Signature)]` handle generic type parameters with `#[flatten]` fields? | **Option C: full replacement.** Build `SignatureSchema` from Facet, replace `FieldSpec` everywhere, delete the old system. No incremental migration. | `S1-generic-signature-derive.md` |
-| **S2** | How does the Facet walker obtain a usable optimizer handle from a discovered Predict? | **Mechanism A**: shape-local accessor payload (`dsrs::parameter` + fn-pointer `PredictAccessorFns`). Reuses existing `WithAdapterFns` typed-attr pattern. | `S2-dynpredictor-handle-discovery.md` |
+| **S2** | How does the Facet walker obtain a usable optimizer handle from a discovered Predict? | **Mechanism A hard-cutover.** Shape-local accessor payload extraction is the runtime behavior; registry fallback is removed. | `S2-dynpredictor-handle-discovery.md` |
 | **S3** | Does Rust auto-Deref chain resolve field access through nested augmentation wrappers? | **Yes for reads/methods**, no for pattern matching (don't care). `Deref`-only unless `DerefMut` is proven necessary. | `S3-augmentation-deref-composition.md` |
 | **S4** | What scoped-context mechanism for Refine's hint injection? | **Deferred.** Mechanism chosen when Refine is built. Findings preserved in spike doc. | `S4-refine-scoped-context.md` |
-| **S5** | How does the Facet walker handle Option/Vec/HashMap/Box containers? | **Deferred.** Struct-field recursion covers all V1 library modules. Container traversal when a concrete use case requires it. | `S5-facet-walker-containers.md` |
+| **S5** | How does the Facet walker handle Option/Vec/HashMap/Box containers? | **Implemented with explicit limits.** Option/list/map/Box traversal is shipped; `Rc`/`Arc` and other unsupported pointer-like containers error explicitly (`TODO(dsrs-shared-ptr-policy)`). Media conversion remains unsupported (`TODO(dsrs-media)`). | `S5-facet-walker-containers.md` |
 | **S6** | Migration path from FieldSpec/MetaSignature to Facet-derived SignatureSchema? | **Subsumed by S1 → Option C.** No migration — full replacement. | `S6-migration-fieldspec-to-signatureschema.md` |
 | **S7** | Can `#[derive(Augmentation)]` generate a generic wrapper from a non-generic struct? What about the `Augmented` phantom type? | **Yes, feasible.** All three derives handle generics. `from_parts`/`into_parts` removed from `Signature` trait — `Augmented` becomes a clean type-level combinator. | `S7-augmentation-derive-feasibility.md` |
 | **S8** | How does Facet flatten manifest in Shape metadata? | **`field.is_flattened()` flag check + `field.shape()` recurse.** Facet ships `fields_for_serialize()` as reference. Direct mapping to design pseudocode. | `S8-facet-flatten-metadata.md` |
@@ -195,7 +216,7 @@ All spikes have been investigated and resolved. Full findings in `spikes/S{n}-*.
 
 **R13 (augmentation composition) has the thinnest coverage** — only F3. S3 confirmed auto-deref works for reads/methods, so the risk is mitigated. Pattern matching through nested wrappers requires explicit destructuring — acceptable for a Nice-to-have.
 
-**R4 (automatic discovery) depends on F6 + F8 together.** F6 finds the values, F8 makes them operable. S2 resolved the handle mechanism (shape-local accessor payload). Container traversal deferred (S5) — struct-field recursion is sufficient for V1.
+**R4 (automatic discovery) depends on F6 + F8 together.** F6 finds the values, F8 makes them operable. Runtime behavior is strict shape-local accessor payload extraction (hard-cutover); there is no registry fallback path.
 
 **R7 (dynamic graph) is the heaviest requirement** — needs F8, F9, AND F10. All three are Layer 3. This is expected — it's the most complex capability.
 

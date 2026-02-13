@@ -1,68 +1,32 @@
-#![allow(deprecated)]
-
-/// GEPA (Genetic-Pareto) Optimizer Implementation
-///
-/// GEPA is a reflective prompt optimizer that uses:
-/// 1. Rich textual feedback (not just scores)
-/// 2. Pareto-based candidate selection
-/// 3. LLM-driven reflection and mutation
-/// 4. Per-example dominance tracking
-///
-/// Reference: "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning"
-/// (Agrawal et al., 2025, arxiv:2507.19457)
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
-use crate::{
-    Example, LM, LegacyPredict, Module, Optimizable, Optimizer, Prediction, Predictor,
-    evaluate::FeedbackEvaluator, example,
+use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
+use crate::optimizer::{
+    Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
-use dsrs_macros::LegacySignature;
+use crate::predictors::Example;
+use crate::{BamlType, BamlValue, Facet, Module, Signature};
 
 use super::pareto::ParetoFrontier;
 
-// ============================================================================
-// Core Data Structures
-// ============================================================================
-
-/// A candidate program in the evolutionary process
+/// A single instruction candidate tracked through GEPA's evolutionary search.
+///
+/// Carries the instruction text, per-example scores, lineage (parent_id), and
+/// generation number. The Pareto frontier selects candidates that aren't dominated
+/// on any individual example — not just by average score.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GEPACandidate {
-    /// Unique identifier
     pub id: usize,
-
-    /// The instruction/prompt for this candidate
     pub instruction: String,
-
-    /// Name of the module this candidate targets
     pub module_name: String,
-
-    /// Scores achieved on each evaluation example
     pub example_scores: Vec<f32>,
-
-    /// Parent candidate ID (for lineage tracking)
     pub parent_id: Option<usize>,
-
-    /// Generation number in the evolutionary process
     pub generation: usize,
 }
 
 impl GEPACandidate {
-    /// Create a new candidate from a predictor
-    pub fn from_predictor(predictor: &dyn Optimizable, module_name: impl Into<String>) -> Self {
-        Self {
-            id: 0,
-            instruction: predictor.get_signature().instruction(),
-            module_name: module_name.into(),
-            example_scores: Vec::new(),
-            parent_id: None,
-            generation: 0,
-        }
-    }
-
-    /// Calculate average score across all examples
     pub fn average_score(&self) -> f32 {
         if self.example_scores.is_empty() {
             return 0.0;
@@ -70,10 +34,9 @@ impl GEPACandidate {
         self.example_scores.iter().sum::<f32>() / self.example_scores.len() as f32
     }
 
-    /// Create a mutated child candidate
     pub fn mutate(&self, new_instruction: String, generation: usize) -> Self {
         Self {
-            id: 0, // Will be assigned by frontier
+            id: 0,
             instruction: new_instruction,
             module_name: self.module_name.clone(),
             example_scores: Vec::new(),
@@ -83,408 +46,368 @@ impl GEPACandidate {
     }
 }
 
-/// Detailed results from GEPA optimization
+/// Full report from a [`GEPA`] optimization run.
+///
+/// Contains the winning candidate, the complete candidate history (if `track_stats`
+/// was enabled), budget usage, and optionally the best outputs on the validation set.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GEPAResult {
-    /// Best candidate found
+    /// The candidate with the best average score on the Pareto frontier.
     pub best_candidate: GEPACandidate,
-
-    /// All candidates evaluated during optimization
+    /// All candidates evaluated (empty unless `track_stats` is enabled).
     pub all_candidates: Vec<GEPACandidate>,
-
-    /// Total number of rollouts performed
+    /// Total evaluation rollouts consumed.
     pub total_rollouts: usize,
-
-    /// Total LM calls made during optimization
+    /// Total LM calls consumed (rollouts + candidate generation).
     pub total_lm_calls: usize,
-
-    /// Evolution history: generation -> best score at that generation
+    /// (generation, best_average_score) pairs for plotting convergence.
     pub evolution_history: Vec<(usize, f32)>,
-
-    /// Highest score achieved on each validation task
+    /// Highest score achieved per validation example across all candidates.
     pub highest_score_achieved_per_val_task: Vec<f32>,
-
-    /// Best outputs on validation set (if tracked)
-    pub best_outputs_valset: Option<Vec<Prediction>>,
-
-    /// Pareto frontier statistics over time
+    /// Best outputs on the validation set (only if `track_best_outputs` is enabled).
+    pub best_outputs_valset: Option<Vec<BamlValue>>,
+    /// Pareto frontier statistics per generation.
     pub frontier_history: Vec<ParetoStatistics>,
 }
 
-/// Statistics about Pareto frontier (re-exported from pareto module)
 pub use super::pareto::ParetoStatistics;
 
-// ============================================================================
-// LLM Signatures for Reflection and Mutation
-// ============================================================================
-
-#[LegacySignature]
-struct ReflectOnTrace {
-    /// You are an expert at analyzing program execution traces and identifying
-    /// areas for improvement. Given the module instruction, example traces showing
-    /// inputs, outputs, and feedback, identify specific weaknesses and suggest
-    /// targeted improvements.
-
-    #[input(desc = "The current instruction for the module")]
-    pub current_instruction: String,
-
-    #[input(desc = "Execution traces showing inputs, outputs, and evaluation feedback")]
-    pub traces: String,
-
-    #[input(desc = "Description of what the module should accomplish")]
-    pub task_description: String,
-
-    #[output(desc = "Analysis of weaknesses and specific improvement suggestions")]
-    pub reflection: String,
-}
-
-#[LegacySignature]
-struct ProposeImprovedInstruction {
-    /// You are an expert prompt engineer. Given the current instruction, execution
-    /// traces, feedback, and reflection on weaknesses, propose an improved instruction
-    /// that addresses the identified issues. Be creative and consider various prompting
-    /// techniques.
-
-    #[input(desc = "The current instruction")]
-    pub current_instruction: String,
-
-    #[input(desc = "Reflection on weaknesses and improvement suggestions")]
-    pub reflection: String,
-
-    #[input(desc = "Execution traces and feedback from recent rollouts")]
-    pub traces_and_feedback: String,
-
-    #[output(desc = "An improved instruction that addresses the identified weaknesses")]
-    pub improved_instruction: String,
-}
-
-#[LegacySignature]
-struct SelectModuleToImprove {
-    /// Given multiple modules in a program and their performance feedback, select which
-    /// module would benefit most from optimization. Consider which module's errors are
-    /// most impactful and addressable through instruction changes.
-
-    #[input(desc = "List of modules with their current instructions and performance")]
-    pub module_summary: String,
-
-    #[input(desc = "Recent execution traces showing module interactions")]
-    pub execution_traces: String,
-
-    #[output(desc = "Name of the module to optimize and reasoning")]
-    pub selected_module: String,
-}
-
-// ============================================================================
-// GEPA Optimizer
-// ============================================================================
-
-/// GEPA Optimizer Configuration
+/// Genetic-Pareto instruction optimizer with feedback-driven evolution.
+///
+/// GEPA uses an evolutionary search guided by per-example feedback from your metric.
+/// Unlike [`COPRO`](crate::COPRO) which only uses numerical scores, GEPA requires your
+/// [`TypedMetric`] to return [`MetricOutcome::with_feedback`] — textual feedback
+/// explaining *why* each example scored the way it did. This feedback gets appended
+/// to the instruction as a mutation prompt for the next generation, so the quality
+/// of your feedback directly determines the quality of GEPA's search.
+///
+/// The Pareto frontier tracks candidates that aren't dominated on any individual
+/// training example, not just by average score. This means GEPA finds instructions
+/// that are robust across diverse inputs rather than overfitting to easy examples.
+///
+/// Only searches instruction space — no demo mutation, no crossover between candidates.
+/// Each child has exactly one parent.
+///
+/// # Hyperparameters
+///
+/// - **`num_iterations`** (default: 20) — evolutionary generations. More = deeper search.
+/// - **`minibatch_size`** (default: 25) — examples per parent evaluation within each
+///   generation. Controls exploration vs cost.
+/// - **`num_trials`** (default: 10) — **currently unused.** Reserved for multi-child
+///   evolution (one child per generation right now). Setting this has no effect.
+/// - **`temperature`** (default: 1.0) — **currently unused.** Reserved for mutation
+///   diversity control. Setting this has no effect.
+/// - **`max_rollouts`** / **`max_lm_calls`** — hard budget caps. Optimization stops
+///   when either limit would be exceeded by the next batch.
+/// - **`track_stats`** (default: true) — record all candidates and frontier history.
+/// - **`track_best_outputs`** (default: false) — re-run the best instruction on the
+///   eval set and record outputs.
+/// - **`prompt_model`** — optional separate LM for candidate generation.
+///
+/// # Requires feedback
+///
+/// GEPA will error if any [`MetricOutcome`] from your metric has `feedback: None`.
+/// Use [`MetricOutcome::with_feedback`] or provide a [`FeedbackMetric`](crate::FeedbackMetric).
+///
+/// # Cost
+///
+/// Roughly `num_iterations × (minibatch_size + eval_set_size) + initial_eval` LM calls.
+/// Budget caps (`max_rollouts`, `max_lm_calls`) prevent runaway costs.
+///
+/// ```ignore
+/// let gepa = GEPA::builder()
+///     .num_iterations(20)
+///     .max_lm_calls(Some(500))
+///     .build();
+/// let report = gepa.compile(&mut module, trainset, &feedback_metric).await?;
+/// println!("Best score: {:.3}", report.best_candidate.average_score());
+/// ```
 #[derive(Builder)]
 pub struct GEPA {
-    /// Maximum number of evolutionary iterations
+    /// Evolutionary generations to run.
     #[builder(default = 20)]
     pub num_iterations: usize,
 
-    /// Size of minibatch for each rollout
+    /// Examples per parent evaluation within each generation.
     #[builder(default = 25)]
     pub minibatch_size: usize,
 
-    /// Number of trials per candidate evaluation
+    /// **Currently unused.** Reserved for multi-child evolution (one child per
+    /// generation right now). Setting this has no effect.
     #[builder(default = 10)]
     pub num_trials: usize,
 
-    /// Temperature for LLM-based mutations
+    /// **Currently unused.** Reserved for mutation diversity control.
+    /// Setting this has no effect.
     #[builder(default = 1.0)]
     pub temperature: f32,
 
-    /// Track detailed statistics
+    /// Record all candidates and frontier history in the report.
     #[builder(default = true)]
     pub track_stats: bool,
 
-    /// Track best outputs on validation set (for inference-time search)
+    /// Re-run the best instruction on the eval set and record outputs.
     #[builder(default = false)]
     pub track_best_outputs: bool,
 
-    /// Maximum total rollouts (budget control)
+    /// Hard cap on total evaluation rollouts.
     pub max_rollouts: Option<usize>,
-
-    /// Maximum LM calls (budget control)
+    /// Hard cap on total LM calls (rollouts + generation).
     pub max_lm_calls: Option<usize>,
-
-    /// Optional separate LM for meta-prompting (instruction generation)
-    pub prompt_model: Option<LM>,
-
-    /// Validation set for Pareto evaluation (if None, uses trainset)
-    pub valset: Option<Vec<Example>>,
+    /// Optional separate LM for candidate generation.
+    pub prompt_model: Option<crate::LM>,
 }
 
 impl GEPA {
-    /// Initialize the Pareto frontier with the seed program
-    async fn initialize_frontier<M>(
+    fn would_exceed_budget(current: usize, batch_cost: usize, max_budget: Option<usize>) -> bool {
+        max_budget.is_some_and(|max| current.saturating_add(batch_cost) > max)
+    }
+
+    fn set_instruction<M>(module: &mut M, module_name: &str, instruction: String) -> Result<()>
+    where
+        M: for<'a> Facet<'a>,
+    {
+        with_named_predictor(module, module_name, |predictor| {
+            predictor.set_instruction(instruction);
+            Ok(())
+        })
+    }
+
+    async fn evaluate_candidate<S, M, MT>(
         &self,
         module: &mut M,
-        trainset: &[Example],
-    ) -> Result<ParetoFrontier>
+        module_name: &str,
+        instruction: &str,
+        examples: &[Example<S>],
+        metric: &MT,
+    ) -> Result<Vec<MetricOutcome>>
     where
-        M: Module + Optimizable + FeedbackEvaluator,
+        S: Signature,
+        S::Input: Clone,
+        M: Module<Input = S::Input> + for<'a> Facet<'a>,
+        MT: TypedMetric<S, M>,
     {
-        let mut frontier = ParetoFrontier::new();
+        let original_state =
+            with_named_predictor(module, module_name, |predictor| Ok(predictor.dump_state()))?;
 
-        // Collect predictor information first (to release mutable borrow)
-        let candidate_infos: Vec<GEPACandidate> = {
-            let predictors = module.parameters();
-            predictors
-                .into_iter()
-                .map(|(name, predictor)| GEPACandidate::from_predictor(predictor, name))
-                .collect()
-        };
+        Self::set_instruction(module, module_name, instruction.to_string())?;
+        let evaluation = evaluate_module_with_metric(&*module, examples, metric).await;
 
-        // Now evaluate each candidate (module is no longer borrowed mutably)
-        for candidate in candidate_infos {
-            let scores = self
-                .evaluate_candidate(module, trainset, &candidate)
-                .await?;
-            frontier.add_candidate(candidate, &scores);
+        match evaluation {
+            Ok(outcomes) => {
+                with_named_predictor(module, module_name, |predictor| {
+                    predictor.load_state(original_state.clone())
+                })?;
+                Ok(outcomes)
+            }
+            Err(eval_err) => {
+                if let Err(restore_err) = with_named_predictor(module, module_name, |predictor| {
+                    predictor.load_state(original_state)
+                }) {
+                    return Err(anyhow!(
+                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
+                    ));
+                }
+                Err(eval_err)
+            }
         }
-
-        Ok(frontier)
     }
 
-    /// Evaluate a candidate on a set of examples (in parallel for speed)
-    async fn evaluate_candidate<M>(
-        &self,
-        module: &M,
-        examples: &[Example],
-        _candidate: &GEPACandidate,
-    ) -> Result<Vec<f32>>
-    where
-        M: Module + FeedbackEvaluator,
-    {
-        use futures::future::join_all;
-
-        let futures: Vec<_> = examples
-            .iter()
-            .map(|example| async move {
-                let prediction = module.forward(example.clone()).await?;
-                let feedback = module.feedback_metric(example, &prediction).await;
-                Ok::<f32, anyhow::Error>(feedback.score)
-            })
-            .collect();
-
-        let results = join_all(futures).await;
-        results.into_iter().collect()
-    }
-
-    /// Collect execution traces with feedback
-    async fn collect_traces<M>(
-        &self,
-        module: &M,
-        minibatch: &[Example],
-    ) -> Result<Vec<(Example, Prediction, String)>>
-    where
-        M: Module + FeedbackEvaluator,
-    {
-        let mut traces = Vec::with_capacity(minibatch.len());
-
-        for example in minibatch {
-            let prediction = module.forward(example.clone()).await?;
-            let feedback = module.feedback_metric(example, &prediction).await;
-
-            // Format trace for LLM reflection
-            let trace_text = format!(
-                "Input: {:?}\nOutput: {:?}\nScore: {:.3}\nFeedback: {}",
-                example, prediction, feedback.score, feedback.feedback
-            );
-
-            traces.push((example.clone(), prediction, trace_text));
+    fn require_feedback(
+        outcomes: &[MetricOutcome],
+        module_name: &str,
+        generation: usize,
+    ) -> Result<()> {
+        if outcomes.iter().any(|o| o.feedback.is_none()) {
+            return Err(anyhow!(
+                "GEPA requires feedback for every evaluated example (module=`{module_name}`, generation={generation})"
+            ));
         }
-
-        Ok(traces)
+        Ok(())
     }
 
-    /// Generate improved instruction through LLM reflection
-    async fn generate_mutation(
-        &self,
-        current_instruction: &str,
-        traces: &[(Example, Prediction, String)],
-        task_description: &str,
-    ) -> Result<String> {
-        // Combine traces into a single string
-        let traces_text = traces
-            .iter()
-            .enumerate()
-            .map(|(i, (_, _, trace))| format!("=== Trace {} ===\n{}\n", i + 1, trace))
-            .collect::<Vec<_>>()
-            .join("\n");
-
-        // First, reflect on the traces
-        let reflect_predictor = LegacyPredict::new(ReflectOnTrace::new());
-        let reflection_input = example! {
-            "current_instruction": "input" => current_instruction,
-            "traces": "input" => traces_text.clone(),
-            "task_description": "input" => task_description
-        };
-
-        let reflection_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
-            prompt_model.temperature = self.temperature;
-            reflect_predictor
-                .forward_with_config(reflection_input, Arc::new(prompt_model))
-                .await?
-        } else {
-            reflect_predictor.forward(reflection_input).await?
-        };
-
-        let reflection = reflection_output
-            .get("reflection", None)
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        // Then, propose improved instruction
-        let propose_predictor = LegacyPredict::new(ProposeImprovedInstruction::new());
-        let proposal_input = example! {
-            "current_instruction": "input" => current_instruction,
-            "reflection": "input" => reflection.clone(),
-            "traces_and_feedback": "input" => traces_text.clone()
-        };
-
-        let proposal_output = if let Some(mut prompt_model) = self.prompt_model.clone() {
-            prompt_model.temperature = self.temperature;
-            propose_predictor
-                .forward_with_config(proposal_input, Arc::new(prompt_model))
-                .await?
-        } else {
-            propose_predictor.forward(proposal_input).await?
-        };
-
-        let improved = proposal_output
-            .get("improved_instruction", None)
-            .as_str()
-            .unwrap_or(current_instruction)
-            .to_string();
-
-        Ok(improved)
+    fn summarize_feedback(outcomes: &[MetricOutcome]) -> String {
+        let mut lines = Vec::new();
+        for (idx, outcome) in outcomes.iter().enumerate() {
+            if let Some(feedback) = &outcome.feedback {
+                lines.push(format!(
+                    "{}: score={:.3}; {}",
+                    idx + 1,
+                    outcome.score,
+                    feedback.feedback
+                ));
+            }
+        }
+        lines.join("\n")
     }
-}
 
-impl Optimizer for GEPA {
-    async fn compile<M>(&self, _module: &mut M, _trainset: Vec<Example>) -> Result<()>
+    async fn collect_best_outputs<S, M>(
+        module: &M,
+        eval_set: &[Example<S>],
+    ) -> Result<Vec<BamlValue>>
     where
-        M: Module + Optimizable + crate::Evaluator,
+        S: Signature,
+        S::Input: Clone,
+        M: Module<Input = S::Input>,
+        M::Output: BamlType,
     {
-        // GEPA requires FeedbackEvaluator, not just Evaluator
-        // This is a compilation error that guides users to implement the right trait
-        anyhow::bail!(
-            "GEPA requires the module to implement FeedbackEvaluator trait. \
-             Please implement feedback_metric() method that returns FeedbackMetric."
-        )
+        let mut outputs = Vec::with_capacity(eval_set.len());
+        for example in eval_set {
+            let input = example.input.clone();
+            let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
+            outputs.push(predicted.into_inner().to_baml_value());
+        }
+        Ok(outputs)
     }
-}
 
-impl GEPA {
-    /// Compile method specifically for FeedbackEvaluator modules
-    pub async fn compile_with_feedback<M>(
+    /// Runs GEPA with an explicit validation set separate from the trainset.
+    ///
+    /// When `valset` is `Some`, initial evaluation and child scoring use the validation
+    /// set, while parent re-evaluation uses the trainset minibatch. When `None`, the
+    /// trainset serves both roles.
+    ///
+    /// # Errors
+    ///
+    /// - No optimizable predictors found
+    /// - Any metric evaluation returns `feedback: None`
+    /// - LM call failure during evaluation
+    pub async fn compile_with_valset<S, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example>,
+        trainset: Vec<Example<S>>,
+        valset: Option<Vec<Example<S>>>,
+        metric: &MT,
     ) -> Result<GEPAResult>
     where
-        M: Module + Optimizable + FeedbackEvaluator,
+        S: Signature,
+        S::Input: Clone,
+        M: Module<Input = S::Input> + for<'a> Facet<'a>,
+        MT: TypedMetric<S, M>,
     {
-        println!("GEPA: Starting reflective prompt optimization");
-        println!("  Iterations: {}", self.num_iterations);
-        println!("  Minibatch size: {}", self.minibatch_size);
+        let eval_set = valset.as_deref().unwrap_or(&trainset);
 
-        // Use valset if provided, otherwise use trainset for Pareto evaluation
-        let eval_set = self.valset.as_ref().unwrap_or(&trainset);
+        let predictor_names = predictor_names(module)?;
 
-        // Initialize frontier with seed program
-        let mut frontier = self.initialize_frontier(&mut *module, eval_set).await?;
-        println!("  Initialized frontier with {} candidates", frontier.len());
+        if predictor_names.is_empty() {
+            return Err(anyhow!("no optimizable predictors found"));
+        }
 
-        // Track statistics
-        let mut all_candidates = Vec::new();
-        let mut evolution_history = Vec::new();
-        let mut frontier_history = Vec::new();
-        let mut total_rollouts = 0;
-        let mut total_lm_calls = 0;
+        let mut frontier = ParetoFrontier::new();
+        let mut total_lm_calls = 0usize;
+        let mut total_rollouts = 0usize;
 
-        // Main evolutionary loop
-        for generation in 0..self.num_iterations {
-            println!("\nGeneration {}/{}", generation + 1, self.num_iterations);
-
-            // Check budget constraints
-            if let Some(max_rollouts) = self.max_rollouts
-                && total_rollouts >= max_rollouts
+        for module_name in &predictor_names {
+            if Self::would_exceed_budget(total_lm_calls, eval_set.len(), self.max_lm_calls)
+                || Self::would_exceed_budget(total_rollouts, eval_set.len(), self.max_rollouts)
             {
-                println!("  Budget limit reached: max rollouts");
                 break;
             }
 
-            // Sample candidate from frontier (proportional to coverage)
+            let instruction = {
+                with_named_predictor(module, module_name, |predictor| Ok(predictor.instruction()))?
+            };
+
+            let outcomes = self
+                .evaluate_candidate::<S, _, _>(module, module_name, &instruction, eval_set, metric)
+                .await?;
+            total_lm_calls = total_lm_calls.saturating_add(outcomes.len());
+            total_rollouts = total_rollouts.saturating_add(outcomes.len());
+            Self::require_feedback(&outcomes, module_name, 0)?;
+
+            let scores: Vec<f32> = outcomes.iter().map(|o| o.score).collect();
+            let candidate = GEPACandidate {
+                id: 0,
+                instruction,
+                module_name: module_name.clone(),
+                example_scores: scores.clone(),
+                parent_id: None,
+                generation: 0,
+            };
+            frontier.add_candidate(candidate, &scores);
+        }
+
+        let mut all_candidates = Vec::new();
+        let mut evolution_history = Vec::new();
+        let mut frontier_history = Vec::new();
+
+        for generation in 0..self.num_iterations {
+            if let Some(max_rollouts) = self.max_rollouts
+                && total_rollouts >= max_rollouts
+            {
+                break;
+            }
+
+            if let Some(max_lm_calls) = self.max_lm_calls
+                && total_lm_calls >= max_lm_calls
+            {
+                break;
+            }
+
             let parent = frontier
                 .sample_proportional_to_coverage()
-                .context("Failed to sample from frontier")?
+                .context("failed to sample from frontier")?
                 .clone();
 
-            println!(
-                "  Sampled parent (ID {}): avg score {:.3}",
-                parent.id,
-                parent.average_score()
+            let minibatch_end = trainset.len().min(self.minibatch_size.max(1));
+            let minibatch = &trainset[..minibatch_end];
+
+            if Self::would_exceed_budget(total_lm_calls, minibatch.len(), self.max_lm_calls)
+                || Self::would_exceed_budget(total_rollouts, minibatch.len(), self.max_rollouts)
+            {
+                break;
+            }
+
+            let parent_outcomes = self
+                .evaluate_candidate::<S, _, _>(
+                    module,
+                    &parent.module_name,
+                    &parent.instruction,
+                    minibatch,
+                    metric,
+                )
+                .await?;
+            total_lm_calls = total_lm_calls.saturating_add(parent_outcomes.len());
+            Self::require_feedback(&parent_outcomes, &parent.module_name, generation)?;
+
+            let feedback_summary = Self::summarize_feedback(&parent_outcomes);
+            let parent_score = average_score(&parent_outcomes);
+            total_rollouts += parent_outcomes.len();
+
+            if Self::would_exceed_budget(total_lm_calls, eval_set.len(), self.max_lm_calls)
+                || Self::would_exceed_budget(total_rollouts, eval_set.len(), self.max_rollouts)
+            {
+                break;
+            }
+
+            let child_instruction = format!(
+                "{}\n\n[GEPA gen {}] Improve based on feedback:\n{}\n(Parent score {:.3})",
+                parent.instruction,
+                generation + 1,
+                feedback_summary,
+                parent_score,
             );
 
-            // Sample minibatch
-            let minibatch: Vec<Example> =
-                trainset.iter().take(self.minibatch_size).cloned().collect();
+            let child = parent.mutate(child_instruction, generation + 1);
 
-            // Apply parent instruction to module
-            {
-                let mut predictors = module.parameters();
-                if let Some(predictor) = predictors.get_mut(&parent.module_name) {
-                    predictor.update_signature_instruction(parent.instruction.clone())?;
-                }
-            }
-
-            // Collect execution traces
-            let traces = self.collect_traces(module, &minibatch).await?;
-            total_rollouts += traces.len();
-
-            // Generate mutation through LLM reflection
-            let task_desc = "Perform the task as specified";
-            let new_instruction = self
-                .generate_mutation(&parent.instruction, &traces, task_desc)
+            let child_outcomes = self
+                .evaluate_candidate::<S, _, _>(
+                    module,
+                    &child.module_name,
+                    &child.instruction,
+                    eval_set,
+                    metric,
+                )
                 .await?;
+            total_lm_calls = total_lm_calls.saturating_add(child_outcomes.len());
+            Self::require_feedback(&child_outcomes, &child.module_name, generation + 1)?;
 
-            total_lm_calls += 2; // Reflection + proposal
-
-            println!("  Generated new instruction through reflection");
-
-            // Create child candidate
-            let child = parent.mutate(new_instruction.clone(), generation + 1);
-
-            // Apply child instruction and evaluate
-            {
-                let mut predictors = module.parameters();
-                if let Some(predictor) = predictors.get_mut(&child.module_name) {
-                    predictor.update_signature_instruction(child.instruction.clone())?;
-                }
-            }
-
-            let child_scores = self.evaluate_candidate(module, eval_set, &child).await?;
+            let child_scores: Vec<f32> = child_outcomes.iter().map(|o| o.score).collect();
             total_rollouts += child_scores.len();
 
-            let child_avg = child_scores.iter().sum::<f32>() / child_scores.len() as f32;
-            println!("  Child avg score: {:.3}", child_avg);
+            let mut child = child;
+            child.example_scores = child_scores.clone();
+            let _added = frontier.add_candidate(child.clone(), &child_scores);
 
-            // Add to frontier
-            let added = frontier.add_candidate(child.clone(), &child_scores);
-            if added {
-                println!("  Added to Pareto frontier");
-            } else {
-                println!("  Dominated, not added");
-            }
-
-            // Track statistics
             if self.track_stats {
                 all_candidates.push(child);
                 let best_avg = frontier
@@ -494,31 +417,55 @@ impl GEPA {
                 evolution_history.push((generation, best_avg));
                 frontier_history.push(frontier.statistics());
             }
-
-            println!("  Frontier size: {}", frontier.len());
         }
 
-        // Get best candidate
         let best_candidate = frontier
             .best_by_average()
-            .context("No candidates on frontier")?
-            .clone();
+            .cloned()
+            .context("no candidates available on Pareto frontier")?;
 
-        println!("\nGEPA optimization complete");
-        println!(
-            "  Best average score: {:.3}",
-            best_candidate.average_score()
-        );
-        println!("  Total rollouts: {}", total_rollouts);
-        println!("  Total LM calls: {}", total_lm_calls);
+        Self::set_instruction(
+            module,
+            &best_candidate.module_name,
+            best_candidate.instruction.clone(),
+        )?;
 
-        // Apply best instruction to module
-        {
-            let mut predictors = module.parameters();
-            if let Some(predictor) = predictors.get_mut(&best_candidate.module_name) {
-                predictor.update_signature_instruction(best_candidate.instruction.clone())?;
+        let highest_score_achieved_per_val_task = if frontier.is_empty() {
+            Vec::new()
+        } else {
+            let mut highs = vec![f32::MIN; eval_set.len()];
+            for candidate in frontier.candidates() {
+                for (idx, score) in candidate.example_scores.iter().enumerate() {
+                    if idx < highs.len() {
+                        highs[idx] = highs[idx].max(*score);
+                    }
+                }
             }
-        }
+            highs
+        };
+
+        let best_outputs_valset = if self.track_best_outputs {
+            if Self::would_exceed_budget(total_lm_calls, eval_set.len(), self.max_lm_calls)
+                || Self::would_exceed_budget(total_rollouts, eval_set.len(), self.max_rollouts)
+            {
+                tracing::debug!(
+                    eval_examples = eval_set.len(),
+                    total_lm_calls,
+                    total_rollouts,
+                    max_lm_calls = ?self.max_lm_calls,
+                    max_rollouts = ?self.max_rollouts,
+                    "skipping best output collection because budget would be exceeded"
+                );
+                None
+            } else {
+                let outputs = Self::collect_best_outputs::<S, _>(module, eval_set).await?;
+                total_lm_calls = total_lm_calls.saturating_add(eval_set.len());
+                total_rollouts = total_rollouts.saturating_add(eval_set.len());
+                Some(outputs)
+            }
+        } else {
+            None
+        };
 
         Ok(GEPAResult {
             best_candidate,
@@ -526,9 +473,121 @@ impl GEPA {
             total_rollouts,
             total_lm_calls,
             evolution_history,
-            highest_score_achieved_per_val_task: vec![], // TODO: Track per-task bests
-            best_outputs_valset: None, // TODO: Implement if track_best_outputs is true
+            highest_score_achieved_per_val_task,
+            best_outputs_valset,
             frontier_history,
         })
+    }
+}
+
+impl Optimizer for GEPA {
+    type Report = GEPAResult;
+
+    async fn compile<S, M, MT>(
+        &self,
+        module: &mut M,
+        trainset: Vec<Example<S>>,
+        metric: &MT,
+    ) -> Result<Self::Report>
+    where
+        S: Signature,
+        S::Input: Clone,
+        M: Module<Input = S::Input> + for<'a> Facet<'a>,
+        MT: TypedMetric<S, M>,
+    {
+        self.compile_with_valset::<S, _, _>(module, trainset, None, metric)
+            .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{Result, anyhow};
+
+    use super::*;
+    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+
+    #[derive(Signature, Clone, Debug)]
+    struct GepaStateSig {
+        #[input]
+        prompt: String,
+
+        #[output]
+        answer: String,
+    }
+
+    #[derive(facet::Facet)]
+    #[facet(crate = facet)]
+    struct GepaStateModule {
+        predictor: Predict<GepaStateSig>,
+    }
+
+    impl Module for GepaStateModule {
+        type Input = GepaStateSigInput;
+        type Output = GepaStateSigOutput;
+
+        async fn forward(
+            &self,
+            input: GepaStateSigInput,
+        ) -> Result<Predicted<GepaStateSigOutput>, PredictError> {
+            Ok(Predicted::new(
+                GepaStateSigOutput {
+                    answer: input.prompt,
+                },
+                CallMetadata::default(),
+            ))
+        }
+    }
+
+    struct AlwaysFailMetric;
+
+    impl TypedMetric<GepaStateSig, GepaStateModule> for AlwaysFailMetric {
+        async fn evaluate(
+            &self,
+            _example: &Example<GepaStateSig>,
+            _prediction: &Predicted<GepaStateSigOutput>,
+        ) -> Result<MetricOutcome> {
+            Err(anyhow!("metric failure"))
+        }
+    }
+
+    fn eval_set() -> Vec<Example<GepaStateSig>> {
+        vec![Example::new(
+            GepaStateSigInput {
+                prompt: "one".to_string(),
+            },
+            GepaStateSigOutput {
+                answer: "one".to_string(),
+            },
+        )]
+    }
+
+    #[tokio::test]
+    async fn evaluate_candidate_restores_state_when_metric_errors() {
+        let optimizer = GEPA::builder().num_iterations(1).minibatch_size(1).build();
+        let mut module = GepaStateModule {
+            predictor: Predict::<GepaStateSig>::builder()
+                .instruction("seed-instruction")
+                .build(),
+        };
+
+        let err = optimizer
+            .evaluate_candidate::<GepaStateSig, _, _>(
+                &mut module,
+                "predictor",
+                "candidate instruction",
+                &eval_set(),
+                &AlwaysFailMetric,
+            )
+            .await
+            .expect_err("candidate evaluation should propagate metric failure");
+        assert!(err.to_string().contains("metric failure"));
+
+        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
+            Ok(predictor.instruction())
+        })
+        .expect("predictor lookup should succeed");
+        assert_eq!(instruction, "seed-instruction");
     }
 }

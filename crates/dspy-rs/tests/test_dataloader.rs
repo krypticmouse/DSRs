@@ -1,293 +1,520 @@
-use anyhow::Result;
-use dspy_rs::data::dataloader::DataLoader;
-use rstest::rstest;
+use anyhow::{Result, anyhow};
+use arrow::array::{ArrayRef, Int64Array, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use bon::Builder;
+use dspy_rs::{
+    COPRO, CallMetadata, DataLoader, Example, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
+    average_score, evaluate_trainset,
+};
+use parquet::arrow::ArrowWriter;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use tempfile::tempdir;
 
-fn should_run_network_tests() -> bool {
-    std::env::var("DSPY_RS_NETWORK_TESTS").is_ok()
+#[derive(Signature, Clone, Debug)]
+struct LoaderSig {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
 }
 
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_hf_awesome_chatgpt_prompts() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    // Load the HuggingFace dataset
-    let input_keys = vec!["events".to_string(), "inputs".to_string()];
-    let output_keys = vec!["output".to_string()];
+#[derive(Signature, Clone, Debug)]
+struct NumericSig {
+    #[input]
+    value: i64,
 
-    let examples = DataLoader::load_hf(
-        "zed-industries/zeta",
-        input_keys.clone(),
-        output_keys.clone(),
-        "",      // No specific subset
-        "train", // Split to load
-        true,    // Not verbose
+    #[output]
+    doubled: i64,
+}
+
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct EchoModule {
+    #[builder(default = Predict::<LoaderSig>::builder().instruction("seed").build())]
+    predictor: Predict<LoaderSig>,
+}
+
+impl Module for EchoModule {
+    type Input = LoaderSigInput;
+    type Output = LoaderSigOutput;
+
+    async fn forward(
+        &self,
+        input: LoaderSigInput,
+    ) -> Result<Predicted<LoaderSigOutput>, PredictError> {
+        let _ = &self.predictor;
+        Ok(Predicted::new(
+            LoaderSigOutput {
+                answer: input.question,
+            },
+            CallMetadata::default(),
+        ))
+    }
+}
+
+struct ExactMatch;
+
+impl TypedMetric<LoaderSig, EchoModule> for ExactMatch {
+    async fn evaluate(
+        &self,
+        example: &Example<LoaderSig>,
+        prediction: &Predicted<LoaderSigOutput>,
+    ) -> Result<MetricOutcome> {
+        let score = (example.output.answer == prediction.answer) as u8 as f32;
+        Ok(MetricOutcome::score(score))
+    }
+}
+
+fn write_file(path: &Path, contents: &str) -> Result<()> {
+    fs::write(path, contents)?;
+    Ok(())
+}
+
+fn write_qa_parquet(path: &Path, questions: &[&str], answers: &[&str]) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("question", DataType::Utf8, false),
+        Field::new("answer", DataType::Utf8, false),
+    ]));
+
+    let question_col: ArrayRef = Arc::new(StringArray::from(questions.to_vec()));
+    let answer_col: ArrayRef = Arc::new(StringArray::from(answers.to_vec()));
+    let batch = RecordBatch::try_new(schema.clone(), vec![question_col, answer_col])?;
+
+    let file = fs::File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+
+fn write_numeric_parquet(path: &Path, values: &[i64], doubled: &[i64]) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("value", DataType::Int64, false),
+        Field::new("doubled", DataType::Int64, false),
+    ]));
+
+    let value_col: ArrayRef = Arc::new(Int64Array::from(values.to_vec()));
+    let doubled_col: ArrayRef = Arc::new(Int64Array::from(doubled.to_vec()));
+    let batch = RecordBatch::try_new(schema.clone(), vec![value_col, doubled_col])?;
+
+    let file = fs::File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+
+#[test]
+fn csv_typed_success_path() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(
+        &path,
+        "question,answer\nWhat is 2+2?,4\nCapital of France?,Paris\n",
     )?;
 
-    // Verify we got some data
-    assert!(
-        !examples.is_empty(),
-        "Should have loaded some examples from HuggingFace dataset"
-    );
-
-    // Check the first example has the expected structure
-    let first_example = &examples[0];
-
-    // Print available keys to debug
-
-    // Verify input and output keys are set correctly
-    assert_eq!(first_example.input_keys, input_keys);
-    assert_eq!(first_example.output_keys, output_keys);
-
-    // Check what fields are actually present
-    let has_act = first_example.data.contains_key("act");
-    let has_prompt = first_example.data.contains_key("prompt");
-
-    // Verify the data contains the expected fields (this will now provide better error info)
-    assert!(
-        has_act || !first_example.keys().is_empty(),
-        "Example should contain 'act' field or have some data. Available fields: {:?}",
-        first_example.keys()
-    );
-    assert!(
-        has_prompt || !first_example.keys().is_empty(),
-        "Example should contain 'prompt' field or have some data. Available fields: {:?}",
-        first_example.keys()
-    );
-
-    // If expected fields exist, verify they're not empty
-    if has_act && has_prompt {
-        let act_value = first_example.get("act", None);
-        let prompt_value = first_example.get("prompt", None);
-        assert!(!act_value.is_null(), "act field should not be null");
-        assert!(!prompt_value.is_null(), "prompt field should not be null");
-
-        // Convert to string for display
-        let act_str = act_value.as_str().unwrap_or("");
-        let prompt_str = prompt_value.as_str().unwrap_or("");
-        assert!(!act_str.is_empty(), "act field should not be empty");
-        assert!(!prompt_str.is_empty(), "prompt field should not be empty");
-    }
-
-    Ok(())
-}
-
-// Test loading CSV from URL: snakes_count_10.csv
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_csv_from_url() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    let url = "https://people.sc.fsu.edu/~jburkardt/data/csv/snakes_count_10.csv";
-    let input_keys = vec!["Game Number".to_string()];
-    let output_keys = vec!["Game Length".to_string()];
-
-    let examples = DataLoader::load_csv(
-        url,
-        ',', // delimiter
-        input_keys.clone(),
-        output_keys.clone(),
-        true, // has headers
-    )?;
-
-    // Verify we got some data
-    assert!(
-        !examples.is_empty(),
-        "Should have loaded some examples from CSV"
-    );
-    assert_eq!(
-        examples.len(),
-        10,
-        "Should have loaded exactly 10 game records"
-    );
-
-    // Check the first example
-    let first_example = &examples[0];
-
-    // Verify input and output keys are set correctly
-    assert_eq!(first_example.input_keys, input_keys);
-    assert_eq!(first_example.output_keys, output_keys);
-
-    // Verify we have data (columns should be indexed as 0, 1, etc for CSV without named headers)
-    assert!(
-        !first_example.data.is_empty(),
-        "Example should contain data"
-    );
-
-    Ok(())
-}
-
-// Test loading JSON from URL: grok-2 config.json
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_json_from_url() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    let url = "https://huggingface.co/xai-org/grok-2/raw/main/config.json";
-    let input_keys = vec!["vocab_size".to_string(), "hidden_size".to_string()];
-    let output_keys = vec![]; // No output keys for this config file
-
-    // This is a single JSON object, not JSON lines
-    let examples = DataLoader::load_json(
-        url,
-        false, // not JSON lines
-        input_keys.clone(),
-        output_keys.clone(),
-    )?;
-
-    // For a single JSON object, we expect it to be parsed as a single Example
-    // or as an array of Examples depending on the structure
-    assert!(!examples.is_empty(), "Should have loaded data from JSON");
-
-    // Get the first (and likely only) example
-    let config_example = &examples[0];
-
-    // Verify the data contains the expected fields
-    assert!(
-        config_example.data.contains_key("vocab_size"),
-        "Config should contain 'vocab_size' field"
-    );
-    assert!(
-        config_example.data.contains_key("hidden_size"),
-        "Config should contain 'hidden_size' field"
-    );
-
-    // Get and verify the values
-    let vocab_size = config_example.get("vocab_size", None);
-    let hidden_size = config_example.get("hidden_size", None);
-
-    assert!(!vocab_size.is_null(), "vocab_size should not be null");
-    assert!(!hidden_size.is_null(), "hidden_size should not be null");
-
-    Ok(())
-}
-
-// Additional test: Load JSON with specific structure verification
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_json_grok2_with_multiple_fields() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    let url = "https://huggingface.co/xai-org/grok-2/raw/main/config.json";
-
-    // Test loading with more comprehensive input keys
-    let input_keys = vec![
-        "vocab_size".to_string(),
-        "hidden_size".to_string(),
-        "intermediate_size".to_string(),
-        "num_hidden_layers".to_string(),
-    ];
-    let output_keys = vec![];
-
-    let examples = DataLoader::load_json(url, false, input_keys.clone(), output_keys.clone())?;
-
-    assert!(!examples.is_empty(), "Should have loaded data from JSON");
-
-    let config = &examples[0];
-
-    // Verify all requested input fields exist
-    for key in &input_keys {
-        assert!(
-            config.data.contains_key(key),
-            "Config should contain '{key}' field"
-        );
-        let value = config.get(key, None);
-        assert!(!value.is_null(), "{key} should not be null");
-    }
-
-    Ok(())
-}
-
-// Test CSV with headers parsing
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_csv_verify_columns() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    // First, let's load without specifying input/output keys to see all columns
-    let url = "https://people.sc.fsu.edu/~jburkardt/data/csv/snakes_count_10.csv";
-    let examples = DataLoader::load_csv(
-        url,
+    let examples = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
         ',',
-        vec![], // No specific input keys
-        vec![], // No specific output keys
-        true,   // has headers
-    )?;
-
-    assert!(!examples.is_empty(), "Should have loaded examples");
-
-    // Examine the structure of the data
-    let first_example = &examples[0];
-    let keys = first_example.keys();
-
-    // Verify we have exactly 10 rows (games)
-    assert_eq!(examples.len(), 10, "Should have 10 game records");
-
-    // Verify each example has the same structure
-    for (i, example) in examples.iter().enumerate() {
-        assert_eq!(
-            example.keys().len(),
-            keys.len(),
-            "Row {i} should have same number of columns"
-        );
-    }
-
-    Ok(())
-}
-
-// Test error handling for invalid URLs
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_invalid_url_handling() {
-    if !should_run_network_tests() {
-        return;
-    }
-    let invalid_url = "https://invalid-url-that-does-not-exist.com/data.csv";
-
-    let result = DataLoader::load_csv(
-        invalid_url,
-        ',',
-        vec!["col1".to_string()],
-        vec!["col2".to_string()],
         true,
-    );
-
-    assert!(result.is_err(), "Should fail when loading from invalid URL");
-}
-
-// Test HuggingFace dataset with specific split
-#[rstest]
-#[cfg_attr(miri, ignore = "MIRI has issues with network operations")]
-fn test_load_hf_with_verbose() -> Result<()> {
-    if !should_run_network_tests() {
-        return Ok(());
-    }
-    let input_keys = vec!["events".to_string(), "inputs".to_string()];
-    let output_keys = vec!["output".to_string()];
-
-    // Load with verbose output to see what files are being processed
-    let examples = DataLoader::load_hf(
-        "zed-industries/zeta",
-        input_keys.clone(),
-        output_keys.clone(),
-        "",      // No specific subset
-        "train", // Split
-        true,    // Verbose - will print loading information
+        TypedLoadOptions::default(),
     )?;
 
-    assert!(!examples.is_empty(), "Should have loaded examples");
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[0].input.question, "What is 2+2?");
+    assert_eq!(examples[0].output.answer, "4");
+    Ok(())
+}
 
-    // Verify data integrity
-    for example in examples.iter().take(3) {
-        // Verify structure
-        assert_eq!(example.input_keys, input_keys);
-        assert_eq!(example.output_keys, output_keys);
-    }
+#[test]
+fn csv_unknown_extra_columns_ignored_by_default() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(
+        &path,
+        "question,answer,notes\nWhat is 2+2?,4,math\nCapital of France?,Paris,geo\n",
+    )?;
+
+    let examples = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+    )?;
+
+    assert_eq!(examples.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn csv_unknown_columns_error_when_policy_is_error() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "question,answer,notes\nWhat is 2+2?,4,math\n")?;
+
+    let err = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions {
+            field_map: HashMap::new(),
+            unknown_fields: UnknownFieldPolicy::Error,
+        },
+    )
+    .expect_err("unknown field policy should fail when extra columns exist");
+
+    assert!(err.to_string().contains("unknown field `notes`"));
+    Ok(())
+}
+
+#[test]
+fn csv_missing_required_input_field_errors() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "answer\n4\n")?;
+
+    let err = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+    )
+    .expect_err("missing question field should fail");
+
+    assert!(err.to_string().contains("missing field `question`"));
+    Ok(())
+}
+
+#[test]
+fn csv_missing_required_output_field_errors() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "question\nWhat is 2+2?\n")?;
+
+    let err = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+    )
+    .expect_err("missing answer field should fail");
+
+    assert!(err.to_string().contains("missing field `answer`"));
+    Ok(())
+}
+
+#[test]
+fn csv_mapper_overload_success() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "q,a\nWhat is 2+2?,4\n")?;
+
+    let examples = DataLoader::load_csv_with::<LoaderSig, _>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+        |row| {
+            Ok(Example::new(
+                LoaderSigInput {
+                    question: row.get::<String>("q")?,
+                },
+                LoaderSigOutput {
+                    answer: row.get::<String>("a")?,
+                },
+            ))
+        },
+    )?;
+
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0].input.question, "What is 2+2?");
+    assert_eq!(examples[0].output.answer, "4");
+    Ok(())
+}
+
+#[test]
+fn csv_mapper_overload_error_includes_row_index() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "q,a\nWhat is 2+2?,4\n")?;
+
+    let err = DataLoader::load_csv_with::<LoaderSig, _>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+        |_row| Err(anyhow!("custom mapper failure")),
+    )
+    .expect_err("mapper failure should surface as row-indexed error");
+
+    assert!(err.to_string().contains("mapper error at row 1"));
+    assert!(err.to_string().contains("custom mapper failure"));
+    Ok(())
+}
+
+#[test]
+fn json_array_typed_success() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.json");
+    write_file(
+        &path,
+        r#"[{"question":"What is 2+2?","answer":"4"},{"question":"Capital of France?","answer":"Paris"}]"#,
+    )?;
+
+    let examples = DataLoader::load_json::<LoaderSig>(
+        path.to_str().unwrap(),
+        false,
+        TypedLoadOptions::default(),
+    )?;
+
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[1].output.answer, "Paris");
+    Ok(())
+}
+
+#[test]
+fn json_mapper_overload_success() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.json");
+    write_file(
+        &path,
+        r#"[{"prompt":"What is 2+2?","gold":"4"},{"prompt":"Capital of France?","gold":"Paris"}]"#,
+    )?;
+
+    let examples = DataLoader::load_json_with::<LoaderSig, _>(
+        path.to_str().unwrap(),
+        false,
+        TypedLoadOptions::default(),
+        |row| {
+            Ok(Example::new(
+                LoaderSigInput {
+                    question: row.get::<String>("prompt")?,
+                },
+                LoaderSigOutput {
+                    answer: row.get::<String>("gold")?,
+                },
+            ))
+        },
+    )?;
+
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[0].input.question, "What is 2+2?");
+    assert_eq!(examples[1].output.answer, "Paris");
+    Ok(())
+}
+
+#[test]
+fn json_mapper_overload_error_includes_row_index() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.json");
+    write_file(&path, r#"[{"question":"What is 2+2?","answer":"4"}]"#)?;
+
+    let err = DataLoader::load_json_with::<LoaderSig, _>(
+        path.to_str().unwrap(),
+        false,
+        TypedLoadOptions::default(),
+        |_row| Err(anyhow!("json mapper failed")),
+    )
+    .expect_err("mapper failure should surface as row-indexed error");
+
+    assert!(err.to_string().contains("mapper error at row 1"));
+    assert!(err.to_string().contains("json mapper failed"));
+    Ok(())
+}
+
+#[test]
+fn jsonl_typed_success() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.jsonl");
+    write_file(
+        &path,
+        r#"{"question":"What is 2+2?","answer":"4"}
+{"question":"Capital of France?","answer":"Paris"}
+"#,
+    )?;
+
+    let examples = DataLoader::load_json::<LoaderSig>(
+        path.to_str().unwrap(),
+        true,
+        TypedLoadOptions::default(),
+    )?;
+
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[0].input.question, "What is 2+2?");
+    Ok(())
+}
+
+#[test]
+fn json_type_mismatch_errors() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("bad.json");
+    write_file(&path, r#"[{"value":"not-an-int","doubled":2}]"#)?;
+
+    let err = DataLoader::load_json::<NumericSig>(
+        path.to_str().unwrap(),
+        false,
+        TypedLoadOptions::default(),
+    )
+    .expect_err("invalid numeric input should fail conversion");
+
+    assert!(err.to_string().contains("type mismatch"));
+    Ok(())
+}
+
+#[test]
+fn jsonl_type_mismatch_errors() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("bad.jsonl");
+    write_file(
+        &path,
+        r#"{"value":1,"doubled":"not-an-int"}
+"#,
+    )?;
+
+    let err = DataLoader::load_json::<NumericSig>(
+        path.to_str().unwrap(),
+        true,
+        TypedLoadOptions::default(),
+    )
+    .expect_err("invalid numeric output should fail conversion");
+
+    assert!(err.to_string().contains("type mismatch"));
+    Ok(())
+}
+
+#[test]
+fn parquet_typed_success_path() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.parquet");
+    write_qa_parquet(
+        &path,
+        &["What is 2+2?", "Capital of France?"],
+        &["4", "Paris"],
+    )?;
+
+    let examples =
+        DataLoader::load_parquet::<LoaderSig>(path.to_str().unwrap(), TypedLoadOptions::default())?;
+
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[1].output.answer, "Paris");
+    Ok(())
+}
+
+#[test]
+fn parquet_mapper_overload_success() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.parquet");
+    write_qa_parquet(&path, &["Q1"], &["A1"])?;
+
+    let examples = DataLoader::load_parquet_with::<LoaderSig, _>(
+        path.to_str().unwrap(),
+        TypedLoadOptions::default(),
+        |row| {
+            Ok(Example::new(
+                LoaderSigInput {
+                    question: row.get::<String>("question")?,
+                },
+                LoaderSigOutput {
+                    answer: row.get::<String>("answer")?,
+                },
+            ))
+        },
+    )?;
+
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0].input.question, "Q1");
+    assert_eq!(examples[0].output.answer, "A1");
+    Ok(())
+}
+
+#[test]
+fn hf_typed_from_parquet_success_path() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.parquet");
+    write_qa_parquet(&path, &["Q1", "Q2"], &["A1", "A2"])?;
+
+    let examples = DataLoader::load_hf_from_parquet::<LoaderSig>(
+        vec![PathBuf::from(&path)],
+        TypedLoadOptions::default(),
+    )?;
+
+    assert_eq!(examples.len(), 2);
+    assert_eq!(examples[0].output.answer, "A1");
+    Ok(())
+}
+
+#[test]
+fn typed_loader_field_remap_supports_input_and_output() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "prompt,completion\nWhat is 2+2?,4\n")?;
+
+    let mut field_map = HashMap::new();
+    field_map.insert("question".to_string(), "prompt".to_string());
+    field_map.insert("answer".to_string(), "completion".to_string());
+
+    let examples = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions {
+            field_map,
+            unknown_fields: UnknownFieldPolicy::Ignore,
+        },
+    )?;
+
+    assert_eq!(examples.len(), 1);
+    assert_eq!(examples[0].input.question, "What is 2+2?");
+    assert_eq!(examples[0].output.answer, "4");
+    Ok(())
+}
+
+#[test]
+fn parquet_numeric_round_trip_for_typed_conversion() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("numeric.parquet");
+    write_numeric_parquet(&path, &[1, 2, 3], &[2, 4, 6])?;
+
+    let examples = DataLoader::load_parquet::<NumericSig>(
+        path.to_str().unwrap(),
+        TypedLoadOptions::default(),
+    )?;
+
+    assert_eq!(examples.len(), 3);
+    assert_eq!(examples[2].output.doubled, 6);
+    Ok(())
+}
+
+#[tokio::test]
+async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("train.csv");
+    write_file(&path, "question,answer\none,one\ntwo,two\n")?;
+
+    let trainset = DataLoader::load_csv::<LoaderSig>(
+        path.to_str().unwrap(),
+        ',',
+        true,
+        TypedLoadOptions::default(),
+    )?;
+
+    let metric = ExactMatch;
+    let mut module = EchoModule::builder().build();
+
+    let outcomes = evaluate_trainset(&module, &trainset, &metric).await?;
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(average_score(&outcomes), 1.0);
+
+    let optimizer = COPRO::builder().breadth(2).depth(1).build();
+    optimizer
+        .compile::<LoaderSig, _, _>(&mut module, trainset, &metric)
+        .await?;
 
     Ok(())
 }

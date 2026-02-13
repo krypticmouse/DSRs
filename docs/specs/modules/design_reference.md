@@ -1,5 +1,15 @@
 # DSRs Module System — Technical Design Reference
 
+## Current Scope Addendum (2026-02-12)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred.
+
+All content below is preserved as a historical implementation record.
+
 > Companion to the Shaping Document. The shaping doc says **what** we want (R's) and **what parts** we need (F's). This document captures **how each part works**: the concrete types, traits, data flow, code sketches, and design decisions from the shaping process.
 
 ---
@@ -58,7 +68,7 @@ pub trait Signature: Send + Sync + 'static {
 
 Bounds: `BamlType` for jsonish coercion and value conversion. `Facet` for schema derivation. Both are derived, not manual.
 
-Note: `from_parts`/`into_parts` were removed from the trait (S7). The current codebase uses them to combine input+output into one struct and split back apart, but with demos stored as `Demo<S> { input: S::Input, output: S::Output }` pairs and `Predict::call()` returning `S::Output` directly, the round-trip is unnecessary. The user's `#[derive(Signature)]` still generates the combined struct for ergonomic field access, but that's a convenience on the user's type, not a trait requirement.
+Note: `from_parts`/`into_parts` were removed from the trait (S7). The current codebase uses them to combine input+output into one struct and split back apart, but with demos stored as `Demo<S> { input: S::Input, output: S::Output }` pairs and `Module::call()` returning `Result<Predicted<S::Output>, PredictError>` (delegating to `forward`), the round-trip is unnecessary. The user's `#[derive(Signature)]` still generates the combined struct for ergonomic field access, but that's a convenience on the user's type, not a trait requirement.
 
 ### User-facing derive
 
@@ -308,7 +318,7 @@ impl<S: Signature, A: Augmentation> Signature for Augmented<S, A> {
 }
 ```
 
-`Augmented` is a zero-sized type-level combinator. It exists purely to map `S::Input → A::Wrap<S::Output>` at the type level. Modules hold `Predict<Augmented<S, A>>` where demos are stored as `Demo { input: S::Input, output: A::Wrap<S::Output> }` pairs and `call()` returns `A::Wrap<S::Output>` directly. No `from_parts`/`into_parts` needed (S7).
+`Augmented` is a zero-sized type-level combinator. It exists purely to map `S::Input → A::Wrap<S::Output>` at the type level. Modules hold `Predict<Augmented<S, A>>` where demos are stored as `Demo { input: S::Input, output: A::Wrap<S::Output> }` pairs and `forward()` returns `Result<Predicted<A::Wrap<S::Output>>, PredictError>`. No `from_parts`/`into_parts` needed (S7).
 
 ### How BamlType works for flatten
 
@@ -364,7 +374,39 @@ pub trait Module: Send + Sync {
     type Input: BamlType + Facet + Send + Sync;
     type Output: BamlType + Facet + Send + Sync;
 
-    async fn forward(&self, input: Self::Input) -> Result<Self::Output, PredictError>;
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
+
+    async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.forward(input).await
+    }
+}
+```
+
+`Module::call` is the canonical user-facing entry point and returns `Result<Predicted<O>, PredictError>`. Module authors implement `forward` as the execution hook; the default `call` delegates to it. `Predicted<O>` carries typed output and call metadata together (raw response, usage, tool calls, field parse metadata). It implements `Deref<Target = O>`, so output fields stay ergonomic (`result.answer`, `result.reasoning`), and metadata is available via `result.metadata()`. The outer `Result` keeps error handling idiomatic and stable: `?` works on stable Rust without nightly `Try` trait machinery.
+
+```rust
+pub struct Predicted<O> {
+    output: O,
+    metadata: CallMetadata,
+}
+
+impl<O> Deref for Predicted<O> {
+    type Target = O;
+    fn deref(&self) -> &O { &self.output }
+}
+
+impl<O> Predicted<O> {
+    pub fn new(output: O, metadata: CallMetadata) -> Self {
+        Self { output, metadata }
+    }
+
+    pub fn metadata(&self) -> &CallMetadata { &self.metadata }
+
+    pub fn into_inner(self) -> O { self.output }
+
+    pub fn into_parts(self) -> (O, CallMetadata) {
+        (self.output, self.metadata)
+    }
 }
 ```
 
@@ -376,7 +418,7 @@ struct Bad {
     step1: Predict<QA>,
     step2: Predict<Summarize>,  // Summarize expects SummarizeInput, not QAOutput
 }
-// step2.forward(step1_output) → type mismatch → compile error
+// step2.call(step1_output) → type mismatch → compile error
 ```
 
 ### Swapping strategies
@@ -401,7 +443,7 @@ struct RAG<A: Module<Input = AnswerInput>> {
 
 ```rust
 #[derive(Facet)]
-#[facet(dsrs::parameter)]  // marks for discovery by F6 walker
+#[facet(dsrs::predict_accessor = ...)]  // shape-local accessor payload for F6 walker
 pub struct Predict<S: Signature> {
     demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
@@ -437,13 +479,13 @@ let predict = Predict::<QA>::builder()
 
 ```rust
 impl<S: Signature> Predict<S> {
-    pub async fn call(&self, input: S::Input) -> Result<S::Output, PredictError> {
+    pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         let schema = SignatureSchema::of::<S>();  // F2: Facet-derived, cached
         let lm = get_global_lm();
         let adapter = ChatAdapter;
 
         // Build prompt
-        let system = adapter.build_system(schema, self.instruction_override.as_deref());
+        let system = adapter.build_system(schema, self.instruction_override.as_deref())?;
         let mut chat = Chat::new(vec![Message::system(system)]);
 
         // Format demos
@@ -459,12 +501,26 @@ impl<S: Signature> Predict<S> {
         chat.push_message(Message::user(user));
 
         // Call LM
-        let response = lm.call(chat, self.tools.clone()).await?;
+        let response = match lm.call(chat, self.tools.clone()).await {
+            Ok(response) => response,
+            Err(err) => return Err(PredictError::Lm { source: err }),
+        };
 
         // Parse response
-        let output = adapter.parse_output::<S::Output>(schema, &response)?;
+        let typed_output = adapter.parse_output::<S::Output>(schema, &response)?;
 
-        Ok(output)
+        let metadata = CallMetadata::new(
+            response.output.content().to_string(),
+            response.usage.clone(),
+            response.tool_calls,
+            response.tool_executions,
+        );
+
+        Ok(Predicted::new(typed_output, metadata))
+    }
+
+    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
+        self.call(input).await
     }
 }
 ```
@@ -498,36 +554,49 @@ impl<S: Signature> Predict<S> {
 ### The walker
 
 ```rust
-pub fn named_parameters<'a>(
-    root: &'a dyn Reflect,  // or: root with known Facet Shape
-) -> Vec<(String, /* handle to predictor */)> {
-    let mut results = Vec::new();
-    walk_value(root, "", &mut results);
-    results
+pub fn visit_named_predictors_mut<M, F>(
+    module: &mut M,
+    mut visitor: F,
+) -> Result<(), NamedParametersError>
+where
+    M: for<'a> Facet<'a>,
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
+{
+    walk_value(Peek::new(&*module), "", &mut visitor)?;
+    Ok(())
 }
 
-fn walk_value(value: /* Peek or similar */, path: &str, results: &mut Vec<...>) {
+fn walk_value<F>(
+    value: Peek<'_, '_>,
+    path: &str,
+    visitor: &mut F,
+) -> Result<ControlFlow<()>, NamedParametersError>
+where
+    F: FnMut(&str, &mut dyn DynPredictor) -> ControlFlow<()>,
+{
     let shape = value.shape();
 
-    // Check: is this a parameter leaf?
-    if has_dsrs_parameter(shape) {
-        results.push((path.to_string(), /* extract DynPredictor handle */));
-        return;  // don't recurse into Predict's internals
+    // Stop at Predict leaves with valid shape-local accessor payloads.
+    if let PredictLeafResolution::Accessor(accessor) = resolve_predict_leaf(shape) {
+        let raw_ptr = value.data().as_byte_ptr() as *mut ();
+        let mut forward = |predictor: &mut dyn DynPredictor| visitor(path, predictor);
+        return Ok((accessor.visit_mut)(raw_ptr, &mut forward));
     }
 
-    // Recurse based on shape.def
-    // V1: struct-field recursion only. Container traversal (Option/Vec/HashMap/Box)
-    // deferred (S5) — all V1 library modules use struct fields.
-    match shape.def {
-        Def::Struct(struct_type) => {
-            for field in struct_type.fields {
-                let child = value.field(field.name);
-                let child_path = format!("{}.{}", path, field.name);
-                walk_value(child, &child_path, results);
-            }
-        }
-        _ => {} // containers, primitives, enums — skip for V1
+    if matches!(shape.ty, Type::User(UserType::Struct(_))) {
+        // recurse through struct fields (excluding skip-deserializing fields)
     }
+
+    match shape.def {
+        Def::Option(_) => { /* recurse when Some */ }
+        Def::List(_) | Def::Array(_) | Def::Slice(_) => { /* recurse with [idx] */ }
+        Def::Map(_) => { /* recurse with ['key']; non-string keys -> explicit Container error */ }
+        Def::Pointer(def) if def.known == Some(KnownPointer::Box) => { /* recurse */ }
+        Def::Pointer(_) => { /* Rc/Arc etc. with predictor leaves -> explicit Container error */ }
+        _ => {}
+    }
+
+    Ok(ControlFlow::Continue(()))
 }
 ```
 
@@ -550,15 +619,15 @@ pub struct RAG {
 ]
 ```
 
-The walker recurses into `ChainOfThought<Answer>` (a struct with a `predict` field), finds the Predict inside, and reports the dotted path. Identical to DSPy's `named_parameters()` output.
+The walker recurses into `ChainOfThought<Answer>` (a struct with a `predict` field), finds the Predict inside, and reports the dotted path. Path semantics match DSPy's `named_parameters()` output even though the Rust API surface is callback-based.
 
 ### How the handle works (S2 resolved: Mechanism A)
 
-The walker finds a value whose Shape has `dsrs::parameter`. It needs to hand back something the optimizer can call `get_demos()`, `set_demos()`, `set_instruction()` on.
+The walker identifies a `Predict` leaf via strict shape identity (`type_identifier` + `module_path`) and then requires exactly one valid `dsrs::predict_accessor` payload. It needs to hand back something the optimizer can call `get_demos()`, `set_demos()`, `set_instruction()` on.
 
 S2 evaluated three mechanisms and selected **Mechanism A: shape-local accessor payload**. `Predict<S>` carries a `PredictAccessorFns` payload as a typed Facet attribute (fn-pointer based, `'static + Copy`). The walker extracts it via `attr.get_as::<PredictAccessorFns>()` — the same pattern already used by `WithAdapterFns` in `bamltype/src/facet_ext.rs`. The payload provides a direct cast to `&mut dyn DynPredictor` at the leaf, with one audited unsafe boundary.
 
-Global registry (Mechanism B) is deferred — only needed if cross-crate runtime loading is later required. Interior dyn-handle state (Mechanism C) was rejected for V1 (see `S2-dynpredictor-handle-discovery.md`).
+Global registry (Mechanism B) is not part of current runtime behavior. Interior dyn-handle state (Mechanism C) was rejected for V1 (see `S2-dynpredictor-handle-discovery.md`).
 
 ---
 
@@ -572,7 +641,7 @@ impl ChatAdapter {
     pub fn build_system(
         schema: &SignatureSchema,
         instruction_override: Option<&str>,
-    ) -> String;
+    ) -> Result<String>;
 
     /// Format a typed input value as user message fields
     /// Uses Facet Peek to walk the value generically
@@ -667,6 +736,8 @@ The `insert_at_path` function creates nested BamlValue::Class entries as needed.
 
 ## 9. DynPredictor: The Optimizer Bridge (F8)
 
+**Current-scope note (2026-02-12):** The code excerpt below is preserved as historical design context. In active V1–V5 typed-only scope, `DynPredictor` remains internal and no longer includes `forward_untyped`; current runtime only exposes schema/instruction/demo/state mutation internally for optimizer use.
+
 ```rust
 pub trait DynPredictor: Send + Sync {
     /// The Facet-derived schema for this predictor
@@ -685,7 +756,7 @@ pub trait DynPredictor: Send + Sync {
     fn load_state(&mut self, state: PredictState) -> Result<()>;
 
     /// Untyped forward (for dynamic graph execution)
-    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError>;
+    async fn forward_untyped(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError>;
 }
 ```
 
@@ -714,15 +785,18 @@ where S::Input: BamlType, S::Output: BamlType
         Ok(())
     }
 
-    async fn forward_untyped(&self, input: BamlValue) -> Result<BamlValue, PredictError> {
-        let typed_input = S::Input::try_from_baml_value(input)?;
-        let output = self.call(typed_input).await?;
-        Ok(output.to_baml_value())
+    async fn forward_untyped(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError> {
+        let typed_input = S::Input::try_from_baml_value(input)
+            .map_err(|err| PredictError::Conversion { source: err.into() })?;
+
+        let result = self.call(typed_input).await?;
+        let (output, metadata) = result.into_parts();
+        Ok(Predicted::new(output.to_baml_value(), metadata))
     }
 }
 ```
 
-**How the Facet walker obtains a `&dyn DynPredictor`** — S2 Mechanism A. The walker detects `dsrs::parameter` on the Shape, extracts the `PredictAccessorFns` payload via typed attr decoding, and uses it to cast the value to `&dyn DynPredictor` (or `&mut dyn DynPredictor` for mutation). See section 7 for walker details.
+**How the Facet walker obtains a `&dyn DynPredictor`** — S2 Mechanism A. The walker checks strict `Predict` shape identity (`type_identifier` + `module_path`), then extracts `PredictAccessorFns` from `dsrs::predict_accessor` via typed attr decoding, and uses it to cast the value to `&dyn DynPredictor` (or `&mut dyn DynPredictor` for mutation). See section 7 for walker details.
 
 **Type safety through the dynamic boundary:** The optimizer manipulates demos as untyped `Example` values, but `DynPredictor` is always backed by a concrete `Predict<S>` that knows its types at compile time. `set_demos_from_examples` converts `Example → Demo<S>` via `S::Input::try_from_baml_value()` / `S::Output::try_from_baml_value()` — if the data doesn't match the schema, this fails with an error, never silent data loss. The typed module is never replaced or wrapped by the optimizer; it reaches IN to the existing `Predict<S>` and mutates state. When the optimizer is done, the user's module still has correctly typed demos because the conversion gatekeeper enforced the schema at every write.
 
@@ -743,7 +817,7 @@ pub trait DynModule: Send + Sync {
     fn predictors_mut(&mut self) -> Vec<(&str, &mut dyn DynPredictor)>;
 
     /// Execute with untyped values
-    async fn forward(&self, input: BamlValue) -> Result<BamlValue>;
+    async fn forward(&self, input: BamlValue) -> Result<Predicted<BamlValue>, PredictError>;
 }
 ```
 
@@ -824,17 +898,24 @@ Topological sort → pipe BamlValues between nodes following edges. Each node's 
 
 ```rust
 impl ProgramGraph {
-    pub fn from_module<M: Facet>(module: &M) -> Self {
-        let params = named_parameters(module);  // F6 walker
+    pub fn from_module<M: Facet>(module: &mut M) -> Result<Self, GraphError> {
         let mut graph = ProgramGraph::new();
-        for (path, predictor_handle) in params {
-            graph.add_node(path, Node {
+        let mut add_err = None;
+        visit_named_predictors_mut(module, |path, predictor_handle| {
+            if let Err(err) = graph.add_node(path.to_string(), Node {
                 schema: predictor_handle.schema().clone(),
                 module: /* wrap predictor as DynModule */,
-            });
+            }) {
+                add_err = Some(err);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        })?;
+        if let Some(err) = add_err {
+            return Err(err);
         }
         // Edges: inferred from trace or explicit annotation
-        graph
+        Ok(graph)
     }
 }
 ```
@@ -863,7 +944,7 @@ impl<S: Signature> Module for ChainOfThought<S> {
     type Input = S::Input;
     type Output = WithReasoning<S::Output>;
 
-    async fn forward(&self, input: S::Input) -> Result<WithReasoning<S::Output>, PredictError> {
+    async fn forward(&self, input: S::Input) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
         self.predict.call(input).await
     }
 }
@@ -887,16 +968,16 @@ where M::Input: Clone
     type Input = M::Input;
     type Output = M::Output;
 
-    async fn forward(&self, input: M::Input) -> Result<M::Output, PredictError> {
-        let mut best = None;
+    async fn forward(&self, input: M::Input) -> Result<Predicted<M::Output>, PredictError> {
+        let mut best: Option<Predicted<M::Output>> = None;
         let mut best_score = f64::NEG_INFINITY;
         for _ in 0..self.n {
-            let output = self.module.forward(input.clone()).await?;
-            let score = (self.reward_fn)(&input, &output);
-            if score >= self.threshold { return Ok(output); }
-            if score > best_score { best_score = score; best = Some(output); }
+            let result = self.module.call(input.clone()).await?;
+            let score = (self.reward_fn)(&input, &result);
+            if score >= self.threshold { return Ok(result); }
+            if score > best_score { best_score = score; best = Some(result); }
         }
-        best.ok_or(PredictError::AllAttemptsFailed)
+        Err(PredictError::AllAttemptsFailed)
     }
 }
 ```

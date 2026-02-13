@@ -2,13 +2,25 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashMap, ops::Index};
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone, facet::Facet)]
+#[facet(crate = facet)]
 pub struct Example {
+    #[facet(skip, opaque)]
     pub data: HashMap<String, Value>,
+    #[facet(skip)]
     pub input_keys: Vec<String>,
+    #[facet(skip)]
     pub output_keys: Vec<String>,
     #[serde(skip)]
+    #[facet(skip)]
     pub node_id: Option<usize>,
+}
+
+impl bamltype::BamlSchema for Example {
+    fn baml_schema() -> &'static bamltype::SchemaBundle {
+        static SCHEMA: std::sync::OnceLock<bamltype::SchemaBundle> = std::sync::OnceLock::new();
+        SCHEMA.get_or_init(|| bamltype::SchemaBundle::from_shape(<Self as facet::Facet<'_>>::SHAPE))
+    }
 }
 
 impl Example {

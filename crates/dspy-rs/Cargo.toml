@@ -26,7 +26,8 @@ async-trait = "0.1.83"
 anyhow = "1.0.99"
 bon = "3.7.0"
 bamltype = { path = "../bamltype" }
-facet = { version = "0.43.2", default-features = false, features = ["std"] }
+# Keep this direct pin in sync with workspace [patch.crates-io] for self-sufficient external path consumers.
+facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std"] }
 thiserror = "2.0.17"
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
 csv = { version = "1.3.1" }
@@ -46,3 +47,6 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
+
+[features]
+default = []

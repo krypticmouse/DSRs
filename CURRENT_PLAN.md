@@ -4,6 +4,13 @@
 > The current runtime intentionally keeps `bamltype::compat`, `LegacySignature`, `LegacyPredict`, `MetaSignature`, and optimizer APIs unchanged.
 >
 > Phase 2 is next: remove remaining compat-trait coupling in typed paths and redesign signature/optimizer APIs to be facet-native.
+>
+> Active execution tracking and cleanup decisions now live in:
+> - `docs/plans/modules/tracker.md`
+> - `docs/plans/modules/slices_closure_audit.md`
+> - `docs/plans/modules/phase_4_5_cleanup_kickoff.md`
+>
+> The detailed plan body below is retained for historical context and may not reflect the latest slice-by-slice closure reconciliations.
 
 Below is a “walk the codebase” integration plan that’s detailed enough to be used as a checklist while you implement. I’m going to treat `CURRENT_SPEC.md` as the source of truth, and I’ll point out the few places where the spec implies machinery you don’t currently have (notably: serializing typed demo values and prompting inputs without `serde_json::Value`).
 

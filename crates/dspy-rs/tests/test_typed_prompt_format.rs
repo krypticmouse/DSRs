@@ -1,3 +1,8 @@
+#![allow(
+    clippy::too_many_arguments,
+    reason = "Signature derive emits multi-field constructors for schema coverage tests."
+)]
+
 use dspy_rs::{BamlType, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]

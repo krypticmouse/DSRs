@@ -1,28 +1,22 @@
+//! Prompt formatting and LM response parsing.
+//!
+//! The adapter turns a [`SignatureSchema`](crate::SignatureSchema) into prompts and parses
+//! LM responses back into typed values. All prompts use the `[[ ## field_name ## ]]`
+//! delimiter protocol — input fields, output fields, and the `[[ ## completed ## ]]`
+//! marker that signals the end of the response.
+//!
+//! Most users never touch this — [`Predict`](crate::Predict) calls the adapter internally.
+//! Module authors who need fine-grained control over prompt construction use the
+//! building blocks directly: [`build_system`](ChatAdapter::build_system),
+//! [`format_input`](ChatAdapter::format_input),
+//! [`parse_output`](ChatAdapter::parse_output).
+
 pub mod chat;
 
 pub use chat::*;
 
-use crate::{Chat, Example, LM, Message, MetaSignature, Prediction};
-use anyhow::Result;
-use async_trait::async_trait;
-use rig::tool::ToolDyn;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::Arc;
-
-#[async_trait]
-pub trait Adapter: Send + Sync + 'static {
-    fn format(&self, signature: &dyn MetaSignature, inputs: Example) -> Chat;
-    fn parse_response(
-        &self,
-        signature: &dyn MetaSignature,
-        response: Message,
-    ) -> HashMap<String, Value>;
-    async fn call(
-        &self,
-        lm: Arc<LM>,
-        signature: &dyn MetaSignature,
-        inputs: Example,
-        tools: Vec<Arc<dyn ToolDyn>>,
-    ) -> Result<Prediction>;
-}
+/// Marker trait for configurable adapters.
+///
+/// Typed call paths currently use `ChatAdapter` directly, while global settings keep
+/// an adapter instance to preserve public configuration shape.
+pub trait Adapter: Send + Sync + 'static {}

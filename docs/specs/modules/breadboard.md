@@ -1,5 +1,15 @@
 # DSRs Module System — Breadboard
 
+## Current Scope Addendum (2026-02-12)
+
+V6/dynamic graph was implemented in-repo, then intentionally deferred; the runtime code has been removed from active scope.
+
+Canonical scope is now V1–V5 typed-only; untyped eval (`U37`) and all V6 dynamic graph/runtime surfaces are deferred.
+
+MIPRO is intentionally instruction-only in current scope; trace-derived per-predictor demo mutation is deferred (`TODO(trace-demos)`).
+
+All content below is preserved as a historical implementation record.
+
 > Shape F: Facet-native typed modules with dynamic graph escape hatch
 > Parts: F1–F12 (see [shapes.md](./shapes.md))
 > Procedure: Designing from Shaped Parts (breadboarding skill)
@@ -36,9 +46,9 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 **Architectural invariants:**
 - **Dependency direction is acyclic:** P1 ← P2 ← P3 ← P4. Each layer sees the one below, never above. No cycles.
 - **S1 (SignatureSchema cache) is the shared backbone:** Written once (immutable after init), read by all Places. Immutable shared state across Places is coupling in name only — it's a computed property of types. If this invariant were ever violated (mutable schema), the whole Place decomposition would collapse.
-- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. Predict carries `PredictAccessorFns` as a static Shape attribute — zero-cost at runtime (no vtable, no allocation, just static data). **Tradeoff:** zero-registration automatic discovery, paid for with a shared compilation unit. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
-- **"Structure IS declaration" — with a known hole.** The walker discovers Predict leaves by reflecting on struct fields. Module authors don't annotate `#[parameter]` or implement traversal. BUT: the walker cannot traverse containers (`Vec`, `Option`, `HashMap`, `Box`). Predictors inside containers are invisible to the optimizer. **Mitigation:** N18 errors (not silently skips) when encountering a container whose inner type has `dsrs::parameter`. See S5 (deferred).
-- **Module combinators must be Facet-transparent.** Any wrapper that composes modules (Map, AndThen, Pipe) must expose inner modules as struct fields visible to the F6 walker (N18), not behind trait objects. `Map<M, F>` requires a manual Facet impl walking only `inner: M` (closures are opaque to Facet derive). `BestOfN<M>` has `module: M` as a concrete typed field. If a combinator hides the inner module behind `Box<dyn Module>`, the walker cannot find Predict leaves inside — optimization breaks silently. This is the same container limitation as above, applied to combinators. **Path namespace consequence:** Wrapping a module changes path prefixes — `predict` becomes `inner.predict`. Serialized optimizer state (U36) is tied to the module tree shape. Changing the tree (adding/removing a wrapper) invalidates saved state with a clear error, not silent misapplication.
+- **L1/L2 share a compilation unit.** `Predict<S>` implements `DynPredictor` in the same crate (`dspy-rs`). This is intentional dependency inversion: L2 defines the interface (`DynPredictor`), L1 satisfies it. **Current mechanism:** accessor fns are extracted from shape-local `PredictAccessorFns` payloads (S2 Mechanism A). Predict-like leaves with missing/invalid payloads fail explicitly with diagnostics; runtime registry fallback is not used. L1 cannot be compiled without L2 type definitions. The layer separation is enforced by API design (P1 users never import L2 types), not by the crate graph.
+- **"Structure IS declaration" — with bounded container support.** The walker discovers Predict leaves by reflecting on struct fields. Module authors don't annotate `#[parameter]` or implement traversal. The current implementation traverses structs plus common containers (`Option`, list/array/slice, `HashMap<String, _>`, and `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) produce explicit N18 errors rather than silent skips.
+- **Module combinators must be Facet-transparent.** Any wrapper that composes modules (Map, AndThen, Pipe) must expose inner modules as struct fields visible to the F6 walker (N18), not behind trait objects. `Map<M, F>` requires a manual Facet impl walking only `inner: M` (closures are opaque to Facet derive). `BestOfN<M>` has `module: M` as a concrete typed field. If a combinator hides the inner module behind `Box<dyn Module>`, the walker cannot find Predict leaves inside — optimization breaks silently. **Path namespace consequence:** Wrapping a module changes path prefixes — `predict` becomes `inner.predict`. Serialized optimizer state (U36) is tied to the module tree shape. Changing the tree (adding/removing a wrapper) invalidates saved state with a clear error, not silent misapplication.
 
 **Boundary notes:**
 - **P1 → P2 boundary:** P1 users *consume* what P2 creates. The blocking test is cognitive: P2 affordances (`#[derive(Augmentation)]`, adapter building blocks, `impl Module`) require understanding prompt pipeline internals, wrapper type mechanics, and Facet composition — a fundamentally different mental model from P1's "pick a module, call it." P2 is a valid separate Place even though nothing physically prevents a P1 user from importing P2 APIs. **Ramp:** Module combinators (U51: `.map()`, `.and_then()`) let P1 users customize output without crossing into P2. The cliff from "use a library module" to "author your own module" has an intermediate step.
@@ -48,24 +58,28 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 
 **Resolved gaps:**
 - ~~No LM configuration affordance~~ → **Global default with scoped override.** LM is globally scoped (existing `GLOBAL_SETTINGS` infrastructure). `dsrs::with_lm(eval_lm, || ...)` overrides per-call via scoped context. N8 checks scoped context first, falls back to global default. Global LM configuration is existing infrastructure, not breadboarded (see External dependencies).
-- ~~No batching affordance~~ → **Standalone utility, not a trait method.** `dsrs::forward_all(&module, inputs, concurrency)` → `Vec<Result<Output, PredictError>>` (Vec-of-Results, not Result-of-Vec — individual failures don't abort batch). Module trait stays minimal (one method: `forward`). Rationale: a default `forward_batch` on Module forces P2 authors to reason about concurrency composition — BestOfN already runs N concurrent calls per invocation, so default batching would produce `batch_size × N` concurrent LM requests. Standalone utility keeps this concern at P1. See U48.
+- ~~No batching affordance~~ → **Standalone utility, not a trait method.** `dsrs::forward_all(&module, inputs, concurrency)` → `Vec<Result<Predicted<Output>, PredictError>>` (Vec-of-Results, not Result-of-Vec — individual failures don't abort batch). Module trait stays minimal (`forward` implementation hook + default `call` wrapper). Rationale: a default `forward_batch` on Module forces P2 authors to reason about concurrency composition — BestOfN already runs N concurrent calls per invocation, so default batching would produce `batch_size × N` concurrent LM requests. Standalone utility keeps this concern at P1. See U48.
 - ~~Error paths underspecified~~ → `PredictError` carries raw LM response + failed field + stage + coercion detail. Error `Display` includes full LM response for iterative debugging. No separate debug API needed for V1. See U49.
-- ~~Container traversal silently fails~~ → N18 errors on containers with `dsrs::parameter` inner types. See architectural invariant above.
+- ~~Container traversal silently fails~~ → N18 now traverses supported containers (`Option`, lists, maps, `Box`) and errors on unsupported pointer-like containers (`Rc`, `Arc`, etc.) with explicit path/type diagnostics.
 - ~~Strategy swap blast radius understated~~ → Updated U16 to note output type change.
 - ~~N12/N13 status~~ → **Keep N13, collapse N12 into N8.** N12 (jsonish coerce) is part of the "text → BamlValue" pipeline inside N8. N13 (try_from_baml_value) is a distinct error boundary: "BamlValue → typed output." Two affordances, two error semantics (N8 failures = coercion/parsing, N13 failures = type mismatch).
 - ~~Missing P1→P3 handoff~~ → Added U50 (`optimizer.compile(&mut module, trainset, metric)`). Exclusive `&mut` during optimization = no concurrent `forward()`.
 - ~~P1→P2 cliff too sharp~~ → **Module combinators as P1 ramp.** Without combinators, a P1 user who wants to post-process output (e.g., derive a confidence score from reasoning) must jump to full `impl Module` — learning associated types, async plumbing, and the Module trait. With `.map()` / `.and_then()`, they write a closure. Added U51 (module combinators). This is the intermediate step between "use a library module" and "author your own module."
+- ~~Calling convention undecided~~ → **Locked for V1.** N8 returns `Result<Predicted<O>, PredictError>`. `Predicted<O>` carries output + call metadata (like DSPy's `Prediction`) with `Deref<Target = O>` for direct field access and `.metadata()` for metadata access. `?` works on stable Rust without nightly `Try`. User-facing invocation is `Module::call`, while module authors implement `Module::forward` as the execution hook.
 
 **N-affordance principle:** Keep **orchestration boundaries** (N3, N8, N17, N18, N25/N26) and **error/decision boundaries** (N13, N22, N23, N24). Collapse pure pipes/transforms into their parent. Test: "can you change the implementation without changing any wiring?" If yes, it's guts, not an affordance.
 
 **Open (from late-stage team conversation):**
 - ⚠️ **P1→P2 cliff / Module combinators:** Resolved — see U51 (`.map()`, `.and_then()`) and boundary note on P1→P2. **Remaining question:** Module combinators must be Facet-transparent for the F6 walker (N18) to see through them. `Map<M, F>` needs a manual Facet impl exposing `inner: M` as a field (closures are opaque to Facet derive). This is an architectural invariant on all future combinators: they must expose inner modules as struct fields, not trait objects.
-- ⚠️ **CallOutcome as V1 return type:** Systems-thinker and adversarial-user converged on: `CallOutcome<O>` (carrying both `Result<O, PredictError>` and metadata like token_usage, latency) should be the V1 return type for N8, not deferred. Argument: N8's return type is a chokepoint — changing it later ripples through N13, U10, U37, and every `impl Module`. One breaking change now vs two later. Type refinement on existing wires (same topology, richer payload). Waiting on concrete ergonomics analysis: does wrapping `Result` in `CallOutcome` break `?` operator flow for P1?
 
 **Deferred (acknowledged, out of scope for V1):**
-- ⚠️ **Observability / N8 return type chokepoint:** N8 currently has no wire for "what happened during the call" — only "what was the result." Token tracking, prompt logging, cost require N8 to emit metadata via either a richer return type (`CallOutcome<O>` carrying both result and metadata) or a parallel tracing/spans channel. **Chokepoint risk:** N8's return type ripples through N13, U10, U37, and every `impl Module`. Changing it post-V1 is a breaking change. Consider whether `CallOutcome<O>` should be the V1 return type to avoid a painful migration later. Waiting on concrete ergonomics analysis (does it break `?` operator for P1?). **Note:** CallOutcome is a *type refinement* on existing wires, not a topology change — same wires, richer payload. No new N-affordances or wiring needed. The breadboard structure is unchanged either way; this is a design-reference-level decision.
-- ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `forward()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
-- ⚠️ **Container traversal (Vec, Option, HashMap, Box):** Walker errors on containers with `dsrs::parameter` inner types (N18). Full traversal deferred — tracked in S5.
+- ⚠️ **Operational policy (retries, timeouts, rate limits):** Per-call execution policy — combinators around `call()`. P1 affordances that wire to U9. No new stores, no new coupling. Easy to add, no architectural impact.
+- ⚠️ **Container traversal (remaining):** Common container traversal is implemented (`Option`, lists, maps, `Box`). Unsupported pointer-like containers (`Rc`, `Arc`, etc.) still error explicitly in N18 (`TODO(dsrs-shared-ptr-policy)`).
+- ⚠️ **Media conversion:** Unsupported in optimizer-facing discovery/state flows (`TODO(dsrs-media)`).
+
+**Explicit limitations (current runtime):**
+- Optimizer discovery does not traverse `Rc<T>`/`Arc<T>` containers; N18 returns explicit unsupported-container errors (`TODO(dsrs-shared-ptr-policy)`).
+- Media conversion is unsupported for optimizer-facing discovery/state flows (`TODO(dsrs-media)`).
 
 ---
 
@@ -81,14 +95,14 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U6** | P1 | `predict` | `Predict::<S>::new()` | construct | → S2, → S3 | — | F5 |
 | **U7** | P1 | `predict` | `Predict::<S>::builder().demo(...).instruction(...).build()` | construct | → S2, → S3, → S4 | — | F5 |
 | **U8** | P1 | `predict` | `Demo { input: ..., output: ... }` | construct | → U7 | — | F5 |
-| **U9** | P1 | `module` | `module.forward(input).await` | call | → N3 | → U10 | F4 |
-| **U10** | P1 | `module` | `Result<S::Output, PredictError>` | access | → U5 (Ok) | ← N8 | F4 |
+| **U9** | P1 | `module` | `module.call(input).await` | call | → N3 | → U10 | F4 |
+| **U10** | P1 | `module` | `Result<Predicted<S::Output>, PredictError>` from `call` (`Predicted` carries output + metadata; Deref to output fields) | access | → U5 (Ok) | ← N8 | F4 |
 | **U11** | P1 | — | `result.answer` — direct field access | access | — | ← U5 | F1 |
 | **U12** | P1 | — | `result.reasoning` — Deref to augmented field | access | — | ← U5 | F3 |
 | **U13** | P1 | `library` | `ChainOfThought::<S>::new()` | construct | → S2 (internal predict) | — | F11 |
 | **U14** | P1 | `library` | `ReAct::<S>::builder().tool("name", "desc", fn).build()` | construct | → S2, → S4 | — | F11 |
 | **U16** | P1 | — | Strategy swap: change type annotation (e.g. `Predict<QA>` → `ChainOfThought<QA>`). **Note:** output type also changes (`QAOutput` → `WithReasoning<QAOutput>`), breaking explicit type annotations and downstream function signatures. Compiler catches all breakage. | compile | — | — | F4 |
-| **U48** | P1 | `module` | `dsrs::forward_all(&module, inputs, concurrency).await` — standalone utility. Returns `Vec<Result<Output, PredictError>>`. Individual failures don't abort batch. Module trait stays minimal (one method). | call | → N8 (×N) | → Vec\<Result\> | F4 |
+| **U48** | P1 | `module` | `dsrs::forward_all(&module, inputs, concurrency).await` — standalone utility. Returns `Vec<Result<Predicted<Output>, PredictError>>`. Individual failures don't abort batch. Module trait stays minimal (`forward` hook + default `call`). | call | → N8 (×N) | → Vec\<Result<Predicted<Output>, PredictError>\> | F4 |
 | **U50** | P1 | `optimizer` | `optimizer.compile(&mut module, trainset, metric).await` — hands module to optimizer. Exclusive `&mut` = no concurrent forward() during optimization. This is the P1→P3 entry point. | call | → U30 (P3 entry) | → &mut module (optimized in place) | F6, F8 |
 | **U51** | P1 | `module` | `module.map(\|output\| transform(output))` — output transformation combinator. Constructs `Map<M, F>` wrapping the original module. Also `.and_then()` for fallible transforms. P1 ramp to avoid `impl Module` for simple post-processing (e.g., derive confidence from reasoning). Map/AndThen must have manual Facet impls exposing `inner` field for N18 walker traversal. | construct | — | → Module\<Output=NewType\> | F4 |
 | **U49** | P1 | `module` | `PredictError` variants — `Provider { source }` (retry-worthy: network, timeout, rate limit), `Parse { raw_response, field, stage, detail }` (prompt-engineering problem). `stage` distinguishes substages within N8: `SectionParsing` (missing `[[ ## field ## ]]` markers), `Coercion` (jsonish can't parse field value), `PathAssembly` (nested structure mismatch). N13 failures use stage `TypeConversion` (BamlValue→typed output mismatch). Error Display includes full LM response text. | access | — | ← N8, ← N13 | F5, F7 |
@@ -99,7 +113,7 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U20** | P2 | `augmentation` | `WithReasoning<O>` generated wrapper type | access | — | ← N14 | F3 |
 | **U21** | P2 | `signature` | `#[derive(Signature)]` with generic type params | compile | → N15 | — | F12 |
 | **U22** | P2 | `signature` | `#[flatten]` on fields | compile | → N15 | — | F12 |
-| **U23** | P2 | `adapter` | `ChatAdapter::build_system(schema, override)` | call | → N3 | → String | F7 |
+| **U23** | P2 | `adapter` | `ChatAdapter::build_system(schema, override)` | call | → N3 | → Result\<String\> | F7 |
 | **U24** | P2 | `adapter` | `ChatAdapter::format_input(schema, &input)` | call | → N8 (formatting internals) | → String | F7 |
 | **U25** | P2 | `adapter` | `ChatAdapter::parse_sections(content)` | call | — | → IndexMap | F7 |
 | **U26** | P2 | `adapter` | `ChatAdapter::parse_output::<O>(schema, &response)` | call | → N8 (coercion internals), → N13 | → Result\<O\> | F7 |
@@ -107,8 +121,8 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U28** | P2 | — | `Predict<Augmented<S, A>>` as internal field | compile | — | — | F3, F5 |
 | **U29** | P2 | — | `#[derive(Facet)]` on module struct | compile | — | — | F6 |
 | | | | | | | | |
-| **U30** | P3 | `discovery` | `named_parameters(&mut module)` — takes exclusive `&mut` access | call | → N18 | → U31 | F6 |
-| **U31** | P3 | `discovery` | `Vec<(String, &mut dyn DynPredictor)>` return — mutable handles for optimizer mutation | access | → U32–U37 | ← N18 | F6 |
+| **U30** | P3 | `discovery` | `visit_named_predictors_mut(&mut module, visitor)` — takes exclusive `&mut` access | call | → N18 | → U31 | F6 |
+| **U31** | P3 | `discovery` | Callback receives `(path, &mut dyn DynPredictor)` handles and may short-circuit with `ControlFlow::Break(())` | access | → U32–U37 | ← N18 | F6 |
 | **U32** | P3 | `dyn_predictor` | `predictor.schema()` | call | — | → &SignatureSchema | F8 |
 | **U33** | P3 | `dyn_predictor` | `predictor.demos_as_examples()` | call | → N21 | → Vec\<Example\> | F8 |
 | **U34** | P3 | `dyn_predictor` | `predictor.set_demos_from_examples(demos)` | call | → N22 | → Result\<()\> | F8 |
@@ -121,10 +135,10 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **U40** | P4 | `dyn_module` | `dyn_module.predictors()` / `predictors_mut()` | call | — | → Vec\<(&str, &dyn DynPredictor)\> | F9 |
 | **U41** | P4 | `graph` | `ProgramGraph::new()` | construct | → S5, → S6 | — | F10 |
 | **U42** | P4 | `graph` | `graph.add_node(name, node)` | call | → S5 | → Result | F10 |
-| **U43** | P4 | `graph` | `graph.connect(from, from_field, to, to_field)` | call | → N24, → S6 | → Result | F10 |
+| **U43** | P4 | `graph` | `graph.connect(from, from_field, to, to_field)` (`from == "input"` reserved for pseudo-node root wiring; user nodes cannot be named `"input"`; duplicate edges are rejected explicitly) | call | → N24, → S6 | → Result | F10 |
 | **U44** | P4 | `graph` | `graph.replace_node(name, node)` | call | → S5, → N24 | → Result | F10 |
 | **U45** | P4 | `graph` | `graph.execute(input).await` | call | → N25, → N26 | → Result\<BamlValue\> | F10 |
-| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` | call | → N18 (reuses F6 walker) | → ProgramGraph | F10 |
+| **U46** | P4 | `graph` | `ProgramGraph::from_module(&module)` / `ProgramGraph::from_module_with_annotations(&module, annotations)` (explicit per-call annotation projection; no global annotation registry) | call | → N18 (reuses F6 walker) | → Result\<ProgramGraph\> | F10 |
 
 ---
 
@@ -135,14 +149,14 @@ This breadboard applies the standard methodology to a **Rust library**, not a we
 | **N1** | P1 | `signature` (macro) | Proc macro expansion — generates `QAInput`, `QAOutput` structs + `impl Signature` | compile | → U4, → U5 | — | F1 |
 | **N2** | P1 | `signature` (macro) | Extract doc comment → `fn instructions() -> &'static str` | compile | — | → N8 | F1 |
 | **N3** | P1 | `schema` | `SignatureSchema::of::<S>()` — TypeId-keyed cached derivation. Internally: walk_fields (Facet shape walk, flatten-aware), build_type_ir (TypeIR from Shape), build_output_format (OutputFormatContent). Pure pipes collapsed — swapping internals changes no wiring. | cache | → S1 | → N8, → U23–U26 | F2 |
-| **N8** | P1 | `adapter` | Predict call pipeline: build_system → format_demos → format_input → lm.call → parse_sections → jsonish coerce → path assembly. Internally uses format_value, navigate_path, insert_at_path, jsonish::from_str (all collapsed — pure pipes). **Error boundary for coercion:** produces `PredictError::Parse` with raw content + field name + coercion detail when LM output doesn't parse. LM resolution: scoped context (`dsrs::with_lm`) > global default (`GLOBAL_SETTINGS`). | call | → N3, → S2 (read demos), → N13, → LM | → U10, → U49 (on error) | F5, F7 |
+| **N8** | P1 | `adapter` | Predict call pipeline: build_system → format_demos → format_input → lm.call → parse_sections → jsonish coerce → path assembly. Internally uses format_value, navigate_path, insert_at_path, jsonish::from_str (all collapsed — pure pipes). **Error boundary for coercion:** produces `PredictError::Parse` with raw content + field name + coercion detail when LM output doesn't parse. LM resolution: scoped context (`dsrs::with_lm`) > global default (`GLOBAL_SETTINGS`). Returns `Result<Predicted<O>, PredictError>` via `Module::call` (delegating to module `forward`). | call | → N3, → S2 (read demos), → N13, → LM | → U10, → U49 (on error) | F5, F7 |
 | **N13** | P1 | `adapter` | `O::try_from_baml_value()` — BamlValue → typed output. **Error boundary:** rejects structurally invalid BamlValue (constraint violations, missing fields). Distinct from N8 coercion errors: N8 = "couldn't understand LM text", N13 = "understood it but doesn't match expected type." | compute | — | → U10 | F7 |
 | | | | | | | | |
 | **N14** | P2 | `augmentation` (macro) | Augmentation proc macro — generates `WithX<O>` + `Deref` + `impl Augmentation`. Includes tuple composition: `impl Augmentation for (A, B)` provides `(A, B)::Wrap<T> = A::Wrap<B::Wrap<T>>` via GATs (type-level only, no code generation — collapsed from former N16). | compile | → U20 | — | F3 |
 | **N15** | P2 | `signature` (macro) | Generic signature macro — `split_for_impl()`, generic param threading, flatten handling | compile | → U4, → U5 (generic variants) | — | F12 |
 | **N17** | P2/P4 | `dyn_module` | Schema transformation — factory modifies `SignatureSchema` (prepend reasoning, build action schema, etc.) | compute | → N3 | → U38 | F9 |
 | | | | | | | | |
-| **N18** | P3 | `discovery` | `walk_value()` — recursive struct-field traversal via Facet reflection. Internally: checks `dsrs::parameter` on each Shape, extracts `PredictAccessorFns` payload and casts to `&mut dyn DynPredictor` (one audited unsafe boundary — pointer cast through known-layout Shape attribute). Errors on containers (Vec, Option, HashMap) whose inner type has `dsrs::parameter`. | walk | — | → U31 | F6, F8 |
+| **N18** | P3 | `discovery` | `walk_value()` — recursive Facet traversal over struct fields and supported containers (`Option`, list/array/slice, `HashMap<String, _>`, `Box`). Extracts shape-local `PredictAccessorFns` payloads and casts to `&mut dyn DynPredictor` (one audited unsafe boundary). Missing/invalid payloads fail explicitly with path diagnostics. Unsupported pointer-like containers (`Rc`, `Arc`, etc.) error explicitly with path/type diagnostics. | walk | — | → U31 | F6, F8 |
 | **N21** | P3 | `dyn_predictor` | `Demo<S> → Example` — `to_baml_value()` on input + output | convert | — | → U33 | F8 |
 | **N22** | P3 | `dyn_predictor` | `Example → Demo<S>` — `try_from_baml_value()` gatekeeper (type safety boundary) | convert | → N23 | → S2 | F8 |
 | **N23** | P3 | `dyn_predictor` | `S::Input::try_from_baml_value(input)` — typed conversion for forward_untyped | convert | → N8 | → U37 | F8 |
@@ -181,7 +195,7 @@ U6 (Predict::new()) → initializes S2 (empty demos), S3 (None instruction)
   — or —
 U7 (builder) + U8 (Demo) → writes S2, S3, S4
 
-U9 (module.forward(input))
+U9 (module.call(input))
   → N3 (SignatureSchema::of::<S>()) → S1 (TypeId cache: cached or init)
   → N8 (adapter pipeline)
     → reads S2 (demos), LM from scoped context or global default
@@ -189,18 +203,18 @@ U9 (module.forward(input))
     → LM provider (external call)
     → parse sections, jsonish coerce, path assembly (all internal to N8)
     → N13 (try_from_baml_value — error boundary: BamlValue → typed output)
-  → U10 (Result<Output, PredictError>)
+  → U10 (Result<Predicted<Output>, PredictError>)
     → on error: U49 (PredictError with raw response + stage)
 
 U10 → U5 (typed output) → U11 (result.answer) or U12 (result.reasoning via Deref)
 
 U48 (dsrs::forward_all(&module, inputs, concurrency))
-  → N8 (×N, buffer_unordered) → Vec<Result<Output, PredictError>>
+  → N8 (×N, buffer_unordered) → Vec<Result<Predicted<Output>, PredictError>>
   Individual failures don't abort the batch.
 
 U51 (module.map(|output| transform(output)))
   → constructs Map<M, F> wrapper (no new wiring — pure value construction)
-  → the returned Module delegates forward() to inner via existing U9→N8 path
+  → the returned Module delegates call() to inner via existing U9→N8 path
   → Map<M, F> has manual Facet impl: walker sees through to inner Predict leaves
   → avoids impl Module for simple post-processing (P1→P2 ramp)
 ```
@@ -222,7 +236,7 @@ Inside forward(), module author calls:
   U23 (build_system) → N3 (schema)
   U24 (format_input) → N8 internals (format_value, navigate_path)
   U26 (parse_output) → N8 internals (jsonish coerce, path assembly) → N13
-  — or simply delegates to internal Predict::call() (most common path)
+  — or simply delegates to internal Predict::forward() (most common path)
 ```
 
 ### P3 Workflow: "Discover and optimize parameters"
@@ -231,11 +245,12 @@ Inside forward(), module author calls:
 U50 (optimizer.compile(&mut module, trainset, metric))
   → exclusive &mut access — no concurrent forward() during optimization
 
-  U30 (named_parameters(&mut module))
+  U30 (visit_named_predictors_mut(&mut module, visitor))
     → N18 (walk_value: recurse through struct fields via Facet reflection,
-           check dsrs::parameter attr, extract PredictAccessorFns,
+           extract shape-local PredictAccessorFns payloads,
+           fail explicit on missing/invalid payloads,
            cast to &mut dyn DynPredictor — one audited unsafe boundary)
-    → U31 (Vec<(path, &mut dyn DynPredictor)>)
+    → U31 (visitor callback receives each (path, &mut dyn DynPredictor))
 
   For each discovered predictor:
     U32 (predictor.schema()) → S1 (understand field structure)
@@ -265,7 +280,18 @@ U43 (graph.connect("input", "question", "cot", "question"))
   → N24 (TypeIR::is_assignable_to) → S6 (edge stored if valid)
 
 U44 (graph.replace_node("cot", new_node)) → S5, re-validates via N24
-U46 (ProgramGraph::from_module(&module)) → N18 (reuses F6 walker) → auto-populates S5/S6
+U46 (ProgramGraph::from_module(&module))
+  → N18 (reuses F6 walker) → projects S5; then uses schema/path inference to populate S6
+  → multi-node projections with no resolvable edges return an explicit projection error
+  or
+U46 (ProgramGraph::from_module_with_annotations(&module, annotations))
+  → N18 (reuses F6 walker) → applies explicit per-call annotations first
+  → if `annotations` is empty, falls back to the same inference path as `from_module`
+  → no global/ambient annotation registry influences projection
+
+graph.fit(&mut module)
+  → applies graph predictor state back to typed predictors by canonical path
+  → enforces strict 1:1 path mapping and surfaces projection mismatch on divergence
 
 U45 (graph.execute(input))
   → N25 (topological sort from S5 + S6)
@@ -279,13 +305,13 @@ U45 (graph.execute(input))
 ```
 P1 → P3: U50 (optimizer.compile(&mut module, trainset, metric)).
   Exclusive &mut borrow — P1 cannot call forward() during optimization.
-  Optimizer calls U30 (named_parameters), which uses N18 (walker)
+  Optimizer calls U30 (visit_named_predictors_mut), which uses N18 (walker)
   to reach INTO the P1 module's Predict leaves.
   N18 (walker) casts to &mut dyn DynPredictor — this is the P1→P3 boundary crossing.
   After optimization, S2/S3 are mutated but the typed module is unchanged.
 
 P3 → P1: After optimization, &mut borrow released.
-  User calls U9 (module.forward()) as normal.
+  User calls U9 (module.call()) as normal.
   The module reads from S2/S3 which now contain optimized demos/instructions.
   No code change in P1 — optimization is invisible.
 
@@ -340,7 +366,7 @@ V5 (optimizer) depends on V2 (needs augmented modules to test multi-level discov
 | U1, U2, U3 | Signature derive + markers + doc comment | Entry point |
 | U4, U5 | Generated QAInput / QAOutput types | Compile-time output |
 | U6, U7, U8 | Predict construction + builder + Demo | Module setup |
-| U9, U10, U11 | forward(), Result, field access | Call and result |
+| U9, U10, U11 | forward(), Predicted<O>, field access | Call and result |
 | U49 | PredictError variants | Error path |
 | N1, N2 | Proc macro expansion, doc extraction | Compile-time mechanisms |
 | N3 | SignatureSchema derivation | Schema cache |
@@ -358,7 +384,7 @@ struct QA {
 }
 
 let predict = Predict::<QA>::new();
-let result = predict.forward(QAInput { question: "What is 2+2?".into() }).await?;
+let result = predict.call(QAInput { question: "What is 2+2?".into() }).await?;
 println!("{}", result.answer);  // typed field access
 ```
 
@@ -376,7 +402,7 @@ println!("{}", result.answer);  // typed field access
 Demo program:
 ```rust
 let cot = ChainOfThought::<QA>::new();
-let result = cot.forward(QAInput { question: "What is 2+2?".into() }).await?;
+let result = cot.call(QAInput { question: "What is 2+2?".into() }).await?;
 println!("Reasoning: {}", result.reasoning);
 println!("Answer: {}", result.answer);  // via Deref
 ```
@@ -401,9 +427,9 @@ struct SimpleRAG {
 impl Module for SimpleRAG {
     type Input = QAInput;
     type Output = WithReasoning<QAWithContextOutput>;
-    async fn forward(&self, input: QAInput) -> Result<Self::Output, PredictError> {
-        let ctx = self.retrieve.forward(RetrieveInput { query: input.question.clone() }).await?;
-        self.answer.forward(QAWithContextInput { question: input.question, context: ctx.passages }).await
+    async fn forward(&self, input: QAInput) -> Result<Predicted<Self::Output>, PredictError> {
+        let ctx = self.retrieve.call(RetrieveInput { query: input.question.clone() }).await?;
+        self.answer.call(QAWithContextInput { question: input.question, context: ctx.passages }).await
     }
 }
 ```
@@ -425,7 +451,7 @@ Demo program:
 let react = ReAct::<QA>::builder()
     .tool("search", "Search the web", search_fn)
     .build();
-let result = react.forward(QAInput { question: "Who won the 2024 election?".into() }).await?;
+let result = react.call(QAInput { question: "Who won the 2024 election?".into() }).await?;
 
 // Batch 10 inputs concurrently
 let results = dsrs::forward_all(&react, inputs, 5).await;
@@ -438,8 +464,8 @@ let confident = cot.map(|r| ConfidentAnswer { answer: r.answer.clone(), confiden
 
 | # | Affordance | Slice Role |
 |---|------------|------------|
-| U50 | optimizer.compile(&mut module, ...) | P1→P3 entry |
-| U30, U31 | named_parameters, handle vec | Discovery |
+| U50 | optimizer.compile(&mut module, trainset, metric) | P1→P3 entry |
+| U30, U31 | callback discovery visitor + mutable handle callback | Discovery |
 | U32 | predictor.schema() | Schema access |
 | U33, U34 | demos_as_examples / set_demos | Demo mutation |
 | U35 | instruction / set_instruction | Instruction mutation |
@@ -452,16 +478,24 @@ Demo program:
 ```rust
 let mut module = SimpleRAG::new();  // from V3
 
-// Discover all Predict leaves — no annotations needed
-let params = named_parameters(&mut module);
-assert_eq!(params.len(), 2);  // retrieve.predict + answer.predict
-
-// Mutate demos
-params[0].1.set_demos_from_examples(new_demos)?;
-params[1].1.set_instruction("Be concise.".into());
+// Discover/mutate Predict leaves — no annotations needed
+let mut seen = Vec::new();
+visit_named_predictors_mut(&mut module, |path, predictor| {
+    seen.push(path.to_string());
+    if path == "retrieve.predict" {
+        predictor
+            .set_demos_from_examples(new_demos.clone())
+            .expect("demo conversion must match schema");
+    }
+    if path == "answer.predict" {
+        predictor.set_instruction("Be concise.".into());
+    }
+    ControlFlow::Continue(())
+})?;
+assert_eq!(seen.len(), 2);  // retrieve.predict + answer.predict
 
 // Verify mutations took effect
-let result = module.forward(input).await?;
+let result = module.call(input).await?;
 
 // Save optimized state to disk
 let state = dsrs::dump_state(&module);

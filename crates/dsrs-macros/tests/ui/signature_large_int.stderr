@@ -1,0 +1,5 @@
+error: unsupported integer width in Signature fields; hint: use i64/isize/u32 or a smaller integer type
+ --> tests/ui/signature_large_int.rs:6:9
+  |
+6 |     id: u64,
+  |         ^^^

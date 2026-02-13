@@ -4,7 +4,12 @@
 
 S2 asks for the concrete mechanism that lets a Facet-based walker discover predictor leaves and return usable optimizer handles (`&dyn DynPredictor` / `&mut dyn DynPredictor`) without manual traversal boilerplate. It is explicitly marked high-priority and blocks R4 in shaping/design (`docs/specs/modules/shapes.md:241`, `docs/specs/modules/design_reference.md:1007`).
 
-The current runtime still uses `Optimizable::parameters()` with manual `#[derive(Optimizable)]` + `#[parameter]`, so S2 must bridge from that model to automatic Facet discovery.
+This spike captured the cutover from manual `Optimizable::parameters()` discovery (`#[derive(Optimizable)]` + `#[parameter]`) to automatic Facet discovery.
+
+## Current Behavior Addendum (2026-02-12)
+
+Hard cutover is complete: runtime discovery uses shape-local accessor payload extraction (Mechanism A) only.
+Runtime registry-based handle resolution is not part of current behavior.
 
 ## Goal
 
@@ -31,16 +36,16 @@ Identify the most practical first implementation for S2 that:
    - `Optimizable` requires `parameters(&mut self) -> IndexMap<String, &mut dyn Optimizable>` (`crates/dspy-rs/src/core/module.rs:89`).
    - Optimizers repeatedly look up dotted names and mutate predictors (`crates/dspy-rs/src/optimizer/copro.rs:221`, `crates/dspy-rs/src/optimizer/mipro.rs:419`, `crates/dspy-rs/src/optimizer/gepa.rs:442`).
 
-2. Current discovery is manual and annotation-driven.
+2. Pre-cutover discovery was manual and annotation-driven.
    - `Optimizable` derive is keyed on `#[parameter]` (`crates/dsrs-macros/src/lib.rs:17`).
    - Macro extraction only includes fields with that annotation (`crates/dsrs-macros/src/optim.rs:72`, `crates/dsrs-macros/src/optim.rs:78`).
    - Flattening uses unsafe casts to create leaf handles (`crates/dsrs-macros/src/optim.rs:49`, `crates/dsrs-macros/src/optim.rs:54`).
 
-3. Predictor leaves are currently exposed only through `Optimizable` leaf behavior.
+3. At spike start, predictor leaves were exposed only through `Optimizable` leaf behavior.
    - `Predict<S>` and `LegacyPredict` both return empty child maps (`crates/dspy-rs/src/predictors/predict.rs:503`, `crates/dspy-rs/src/predictors/predict.rs:667`).
-   - There is no concrete `DynPredictor` trait in current runtime code.
+   - At spike start, there was no concrete `DynPredictor` trait in runtime code.
 
-4. Test coverage validates nested struct flattening, but not container traversal (`Option`/`Vec`/`Map`) or Facet auto-discovery.
+4. At spike time, test coverage validated nested struct flattening, but not container traversal (`Option`/`Vec`/`Map`) or Facet auto-discovery.
    - Existing tests exercise nested named-field flattening (`crates/dspy-rs/tests/test_optimizable.rs:39`, `crates/dspy-rs/tests/test_optimizable.rs:64`).
    - `cargo test -p dspy-rs --test test_optimizable` passes (3/3) as of February 9, 2026.
 
@@ -64,8 +69,8 @@ Decision criteria: satisfy Q1 handle contract, preserve S5 container recursion, 
 
 | Mechanism | Q1: mutable handle contract | Q3/Q4/S5: Facet traversal + typed payload fit | Migration risk | Verdict |
 |---|---|---|---|---|
-| **A. Shape-local accessor payload (`dsrs::parameter` + fn ptr payload)** | **Strong**: direct cast to `&mut dyn DynPredictor` at leaf | **Strong**: matches existing typed attr payload pattern and recursive reflection model | **Medium**: requires one audited unsafe boundary | **Best first implementation** |
-| **B. Global registry (shape/type id → accessor)** | **Strong**: can return mutable handles | **Medium**: traversal still works, but handle resolution depends on external registration | **High**: init-order, registration drift, harder debugging | **Fallback only** |
+| **A. Shape-local accessor payload (`dsrs::predict_accessor` + fn ptr payload)** | **Strong**: direct cast to `&mut dyn DynPredictor` at leaf | **Strong**: matches existing typed attr payload pattern and recursive reflection model | **Medium**: requires one audited unsafe boundary | **Best first implementation** |
+| **B. Global registry (shape/type id → accessor)** | **Strong**: can return mutable handles | **Medium**: traversal still works, but handle resolution depends on external registration | **High**: init-order, registration drift, harder debugging | **Not used in hard-cutover runtime** |
 | **C. Store dyn handle inside `Predict` state** | **Medium**: contract works but via extra indirection | **Weak**: bypasses Facet metadata path and adds ownership complexity | **High**: invasive runtime state changes | **Reject for V1** |
 
 ## Recommended Approach
@@ -73,8 +78,8 @@ Decision criteria: satisfy Q1 handle contract, preserve S5 container recursion, 
 **Decision:** implement **Mechanism A** for S2 V1.
 
 **Scope for this spike outcome:**
-- **In:** shape-local accessor payload on `Predict<S>`, Facet walker discovery, compatibility shim for current optimizers.
-- **Deferred:** registry-based indirection (Mechanism B) unless later required by cross-crate runtime loading.
+- **In:** shape-local accessor payload on `Predict<S>`, Facet walker discovery, compatibility shim for optimizer call sites.
+- **Out:** registry-based indirection (Mechanism B).
 - **Out:** interior dyn-handle state in `Predict` (Mechanism C).
 
 Why this path is crisp:
@@ -89,7 +94,7 @@ Why this path is crisp:
 | 1 | Introduce `DynPredictor` trait and `PredictAccessorFns` payload type (opaque, fn-pointer based) | Compile-time check that `Predict<S>: DynPredictor`; payload type is `'static + Copy` and can be stored in Facet attr grammar |
 | 2 | Add `dsrs` attr grammar entries for predictor marker + accessor payload | Unit test can read `Predict::<TestSig>::SHAPE` attrs and decode payload via typed `get_as` |
 | 3 | Implement `DynPredictor` for `Predict<S>` and attach payload on `Predict` shape | Unit test obtains payload from shape and successfully reads/updates predictor instruction through returned dyn handle |
-| 4 | Implement `named_predictors_mut` walker over Facet-reflect values (struct/list/map/option/pointer; stop descent at predictor leaves) | Snapshot test returns expected dotted paths for nested fixture module (e.g. `retrieve`, `answer.predict`) |
+| 4 | Implement `visit_named_predictors_mut` walker over Facet-reflect values (struct + `Option`/list/array/slice/string-key map/`Box`; stop descent at predictor leaves; explicit `Rc`/`Arc` erroring) | Snapshot/behavior tests return expected dotted paths for nested fixture modules (e.g. `retrieve.predict`, `answer.predict`) and explicit errors for unsupported containers |
 | 5 | Define deterministic path encoding (`field`, `[idx]`, `['key']`) + cycle guard behavior | Repeated runs (e.g. 100 iterations) return identical order/paths for the same module instance |
 | 6 | Add compatibility shim from new discovery output to current optimizer mutation flow | Existing optimizer tests/smokes still mutate instructions by dotted name without changing optimizer call sites |
 | 7 | Add container and failure-path tests | Tests cover `Option<Predict<_>>`, `Vec<Predict<_>>`, `Map<String, Predict<_>>`, and missing/invalid payload decode errors |
@@ -107,8 +112,13 @@ S2 is complete when:
 - The mechanism is documented with clear unsafe boundaries and invariants.
 - Baseline compatibility remains green (`cargo test -p dspy-rs --test test_optimizable`).
 
+## Explicit Limitations (Current Runtime)
+
+- Optimizer discovery does not traverse `Rc<T>` or `Arc<T>` containers (`TODO(dsrs-shared-ptr-policy)`).
+- Media conversion is unsupported in optimizer discovery/state flows (`TODO(dsrs-media)`).
+
 ## Open Risks
 
 - Unsafe cast boundary for payload-based handle extraction must be tightly documented and audited.
 - Map-key ordering policy for dotted paths must be explicit to avoid optimizer cache churn across runs.
-- If structural optimization later requires loading strategies from crates not linked at compile time, Mechanism B (registry fallback) may still be needed.
+- If structural optimization later requires loading strategies from crates not linked at compile time, a separate registration design would need to be evaluated as new work.

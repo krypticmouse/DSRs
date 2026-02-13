@@ -1,25 +1,23 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use serde_json::{Value, json};
+use std::collections::HashSet;
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitStr, Meta, MetaNameValue,
     Token, Visibility,
     parse::{Parse, ParseStream},
     parse_macro_input,
     spanned::Spanned,
+    visit::Visit,
 };
 
-mod optim;
 mod runtime_path;
 
 use runtime_path::resolve_dspy_rs_path;
 
-#[proc_macro_derive(Optimizable, attributes(parameter))]
-pub fn derive_optimizable(input: TokenStream) -> TokenStream {
-    optim::optimizable_impl(input)
-}
-
-#[proc_macro_derive(Signature, attributes(input, output, check, assert, alias, format))]
+#[proc_macro_derive(
+    Signature,
+    attributes(input, output, check, assert, alias, format, flatten)
+)]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let runtime = match resolve_dspy_rs_path() {
@@ -28,6 +26,20 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
     };
 
     match expand_signature(&input, &runtime) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
+pub fn derive_augmentation(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match expand_augmentation(&input, &runtime) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -67,6 +79,7 @@ struct ParsedField {
     ty: syn::Type,
     is_input: bool,
     is_output: bool,
+    is_flatten: bool,
     description: String,
     alias: Option<String>,
     format: Option<String>,
@@ -190,6 +203,8 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
 
     let mut is_input = false;
     let mut is_output = false;
+    let mut is_flatten = false;
+    let mut saw_flatten = false;
     let mut alias = None;
     let mut format = None;
     let mut constraints = Vec::new();
@@ -216,6 +231,15 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
             format = Some(parse_string_attr(attr, "format")?);
+        } else if attr.path().is_ident("flatten") {
+            if saw_flatten {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[flatten] can only be specified once per field",
+                ));
+            }
+            saw_flatten = true;
+            is_flatten = true;
         } else if attr.path().is_ident("check") {
             constraints.push(parse_constraint_attr(attr, ParsedConstraintKind::Check)?);
         } else if attr.path().is_ident("assert") {
@@ -242,6 +266,15 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         }
     }
 
+    if is_flatten && (alias.is_some() || format.is_some() || !constraints.is_empty()) {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[flatten] cannot be combined with #[alias], #[format], #[check], or #[assert]",
+        ));
+    }
+
+    validate_signature_field_type(field)?;
+
     let doc_comment = collect_doc_comment(&field.attrs);
     let description = desc_override.unwrap_or(doc_comment);
 
@@ -250,6 +283,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         ty: field.ty.clone(),
         is_input,
         is_output,
+        is_flatten,
         description,
         alias,
         format,
@@ -327,12 +361,58 @@ fn parse_constraint_attr(
 fn normalize_constraint_expression(expression: &mut String) {
     // Accept common Rust-style logical operators in docs/examples and normalize
     // to the Jinja expression syntax expected by downstream evaluation.
-    let normalized = expression
-        .replace(" && ", " and ")
-        .replace(" || ", " or ")
-        .replace("&&", " and ")
-        .replace("||", " or ");
+    let segments = split_constraint_segments(expression);
+    let normalized: String = segments
+        .into_iter()
+        .map(|(segment, is_literal)| {
+            if is_literal {
+                segment
+            } else {
+                segment
+                    .replace(" && ", " and ")
+                    .replace(" || ", " or ")
+                    .replace("&&", " and ")
+                    .replace("||", " or ")
+            }
+        })
+        .collect();
     *expression = normalized;
+}
+
+fn split_constraint_segments(expression: &str) -> Vec<(String, bool)> {
+    let mut segments = Vec::new();
+    let mut buf = String::new();
+    let mut in_literal = false;
+    let mut prev_escape = false;
+
+    for ch in expression.chars() {
+        if ch == '"' && !prev_escape {
+            if in_literal {
+                buf.push(ch);
+                segments.push((buf.clone(), true));
+                buf.clear();
+                in_literal = false;
+            } else {
+                if !buf.is_empty() {
+                    segments.push((buf.clone(), false));
+                    buf.clear();
+                }
+                in_literal = true;
+                buf.push(ch);
+            }
+            prev_escape = false;
+            continue;
+        }
+
+        buf.push(ch);
+        prev_escape = ch == '\\' && !prev_escape;
+    }
+
+    if !buf.is_empty() {
+        segments.push((buf, in_literal));
+    }
+
+    segments
 }
 
 fn collect_doc_comment(attrs: &[Attribute]) -> String {
@@ -365,6 +445,158 @@ fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String
     }
 }
 
+// TODO(dsrs-derive-shared-validation): deduplicate type-validation logic with bamltype-derive.
+fn validate_signature_field_type(field: &syn::Field) -> syn::Result<()> {
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::BareFn(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "function types are not supported in Signature fields; hint: use a concrete type",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::TraitObject(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "trait objects are not supported in Signature fields; hint: use a concrete type",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &|ty| matches!(ty, syn::Type::Tuple(_))) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "tuple types are not supported in Signature fields; hint: use a struct with named fields or a list",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &is_serde_json_value_type) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "serde_json::Value is not supported in Signature fields; hint: use a concrete typed value",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &has_non_string_map_key) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "map keys must be String in Signature fields; hint: use HashMap<String, V> or BTreeMap<String, V>",
+        ));
+    }
+
+    if let Some(ty) = find_type_match(&field.ty, &is_unsupported_signature_int_type) {
+        return Err(syn::Error::new_spanned(
+            ty,
+            "unsupported integer width in Signature fields; hint: use i64/isize/u32 or a smaller integer type",
+        ));
+    }
+
+    Ok(())
+}
+
+fn find_type_match<'a, F>(ty: &'a syn::Type, predicate: &F) -> Option<&'a syn::Type>
+where
+    F: Fn(&syn::Type) -> bool,
+{
+    if predicate(ty) {
+        return Some(ty);
+    }
+
+    match ty {
+        syn::Type::Array(array) => find_type_match(&array.elem, predicate),
+        syn::Type::Group(group) => find_type_match(&group.elem, predicate),
+        syn::Type::Paren(paren) => find_type_match(&paren.elem, predicate),
+        syn::Type::Ptr(ptr) => find_type_match(&ptr.elem, predicate),
+        syn::Type::Reference(reference) => find_type_match(&reference.elem, predicate),
+        syn::Type::Slice(slice) => find_type_match(&slice.elem, predicate),
+        syn::Type::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                if let Some(found) = find_type_match(elem, predicate) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        syn::Type::Path(path) => {
+            for segment in &path.path.segments {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    for arg in &args.args {
+                        if let syn::GenericArgument::Type(inner) = arg
+                            && let Some(found) = find_type_match(inner, predicate)
+                        {
+                            return Some(found);
+                        }
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn type_ident(ty: &syn::Type) -> Option<&syn::Ident> {
+    match ty {
+        syn::Type::Path(path) if path.qself.is_none() => {
+            path.path.segments.last().map(|s| &s.ident)
+        }
+        _ => None,
+    }
+}
+
+fn map_types(ty: &syn::Type) -> Option<(&syn::Type, &syn::Type)> {
+    if let syn::Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+        && (segment.ident == "HashMap" || segment.ident == "BTreeMap")
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+    {
+        let mut iter = args.args.iter();
+        let key = match iter.next() {
+            Some(syn::GenericArgument::Type(t)) => t,
+            _ => return None,
+        };
+        let value = match iter.next() {
+            Some(syn::GenericArgument::Type(t)) => t,
+            _ => return None,
+        };
+        return Some((key, value));
+    }
+
+    None
+}
+
+fn is_string_type(ty: &syn::Type) -> bool {
+    type_ident(ty)
+        .map(|ident| ident == "String")
+        .unwrap_or(false)
+}
+
+fn has_non_string_map_key(ty: &syn::Type) -> bool {
+    map_types(ty)
+        .map(|(key, _)| !is_string_type(key))
+        .unwrap_or(false)
+}
+
+fn is_unsupported_signature_int_type(ty: &syn::Type) -> bool {
+    match type_ident(ty).map(|ident| ident.to_string()) {
+        Some(name) => matches!(name.as_str(), "u64" | "usize" | "i128" | "u128"),
+        None => false,
+    }
+}
+
+fn is_serde_json_value_type(ty: &syn::Type) -> bool {
+    if let syn::Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+        && segment.ident == "Value"
+    {
+        return path
+            .path
+            .segments
+            .iter()
+            .any(|seg| seg.ident == "serde_json");
+    }
+
+    false
+}
+
 fn generate_signature_code(
     input: &DeriveInput,
     parsed: &ParsedSignature,
@@ -372,17 +604,18 @@ fn generate_signature_code(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let name = &input.ident;
     let vis = &input.vis;
+    let generics = &input.generics;
 
-    let helper_structs = generate_helper_structs(name, parsed, vis, runtime)?;
-    let input_fields = generate_field_specs(name, &parsed.input_fields, "INPUT", runtime)?;
-    let output_fields = generate_field_specs(name, &parsed.output_fields, "OUTPUT", runtime)?;
-    let baml_delegation = generate_baml_delegation(name, parsed, runtime);
-    let signature_impl = generate_signature_impl(name, parsed, runtime);
+    let helper_structs = generate_helper_structs(name, generics, parsed, vis, runtime)?;
+    let input_metadata = generate_field_metadata(name, &parsed.input_fields, "INPUT", runtime)?;
+    let output_metadata = generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
+    let baml_delegation = generate_baml_delegation(name, generics, parsed, runtime);
+    let signature_impl = generate_signature_impl(name, generics, parsed, runtime);
 
     Ok(quote! {
         #helper_structs
-        #input_fields
-        #output_fields
+        #input_metadata
+        #output_metadata
         #baml_delegation
         #signature_impl
     })
@@ -390,35 +623,244 @@ fn generate_signature_code(
 
 fn generate_helper_structs(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     vis: &Visibility,
     runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let input_name = format_ident!("{}Input", name);
-    let output_name = format_ident!("__{}Output", name);
-    let all_name = format_ident!("__{}All", name);
+    let output_name = format_ident!("{}Output", name);
+    let all_name = format_ident!("{}All", name);
 
-    let input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
-    let output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
-    let all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
+    let helper_generics = unconstrained_generics(generics);
+    let (helper_impl_generics, helper_ty_generics, _helper_where_clause) =
+        helper_generics.split_for_impl();
+
+    let mut input_fields: Vec<_> = parsed.input_fields.iter().map(field_tokens).collect();
+    let input_marker = generic_marker_field(generics, &parsed.input_fields);
+    if let Some(marker) = &input_marker {
+        input_fields.push(marker.field.clone());
+    }
+    let input_new_args: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
+    let mut input_new_fields: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
+    if let Some(marker) = &input_marker {
+        input_new_fields.push(marker.init.clone());
+    }
+
+    let mut output_fields: Vec<_> = parsed.output_fields.iter().map(field_tokens).collect();
+    let output_marker = generic_marker_field(generics, &parsed.output_fields);
+    if let Some(marker) = &output_marker {
+        output_fields.push(marker.field.clone());
+    }
+    let output_new_args: Vec<_> = parsed
+        .output_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
+    let mut output_new_fields: Vec<_> = parsed
+        .output_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
+    if let Some(marker) = &output_marker {
+        output_new_fields.push(marker.init.clone());
+    }
+
+    let mut all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
+    let all_marker = generic_marker_field(generics, &parsed.all_fields);
+    if let Some(marker) = &all_marker {
+        all_fields.push(marker.field.clone());
+    }
+    let all_new_args: Vec<_> = parsed
+        .all_fields
+        .iter()
+        .map(constructor_arg_tokens)
+        .collect();
+    let mut all_new_fields: Vec<_> = parsed
+        .all_fields
+        .iter()
+        .map(constructor_init_tokens)
+        .collect();
+    if let Some(marker) = &all_marker {
+        all_new_fields.push(marker.init.clone());
+    }
+
+    let facet = quote! { #runtime::__macro_support::bamltype::facet };
+    let schema_bundle = quote! { #runtime::__macro_support::bamltype::SchemaBundle };
 
     Ok(quote! {
-        #[#runtime::BamlType]
-        #[derive(Debug, Clone)]
-        #vis struct #input_name {
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        #vis struct #input_name #helper_generics {
             #(#input_fields),*
         }
 
-        #[#runtime::BamlType]
-        pub struct #output_name {
+        impl #helper_impl_generics #input_name #helper_ty_generics {
+            #vis fn new(#(#input_new_args),*) -> Self {
+                Self {
+                    #(#input_new_fields),*
+                }
+            }
+        }
+
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #input_name #helper_ty_generics
+        where
+            #input_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
+
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        pub struct #output_name #helper_generics {
             #(#output_fields),*
         }
 
-        #[#runtime::BamlType]
-        pub struct #all_name {
+        impl #helper_impl_generics #output_name #helper_ty_generics {
+            pub fn new(#(#output_new_args),*) -> Self {
+                Self {
+                    #(#output_new_fields),*
+                }
+            }
+        }
+
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #output_name #helper_ty_generics
+        where
+            #output_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
+
+        #[derive(Debug, Clone, #facet::Facet)]
+        #[facet(crate = #facet)]
+        pub struct #all_name #helper_generics {
             #(#all_fields),*
         }
+
+        impl #helper_impl_generics #all_name #helper_ty_generics {
+            pub fn new(#(#all_new_args),*) -> Self {
+                Self {
+                    #(#all_new_fields),*
+                }
+            }
+        }
+
+        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #all_name #helper_ty_generics
+        where
+            #all_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
+        {
+            fn baml_schema() -> &'static #schema_bundle {
+                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
+                })
+            }
+        }
     })
+}
+
+fn unconstrained_generics(generics: &syn::Generics) -> syn::Generics {
+    let mut helper_generics = generics.clone();
+
+    for param in helper_generics.type_params_mut() {
+        param.bounds.clear();
+        param.bounds.push(syn::parse_quote!('static));
+        param.eq_token = None;
+        param.default = None;
+    }
+
+    helper_generics.where_clause = None;
+    helper_generics
+}
+
+struct MarkerFieldTokens {
+    field: proc_macro2::TokenStream,
+    init: proc_macro2::TokenStream,
+}
+
+fn generic_marker_field(
+    generics: &syn::Generics,
+    fields: &[ParsedField],
+) -> Option<MarkerFieldTokens> {
+    let missing = missing_type_params_for_fields(generics, fields);
+    if missing.is_empty() {
+        return None;
+    }
+
+    Some(MarkerFieldTokens {
+        field: quote! {
+            #[doc(hidden)]
+            #[facet(skip)]
+            _phantom: ::std::marker::PhantomData<(#(#missing),*)>
+        },
+        init: quote! {
+            _phantom: ::std::marker::PhantomData
+        },
+    })
+}
+
+fn missing_type_params_for_fields(generics: &syn::Generics, fields: &[ParsedField]) -> Vec<Ident> {
+    let type_params: Vec<Ident> = generics
+        .type_params()
+        .map(|param| param.ident.clone())
+        .collect();
+
+    if type_params.is_empty() {
+        return Vec::new();
+    }
+
+    let mut collector = TypeParamUsageCollector {
+        tracked: type_params
+            .iter()
+            .map(|ident| ident.to_string())
+            .collect::<HashSet<_>>(),
+        used: HashSet::new(),
+    };
+
+    for field in fields {
+        collector.visit_type(&field.ty);
+    }
+
+    type_params
+        .into_iter()
+        .filter(|ident| !collector.used.contains(&ident.to_string()))
+        .collect()
+}
+
+struct TypeParamUsageCollector {
+    tracked: HashSet<String>,
+    used: HashSet<String>,
+}
+
+impl<'ast> Visit<'ast> for TypeParamUsageCollector {
+    fn visit_type_path(&mut self, path: &'ast syn::TypePath) {
+        if path.qself.is_none() && path.path.segments.len() == 1 {
+            let ident = path.path.segments[0].ident.to_string();
+            if self.tracked.contains(&ident) {
+                self.used.insert(ident);
+            }
+        }
+
+        syn::visit::visit_type_path(self, path);
+    }
 }
 
 fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
@@ -431,9 +873,12 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         attrs.push(quote! { #[doc = #doc] });
     }
 
-    // Note: aliases and constraints are handled at the FieldSpec level in
-    // generate_field_specs, not via struct attributes. The adapter layer uses
-    // FieldSpec metadata for LLM name mapping and constraint enforcement.
+    if field.is_flatten {
+        attrs.push(quote! { #[facet(flatten)] });
+    }
+
+    // Note: aliases, formats, and constraints are emitted in
+    // generate_field_metadata(), not as struct attributes.
 
     quote! {
         #(#attrs)*
@@ -441,28 +886,39 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
     }
 }
 
-fn generate_field_specs(
+fn constructor_arg_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
+    let ident = &field.ident;
+    let ty = &field.ty;
+    quote! { #ident: #ty }
+}
+
+fn constructor_init_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
+    let ident = &field.ident;
+    quote! { #ident }
+}
+
+fn generate_field_metadata(
     name: &Ident,
     fields: &[ParsedField],
     kind: &str,
     runtime: &syn::Path,
 ) -> syn::Result<proc_macro2::TokenStream> {
-    let prefix = name.to_string().to_lowercase();
-    let array_name = format_ident!("__{}_{}_FIELDS", name.to_string().to_uppercase(), kind);
+    let metadata_array_name =
+        format_ident!("__{}_{}_METADATA", name.to_string().to_uppercase(), kind);
 
-    let mut type_ir_fns = Vec::new();
     let mut constraint_arrays = Vec::new();
-    let mut field_specs = Vec::new();
+    let mut metadata_specs = Vec::new();
 
     for field in fields {
         let field_name = field.ident.to_string();
-        let field_name_ident = &field.ident;
-        let ty = &field.ty;
-
-        let llm_name = field.alias.as_ref().unwrap_or(&field_name);
-        let llm_name = LitStr::new(llm_name, proc_macro2::Span::call_site());
         let rust_name = LitStr::new(&field_name, proc_macro2::Span::call_site());
-        let description = LitStr::new(&field.description, proc_macro2::Span::call_site());
+        let alias = match &field.alias {
+            Some(value) => {
+                let lit = LitStr::new(value, proc_macro2::Span::call_site());
+                quote! { Some(#lit) }
+            }
+            None => quote! { None },
+        };
         let format = match &field.format {
             Some(value) => {
                 let lit = LitStr::new(value, proc_macro2::Span::call_site());
@@ -470,42 +926,6 @@ fn generate_field_specs(
             }
             None => quote! { None },
         };
-
-        let type_ir_fn_name = format_ident!("__{}_{}_type_ir", prefix, field_name_ident);
-
-        if field.constraints.is_empty() {
-            type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    #runtime::__macro_support::bamltype::baml_type_ir::<#ty>()
-                }
-            });
-        } else {
-            let constraint_tokens: Vec<_> = field
-                .constraints
-                .iter()
-                .map(|constraint| {
-                    let expr = LitStr::new(&constraint.expression, proc_macro2::Span::call_site());
-                    let label = constraint.label.as_deref().unwrap_or("");
-                    let label = LitStr::new(label, proc_macro2::Span::call_site());
-                    match constraint.kind {
-                        ParsedConstraintKind::Check => {
-                            quote! { #runtime::Constraint::new_check(#label, #expr) }
-                        }
-                        ParsedConstraintKind::Assert => {
-                            quote! { #runtime::Constraint::new_assert(#label, #expr) }
-                        }
-                    }
-                })
-                .collect();
-
-            type_ir_fns.push(quote! {
-                fn #type_ir_fn_name() -> #runtime::TypeIR {
-                    let mut base = #runtime::__macro_support::bamltype::baml_type_ir::<#ty>();
-                    base.meta_mut().constraints.extend(vec![#(#constraint_tokens),*]);
-                    base
-                }
-            });
-        }
 
         let constraints_name = format_ident!(
             "__{}_{}_CONSTRAINTS",
@@ -548,12 +968,10 @@ fn generate_field_specs(
             });
         }
 
-        field_specs.push(quote! {
-            #runtime::FieldSpec {
-                name: #llm_name,
+        metadata_specs.push(quote! {
+            #runtime::FieldMetadataSpec {
                 rust_name: #rust_name,
-                description: #description,
-                type_ir: #type_ir_fn_name,
+                alias: #alias,
                 constraints: #constraints_name,
                 format: #format,
             }
@@ -561,51 +979,61 @@ fn generate_field_specs(
     }
 
     Ok(quote! {
-        #(#type_ir_fns)*
         #(#constraint_arrays)*
 
-        static #array_name: &[#runtime::FieldSpec] = &[
-            #(#field_specs),*
+        static #metadata_array_name: &[#runtime::FieldMetadataSpec] = &[
+            #(#metadata_specs),*
         ];
     })
 }
 
 fn generate_baml_delegation(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
-    let all_name = format_ident!("__{}All", name);
+    let all_name = format_ident!("{}All", name);
     let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let mut to_value_inserts = Vec::new();
     for field in &parsed.all_fields {
         let field_name = field.ident.to_string();
         let ident = &field.ident;
+        let ty = &field.ty;
         to_value_inserts.push(quote! {
             fields.insert(
                 #field_name.to_string(),
-                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or(#runtime::BamlValue::Null),
+                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or_else(|err| {
+                    panic!(
+                        "Signature derive failed to convert field `{}` on `{}` (type `{}`) to BamlValue: {:?}",
+                        #field_name,
+                        stringify!(#name),
+                        ::std::any::type_name::<#ty>(),
+                        err,
+                    )
+                }),
             );
         });
     }
 
     quote! {
-        impl #runtime::BamlType for #name {
+        impl #impl_generics #runtime::BamlType for #name #ty_generics #where_clause {
             fn baml_output_format() -> &'static #runtime::OutputFormatContent {
-                <#all_name as #runtime::BamlType>::baml_output_format()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_output_format()
             }
 
             fn baml_internal_name() -> &'static str {
-                <#all_name as #runtime::BamlType>::baml_internal_name()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_internal_name()
             }
 
             fn baml_type_ir() -> #runtime::TypeIR {
-                <#all_name as #runtime::BamlType>::baml_type_ir()
+                <#all_name #ty_generics as #runtime::BamlType>::baml_type_ir()
             }
 
             fn try_from_baml_value(value: #runtime::BamlValue) -> Result<Self, #runtime::BamlConvertError> {
-                let all = <#all_name as #runtime::BamlType>::try_from_baml_value(value)?;
+                let all = <#all_name #ty_generics as #runtime::BamlType>::try_from_baml_value(value)?;
                 Ok(Self {
                     #(#field_names: all.#field_names),*
                 })
@@ -626,381 +1054,251 @@ fn generate_baml_delegation(
 
 fn generate_signature_impl(
     name: &Ident,
+    generics: &syn::Generics,
     parsed: &ParsedSignature,
     runtime: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let input_name = format_ident!("{}Input", name);
-    let output_name = format_ident!("__{}Output", name);
+    let output_name = format_ident!("{}Output", name);
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let instruction = LitStr::new(&parsed.instruction, proc_macro2::Span::call_site());
 
-    let input_field_names: Vec<_> = parsed
-        .input_fields
-        .iter()
-        .map(|field| &field.ident)
-        .collect();
-    let output_field_names: Vec<_> = parsed
-        .output_fields
-        .iter()
-        .map(|field| &field.ident)
-        .collect();
-
-    let input_fields_static = format_ident!("__{}_INPUT_FIELDS", name.to_string().to_uppercase());
-    let output_fields_static = format_ident!("__{}_OUTPUT_FIELDS", name.to_string().to_uppercase());
+    let input_metadata_static =
+        format_ident!("__{}_INPUT_METADATA", name.to_string().to_uppercase());
+    let output_metadata_static =
+        format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
     quote! {
-        impl #runtime::Signature for #name {
-            type Input = #input_name;
-            type Output = #output_name;
+        impl #impl_generics #runtime::Signature for #name #ty_generics #where_clause {
+            type Input = #input_name #ty_generics;
+            type Output = #output_name #ty_generics;
 
             fn instruction() -> &'static str {
                 #instruction
             }
 
-            fn input_fields() -> &'static [#runtime::FieldSpec] {
-                &#input_fields_static
+            fn input_shape() -> &'static #runtime::Shape {
+                <#input_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
             }
 
-            fn output_fields() -> &'static [#runtime::FieldSpec] {
-                &#output_fields_static
+            fn output_shape() -> &'static #runtime::Shape {
+                <#output_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+            }
+
+            fn input_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
+                &#input_metadata_static
+            }
+
+            fn output_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
+                &#output_metadata_static
             }
 
             fn output_format_content() -> &'static #runtime::OutputFormatContent {
-                <#output_name as #runtime::BamlType>::baml_output_format()
-            }
-
-            fn from_parts(input: Self::Input, output: Self::Output) -> Self {
-                Self {
-                    #(#input_field_names: input.#input_field_names),*,
-                    #(#output_field_names: output.#output_field_names),*
-                }
-            }
-
-            fn into_parts(self) -> (Self::Input, Self::Output) {
-                (
-                    #input_name {
-                        #(#input_field_names: self.#input_field_names),*
-                    },
-                    #output_name {
-                        #(#output_field_names: self.#output_field_names),*
-                    },
-                )
+                <#output_name #ty_generics as #runtime::BamlType>::baml_output_format()
             }
         }
     }
 }
 
-#[allow(unused_assignments, non_snake_case)]
-#[proc_macro_attribute]
-pub fn LegacySignature(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(item as DeriveInput);
-    let runtime = match resolve_dspy_rs_path() {
-        Ok(path) => path,
-        Err(err) => return err.to_compile_error().into(),
+#[derive(Clone)]
+struct AugmentField {
+    ident: Ident,
+    ty: syn::Type,
+    description: String,
+    alias: Option<String>,
+}
+
+#[derive(Default)]
+struct AugmentOptions {
+    prepend: bool,
+}
+
+fn expand_augmentation(
+    input: &DeriveInput,
+    runtime: &syn::Path,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let data = match &input.data {
+        Data::Struct(data) => data,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "#[derive(Augmentation)] only supports structs with named fields",
+            ));
+        }
     };
 
-    // Parse the attributes (cot, hint, etc.)
-    let attr_str = attr.to_string();
-    let has_cot = attr_str.contains("cot");
-    let has_hint = attr_str.contains("hint");
+    let fields = match &data.fields {
+        Fields::Named(named) => &named.named,
+        _ => {
+            return Err(syn::Error::new_spanned(
+                input,
+                "#[derive(Augmentation)] requires named fields",
+            ));
+        }
+    };
+
+    let options = parse_augment_options(&input.attrs)?;
+    let parsed_fields = parse_augmentation_fields(fields)?;
+
+    if parsed_fields.is_empty() {
+        return Err(syn::Error::new_spanned(
+            input,
+            "#[derive(Augmentation)] requires at least one #[output] field",
+        ));
+    }
 
     let struct_name = &input.ident;
+    let wrapper_name = format_ident!("With{}", struct_name);
 
-    let mut signature_instruction = String::new();
-    // Store everything as serde Values
-    let mut input_schema: Value = json!({});
-    let mut output_schema: Value = json!({});
-
-    // Store schema update operations to be performed at runtime
-    let mut schema_updates = Vec::new();
-
-    if has_cot {
-        output_schema["reasoning"] = json!({
-            "type": "String",
-            "desc": "Think step by step",
-            "schema": "",
-            "__dsrs_field_type": "output"
-        });
-    }
-    // Generate schema for the field
-
-    match &input.data {
-        syn::Data::Struct(s) => {
-            if let syn::Fields::Named(named) = &s.fields {
-                let mut found_first_input = false;
-
-                for field in &named.named {
-                    let field_name = match field.ident.as_ref() {
-                        Some(name) => name.clone(),
-                        None => {
-                            return syn::Error::new_spanned(
-                                field,
-                                "LegacySignature requires named fields",
-                            )
-                            .to_compile_error()
-                            .into();
-                        }
-                    };
-                    let field_type = field.ty.clone();
-
-                    // Check for #[input] or #[output] attributes
-                    let (is_input, desc) = has_io_attribute(&field.attrs, "input");
-                    let (is_output, desc2) = has_io_attribute(&field.attrs, "output");
-
-                    if is_input && is_output {
-                        return syn::Error::new_spanned(
-                            field,
-                            format!("Field `{field_name}` cannot be both input and output"),
-                        )
-                        .to_compile_error()
-                        .into();
-                    }
-
-                    if !is_input && !is_output {
-                        return syn::Error::new_spanned(
-                            field,
-                            format!(
-                                "Field `{field_name}` must have either #[input] or #[output] attribute"
-                            ),
-                        )
-                        .to_compile_error()
-                        .into();
-                    }
-
-                    let field_desc = if is_input { desc } else { desc2 };
-
-                    // Collect doc comments from first input field as instruction
-                    if is_input && !found_first_input {
-                        signature_instruction = field
-                            .attrs
-                            .iter()
-                            .filter(|a| a.path().is_ident("doc"))
-                            .filter_map(|a| match &a.meta {
-                                syn::Meta::NameValue(nv) => match &nv.value {
-                                    syn::Expr::Lit(syn::ExprLit {
-                                        lit: syn::Lit::Str(s),
-                                        ..
-                                    }) => Some(s.value()),
-                                    _ => None,
-                                },
-                                _ => None,
-                            })
-                            .map(|s| s.trim().to_string())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        found_first_input = true;
-                    }
-
-                    // Create the field metadata as a serde Value
-                    let type_str = quote!(#field_type).to_string();
-
-                    let field_metadata = json!({
-                        "type": type_str,
-                        "desc": field_desc,
-                        "schema": "",
-                        "__dsrs_field_type": if is_input { "input" } else { "output" }
-                    });
-
-                    if is_input {
-                        input_schema[field_name.to_string()] = field_metadata;
-                        // Check if type needs schema generation (not primitive types)
-                        if !is_primitive_type(&type_str) {
-                            let field_name_str = field_name.to_string();
-                            schema_updates.push(quote! {
-                                {
-                                    let schema = #runtime::__macro_support::schemars::schema_for!(#field_type);
-                                    let schema_json = #runtime::__macro_support::serde_json::to_value(schema).unwrap();
-                                    // Extract just the properties if it's an object schema
-                                    if let Some(obj) = schema_json.as_object() {
-                                        if obj.contains_key("properties") {
-                                            input_fields[#field_name_str]["schema"] = schema_json["properties"].clone();
-                                        } else {
-                                            input_fields[#field_name_str]["schema"] = schema_json;
-                                        }
-                                    } else {
-                                        input_fields[#field_name_str]["schema"] = schema_json;
-                                    }
-                                }
-                            });
-                        }
-                    } else if is_output {
-                        output_schema[field_name.to_string()] = field_metadata;
-                        // Check if type needs schema generation (not primitive types)
-                        if !is_primitive_type(&type_str) {
-                            let field_name_str = field_name.to_string();
-                            schema_updates.push(quote! {
-                                {
-                                    let schema = #runtime::__macro_support::schemars::schema_for!(#field_type);
-                                    let schema_json = #runtime::__macro_support::serde_json::to_value(schema).unwrap();
-                                    // Extract just the properties if it's an object schema
-                                    if let Some(obj) = schema_json.as_object() {
-                                        if obj.contains_key("properties") {
-                                            output_fields[#field_name_str]["schema"] = schema_json["properties"].clone();
-                                        } else {
-                                            output_fields[#field_name_str]["schema"] = schema_json;
-                                        }
-                                    } else {
-                                        output_fields[#field_name_str]["schema"] = schema_json;
-                                    }
-                                }
-                            });
-                        }
-                    }
-                }
+    let reasoning_fields: Vec<_> = parsed_fields
+        .iter()
+        .map(|field| {
+            let ident = &field.ident;
+            let ty = &field.ty;
+            let mut attrs = Vec::new();
+            if !field.description.is_empty() {
+                let doc = LitStr::new(&field.description, proc_macro2::Span::call_site());
+                attrs.push(quote! { #[doc = #doc] });
             }
-        }
-        _ => {
-            return syn::Error::new_spanned(
-                &input,
-                "LegacySignature can only be applied to structs with named fields",
-            )
-            .to_compile_error()
-            .into();
-        }
-    }
-
-    if has_hint {
-        input_schema["hint"] = json!({
-            "type": "String",
-            "desc": "Hint for the query",
-            "schema": "",
-            "__dsrs_field_type": "input"
-        });
-    }
-
-    // Serialize the schemas to strings so we can embed them in the generated code
-    let input_schema_str = serde_json::to_string(&input_schema).unwrap();
-    let output_schema_str = serde_json::to_string(&output_schema).unwrap();
-
-    let generated = quote! {
-        #[derive(Default, Debug, Clone, #runtime::__macro_support::serde::Serialize, #runtime::__macro_support::serde::Deserialize)]
-        struct #struct_name {
-            instruction: String,
-            input_fields: #runtime::__macro_support::serde_json::Value,
-            output_fields: #runtime::__macro_support::serde_json::Value,
-            demos: Vec<#runtime::Example>,
-        }
-
-        impl #struct_name {
-            pub fn new() -> Self {
-                let mut input_fields: #runtime::__macro_support::serde_json::Value = #runtime::__macro_support::serde_json::from_str(#input_schema_str).unwrap();
-                let mut output_fields: #runtime::__macro_support::serde_json::Value = #runtime::__macro_support::serde_json::from_str(#output_schema_str).unwrap();
-
-                // Update schemas for complex types
-                #(#schema_updates)*
-
-                Self {
-                    instruction: #signature_instruction.to_string(),
-                    input_fields: input_fields,
-                    output_fields: output_fields,
-                    demos: vec![],
-                }
+            if let Some(alias) = &field.alias {
+                let lit = LitStr::new(alias, proc_macro2::Span::call_site());
+                attrs.push(quote! { #[facet(rename = #lit)] });
             }
-
-            pub fn input_fields_len(&self) -> usize {
-                self.input_fields.as_object().map_or(0, |obj| obj.len())
+            quote! {
+                #(#attrs)*
+                pub #ident: #ty
             }
+        })
+        .collect();
 
-            pub fn output_fields_len(&self) -> usize {
-                self.output_fields.as_object().map_or(0, |obj| obj.len())
-            }
-        }
-
-        impl #runtime::core::MetaSignature for #struct_name {
-            fn demos(&self) -> Vec<#runtime::Example> {
-                self.demos.clone()
-            }
-
-            fn set_demos(&mut self, demos: Vec<#runtime::Example>) -> #runtime::__macro_support::anyhow::Result<()> {
-                self.demos = demos;
-                Ok(())
-            }
-
-            fn instruction(&self) -> String {
-                self.instruction.clone()
-            }
-
-            fn input_fields(&self) -> #runtime::__macro_support::serde_json::Value {
-                self.input_fields.clone()
-            }
-
-            fn output_fields(&self) -> #runtime::__macro_support::serde_json::Value {
-                self.output_fields.clone()
-            }
-
-            fn update_instruction(&mut self, instruction: String) -> #runtime::__macro_support::anyhow::Result<()> {
-                self.instruction = instruction;
-                Ok(())
-            }
-
-            fn append(&mut self, name: &str, field_value: #runtime::__macro_support::serde_json::Value) -> #runtime::__macro_support::anyhow::Result<()> {
-                match field_value["__dsrs_field_type"].as_str() {
-                    Some("input") => {
-                        self.input_fields[name] = field_value;
-                    }
-                    Some("output") => {
-                        self.output_fields[name] = field_value;
-                    }
-                    _ => {
-                        return Err(#runtime::__macro_support::anyhow::anyhow!("Invalid field type: {:?}", field_value["__dsrs_field_type"].as_str()));
-                    }
-                }
-                Ok(())
-            }
-        }
+    let output_field = quote! {
+        #[facet(flatten)]
+        pub inner: O
     };
 
-    generated.into()
+    let (first_fields, last_fields) = if options.prepend {
+        (reasoning_fields, vec![output_field])
+    } else {
+        (vec![output_field], reasoning_fields)
+    };
+
+    Ok(quote! {
+        #[derive(Clone, Debug, #runtime::__macro_support::bamltype::facet::Facet)]
+        #[facet(crate = #runtime::__macro_support::bamltype::facet)]
+        pub struct #wrapper_name<O> {
+            #(#first_fields),*,
+            #(#last_fields),*
+        }
+
+        impl<O> std::ops::Deref for #wrapper_name<O> {
+            type Target = O;
+            fn deref(&self) -> &Self::Target {
+                &self.inner
+            }
+        }
+
+        impl<O> #runtime::__macro_support::bamltype::BamlSchema for #wrapper_name<O>
+        where
+            O: for<'a> #runtime::__macro_support::bamltype::facet::Facet<'a>,
+        {
+            fn baml_schema(
+            ) -> &'static #runtime::__macro_support::bamltype::SchemaBundle {
+                static SCHEMA: ::std::sync::OnceLock<
+                    #runtime::__macro_support::bamltype::SchemaBundle,
+                > = ::std::sync::OnceLock::new();
+                SCHEMA.get_or_init(|| {
+                    #runtime::__macro_support::bamltype::SchemaBundle::from_shape(
+                        <Self as #runtime::__macro_support::bamltype::facet::Facet<'_>>::SHAPE,
+                    )
+                })
+            }
+        }
+
+        impl #runtime::augmentation::Augmentation for #struct_name {
+            type Wrap<T: #runtime::BamlType + for<'a> #runtime::Facet<'a> + Send + Sync> =
+                #wrapper_name<T>;
+        }
+    })
 }
 
-fn has_io_attribute(attrs: &[Attribute], attr_name: &str) -> (bool, String) {
+fn parse_augment_options(attrs: &[Attribute]) -> syn::Result<AugmentOptions> {
+    let mut options = AugmentOptions::default();
     for attr in attrs {
-        if attr.path().is_ident(attr_name) {
-            // Try to parse desc parameter
-            if let Ok(list) = attr.meta.require_list() {
-                let desc = parse_desc_from_tokens(list.tokens.clone());
-                return (true, desc);
+        if !attr.path().is_ident("augment") {
+            continue;
+        }
+        let meta = attr
+            .parse_args_with(syn::punctuated::Punctuated::<Ident, Token![,]>::parse_terminated)?;
+        for ident in meta {
+            let name = ident.to_string();
+            match name.as_str() {
+                "output" => {}
+                "prepend" => options.prepend = true,
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        ident,
+                        format!("unsupported #[augment] option `{other}`"),
+                    ));
+                }
             }
-
-            // Just #[input] or #[output] without parameters.
-            return (true, String::new());
         }
     }
-    (false, String::new())
+    Ok(options)
 }
 
-fn parse_desc_from_tokens(tokens: proc_macro2::TokenStream) -> String {
-    if let Ok(nv) = syn::parse2::<MetaNameValue>(tokens)
-        && nv.path.is_ident("desc")
-        && let syn::Expr::Lit(syn::ExprLit {
-            lit: Lit::Str(s), ..
-        }) = nv.value
-    {
-        return s.value();
+fn parse_augmentation_fields(
+    fields: &syn::punctuated::Punctuated<syn::Field, Token![,]>,
+) -> syn::Result<Vec<AugmentField>> {
+    let mut parsed = Vec::new();
+
+    for field in fields {
+        let ident = field.ident.clone().ok_or_else(|| {
+            syn::Error::new_spanned(field, "#[derive(Augmentation)] requires named fields")
+        })?;
+
+        let mut is_output = false;
+        let mut alias = None;
+        let mut desc_override = None;
+
+        for attr in &field.attrs {
+            if attr.path().is_ident("output") {
+                is_output = true;
+                if let Some(desc) = parse_desc_from_attr(attr, "output")? {
+                    desc_override = Some(desc);
+                }
+            } else if attr.path().is_ident("input") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[derive(Augmentation)] does not support #[input] fields",
+                ));
+            } else if attr.path().is_ident("alias") {
+                alias = Some(parse_string_attr(attr, "alias")?);
+            } else if attr.path().is_ident("flatten") {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[derive(Augmentation)] does not support #[flatten] on fields",
+                ));
+            }
+        }
+
+        if !is_output {
+            return Err(syn::Error::new_spanned(
+                field,
+                "#[derive(Augmentation)] requires fields to be marked #[output]",
+            ));
+        }
+
+        let doc_comment = collect_doc_comment(&field.attrs);
+        let description = desc_override.unwrap_or(doc_comment);
+
+        parsed.push(AugmentField {
+            ident,
+            ty: field.ty.clone(),
+            description,
+            alias,
+        });
     }
-    String::new()
-}
 
-fn is_primitive_type(type_str: &str) -> bool {
-    matches!(
-        type_str,
-        "String"
-            | "str"
-            | "bool"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "i128"
-            | "isize"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "u128"
-            | "usize"
-            | "f32"
-            | "f64"
-            | "char"
-    )
+    Ok(parsed)
 }

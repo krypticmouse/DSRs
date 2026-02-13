@@ -7,24 +7,40 @@ use tempfile;
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use crate::{Example, Prediction};
+use crate::{Prediction, RawExample};
 
 type CacheKey = Vec<(String, Value)>;
 
+/// A cached prompt-response pair.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CacheEntry {
+    /// The formatted prompt that was sent to the LM.
     pub prompt: String,
+    /// The parsed prediction from the LM response.
     pub prediction: Prediction,
 }
 
+/// Interface for LM response caching.
+///
+/// Implemented by [`ResponseCache`]. The `insert` method takes a channel receiver
+/// because the cache entry is produced asynchronously — the LM sends the entry
+/// after the response is parsed, allowing the cache to be populated without
+/// blocking the call return.
 #[async_trait]
 pub trait Cache: Send + Sync {
     async fn new() -> Self;
-    async fn get(&self, key: Example) -> Result<Option<Prediction>>;
-    async fn insert(&mut self, key: Example, rx: mpsc::Receiver<CacheEntry>) -> Result<()>;
+    async fn get(&self, key: RawExample) -> Result<Option<Prediction>>;
+    async fn insert(&mut self, key: RawExample, rx: mpsc::Receiver<CacheEntry>) -> Result<()>;
     async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>>;
 }
 
+/// Hybrid memory + disk LM response cache.
+///
+/// Uses [foyer](https://docs.rs/foyer) with 256MB memory and 1GB disk (in a
+/// temp directory). Maintains a sliding window of the 100 most recent entries
+/// for [`inspect_history`](crate::LM::inspect_history).
+///
+/// Created automatically by [`LM`](crate::LM) — you don't construct this directly.
 #[derive(Clone)]
 pub struct ResponseCache {
     handler: HybridCache<CacheKey, CacheEntry>,
@@ -68,7 +84,7 @@ impl Cache for ResponseCache {
         skip(self, key),
         fields(key_fields = key.data.len())
     )]
-    async fn get(&self, key: Example) -> Result<Option<Prediction>> {
+    async fn get(&self, key: RawExample) -> Result<Option<Prediction>> {
         let key = key.into_iter().collect::<CacheKey>();
 
         let value = self.handler.get(&key).await?.map(|v| v.value().clone());
@@ -83,7 +99,7 @@ impl Cache for ResponseCache {
         skip(self, key, rx),
         fields(key_fields = key.data.len(), window_size = self.window_size)
     )]
-    async fn insert(&mut self, key: Example, mut rx: mpsc::Receiver<CacheEntry>) -> Result<()> {
+    async fn insert(&mut self, key: RawExample, mut rx: mpsc::Receiver<CacheEntry>) -> Result<()> {
         let key = key.into_iter().collect::<CacheKey>();
         let Some(value) = rx.recv().await else {
             warn!("cache insert channel closed before receiving entry");

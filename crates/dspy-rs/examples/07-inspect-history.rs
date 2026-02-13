@@ -1,5 +1,5 @@
 /*
-Script to inspect the history of an LM.
+Script to inspect LM history after a typed predictor call.
 
 Run with:
 ```
@@ -7,54 +7,39 @@ cargo run --example 07-inspect-history
 ```
 */
 
-#![allow(deprecated)]
-
 use anyhow::Result;
-use bon::Builder;
-use dspy_rs::{
-    ChatAdapter, Example, LM, LegacyPredict, LegacySignature, Module, Prediction, Predictor,
-    configure, example, get_lm, init_tracing,
-};
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, get_lm, init_tracing};
 
-#[LegacySignature]
-struct QASignature {
+#[derive(Signature, Clone, Debug)]
+struct QA {
     #[input]
-    pub question: String,
+    question: String,
+
     #[output]
-    pub answer: String,
-}
-
-#[derive(Builder)]
-pub struct QARater {
-    #[builder(default = LegacyPredict::new(QASignature::new()))]
-    pub answerer: LegacyPredict,
-}
-
-impl Module for QARater {
-    async fn forward(&self, inputs: Example) -> Result<Prediction> {
-        return self.answerer.forward(inputs.clone()).await;
-    }
+    answer: String,
 }
 
 #[tokio::main]
-async fn main() {
-    init_tracing().expect("failed to initialize tracing");
+async fn main() -> Result<()> {
+    init_tracing()?;
 
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
         .build()
-        .await
-        .unwrap();
+        .await?;
     configure(lm, ChatAdapter);
 
-    let example = example! {
-        "question": "input" => "What is the capital of France?",
-    };
-
-    let qa_rater = QARater::builder().build();
-    let prediction = qa_rater.forward(example.clone()).await.unwrap();
-    println!("Prediction: {prediction:?}");
+    let predictor = Predict::<QA>::new();
+    let output = predictor
+        .call(QAInput {
+            question: "What is the capital of France?".to_string(),
+        })
+        .await?
+        .into_inner();
+    println!("prediction: {:?}", output.answer);
 
     let history = get_lm().inspect_history(1).await;
-    println!("History: {history:?}");
+    println!("history: {history:?}");
+
+    Ok(())
 }

@@ -1,117 +1,267 @@
 ---
 title: 'Modules'
-description: 'Compose predictors into multi-step pipelines'
+description: 'Compose prompting strategies over any signature'
 icon: 'circle-nodes'
 ---
 
-Most of the time, you can chain [predictors](/docs/building-blocks/predictors) directly using the typed API. For more complex composition or optimizer integration, you can implement the `Module` trait.
+A module wraps one or more predictors into a prompting strategy. `ChainOfThought` makes the LM reason before answering. You swap strategies by changing a type — everything else stays the same.
 
-## Chaining predictors (the simple way)
+## The idea
 
-Just call one predictor, then use its output as input to the next:
+A `Predict<S>` calls the LM directly against your signature. A module adds behavior around that call — extra output fields, retry loops, tool use — without changing your signature definition.
 
 ```rust
-#[derive(Signature, Clone, Debug)]
-struct Summarize {
-    #[input] text: String,
-    #[output] summary: String,
-}
+// Direct call — LM produces answer immediately
+let predict = Predict::<QA>::new();
+let result = predict.call(QAInput { question: "What is 2+2?".into() }).await?;
+println!("{}", result.answer);
 
-#[derive(Signature, Clone, Debug)]
-struct Analyze {
-    #[input] summary: String,
-    #[output] sentiment: String,
-    #[output] key_points: Vec<String>,
-}
-
-// Chain them together
-let summarizer = Predict::<Summarize>::new();
-let analyzer = Predict::<Analyze>::new();
-
-let summary = summarizer.call(SummarizeInput {
-    text: long_document.into()
-}).await?;
-
-let analysis = analyzer.call(AnalyzeInput {
-    summary: summary.summary  // output of first becomes input of second
-}).await?;
-
-println!("Sentiment: {}", analysis.sentiment);
+// Chain of thought — LM reasons first, then answers
+let cot = ChainOfThought::<QA>::new();
+let result = cot.call(QAInput { question: "What is 2+2?".into() }).await?;
+println!("{}", result.reasoning);  // added by the strategy
+println!("{}", result.answer);     // same field, same type
 ```
 
-This is fully typed end-to-end.
+Both return your `answer` field. ChainOfThought adds `reasoning` on top. Your signature didn't change. The prompting strategy did.
 
-## Wrapping in a struct
+## How augmented output works
 
-For reusability, wrap predictors in a struct:
+ChainOfThought returns `WithReasoning<QAOutput>`, not bare `QAOutput`. But you rarely write that type — inference handles it:
 
 ```rust
-struct SummarizeAndAnalyze {
-    summarizer: Predict<Summarize>,
-    analyzer: Predict<Analyze>,
+let result = cot.call(input).await?;
+result.reasoning  // direct field on WithReasoning (String)
+result.answer     // accessed through Deref to QAOutput
+```
+
+Rust's `Deref` coercion makes the wrapper transparent. `result.answer` resolves automatically. Your IDE shows both `reasoning` and `answer` in autocomplete.
+
+When you do need to name the type (function signatures, struct fields):
+
+```rust
+async fn answer_with_reasoning(q: &str) -> Result<Predicted<WithReasoning<QAOutput>>, PredictError> {
+    let cot = ChainOfThought::<QA>::new();
+    cot.call(QAInput { question: q.into() }).await
+}
+```
+
+`WithReasoning<QAOutput>` reads as English: "QA output, with reasoning."
+
+## ChainOfThought
+
+Prepends a `reasoning` field to the output. The LM thinks step-by-step before producing your output fields.
+
+```rust
+use dspy_rs::{ChainOfThought, Signature};
+
+#[derive(Signature, Clone, Debug)]
+/// Solve math problems step by step.
+struct Math {
+    #[input] problem: String,
+    #[output] answer: f64,
 }
 
-impl SummarizeAndAnalyze {
+let cot = ChainOfThought::<Math>::new();
+let result = cot.call(MathInput {
+    problem: "What is 15% of 80?".into(),
+}).await?;
+
+println!("{}", result.reasoning);  // "15% of 80 = 0.15 × 80 = 12"
+println!("{}", result.answer);     // 12.0
+```
+
+### With instruction override
+
+```rust
+let cot = ChainOfThought::<Math>::builder()
+    .instruction("Show all work. Be precise.")
+    .build();
+```
+
+### With demos
+
+Demos for ChainOfThought include reasoning — they're `Example<Augmented<S, Reasoning>>`. The reasoning field shows the LM what good chain-of-thought looks like.
+
+```rust
+use dspy_rs::{Example, Augmented, Reasoning, WithReasoning};
+
+let cot = ChainOfThought::<Math>::builder()
+    .demo(Example::<Augmented<Math, Reasoning>>::new(
+        MathInput { problem: "What is 10% of 50?".into() },
+        WithReasoning {
+            reasoning: "10% of 50 = 0.10 × 50 = 5".into(),
+            inner: MathOutput { answer: 5.0 },
+        },
+    ))
+    .build();
+```
+
+`WithReasoning` has two fields: `reasoning: String` and `inner: O` (your output type). The `Deref` to `O` is just for ergonomic field access — when constructing, you build both parts explicitly.
+
+In practice you rarely write demos by hand. Optimizers generate them automatically.
+
+## Custom modules
+
+Define a struct, derive Facet, implement Module.
+
+```rust
+use dspy_rs::{Module, Predict, ChainOfThought, Predicted, PredictError, Signature};
+
+#[derive(Signature, Clone, Debug)]
+/// Retrieve relevant passages for a question.
+struct Retrieve {
+    #[input] question: String,
+    #[output] passages: Vec<String>,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Answer using the provided passages.
+struct Answer {
+    #[input] question: String,
+    #[input] passages: Vec<String>,
+    #[output] answer: String,
+}
+
+#[derive(facet::Facet)]
+#[facet(crate = facet)]
+struct RAG {
+    retrieve: Predict<Retrieve>,
+    answer: ChainOfThought<Answer>,
+}
+
+impl RAG {
     fn new() -> Self {
-        Self {
-            summarizer: Predict::<Summarize>::new(),
-            analyzer: Predict::<Analyze>::new(),
+        RAG {
+            retrieve: Predict::new(),
+            answer: ChainOfThought::new(),
         }
     }
+}
 
-    async fn run(&self, text: String) -> anyhow::Result<Analyze> {
-        let summary = self.summarizer.call(SummarizeInput { text }).await?;
-        let analysis = self.analyzer.call(AnalyzeInput {
-            summary: summary.summary
-        }).await?;
-        Ok(analysis)
+impl Module for RAG {
+    type Input = RetrieveInput;
+    type Output = WithReasoning<AnswerOutput>;
+
+    async fn forward(
+        &self,
+        input: RetrieveInput,
+    ) -> Result<Predicted<Self::Output>, PredictError> {
+        let question = input.question.clone();
+        let r = self.retrieve.call(input).await?;
+
+        self.answer.call(AnswerInput {
+            question,
+            passages: r.passages.clone(),
+        }).await
     }
 }
 ```
 
-## The Module trait
-
-`Predict<S>` implements `Module`, which is used by optimizers and batch processing:
+Usage:
 
 ```rust
-pub trait Module: Send + Sync {
-    async fn forward(&self, inputs: Example) -> Result<Prediction>;
+let rag = RAG::new();
+let result = rag.call(RetrieveInput {
+    question: "Who wrote Hamlet?".into(),
+}).await?;
 
-    async fn batch(
-        &self,
-        inputs: Vec<Example>,
-        max_concurrency: usize,
-        display_progress: bool,
-    ) -> Result<Vec<Prediction>>;
+println!("{}", result.reasoning);
+println!("{}", result.answer);
+```
+
+`#[derive(facet::Facet)]` on the struct is what makes optimizer discovery work — the framework finds `retrieve` and `answer`'s inner predictor automatically without annotations. See [Optimization](/docs/optimizers) for details.
+
+### `call` vs `forward`
+
+`call` is the user-facing entry point. `forward` is the implementation hook you override. `call` currently delegates to `forward` — the split exists so hooks, tracing, and usage tracking can wrap `call` without breaking module implementations.
+
+```rust
+// Users call:
+module.call(input).await?
+
+// Module authors implement:
+async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+    // your logic here
 }
 ```
 
-The `batch` method runs `forward` concurrently with a progress bar.
+## Output transforms without `impl Module`
 
-If you need your custom struct to work with optimizers, implement `Module`. Otherwise, the simpler patterns above are usually enough.
-
-## Current limitations
-
-<Warning>
-**Runtime signature modification is not supported.**
-
-Unlike DSPy where you can do `ChainOfThought(signature)` to dynamically add a reasoning field, DSRs signatures are fixed at compile time.
-
-If you want chain-of-thought style reasoning, add the field explicitly:
+For simple post-processing, use `.map()` instead of writing a full module:
 
 ```rust
-#[derive(Signature, Clone, Debug)]
-struct QA {
-    #[input]
-    question: String,
+use dspy_rs::ModuleExt;
 
-    #[output]
-    reasoning: String,  // add explicitly
+let cot = ChainOfThought::<QA>::new();
 
-    #[output]
-    answer: String,
+let uppercase = cot.map(|output| {
+    // output is WithReasoning<QAOutput> here
+    QAOutput { answer: output.answer.to_uppercase() }
+});
+
+let result = uppercase.call(input).await?;
+println!("{}", result.answer);  // "PARIS"
+```
+
+`.and_then()` for fallible transforms that return `Result<T, PredictError>`.
+
+Combinators preserve optimizer discovery — the framework sees through `.map()` and `.and_then()` to find the Predict leaves inside.
+
+## Batch calls
+
+Run a module over many inputs concurrently:
+
+```rust
+let cot = ChainOfThought::<QA>::new();
+
+let inputs: Vec<QAInput> = questions.iter()
+    .map(|q| QAInput { question: q.clone() })
+    .collect();
+
+let results = dspy_rs::forward_all(&cot, inputs, 10).await;
+// Vec<Result<Predicted<WithReasoning<QAOutput>>, PredictError>>
+```
+
+The third argument is max concurrency. Each result is independent — one failure doesn't stop the others. Shows a progress bar on stderr.
+
+## Swapping strategies
+
+Modules are interchangeable when they share the same input type. Change a type annotation, the compiler tells you what else to update:
+
+```rust
+struct Pipeline {
+    // Change this line to swap strategy:
+    answer: ChainOfThought<QA>,
+    // answer: Predict<QA>,   // direct — output is QAOutput
 }
 ```
 
-A more ergonomic pattern for this is being explored.
-</Warning>
+Changing the strategy may change the output type — `Predict<QA>` returns `QAOutput`, `ChainOfThought<QA>` returns `WithReasoning<QAOutput>`. The compiler catches every downstream breakage. No runtime surprises.
+
+For generic pipelines that accept any strategy:
+
+```rust
+struct Pipeline<A: Module<Input = AnswerInput>> {
+    retrieve: Predict<Retrieve>,
+    answer: A,
+}
+```
+
+## Where it fits
+
+```
+Signature  →  defines the contract (what goes in, what comes out)
+Module     →  prompting strategy (how to get there)
+Predict    →  the leaf LM call (inside every module)
+Adapter    →  turns signatures into prompts and parses responses
+Optimizer  →  discovers Predict leaves, tunes demos and instructions
+```
+
+A Module doesn't call the LM directly. It orchestrates one or more `Predict` instances that do. The optimizer reaches through the module to find and tune those Predict leaves. Your module's `forward` logic stays the same — the optimizer changes what the LM sees (demos, instructions), not how your code runs.
+
+| Module | What it does | Output type | Internal Predicts |
+|--------|-------------|-------------|-------------------|
+| `Predict<S>` | Direct LM call | `S::Output` | 1 (itself) |
+| `ChainOfThought<S>` | Reason then answer | `WithReasoning<S::Output>` | 1 |
+| Custom | Your logic | Your choice | Your Predicts |
