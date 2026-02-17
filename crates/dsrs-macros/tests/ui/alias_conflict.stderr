@@ -1,0 +1,7 @@
+error: duplicate input field name `first` after aliasing; conflicts between `first` and `second`
+ --> tests/ui/alias_conflict.rs:3:10
+  |
+3 | #[derive(Signature)]
+  |          ^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `Signature` (in Nightly builds, run with -Z macro-backtrace for more info)

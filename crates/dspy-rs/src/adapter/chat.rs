@@ -4,15 +4,20 @@ use bamltype::jsonish::BamlValueWithFlags;
 use bamltype::jsonish::deserializer::coercer::run_user_checks;
 use bamltype::jsonish::deserializer::deserialize_flags::DeserializerConditions;
 use indexmap::IndexMap;
+use minijinja::UndefinedBehavior;
+use minijinja::value::{Kwargs, Value as MiniJinjaValue};
 use regex::Regex;
-use std::sync::LazyLock;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use tracing::{debug, trace};
 
 use super::Adapter;
 use crate::CallMetadata;
 use crate::{
-    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, JsonishError, Message,
-    OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions, Signature, TypeIR,
+    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, InputRenderSpec,
+    JsonishError, Message, OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions,
+    Signature, TypeIR,
 };
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
@@ -32,6 +37,101 @@ pub struct ChatAdapter;
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[ ## ([^#]+?) ## \]\]").unwrap());
+
+const INPUT_RENDER_TEMPLATE_NAME: &str = "__input_field__";
+
+#[derive(Clone)]
+struct CachedInputRenderTemplate {
+    env: minijinja::Environment<'static>,
+}
+
+static INPUT_RENDER_TEMPLATE_CACHE: LazyLock<
+    Mutex<HashMap<&'static str, CachedInputRenderTemplate>>,
+> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn regex_match(value: String, regex: String) -> bool {
+    match Regex::new(&regex) {
+        Ok(re) => re.is_match(&value),
+        Err(_) => false,
+    }
+}
+
+fn sum_filter(value: Vec<MiniJinjaValue>) -> MiniJinjaValue {
+    let int_sum: Option<i64> = value
+        .iter()
+        .map(|value| <i64>::try_from(value.clone()).ok())
+        .collect::<Option<Vec<_>>>()
+        .map(|ints| ints.into_iter().sum());
+    let float_sum: Option<f64> = value
+        .into_iter()
+        .map(|value| <f64>::try_from(value).ok())
+        .collect::<Option<Vec<_>>>()
+        .map(|floats| floats.into_iter().sum());
+    int_sum.map_or(
+        float_sum.map_or(MiniJinjaValue::from(0), MiniJinjaValue::from),
+        MiniJinjaValue::from,
+    )
+}
+
+fn truncate_filter(
+    value: String,
+    positional_length: Option<usize>,
+    kwargs: Kwargs,
+) -> Result<String, minijinja::Error> {
+    let kwarg_length: Option<usize> = kwargs.get("length")?;
+    let length = kwarg_length.or(positional_length).unwrap_or(255);
+    let killwords: Option<bool> = kwargs.get("killwords")?;
+    let leeway: Option<usize> = kwargs.get("leeway")?;
+    let end: Option<String> = kwargs.get("end")?;
+    kwargs.assert_all_used()?;
+
+    let killwords = killwords.unwrap_or(false);
+    let leeway = leeway.unwrap_or(5);
+    let end = end.unwrap_or_else(|| "...".to_string());
+    let value_len = value.chars().count();
+
+    if value_len <= length.saturating_add(leeway) {
+        return Ok(value);
+    }
+
+    let trim_to = length.saturating_sub(end.chars().count());
+    if trim_to == 0 {
+        return Ok(end.chars().take(length).collect());
+    }
+
+    let mut truncated: String = value.chars().take(trim_to).collect();
+    if !killwords {
+        if let Some(index) = truncated.rfind(char::is_whitespace) {
+            if index > 0 {
+                truncated.truncate(index);
+            }
+        }
+        truncated = truncated.trim_end().to_string();
+    }
+
+    Ok(format!("{truncated}{end}"))
+}
+
+fn build_input_render_environment() -> minijinja::Environment<'static> {
+    // Keep this setup aligned with BAML's jinja env defaults, then add contrib filters.
+    let mut env = minijinja::Environment::new();
+    env.set_formatter(|output, state, value| {
+        let value = if value.is_none() {
+            &MiniJinjaValue::from("null")
+        } else {
+            value
+        };
+        minijinja::escape_formatter(output, state, value)
+    });
+    env.set_debug(true);
+    env.set_trim_blocks(true);
+    env.set_lstrip_blocks(true);
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.add_filter("regex_match", regex_match);
+    env.add_filter("sum", sum_filter);
+    env.add_filter("truncate", truncate_filter);
+    env
+}
 
 fn render_field_type_schema(
     parent_format: &OutputFormatContent,
@@ -396,15 +496,19 @@ impl ChatAdapter {
     {
         let baml_value = input.to_baml_value();
         let input_output_format = <I as BamlType>::baml_output_format();
+        let input_json = build_input_context_value(schema, &baml_value);
+        let vars = Value::Object(serde_json::Map::new());
 
         let mut result = String::new();
         for field_spec in schema.input_fields() {
             if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
                 result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
-                result.push_str(&format_baml_value_for_prompt_typed(
+                result.push_str(&render_input_field(
+                    field_spec,
                     value,
+                    &input_json,
                     input_output_format,
-                    field_spec.format,
+                    &vars,
                 ));
                 result.push_str("\n\n");
             }
@@ -865,23 +969,117 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
     }
 }
 
-fn format_baml_value_for_prompt_typed(
+fn render_input_field(
+    field_spec: &crate::FieldSchema,
     value: &BamlValue,
+    input: &Value,
     output_format: &OutputFormatContent,
-    format: Option<&str>,
+    vars: &Value,
 ) -> String {
-    let format = match format {
-        Some(format) => format,
-        None => {
-            if let BamlValue::String(s) = value {
-                return s.clone();
-            }
-            "json"
+    match field_spec.input_render {
+        InputRenderSpec::Default => match value {
+            BamlValue::String(s) => s.clone(),
+            _ => bamltype::internal_baml_jinja::format_baml_value(value, output_format, "json")
+                .unwrap_or_else(|_| "<error>".to_string()),
+        },
+        InputRenderSpec::Format(format) => {
+            bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
+                .unwrap_or_else(|_| "<error>".to_string())
         }
+        InputRenderSpec::Jinja(template) => {
+            render_input_field_jinja(template, field_spec, value, input, output_format, vars)
+        }
+    }
+}
+
+fn build_input_context_value(schema: &crate::SignatureSchema, root: &BamlValue) -> Value {
+    let mut input_json = baml_value_to_render_json(root);
+    let Some(root_map) = input_json.as_object_mut() else {
+        return input_json;
     };
 
-    bamltype::internal_baml_jinja::format_baml_value(value, output_format, format)
-        .unwrap_or_else(|_| "<error>".to_string())
+    // Provide alias lookups for top-level fields so templates can use either
+    // Rust field names (`input.question`) or prompt aliases (`input.query`).
+    for field_spec in schema.input_fields() {
+        if field_spec.rust_name.contains('.') || field_spec.lm_name == field_spec.rust_name {
+            continue;
+        }
+        if field_spec.path().iter().nth(1).is_some() {
+            continue;
+        }
+        if let Some(value) = root_map.get(field_spec.rust_name.as_str()).cloned() {
+            root_map
+                .entry(field_spec.lm_name.to_string())
+                .or_insert(value);
+        }
+    }
+
+    input_json
+}
+
+fn baml_value_to_render_json(value: &BamlValue) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+fn render_input_field_jinja(
+    template: &'static str,
+    field_spec: &crate::FieldSchema,
+    value: &BamlValue,
+    input: &Value,
+    _output_format: &OutputFormatContent,
+    vars: &Value,
+) -> String {
+    let env = {
+        let mut cache = INPUT_RENDER_TEMPLATE_CACHE
+            .lock()
+            .expect("input render template cache lock poisoned");
+        cache
+            .entry(template)
+            .or_insert_with(|| {
+                let mut env = build_input_render_environment();
+                env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to compile cached input render template for `{}` ({}): {err}",
+                            field_spec.lm_name, field_spec.rust_name
+                        )
+                    });
+                CachedInputRenderTemplate { env }
+            })
+            .env
+            .clone()
+    };
+
+    let compiled = env
+        .get_template(INPUT_RENDER_TEMPLATE_NAME)
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to fetch cached input render template for `{}` ({}): {err}",
+                field_spec.lm_name, field_spec.rust_name
+            )
+        });
+
+    let this = baml_value_to_render_json(value);
+    let field = json!({
+        "name": field_spec.lm_name,
+        "rust_name": field_spec.rust_name,
+        "type": field_spec.type_ir.diagnostic_repr().to_string(),
+    });
+    let context = json!({
+        "this": this,
+        "input": input,
+        "field": field,
+        "vars": vars,
+    });
+
+    compiled
+        .render(minijinja::Value::from_serialize(context))
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to render input field `{}` (rust `{}`) with #[render(jinja = ...)] template `{}`: {err}",
+                field_spec.lm_name, field_spec.rust_name, template
+            )
+        })
 }
 
 fn collect_flags_recursive(value: &BamlValueWithFlags, flags: &mut Vec<Flag>) {

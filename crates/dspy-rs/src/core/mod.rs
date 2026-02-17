@@ -37,7 +37,7 @@ pub use lm::*;
 pub use module::*;
 pub use module_ext::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
-pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, SignatureSchema};
+pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;
 pub use specials::*;

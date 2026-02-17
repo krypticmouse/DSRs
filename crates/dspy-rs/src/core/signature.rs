@@ -73,9 +73,9 @@ pub trait Signature: Send + Sync + 'static {
     /// The Facet shape of the output struct.
     fn output_shape() -> &'static Shape;
 
-    /// Per-field metadata for input fields (aliases, constraints, format hints).
+    /// Per-field metadata for input fields (aliases, constraints, input render hints).
     fn input_field_metadata() -> &'static [FieldMetadataSpec];
-    /// Per-field metadata for output fields (aliases, constraints, format hints).
+    /// Per-field metadata for output fields (aliases, constraints, input render hints).
     fn output_field_metadata() -> &'static [FieldMetadataSpec];
 
     /// The output format descriptor used by the adapter for structured output parsing.

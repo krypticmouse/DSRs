@@ -1,6 +1,6 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use syn::{
     Attribute, Data, DeriveInput, Expr, ExprLit, Fields, Ident, Lit, LitStr, Meta, MetaNameValue,
     Token, Visibility,
@@ -16,7 +16,7 @@ use runtime_path::resolve_dspy_rs_path;
 
 #[proc_macro_derive(
     Signature,
-    attributes(input, output, check, assert, alias, format, flatten)
+    attributes(input, output, check, assert, alias, format, render, flatten)
 )]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -82,8 +82,15 @@ struct ParsedField {
     is_flatten: bool,
     description: String,
     alias: Option<String>,
-    format: Option<String>,
+    input_render: ParsedInputRender,
     constraints: Vec<ParsedConstraint>,
+}
+
+#[derive(Clone)]
+enum ParsedInputRender {
+    Default,
+    Format(String),
+    Jinja(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,6 +194,8 @@ fn parse_signature_fields(
             "#[derive(Signature)] requires at least one #[output] field",
         ));
     }
+    validate_unique_lm_names(&input_fields, "input")?;
+    validate_unique_lm_names(&output_fields, "output")?;
 
     Ok(ParsedSignature {
         input_fields,
@@ -194,6 +203,25 @@ fn parse_signature_fields(
         all_fields,
         instruction: collect_doc_comment(attrs),
     })
+}
+
+fn validate_unique_lm_names(fields: &[ParsedField], kind: &str) -> syn::Result<()> {
+    let mut seen = HashMap::<String, String>::new();
+
+    for field in fields {
+        let rust_name = field.ident.to_string();
+        let lm_name = field.alias.as_deref().unwrap_or(&rust_name).to_string();
+        if let Some(previous_rust_name) = seen.insert(lm_name.clone(), rust_name.clone()) {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                format!(
+                    "duplicate {kind} field name `{lm_name}` after aliasing; conflicts between `{previous_rust_name}` and `{rust_name}`"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
@@ -207,6 +235,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
     let mut saw_flatten = false;
     let mut alias = None;
     let mut format = None;
+    let mut render_jinja = None;
     let mut constraints = Vec::new();
     let mut desc_override = None;
 
@@ -231,6 +260,16 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
             format = Some(parse_string_attr(attr, "format")?);
+        } else if attr.path().is_ident("render") {
+            if render_jinja.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "#[render] can only be specified once per field",
+                ));
+            }
+            let template = parse_render_jinja_attr(attr)?;
+            validate_jinja_template(&template, attr.span())?;
+            render_jinja = Some(template);
         } else if attr.path().is_ident("flatten") {
             if saw_flatten {
                 return Err(syn::Error::new_spanned(
@@ -247,16 +286,31 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         }
     }
 
+    if format.is_some() && render_jinja.is_some() {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[format] and #[render] cannot be combined on the same field",
+        ));
+    }
+
     if format.is_some() && !is_input {
         return Err(syn::Error::new_spanned(
             field,
             "#[format] is only supported on #[input] fields",
         ));
     }
+    if render_jinja.is_some() && !is_input {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[render] is only supported on #[input] fields",
+        ));
+    }
 
-    if let Some(format_value) = format.as_deref() {
+    let input_render = if let Some(template) = render_jinja {
+        ParsedInputRender::Jinja(template)
+    } else if let Some(format_value) = format {
         match format_value.to_ascii_lowercase().as_str() {
-            "json" | "yaml" | "toon" => {}
+            "json" | "yaml" | "toon" => ParsedInputRender::Format(format_value),
             _ => {
                 return Err(syn::Error::new_spanned(
                     field,
@@ -264,12 +318,18 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
         }
-    }
+    } else {
+        ParsedInputRender::Default
+    };
 
-    if is_flatten && (alias.is_some() || format.is_some() || !constraints.is_empty()) {
+    if is_flatten
+        && (alias.is_some()
+            || !matches!(input_render, ParsedInputRender::Default)
+            || !constraints.is_empty())
+    {
         return Err(syn::Error::new_spanned(
             field,
-            "#[flatten] cannot be combined with #[alias], #[format], #[check], or #[assert]",
+            "#[flatten] cannot be combined with #[alias], #[format], #[render], #[check], or #[assert]",
         ));
     }
 
@@ -286,7 +346,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
         is_flatten,
         description,
         alias,
-        format,
+        input_render,
         constraints,
     })
 }
@@ -336,6 +396,44 @@ fn parse_string_attr(attr: &Attribute, attr_name: &str) -> syn::Result<String> {
             format!("expected #[{attr_name} = \"...\"] or #[{attr_name}(\"...\")]"),
         )),
     }
+}
+
+fn parse_render_jinja_attr(attr: &Attribute) -> syn::Result<String> {
+    match &attr.meta {
+        Meta::List(list) => {
+            let metas = list.parse_args_with(
+                syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated,
+            )?;
+
+            if metas.len() != 1 {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "expected #[render(jinja = \"...\")]",
+                ));
+            }
+
+            match metas.first() {
+                Some(Meta::NameValue(meta)) if meta.path.is_ident("jinja") => {
+                    parse_string_expr(&meta.value, meta.span())
+                }
+                _ => Err(syn::Error::new_spanned(
+                    attr,
+                    "expected #[render(jinja = \"...\")]",
+                )),
+            }
+        }
+        _ => Err(syn::Error::new_spanned(
+            attr,
+            "expected #[render(jinja = \"...\")]",
+        )),
+    }
+}
+
+fn validate_jinja_template(template: &str, span: proc_macro2::Span) -> syn::Result<()> {
+    let mut env = minijinja::Environment::new();
+    env.add_template("__input_field__", template)
+        .map_err(|_| syn::Error::new(span, "invalid Jinja syntax in #[render(jinja = \"...\")]"))?;
+    Ok(())
 }
 
 fn parse_constraint_attr(
@@ -877,7 +975,7 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
         attrs.push(quote! { #[facet(flatten)] });
     }
 
-    // Note: aliases, formats, and constraints are emitted in
+    // Note: aliases, input render hints, and constraints are emitted in
     // generate_field_metadata(), not as struct attributes.
 
     quote! {
@@ -919,12 +1017,16 @@ fn generate_field_metadata(
             }
             None => quote! { None },
         };
-        let format = match &field.format {
-            Some(value) => {
+        let input_render = match &field.input_render {
+            ParsedInputRender::Default => quote! { #runtime::InputRenderSpec::Default },
+            ParsedInputRender::Format(value) => {
                 let lit = LitStr::new(value, proc_macro2::Span::call_site());
-                quote! { Some(#lit) }
+                quote! { #runtime::InputRenderSpec::Format(#lit) }
             }
-            None => quote! { None },
+            ParsedInputRender::Jinja(value) => {
+                let lit = LitStr::new(value, proc_macro2::Span::call_site());
+                quote! { #runtime::InputRenderSpec::Jinja(#lit) }
+            }
         };
 
         let constraints_name = format_ident!(
@@ -973,7 +1075,7 @@ fn generate_field_metadata(
                 rust_name: #rust_name,
                 alias: #alias,
                 constraints: #constraints_name,
-                format: #format,
+                input_render: #input_render,
             }
         });
     }

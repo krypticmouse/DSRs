@@ -164,6 +164,11 @@ Compose multi-step pipelines
 
 ## Adding complexity
 
+### Input formatting and rendering
+
+Use `#[format("json" | "yaml" | "toon")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
+See the full attribute reference in [Signatures](/docs/building-blocks/signature) and runtime behavior in [Adapter](/docs/building-blocks/adapter).
+
 ### Custom types
 
 When you need more than primitives, add [`#[BamlType]`](/docs/building-blocks/types):
