@@ -280,6 +280,7 @@ impl LM {
         // Now loop until we get a text response
         for iteration in 1..max_iterations {
             let request = CompletionRequest {
+                model: None,
                 preamble: Some(system_prompt.clone()),
                 chat_history: if chat_history.len() == 1 {
                     OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
@@ -292,6 +293,7 @@ impl LM {
                 max_tokens: Some(self.max_tokens as u64),
                 tool_choice: Some(ToolChoice::Auto),
                 additional_params: None,
+                output_schema: None,
             };
 
             let response = self
@@ -325,7 +327,7 @@ impl LM {
                 AssistantContent::Reasoning(reasoning) => {
                     debug!(iteration, "tool loop completed with reasoning");
                     return Ok(ToolLoopResult {
-                        message: Message::assistant(reasoning.reasoning.join("\n")),
+                        message: Message::assistant(reasoning.display_text()),
                         chat_history,
                         tool_calls,
                         tool_executions,
@@ -429,6 +431,7 @@ impl LM {
         chat_history.push(request_messages.prompt);
 
         let request = CompletionRequest {
+            model: None,
             preamble: Some(request_messages.system.clone()),
             chat_history: if chat_history.len() == 1 {
                 OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
@@ -445,6 +448,7 @@ impl LM {
                 None
             },
             additional_params: None,
+            output_schema: None,
         };
 
         // Execute the completion using enum dispatch (zero-cost abstraction)
@@ -469,9 +473,7 @@ impl LM {
         let mut tool_loop_result = None;
         let first_choice = match response.choice.first() {
             AssistantContent::Text(text) => Message::assistant(&text.text),
-            AssistantContent::Reasoning(reasoning) => {
-                Message::assistant(reasoning.reasoning.join("\n"))
-            }
+            AssistantContent::Reasoning(reasoning) => Message::assistant(reasoning.display_text()),
             AssistantContent::ToolCall(tool_call) if !tools.is_empty() => {
                 // Only execute tool loop if we have tools available
                 debug!(tool = %tool_call.function.name, "entering tool loop");
