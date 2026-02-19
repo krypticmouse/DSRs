@@ -196,6 +196,8 @@ where
                     name: action_name.clone(),
                     arguments: serde_json::json!(action_input),
                 },
+                signature: None,
+                additional_params: None,
             });
             tool_executions.push(Self::format_trace_entry(
                 step + 1,

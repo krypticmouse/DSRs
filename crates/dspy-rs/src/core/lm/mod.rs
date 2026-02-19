@@ -185,13 +185,145 @@ struct ToolLoopResult {
     tool_executions: Vec<String>,
 }
 
+/// What the model actually wants to do, extracted from a potentially multi-block response.
+/// Reasoning blocks are preserved in `full_content` for faithful history replay.
+enum ChoiceAction {
+    /// Terminal text response (possibly preceded by reasoning).
+    Text(String),
+    /// One or more tool calls to execute. Carries the full `OneOrMany` so
+    /// reasoning blocks are preserved when we push the assistant turn into
+    /// chat history. Supports parallel tool calling (Anthropic multi-tool-use,
+    /// OpenAI parallel function calls).
+    ToolCalls {
+        calls: Vec<ToolCall>,
+        full_content: Box<rig::OneOrMany<AssistantContent>>,
+    },
+}
+
+/// Scan all content blocks in a response to find actionable items.
+/// Anthropic returns `[Reasoning, ToolCall]` or `[Reasoning, Text]`;
+/// OpenAI Responses API returns `[Reasoning, FunctionCall]`.
+/// Multiple tool calls in one response are supported (parallel tool calling).
+fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
+    let mut text: Option<String> = None;
+    let mut tool_calls: Vec<ToolCall> = Vec::new();
+
+    for item in choice.iter() {
+        match item {
+            AssistantContent::ToolCall(tc) => {
+                tool_calls.push(tc.clone());
+            }
+            AssistantContent::Text(t) => {
+                text = Some(t.text.clone());
+            }
+            AssistantContent::Reasoning(_) | AssistantContent::Image(_) => {}
+        }
+    }
+
+    if !tool_calls.is_empty() {
+        return ChoiceAction::ToolCalls {
+            calls: tool_calls,
+            full_content: Box::new(choice),
+        };
+    }
+
+    if let Some(t) = text {
+        return ChoiceAction::Text(t);
+    }
+
+    // Fallback: only reasoning blocks — extract display text
+    let display = choice
+        .iter()
+        .filter_map(|item| match item {
+            AssistantContent::Reasoning(r) => Some(r.display_text()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    ChoiceAction::Text(display)
+}
+
+/// Look up a tool by name in the tool list and execute it.
+/// Returns `(result_string, was_found)`.
+async fn find_and_execute_tool(
+    tools: &mut [Arc<dyn ToolDyn>],
+    tool_name: &str,
+    args: &str,
+) -> Result<(String, bool)> {
+    for tool in tools.iter_mut() {
+        let def = tool.definition("".to_string()).await;
+        if def.name == tool_name {
+            let result = tool.call(args.to_string()).await?;
+            return Ok((result, true));
+        }
+    }
+    Ok((format!("Tool '{}' not found", tool_name), false))
+}
+
 impl LM {
+    /// Execute all tool calls in a batch, returning results paired with their calls.
+    async fn execute_tool_batch(
+        tools: &mut [Arc<dyn ToolDyn>],
+        calls: &[ToolCall],
+        context: &str,
+    ) -> Result<Vec<(ToolCall, String)>> {
+        let mut results = Vec::with_capacity(calls.len());
+        for tc in calls {
+            let (result, found) =
+                find_and_execute_tool(tools, &tc.function.name, &tc.function.arguments.to_string())
+                    .await
+                    .map_err(|err| {
+                        anyhow::anyhow!(
+                            "tool `{}` execution failed ({}): {:?}",
+                            tc.function.name,
+                            context,
+                            err
+                        )
+                    })?;
+            if !found {
+                warn!(tool = %tc.function.name, context, "tool not found");
+            }
+            trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
+            results.push((tc.clone(), result));
+        }
+        Ok(results)
+    }
+
+    /// Push tool results into chat history as a single User message.
+    fn push_tool_results(
+        chat_history: &mut Vec<rig::message::Message>,
+        results: &[(ToolCall, String)],
+    ) {
+        use rig::OneOrMany;
+        use rig::message::UserContent;
+
+        let tool_result_contents: Vec<UserContent> = results
+            .iter()
+            .map(|(tc, result)| {
+                if let Some(call_id) = &tc.call_id {
+                    UserContent::tool_result_with_call_id(
+                        tc.id.clone(),
+                        call_id.clone(),
+                        OneOrMany::one(result.clone().into()),
+                    )
+                } else {
+                    UserContent::tool_result(tc.id.clone(), OneOrMany::one(result.clone().into()))
+                }
+            })
+            .collect();
+
+        chat_history.push(rig::message::Message::User {
+            content: OneOrMany::many(tool_result_contents).expect("results should not be empty"),
+        });
+    }
+
     #[tracing::instrument(
         name = "dsrs.lm.tools.loop",
         level = "debug",
         skip(
             self,
-            initial_tool_call,
+            initial_calls,
+            initial_assistant_content,
             tools,
             tool_definitions,
             chat_history,
@@ -199,13 +331,15 @@ impl LM {
             accumulated_usage
         ),
         fields(
-            initial_tool = %initial_tool_call.function.name,
+            initial_tool_count = initial_calls.len(),
             max_iterations = self.max_tool_iterations as usize
         )
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_loop(
         &self,
-        initial_tool_call: &rig::message::ToolCall,
+        initial_calls: &[ToolCall],
+        initial_assistant_content: rig::OneOrMany<AssistantContent>,
         mut tools: Vec<Arc<dyn ToolDyn>>,
         tool_definitions: Vec<rig::completion::ToolDefinition>,
         mut chat_history: Vec<rig::message::Message>,
@@ -214,72 +348,32 @@ impl LM {
     ) -> Result<ToolLoopResult> {
         use rig::OneOrMany;
         use rig::completion::CompletionRequest;
-        use rig::message::UserContent;
 
         let max_iterations = self.max_tool_iterations as usize;
-        let mut tool_calls = Vec::new();
-        let mut tool_executions = Vec::new();
+        let mut all_tool_calls = Vec::new();
+        let mut all_tool_executions = Vec::new();
 
-        // Execute the first tool call
-        let tool_name = &initial_tool_call.function.name;
-        let args_str = initial_tool_call.function.arguments.to_string();
-        debug!(tool = %tool_name, "executing initial tool call");
-
-        let mut tool_result = format!("Tool '{}' not found", tool_name);
-        let mut found_tool = false;
-        for tool in &mut tools {
-            let def = tool.definition("".to_string()).await;
-            if def.name == *tool_name {
-                // Actually execute the tool
-                tool_result = tool.call(args_str.clone()).await.map_err(|err| {
-                    anyhow::anyhow!(
-                        "tool `{}` execution failed during initial call: {:?}",
-                        tool_name,
-                        err
-                    )
-                })?;
-                tool_calls.push(initial_tool_call.clone());
-                tool_executions.push(tool_result.clone());
-                found_tool = true;
-                break;
-            }
+        // Execute the initial tool call batch
+        debug!(count = initial_calls.len(), "executing initial tool calls");
+        let results = Self::execute_tool_batch(&mut tools, initial_calls, "initial").await?;
+        for (tc, result) in &results {
+            all_tool_calls.push(tc.clone());
+            all_tool_executions.push(result.clone());
         }
-        if !found_tool {
-            warn!(tool = %tool_name, "tool not found");
-        }
-        trace!(
-            tool_result_len = tool_result.len(),
-            "initial tool execution complete"
-        );
 
-        // Add initial tool call and result to history
+        // Add initial assistant turn to history, preserving ALL content blocks
+        // (reasoning + tool calls) so providers like Anthropic get their thinking
+        // blocks back with signatures intact.
         chat_history.push(rig::message::Message::Assistant {
             id: None,
-            content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
-                initial_tool_call.clone(),
-            )),
+            content: initial_assistant_content,
         });
-
-        let tool_result_content = if let Some(call_id) = &initial_tool_call.call_id {
-            UserContent::tool_result_with_call_id(
-                initial_tool_call.id.clone(),
-                call_id.clone(),
-                OneOrMany::one(tool_result.into()),
-            )
-        } else {
-            UserContent::tool_result(
-                initial_tool_call.id.clone(),
-                OneOrMany::one(tool_result.into()),
-            )
-        };
-
-        chat_history.push(rig::message::Message::User {
-            content: OneOrMany::one(tool_result_content),
-        });
+        Self::push_tool_results(&mut chat_history, &results);
 
         // Now loop until we get a text response
         for iteration in 1..max_iterations {
             let request = CompletionRequest {
+                model: None,
                 preamble: Some(system_prompt.clone()),
                 chat_history: if chat_history.len() == 1 {
                     OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
@@ -292,6 +386,7 @@ impl LM {
                 max_tokens: Some(self.max_tokens as u64),
                 tool_choice: Some(ToolChoice::Auto),
                 additional_params: None,
+                output_schema: None,
             };
 
             let response = self
@@ -312,85 +407,37 @@ impl LM {
                 "tool loop usage updated"
             );
 
-            match response.choice.first() {
-                AssistantContent::Text(text) => {
+            // Scan ALL content blocks — don't just look at .first(), since
+            // responses can be [Reasoning, ToolCall] or [Reasoning, Text].
+            match classify_choice(response.choice) {
+                ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
                     return Ok(ToolLoopResult {
-                        message: Message::assistant(&text.text),
+                        message: Message::assistant(&text),
                         chat_history,
-                        tool_calls,
-                        tool_executions,
+                        tool_calls: all_tool_calls,
+                        tool_executions: all_tool_executions,
                     });
                 }
-                AssistantContent::Reasoning(reasoning) => {
-                    debug!(iteration, "tool loop completed with reasoning");
-                    return Ok(ToolLoopResult {
-                        message: Message::assistant(reasoning.reasoning.join("\n")),
-                        chat_history,
-                        tool_calls,
-                        tool_executions,
-                    });
-                }
-                AssistantContent::ToolCall(tool_call) => {
-                    // Execute tool and continue
-                    let tool_name = &tool_call.function.name;
-                    let args_str = tool_call.function.arguments.to_string();
-                    debug!(iteration, tool = %tool_name, "executing tool call");
-
-                    let mut tool_result = format!("Tool '{}' not found", tool_name);
-                    let mut found_tool = false;
-                    for tool in &mut tools {
-                        let def = tool.definition("".to_string()).await;
-                        if def.name == *tool_name {
-                            // Actually execute the tool
-                            tool_result = tool.call(args_str.clone()).await.map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed at iteration {}: {:?}",
-                                    tool_name,
-                                    iteration,
-                                    err
-                                )
-                            })?;
-                            tool_calls.push(tool_call.clone());
-                            tool_executions.push(tool_result.clone());
-                            found_tool = true;
-                            break;
-                        }
+                ChoiceAction::ToolCalls {
+                    calls,
+                    full_content,
+                } => {
+                    let context = format!("iteration {}", iteration);
+                    debug!(iteration, count = calls.len(), "executing tool calls");
+                    let results = Self::execute_tool_batch(&mut tools, &calls, &context).await?;
+                    for (tc, result) in &results {
+                        all_tool_calls.push(tc.clone());
+                        all_tool_executions.push(result.clone());
                     }
-                    if !found_tool {
-                        warn!(iteration, tool = %tool_name, "tool not found");
-                    }
-                    trace!(
-                        iteration,
-                        tool_result_len = tool_result.len(),
-                        "tool execution complete"
-                    );
 
+                    // Preserve full content (reasoning + tool calls) in history
                     chat_history.push(rig::message::Message::Assistant {
                         id: None,
-                        content: OneOrMany::one(rig::message::AssistantContent::ToolCall(
-                            tool_call.clone(),
-                        )),
+                        content: *full_content,
                     });
-
-                    let tool_result_content = if let Some(call_id) = &tool_call.call_id {
-                        UserContent::tool_result_with_call_id(
-                            tool_call.id.clone(),
-                            call_id.clone(),
-                            OneOrMany::one(tool_result.into()),
-                        )
-                    } else {
-                        UserContent::tool_result(
-                            tool_call.id.clone(),
-                            OneOrMany::one(tool_result.into()),
-                        )
-                    };
-
-                    chat_history.push(rig::message::Message::User {
-                        content: OneOrMany::one(tool_result_content),
-                    });
+                    Self::push_tool_results(&mut chat_history, &results);
                 }
-                AssistantContent::Image(_image) => todo!(),
             }
         }
 
@@ -429,6 +476,7 @@ impl LM {
         chat_history.push(request_messages.prompt);
 
         let request = CompletionRequest {
+            model: None,
             preamble: Some(request_messages.system.clone()),
             chat_history: if chat_history.len() == 1 {
                 OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
@@ -445,6 +493,7 @@ impl LM {
                 None
             },
             additional_params: None,
+            output_schema: None,
         };
 
         // Execute the completion using enum dispatch (zero-cost abstraction)
@@ -465,19 +514,20 @@ impl LM {
 
         let mut accumulated_usage = LmUsage::from(response.usage);
 
-        // Handle the response
+        // Scan ALL content blocks in the response — don't just look at .first().
+        // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
         let mut tool_loop_result = None;
-        let first_choice = match response.choice.first() {
-            AssistantContent::Text(text) => Message::assistant(&text.text),
-            AssistantContent::Reasoning(reasoning) => {
-                Message::assistant(reasoning.reasoning.join("\n"))
-            }
-            AssistantContent::ToolCall(tool_call) if !tools.is_empty() => {
-                // Only execute tool loop if we have tools available
-                debug!(tool = %tool_call.function.name, "entering tool loop");
+        let first_choice = match classify_choice(response.choice) {
+            ChoiceAction::Text(text) => Message::assistant(&text),
+            ChoiceAction::ToolCalls {
+                calls,
+                full_content,
+            } if !tools.is_empty() => {
+                debug!(count = calls.len(), "entering tool loop");
                 let result = self
                     .execute_tool_loop(
-                        &tool_call,
+                        &calls,
+                        *full_content,
                         tools,
                         tool_definitions,
                         chat_history,
@@ -489,16 +539,12 @@ impl LM {
                 tool_loop_result = Some(result);
                 message
             }
-            AssistantContent::ToolCall(tool_call) => {
-                // No tools available, just return a message indicating this
-                warn!(tool = %tool_call.function.name, "tool requested but no tools available");
-                let msg = format!(
-                    "Tool call requested: {} with args: {}, but no tools available",
-                    tool_call.function.name, tool_call.function.arguments
-                );
+            ChoiceAction::ToolCalls { calls, .. } => {
+                let names: Vec<_> = calls.iter().map(|tc| tc.function.name.as_str()).collect();
+                warn!(?names, "tools requested but no tools available");
+                let msg = format!("Tool calls requested: {:?}, but no tools available", names);
                 Message::assistant(&msg)
             }
-            AssistantContent::Image(_image) => todo!(),
         };
 
         let mut full_chat = messages.clone();
@@ -662,5 +708,146 @@ impl DummyLM {
             .get_history(n)
             .await
             .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rig::OneOrMany;
+    use rig::completion::AssistantContent;
+
+    fn make_tool_call(name: &str) -> AssistantContent {
+        AssistantContent::tool_call(
+            format!("id_{name}"),
+            name.to_string(),
+            serde_json::json!({"arg": "val"}),
+        )
+    }
+
+    fn make_reasoning(text: &str) -> AssistantContent {
+        AssistantContent::reasoning(text)
+    }
+
+    fn make_text(text: &str) -> AssistantContent {
+        AssistantContent::text(text)
+    }
+
+    #[test]
+    fn classify_text_only() {
+        let choice = OneOrMany::one(make_text("hello"));
+        match classify_choice(choice) {
+            ChoiceAction::Text(t) => assert_eq!(t, "hello"),
+            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        }
+    }
+
+    #[test]
+    fn classify_single_tool_call() {
+        let choice = OneOrMany::one(make_tool_call("search"));
+        match classify_choice(choice) {
+            ChoiceAction::ToolCalls {
+                calls,
+                full_content,
+            } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].function.name, "search");
+                assert_eq!(full_content.iter().count(), 1);
+            }
+            ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
+        }
+    }
+
+    #[test]
+    fn classify_reasoning_then_tool_call() {
+        let choice = OneOrMany::many(vec![
+            make_reasoning("thinking..."),
+            make_tool_call("search"),
+        ])
+        .unwrap();
+
+        match classify_choice(choice) {
+            ChoiceAction::ToolCalls {
+                calls,
+                full_content,
+            } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].function.name, "search");
+                // full_content preserves both blocks
+                assert_eq!(full_content.iter().count(), 2);
+            }
+            ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
+        }
+    }
+
+    #[test]
+    fn classify_reasoning_then_text() {
+        let choice = OneOrMany::many(vec![
+            make_reasoning("let me think"),
+            make_text("the answer is 42"),
+        ])
+        .unwrap();
+
+        match classify_choice(choice) {
+            ChoiceAction::Text(t) => assert_eq!(t, "the answer is 42"),
+            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        }
+    }
+
+    #[test]
+    fn classify_reasoning_only_fallback() {
+        let choice = OneOrMany::one(make_reasoning("just thinking"));
+        match classify_choice(choice) {
+            ChoiceAction::Text(t) => assert_eq!(t, "just thinking"),
+            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        }
+    }
+
+    #[test]
+    fn classify_tool_call_wins_over_text() {
+        let choice =
+            OneOrMany::many(vec![make_text("some text"), make_tool_call("search")]).unwrap();
+
+        match classify_choice(choice) {
+            ChoiceAction::ToolCalls { calls, .. } => {
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].function.name, "search");
+            }
+            ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
+        }
+    }
+
+    #[test]
+    fn classify_multiple_tool_calls() {
+        let choice = OneOrMany::many(vec![
+            make_reasoning("planning"),
+            make_tool_call("search"),
+            make_tool_call("calculate"),
+        ])
+        .unwrap();
+
+        match classify_choice(choice) {
+            ChoiceAction::ToolCalls {
+                calls,
+                full_content,
+            } => {
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].function.name, "search");
+                assert_eq!(calls[1].function.name, "calculate");
+                assert_eq!(full_content.iter().count(), 3);
+            }
+            ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
+        }
+    }
+
+    #[test]
+    fn classify_image_only_fallback() {
+        let choice = OneOrMany::one(AssistantContent::Image(
+            rig::completion::message::Image::default(),
+        ));
+        match classify_choice(choice) {
+            ChoiceAction::Text(t) => assert!(t.is_empty()),
+            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        }
     }
 }

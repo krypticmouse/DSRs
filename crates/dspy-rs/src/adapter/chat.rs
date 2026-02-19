@@ -101,10 +101,10 @@ fn truncate_filter(
 
     let mut truncated: String = value.chars().take(trim_to).collect();
     if !killwords {
-        if let Some(index) = truncated.rfind(char::is_whitespace) {
-            if index > 0 {
-                truncated.truncate(index);
-            }
+        if let Some(index) = truncated.rfind(char::is_whitespace)
+            && index > 0
+        {
+            truncated.truncate(index);
         }
         truncated = truncated.trim_end().to_string();
     }

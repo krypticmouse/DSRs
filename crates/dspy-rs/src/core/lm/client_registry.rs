@@ -23,6 +23,15 @@ pub trait CompletionProvider {
     ) -> Result<CompletionResponse<()>, CompletionError>;
 }
 
+fn to_unit_completion_response<T>(response: CompletionResponse<T>) -> CompletionResponse<()> {
+    CompletionResponse {
+        choice: response.choice,
+        usage: response.usage,
+        raw_response: (),
+        message_id: response.message_id,
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct TestCompletionModel {
     responses: Arc<Mutex<VecDeque<AssistantContent>>>,
@@ -59,6 +68,7 @@ impl CompletionProvider for TestCompletionModel {
             choice: OneOrMany::one(response),
             usage: Usage::new(),
             raw_response: (),
+            message_id: None,
         })
     }
 }
@@ -89,11 +99,7 @@ impl CompletionProvider for openai::completion::CompletionModel {
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
         // Convert the typed response to unit type
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -103,11 +109,7 @@ impl CompletionProvider for anthropic::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -117,11 +119,7 @@ impl CompletionProvider for gemini::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -131,11 +129,7 @@ impl CompletionProvider for groq::CompletionModel<reqwest::Client> {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -145,11 +139,7 @@ impl CompletionProvider for openrouter::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -159,11 +149,7 @@ impl CompletionProvider for ollama::CompletionModel<reqwest::Client> {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -173,11 +159,7 @@ impl CompletionProvider for azure::CompletionModel<reqwest::Client> {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 impl CompletionProvider for xai::completion::CompletionModel {
@@ -186,11 +168,7 @@ impl CompletionProvider for xai::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -200,11 +178,7 @@ impl CompletionProvider for cohere::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -214,11 +188,7 @@ impl CompletionProvider for mistral::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -228,11 +198,7 @@ impl CompletionProvider for together::completion::CompletionModel {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
@@ -242,11 +208,7 @@ impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
-        Ok(CompletionResponse {
-            choice: response.choice,
-            usage: response.usage,
-            raw_response: (),
-        })
+        Ok(to_unit_completion_response(response))
     }
 }
 
