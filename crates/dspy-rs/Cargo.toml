@@ -35,12 +35,12 @@ hf-hub = { version = "0.4.3", features = ["tokio"] }
 parquet = { version = "56.1.0" }
 arrow = { version = "56.1.0" }
 regex = "1.11.2"
-reqwest = { version = "0.12.23", features = ["blocking"] }
+reqwest = { version = "0.13", features = ["blocking"] }
 kdam = "0.6.3"
 rand = "0.8.5"
 foyer = { version = "0.20.0", features = ["serde"]}
 tempfile = "3.23.0"
-rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="e7849df" }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev="aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
 enum_dispatch = "0.3.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
