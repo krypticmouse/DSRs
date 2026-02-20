@@ -3,106 +3,469 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use rig::completion::{AssistantContent, Message as RigMessage, message::UserContent};
+use rig::OneOrMany;
+use rig::message::{
+    AssistantContent, Message as RigMessage, Reasoning, ToolCall, ToolResult, ToolResultContent,
+    UserContent,
+};
+
+// ---------------------------------------------------------------------------
+// ContentBlock — one piece of content within a message
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum Message {
-    System { content: String },
-    User { content: String },
-    Assistant { content: String },
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentBlock {
+    Text { text: String },
+    ToolCall { tool_call: ToolCall },
+    ToolResult { tool_result: ToolResult },
+    Reasoning { reasoning: Reasoning },
+}
+
+impl ContentBlock {
+    pub fn text(t: impl Into<String>) -> Self {
+        ContentBlock::Text { text: t.into() }
+    }
+
+    pub fn tool_call(tc: ToolCall) -> Self {
+        ContentBlock::ToolCall { tool_call: tc }
+    }
+
+    pub fn tool_result(tr: ToolResult) -> Self {
+        ContentBlock::ToolResult { tool_result: tr }
+    }
+
+    pub fn reasoning(r: Reasoning) -> Self {
+        ContentBlock::Reasoning { reasoning: r }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Role
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    System,
+    User,
+    Assistant,
+}
+
+impl Role {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Role::System => "system",
+            Role::User => "user",
+            Role::Assistant => "assistant",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Message — a single turn in a conversation
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub role: Role,
+    pub content: Vec<ContentBlock>,
+    /// Provider-assigned message ID (e.g. Anthropic thinking turn IDs).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub id: Option<String>,
 }
 
 impl Message {
+    /// Creates a text-only message from a role string.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `role` is not one of `"system"`, `"user"`, or `"assistant"`.
     pub fn new(role: &str, content: &str) -> Self {
-        match role {
-            "system" => Message::system(content),
-            "user" => Message::user(content),
-            "assistant" => Message::assistant(content),
+        let role = match role {
+            "system" => Role::System,
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
             _ => panic!("Invalid role: {role}"),
+        };
+        Self {
+            role,
+            content: vec![ContentBlock::text(content)],
+            id: None,
         }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        Message::User {
-            content: content.into(),
+        Self {
+            role: Role::User,
+            content: vec![ContentBlock::text(content)],
+            id: None,
         }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {
-        Message::Assistant {
-            content: content.into(),
+        Self {
+            role: Role::Assistant,
+            content: vec![ContentBlock::text(content)],
+            id: None,
         }
     }
 
     pub fn system(content: impl Into<String>) -> Self {
-        Message::System {
-            content: content.into(),
+        Self {
+            role: Role::System,
+            content: vec![ContentBlock::text(content)],
+            id: None,
         }
     }
 
+    /// Creates an assistant message containing a single tool call.
+    pub fn tool_call(tool_call: ToolCall) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: vec![ContentBlock::tool_call(tool_call)],
+            id: None,
+        }
+    }
+
+    /// Creates a user message containing a single tool result.
+    pub fn tool_result(tool_result: ToolResult) -> Self {
+        Self {
+            role: Role::User,
+            content: vec![ContentBlock::tool_result(tool_result)],
+            id: None,
+        }
+    }
+
+    /// Creates an assistant message containing a single reasoning block.
+    pub fn reasoning(reasoning: Reasoning) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: vec![ContentBlock::reasoning(reasoning)],
+            id: None,
+        }
+    }
+
+    /// Creates a message with arbitrary content blocks.
+    pub fn with_content(role: Role, content: Vec<ContentBlock>) -> Self {
+        Self {
+            role,
+            content,
+            id: None,
+        }
+    }
+
+    // -- Accessors -----------------------------------------------------------
+
+    /// Returns a string representation of the message's content.
+    ///
+    /// For text-only messages, returns the text. For multi-content messages,
+    /// returns all blocks formatted and joined with newlines.
     pub fn content(&self) -> String {
-        match self {
-            Message::System { content } => content.clone(),
-            Message::User { content } => content.clone(),
-            Message::Assistant { content } => content.clone(),
+        let parts: Vec<String> = self
+            .content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => text.clone(),
+                ContentBlock::ToolCall { tool_call } => {
+                    format!(
+                        "{}({})",
+                        tool_call.function.name, tool_call.function.arguments
+                    )
+                }
+                ContentBlock::ToolResult { tool_result } => tool_result
+                    .content
+                    .iter()
+                    .filter_map(|item| match item {
+                        ToolResultContent::Text(text) => Some(text.text.as_str()),
+                        ToolResultContent::Image(_) => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                ContentBlock::Reasoning { reasoning } => reasoning.display_text(),
+            })
+            .collect();
+        parts.join("\n")
+    }
+
+    /// Returns only the text content, ignoring tool calls, tool results,
+    /// and reasoning blocks. Used by the parser to extract structured output.
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    // -- Content query helpers -----------------------------------------------
+
+    /// Returns `true` if this message contains at least one tool call.
+    pub fn has_tool_calls(&self) -> bool {
+        self.content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolCall { .. }))
+    }
+
+    /// Returns `true` if this message contains at least one tool result.
+    pub fn has_tool_results(&self) -> bool {
+        self.content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    }
+
+    /// Returns `true` if this message contains at least one reasoning block.
+    pub fn has_reasoning(&self) -> bool {
+        self.content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Reasoning { .. }))
+    }
+
+    /// Extracts all tool calls from this message.
+    pub fn tool_calls(&self) -> Vec<&ToolCall> {
+        self.content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolCall { tool_call } => Some(tool_call),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // -- Rig conversion ------------------------------------------------------
+
+    /// Converts this message to a rig message for provider API calls.
+    ///
+    /// Returns `None` for system messages (rig handles them as preamble).
+    pub fn to_rig_message(&self) -> Option<RigMessage> {
+        match self.role {
+            Role::System => None,
+            Role::User => {
+                let user_content: Vec<UserContent> = self
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(UserContent::text(text.clone())),
+                        ContentBlock::ToolResult { tool_result } => {
+                            Some(UserContent::ToolResult(tool_result.clone()))
+                        }
+                        // ToolCall/Reasoning don't belong in user messages; skip gracefully
+                        _ => None,
+                    })
+                    .collect();
+                if user_content.is_empty() {
+                    return Some(RigMessage::user(String::new()));
+                }
+                Some(RigMessage::User {
+                    content: OneOrMany::many(user_content)
+                        .unwrap_or_else(|_| OneOrMany::one(UserContent::text(String::new()))),
+                })
+            }
+            Role::Assistant => {
+                let asst_content: Vec<AssistantContent> = self
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(AssistantContent::text(text.clone())),
+                        ContentBlock::ToolCall { tool_call } => {
+                            Some(AssistantContent::ToolCall(tool_call.clone()))
+                        }
+                        ContentBlock::Reasoning { reasoning } => {
+                            Some(AssistantContent::Reasoning(reasoning.clone()))
+                        }
+                        // ToolResult doesn't belong in assistant messages; skip gracefully
+                        _ => None,
+                    })
+                    .collect();
+                if asst_content.is_empty() {
+                    return Some(RigMessage::assistant(String::new()));
+                }
+                Some(RigMessage::Assistant {
+                    id: self.id.clone(),
+                    content: OneOrMany::many(asst_content)
+                        .unwrap_or_else(|_| OneOrMany::one(AssistantContent::text(String::new()))),
+                })
+            }
         }
     }
 
-    pub fn get_message_turn(&self) -> RigMessage {
-        match self {
-            Message::User { content } => RigMessage::user(content.clone()),
-            Message::Assistant { content } => RigMessage::assistant(content.clone()),
-            _ => panic!("Invalid role: {:?}", self),
-        }
-    }
+    // -- JSON serialization --------------------------------------------------
 
     pub fn to_json(&self) -> Value {
-        match self {
-            Message::System { content } => json!({ "role": "system", "content": content }),
-            Message::User { content } => json!({ "role": "user", "content": content }),
-            Message::Assistant { content } => json!({ "role": "assistant", "content": content }),
+        let content_json: Vec<Value> = self
+            .content
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => json!({ "type": "text", "text": text }),
+                ContentBlock::ToolCall { tool_call } => {
+                    json!({ "type": "tool_call", "tool_call": tool_call })
+                }
+                ContentBlock::ToolResult { tool_result } => {
+                    json!({ "type": "tool_result", "tool_result": tool_result })
+                }
+                ContentBlock::Reasoning { reasoning } => {
+                    json!({ "type": "reasoning", "reasoning": reasoning })
+                }
+            })
+            .collect();
+
+        let mut msg = json!({
+            "role": self.role.as_str(),
+            "content": content_json,
+        });
+
+        if let Some(id) = &self.id {
+            msg.as_object_mut()
+                .unwrap()
+                .insert("id".to_string(), json!(id));
         }
+
+        msg
+    }
+
+    fn from_json_value(message: &Value) -> Result<Self> {
+        let role_str = message
+            .get("role")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("chat message missing string role"))?;
+
+        let role = match role_str {
+            "system" => Role::System,
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            other => return Err(anyhow::anyhow!("unsupported chat message role: {other}")),
+        };
+
+        let id = message.get("id").and_then(Value::as_str).map(String::from);
+
+        let content_val = message.get("content");
+
+        // Support both formats:
+        //   New: "content": [{ "type": "text", "text": "..." }, ...]
+        //   Legacy: "content": "plain string"
+        let content = match content_val {
+            Some(Value::Array(arr)) => arr
+                .iter()
+                .map(parse_content_block)
+                .collect::<Result<Vec<_>>>()?,
+            Some(Value::String(s)) => vec![ContentBlock::text(s.clone())],
+            _ => {
+                // Legacy type-tagged format: { "type": "tool_call", "tool_call": {...} }
+                match message.get("type").and_then(Value::as_str) {
+                    Some("tool_call") => {
+                        let tc: ToolCall = serde_json::from_value(message["tool_call"].clone())?;
+                        vec![ContentBlock::tool_call(tc)]
+                    }
+                    Some("tool_result") => {
+                        let tr: ToolResult =
+                            serde_json::from_value(message["tool_result"].clone())?;
+                        vec![ContentBlock::tool_result(tr)]
+                    }
+                    Some("reasoning") => {
+                        let r: Reasoning = serde_json::from_value(message["reasoning"].clone())?;
+                        vec![ContentBlock::reasoning(r)]
+                    }
+                    Some(other) => {
+                        return Err(anyhow::anyhow!("unsupported chat message type: {other}"));
+                    }
+                    None => return Err(anyhow::anyhow!("chat message missing content field")),
+                }
+            }
+        };
+
+        Ok(Self { role, content, id })
     }
 }
+
+fn parse_content_block(value: &Value) -> Result<ContentBlock> {
+    let block_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("content block missing type"))?;
+
+    match block_type {
+        "text" => {
+            let text = value
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("text block missing text field"))?;
+            Ok(ContentBlock::text(text))
+        }
+        "tool_call" => {
+            let tc: ToolCall = serde_json::from_value(value["tool_call"].clone())?;
+            Ok(ContentBlock::tool_call(tc))
+        }
+        "tool_result" => {
+            let tr: ToolResult = serde_json::from_value(value["tool_result"].clone())?;
+            Ok(ContentBlock::tool_result(tr))
+        }
+        "reasoning" => {
+            let r: Reasoning = serde_json::from_value(value["reasoning"].clone())?;
+            Ok(ContentBlock::reasoning(r))
+        }
+        other => Err(anyhow::anyhow!("unsupported content block type: {other}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// From<RigMessage> — lossless conversion, one rig message → one DSRs message
+// ---------------------------------------------------------------------------
 
 impl From<RigMessage> for Message {
     fn from(message: RigMessage) -> Self {
         match message {
             RigMessage::User { content } => {
-                let text = content
+                let blocks: Vec<ContentBlock> = content
                     .into_iter()
-                    .find_map(|c| {
-                        if let UserContent::Text(t) = c {
-                            Some(t.text)
-                        } else {
-                            None
-                        }
+                    .filter_map(|item| match item {
+                        UserContent::Text(text) => Some(ContentBlock::text(text.text)),
+                        UserContent::ToolResult(result) => Some(ContentBlock::tool_result(result)),
+                        UserContent::Image(_)
+                        | UserContent::Audio(_)
+                        | UserContent::Video(_)
+                        | UserContent::Document(_) => None,
                     })
-                    .unwrap_or_default();
-                Message::user(text)
+                    .collect();
+                Message {
+                    role: Role::User,
+                    content: if blocks.is_empty() {
+                        vec![ContentBlock::text(String::new())]
+                    } else {
+                        blocks
+                    },
+                    id: None,
+                }
             }
-            RigMessage::Assistant { content, .. } => {
-                let text = content
+            RigMessage::Assistant { id, content } => {
+                let blocks: Vec<ContentBlock> = content
                     .into_iter()
-                    .find_map(|c| {
-                        if let AssistantContent::Text(t) = c {
-                            Some(t.text)
-                        } else {
-                            None
-                        }
+                    .filter_map(|item| match item {
+                        AssistantContent::Text(text) => Some(ContentBlock::text(text.text)),
+                        AssistantContent::ToolCall(tc) => Some(ContentBlock::tool_call(tc)),
+                        AssistantContent::Reasoning(r) => Some(ContentBlock::reasoning(r)),
+                        AssistantContent::Image(_) => None,
                     })
-                    .unwrap_or_default();
-                Message::assistant(text)
+                    .collect();
+                Message {
+                    role: Role::Assistant,
+                    content: if blocks.is_empty() {
+                        vec![ContentBlock::text(String::new())]
+                    } else {
+                        blocks
+                    },
+                    id,
+                }
             }
         }
     }
 }
 
-pub struct RigChatMessage {
-    pub system: String,
-    pub conversation: Vec<RigMessage>,
-    pub prompt: RigMessage,
-}
+// ---------------------------------------------------------------------------
+// Chat — ordered sequence of messages
+// ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct Chat {
@@ -139,16 +502,13 @@ impl Chat {
     }
 
     pub fn from_json(&self, json_dump: Value) -> Result<Self> {
-        let messages = json_dump.as_array().unwrap();
+        let messages = json_dump
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("chat dump must be an array"))?;
         let messages = messages
             .iter()
-            .map(|message| {
-                Message::new(
-                    message["role"].as_str().unwrap(),
-                    message["content"].as_str().unwrap(),
-                )
-            })
-            .collect();
+            .map(Message::from_json_value)
+            .collect::<Result<Vec<_>>>()?;
         Ok(Self { messages })
     }
 
@@ -161,22 +521,27 @@ impl Chat {
         json!(messages)
     }
 
-    pub fn get_rig_messages(&self) -> RigChatMessage {
-        let system: String = self.messages[0].content();
-        let conversation: Vec<RigMessage> = if self.messages.len() > 2 {
-            self.messages[1..self.messages.len() - 1]
-                .iter()
-                .map(|message| message.get_message_turn())
-                .collect::<Vec<RigMessage>>()
-        } else {
-            vec![]
-        };
-        let prompt = self.messages.last().unwrap().get_message_turn();
+    // -- Rig interop ---------------------------------------------------------
 
-        RigChatMessage {
-            system,
-            conversation,
-            prompt,
-        }
+    /// Extracts the system prompt text from the first system message.
+    pub fn system_prompt(&self) -> String {
+        self.messages
+            .iter()
+            .find_map(|message| {
+                if message.role == Role::System {
+                    Some(message.text_content())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    /// Converts all non-system messages to rig messages for provider API calls.
+    pub fn to_rig_chat_history(&self) -> Vec<RigMessage> {
+        self.messages
+            .iter()
+            .filter_map(Message::to_rig_message)
+            .collect()
     }
 }

@@ -51,3 +51,6 @@ ignored = ["rig-core"]
 
 [features]
 default = []
+
+[dev-dependencies]
+temp-env = { version = "0.3.6", features = ["async_closure"] }

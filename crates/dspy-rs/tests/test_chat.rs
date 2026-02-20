@@ -1,4 +1,9 @@
-use dspy_rs::core::{Chat, Message};
+use dspy_rs::core::lm::chat::{Chat, ContentBlock, Message, Role};
+use rig::OneOrMany;
+use rig::message::{
+    AssistantContent, Message as RigMessage, Reasoning, ToolCall, ToolFunction, ToolResult,
+    ToolResultContent, UserContent,
+};
 use rstest::*;
 use serde_json::json;
 
@@ -10,20 +15,14 @@ fn test_chat_init() {
         Message::assistant("Hello, world to you!"),
     ]);
 
-    let json_value = chat.to_json();
-    let json = json_value.as_array().unwrap();
-
     assert_eq!(chat.len(), 3);
-    assert_eq!(json[0]["role"], "system");
     assert!(!chat.is_empty());
-    assert_eq!(
-        json[0]["content"],
-        "You are a helpful assistant.".to_string()
-    );
-    assert_eq!(json[1]["role"], "user");
-    assert_eq!(json[1]["content"], "Hello, world!".to_string());
-    assert_eq!(json[2]["role"], "assistant");
-    assert_eq!(json[2]["content"], "Hello, world to you!".to_string());
+    assert_eq!(chat.messages[0].role, Role::System);
+    assert_eq!(chat.messages[0].content(), "You are a helpful assistant.");
+    assert_eq!(chat.messages[1].role, Role::User);
+    assert_eq!(chat.messages[1].content(), "Hello, world!");
+    assert_eq!(chat.messages[2].role, Role::Assistant);
+    assert_eq!(chat.messages[2].content(), "Hello, world to you!");
 }
 
 #[rstest]
@@ -31,11 +30,9 @@ fn test_chat_push() {
     let mut chat = Chat::new(vec![]);
     chat.push("user", "Hello, world!");
 
-    let json_value = chat.to_json();
-    let json = json_value.as_array().unwrap();
-    assert_eq!(json.len(), 1);
-    assert_eq!(json[0]["role"], "user");
-    assert_eq!(json[0]["content"], "Hello, world!".to_string());
+    assert_eq!(chat.len(), 1);
+    assert_eq!(chat.messages[0].role, Role::User);
+    assert_eq!(chat.messages[0].content(), "Hello, world!");
 }
 
 #[rstest]
@@ -44,47 +41,48 @@ fn test_chat_pop() {
     chat.push("user", "Hello, world!");
     chat.pop();
 
-    let json_value = chat.to_json();
-    let json = json_value.as_array().unwrap();
-    assert_eq!(json.len(), 0);
+    assert_eq!(chat.len(), 0);
 }
 
 #[rstest]
-fn test_chat_to_json() {
+fn test_chat_to_json_and_back() {
     let chat = Chat::new(vec![
         Message::system("You are a helpful assistant."),
         Message::user("Hello, world!"),
         Message::assistant("Hello, world to you!"),
     ]);
-    let json = chat.to_json();
+    let json_dump = chat.to_json();
+    let reparsed = Chat::new(vec![]).from_json(json_dump).unwrap();
+
+    assert_eq!(reparsed.len(), 3);
+    assert_eq!(reparsed.messages[0].role, Role::System);
     assert_eq!(
-        json.to_string(),
-        "[{\"role\":\"system\",\"content\":\"You are a helpful assistant.\"},{\"role\":\"user\",\"content\":\"Hello, world!\"},{\"role\":\"assistant\",\"content\":\"Hello, world to you!\"}]"
+        reparsed.messages[0].content(),
+        "You are a helpful assistant."
     );
+    assert_eq!(reparsed.messages[1].role, Role::User);
+    assert_eq!(reparsed.messages[1].content(), "Hello, world!");
+    assert_eq!(reparsed.messages[2].role, Role::Assistant);
+    assert_eq!(reparsed.messages[2].content(), "Hello, world to you!");
 }
 
 #[rstest]
-fn test_chat_from_json() {
+fn test_chat_from_legacy_json() {
+    // Legacy format: "content" is a plain string
     let json = json!([
         {"role":"system","content":"You are a helpful assistant."},
         {"role":"user","content":"Hello, world!"},
         {"role":"assistant","content":"Hello, world to you!"}
     ]);
-    let empty_chat = Chat::new(vec![]);
-    let chat = empty_chat.from_json(json).unwrap();
-
-    let json_value = chat.to_json();
-    let json = json_value.as_array().unwrap();
+    let chat = Chat::new(vec![]).from_json(json).unwrap();
 
     assert_eq!(chat.len(), 3);
-    assert_eq!(json[0]["role"], "system");
-    assert_eq!(
-        json[0]["content"],
-        "You are a helpful assistant.".to_string()
-    );
-    assert_eq!(json[1]["role"], "user");
-    assert_eq!(json[1]["content"], "Hello, world!".to_string());
-    assert_eq!(json[2]["content"], "Hello, world to you!".to_string());
+    assert_eq!(chat.messages[0].role, Role::System);
+    assert_eq!(chat.messages[0].content(), "You are a helpful assistant.");
+    assert_eq!(chat.messages[1].role, Role::User);
+    assert_eq!(chat.messages[1].content(), "Hello, world!");
+    assert_eq!(chat.messages[2].role, Role::Assistant);
+    assert_eq!(chat.messages[2].content(), "Hello, world to you!");
 }
 
 #[rstest]
@@ -103,20 +101,16 @@ fn test_chat_push_all() {
     chat1.push_all(&chat2);
 
     assert_eq!(chat1.len(), 5);
-
-    let json_value = chat1.to_json();
-    let json = json_value.as_array().unwrap();
-
-    assert_eq!(json[0]["role"], "system");
-    assert_eq!(json[0]["content"], "You are a helpful assistant.");
-    assert_eq!(json[1]["role"], "user");
-    assert_eq!(json[1]["content"], "Hello!");
-    assert_eq!(json[2]["role"], "assistant");
-    assert_eq!(json[2]["content"], "Hi there!");
-    assert_eq!(json[3]["role"], "user");
-    assert_eq!(json[3]["content"], "How are you?");
-    assert_eq!(json[4]["role"], "assistant");
-    assert_eq!(json[4]["content"], "I'm doing well, thank you!");
+    assert_eq!(chat1.messages[0].role, Role::System);
+    assert_eq!(chat1.messages[0].content(), "You are a helpful assistant.");
+    assert_eq!(chat1.messages[1].role, Role::User);
+    assert_eq!(chat1.messages[1].content(), "Hello!");
+    assert_eq!(chat1.messages[2].role, Role::Assistant);
+    assert_eq!(chat1.messages[2].content(), "Hi there!");
+    assert_eq!(chat1.messages[3].role, Role::User);
+    assert_eq!(chat1.messages[3].content(), "How are you?");
+    assert_eq!(chat1.messages[4].role, Role::Assistant);
+    assert_eq!(chat1.messages[4].content(), "I'm doing well, thank you!");
 }
 
 #[rstest]
@@ -127,10 +121,164 @@ fn test_chat_push_all_empty() {
     chat1.push_all(&empty_chat);
 
     assert_eq!(chat1.len(), 1);
+    assert_eq!(chat1.messages[0].role, Role::System);
+    assert_eq!(chat1.messages[0].content(), "System message");
+}
 
-    let json_value = chat1.to_json();
-    let json = json_value.as_array().unwrap();
+#[rstest]
+fn test_new_variants_round_trip_json() {
+    let call = ToolCall::new(
+        "call-1".to_string(),
+        ToolFunction {
+            name: "lookup".to_string(),
+            arguments: json!({ "query": "rust" }),
+        },
+    );
+    let result = ToolResult {
+        id: "call-1".to_string(),
+        call_id: Some("provider-call-1".to_string()),
+        content: OneOrMany::one(ToolResultContent::text("result payload")),
+    };
+    let reasoning = Reasoning::new("thinking...");
 
-    assert_eq!(json[0]["role"], "system");
-    assert_eq!(json[0]["content"], "System message");
+    let chat = Chat::new(vec![
+        Message::system("You are a tool-using assistant."),
+        Message::tool_call(call.clone()),
+        Message::tool_result(result.clone()),
+        Message::reasoning(reasoning.clone()),
+    ]);
+
+    let json_dump = chat.to_json();
+    let reparsed = Chat::new(vec![]).from_json(json_dump).unwrap();
+    assert_eq!(reparsed.len(), 4);
+
+    assert_eq!(reparsed.messages[0].role, Role::System);
+
+    assert_eq!(reparsed.messages[1].role, Role::Assistant);
+    assert!(reparsed.messages[1].has_tool_calls());
+    let reparsed_calls = reparsed.messages[1].tool_calls();
+    assert_eq!(reparsed_calls[0].function.name, call.function.name);
+
+    assert_eq!(reparsed.messages[2].role, Role::User);
+    assert!(reparsed.messages[2].has_tool_results());
+
+    assert_eq!(reparsed.messages[3].role, Role::Assistant);
+    assert!(reparsed.messages[3].has_reasoning());
+}
+
+#[rstest]
+fn test_system_prompt_and_rig_chat_history() {
+    let chat = Chat::new(vec![
+        Message::system("Be helpful"),
+        Message::user("Hello"),
+        Message::assistant("Hi!"),
+    ]);
+
+    assert_eq!(chat.system_prompt(), "Be helpful");
+    let history = chat.to_rig_chat_history();
+    assert_eq!(history.len(), 2); // system excluded
+}
+
+#[rstest]
+fn test_empty_chat_system_prompt_and_rig_history() {
+    let chat = Chat::new(vec![]);
+
+    assert_eq!(chat.system_prompt(), "");
+    let history = chat.to_rig_chat_history();
+    assert!(history.is_empty());
+}
+
+#[rstest]
+fn test_from_rig_message_preserves_all_content() {
+    // User with text + tool result — both preserved
+    let user_msg = RigMessage::User {
+        content: OneOrMany::many(vec![
+            UserContent::text("some context"),
+            UserContent::ToolResult(ToolResult {
+                id: "id-1".to_string(),
+                call_id: None,
+                content: OneOrMany::one(ToolResultContent::text("ok")),
+            }),
+        ])
+        .unwrap(),
+    };
+    let converted = Message::from(user_msg);
+    assert_eq!(converted.role, Role::User);
+    assert_eq!(converted.content.len(), 2);
+    assert!(matches!(converted.content[0], ContentBlock::Text { .. }));
+    assert!(matches!(
+        converted.content[1],
+        ContentBlock::ToolResult { .. }
+    ));
+
+    // Assistant with reasoning + tool call — both preserved (was lossy before)
+    let assistant_msg = RigMessage::Assistant {
+        id: Some("asst-123".to_string()),
+        content: OneOrMany::many(vec![
+            AssistantContent::Reasoning(Reasoning::new("step by step")),
+            AssistantContent::ToolCall(ToolCall::new(
+                "tool-2".to_string(),
+                ToolFunction {
+                    name: "search".to_string(),
+                    arguments: json!({ "q": "x" }),
+                },
+            )),
+        ])
+        .unwrap(),
+    };
+    let converted = Message::from(assistant_msg);
+    assert_eq!(converted.role, Role::Assistant);
+    assert_eq!(converted.id, Some("asst-123".to_string()));
+    assert_eq!(converted.content.len(), 2);
+    assert!(converted.has_reasoning());
+    assert!(converted.has_tool_calls());
+}
+
+#[rstest]
+fn test_rig_round_trip_preserves_grouped_content() {
+    // Create a grouped assistant message with reasoning + tool call
+    let original_rig = RigMessage::Assistant {
+        id: None,
+        content: OneOrMany::many(vec![
+            AssistantContent::Reasoning(Reasoning::new("thinking")),
+            AssistantContent::ToolCall(ToolCall::new(
+                "tc-1".to_string(),
+                ToolFunction {
+                    name: "search".to_string(),
+                    arguments: json!({"q": "rust"}),
+                },
+            )),
+        ])
+        .unwrap(),
+    };
+
+    // Convert to DSRs Message
+    let dsrs_msg = Message::from(original_rig);
+    assert_eq!(dsrs_msg.content.len(), 2);
+
+    // Convert back to rig message
+    let round_tripped = dsrs_msg.to_rig_message().unwrap();
+    match round_tripped {
+        RigMessage::Assistant { content, .. } => {
+            assert_eq!(content.iter().count(), 2); // Both blocks preserved!
+        }
+        _ => panic!("expected assistant message"),
+    }
+}
+
+#[rstest]
+fn test_text_content_filters_non_text_blocks() {
+    let msg = Message::with_content(
+        Role::Assistant,
+        vec![
+            ContentBlock::reasoning(Reasoning::new("thinking")),
+            ContentBlock::text("the answer is 42"),
+        ],
+    );
+
+    // text_content() returns only Text blocks
+    assert_eq!(msg.text_content(), "the answer is 42");
+    // content() returns everything
+    assert!(msg.content().contains("thinking"));
+    assert!(msg.content().contains("the answer is 42"));
 }

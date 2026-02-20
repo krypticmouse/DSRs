@@ -625,7 +625,7 @@ impl ChatAdapter {
     where
         O: BamlType + for<'a> facet::Facet<'a>,
     {
-        let content = response.content();
+        let content = response.text_content();
         let output_format = schema.output_format();
         let sections = parse_sections(&content);
 

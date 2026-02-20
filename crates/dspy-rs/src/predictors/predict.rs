@@ -189,12 +189,43 @@ impl<S: Signature> Predict<S> {
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        let lm = {
-            let guard = GLOBAL_SETTINGS.read().unwrap();
-            let settings = guard.as_ref().unwrap();
-            Arc::clone(&settings.lm)
-        };
+        let chat = self.build_chat(&input)?;
+        let (predicted, _) = self.call_and_parse(chat).await?;
+        Ok(predicted)
+    }
 
+    /// Continues a prior conversation and parses the LM's response.
+    ///
+    /// The caller owns the `Chat` between calls:
+    /// 1. Call [`forward`] to get the first turn's `(Predicted, Chat)`.
+    /// 2. Append a follow-up user message to the returned `Chat`.
+    /// 3. Call `forward_continue` with the updated `Chat`.
+    ///
+    /// The LM response is parsed using the same `[[ ## field ## ]]` protocol.
+    /// The caller is responsible for including format instructions in follow-up
+    /// messages if the model needs reminding of the output format.
+    pub async fn forward_continue(
+        &self,
+        chat: Chat,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    where
+        S::Input: BamlType,
+        S::Output: BamlType,
+    {
+        trace!(message_count = chat.len(), "continuing prior chat");
+        self.call_and_parse(chat).await
+    }
+
+    /// Builds the first-turn chat from the signature, demos, and input.
+    ///
+    /// Returns a [`Chat`] ready to pass to [`call_and_parse`](Predict::call_and_parse)
+    /// or [`forward_continue`](Predict::forward_continue). Useful when you need to
+    /// inspect or modify the prompt before sending it to the LM.
+    #[allow(clippy::result_large_err)]
+    pub fn build_chat(&self, input: &S::Input) -> Result<Chat, PredictError>
+    where
+        S::Input: BamlType,
+    {
         let chat_adapter = ChatAdapter;
         let system = match chat_adapter
             .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
@@ -211,7 +242,7 @@ impl<S: Signature> Predict<S> {
             }
         };
 
-        let user = chat_adapter.format_user_message_typed::<S>(&input);
+        let user = chat_adapter.format_user_message_typed::<S>(input);
         trace!(
             system_len = system.len(),
             user_len = user.len(),
@@ -228,6 +259,27 @@ impl<S: Signature> Predict<S> {
         }
         chat.push("user", &user);
         trace!(message_count = chat.len(), "chat constructed");
+        Ok(chat)
+    }
+
+    /// Calls the LM with the given chat and parses the response.
+    ///
+    /// This is the shared implementation behind [`forward`](Predict::forward) and
+    /// [`forward_continue`](Predict::forward_continue). Use it directly when you need
+    /// both the prediction and the updated conversation history.
+    pub async fn call_and_parse(
+        &self,
+        chat: Chat,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    where
+        S::Input: BamlType,
+        S::Output: BamlType,
+    {
+        let lm = {
+            let guard = GLOBAL_SETTINGS.read().unwrap();
+            let settings = guard.as_ref().unwrap();
+            Arc::clone(&settings.lm)
+        };
 
         let response = match lm.call(chat, self.tools.clone()).await {
             Ok(response) => response,
@@ -249,6 +301,14 @@ impl<S: Signature> Predict<S> {
             "lm response received"
         );
 
+        let crate::core::lm::LMResponse {
+            output,
+            usage,
+            chat,
+            tool_calls,
+            tool_executions,
+        } = response;
+
         let node_id = if crate::trace::is_tracing() {
             crate::trace::record_node(
                 crate::trace::NodeType::Predict {
@@ -261,27 +321,27 @@ impl<S: Signature> Predict<S> {
             None
         };
 
-        let raw_response = response.output.content().to_string();
-        let lm_usage = response.usage.clone();
+        let chat_adapter = ChatAdapter;
+        let raw_response = output.content().to_string();
+        let lm_usage = usage.clone();
 
-        let (typed_output, field_metas) =
-            match chat_adapter.parse_response_typed::<S>(&response.output) {
-                Ok(parsed) => parsed,
-                Err(err) => {
-                    let failed_fields = err.fields();
-                    debug!(
-                        failed_fields = failed_fields.len(),
-                        fields = ?failed_fields,
-                        raw_response_len = raw_response.len(),
-                        "typed parse failed"
-                    );
-                    return Err(PredictError::Parse {
-                        source: err,
-                        raw_response,
-                        lm_usage,
-                    });
-                }
-            };
+        let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&output) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                let failed_fields = err.fields();
+                debug!(
+                    failed_fields = failed_fields.len(),
+                    fields = ?failed_fields,
+                    raw_response_len = raw_response.len(),
+                    "typed parse failed"
+                );
+                return Err(PredictError::Parse {
+                    source: err,
+                    raw_response,
+                    lm_usage,
+                });
+            }
+        };
 
         let checks_total = field_metas
             .values()
@@ -316,13 +376,13 @@ impl<S: Signature> Predict<S> {
         let metadata = CallMetadata::new(
             raw_response,
             lm_usage,
-            response.tool_calls,
-            response.tool_executions,
+            tool_calls,
+            tool_executions,
             node_id,
             field_metas,
         );
 
-        Ok(Predicted::new(typed_output, metadata))
+        Ok((Predicted::new(typed_output, metadata), chat))
     }
 }
 
