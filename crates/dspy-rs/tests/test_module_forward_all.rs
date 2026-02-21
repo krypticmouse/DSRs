@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use dspy_rs::{BamlType, CallMetadata, Module, PredictError, Predicted, forward_all};
+use dspy_rs::{BamlType, CallMetadata, Chat, Module, PredictError, Predicted, forward_all};
 use tokio::time::sleep;
 
 struct DelayEcho;
@@ -27,6 +27,7 @@ impl Module for DelayEcho {
         Ok(Predicted::new(
             DelayOutput { value: input.value },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

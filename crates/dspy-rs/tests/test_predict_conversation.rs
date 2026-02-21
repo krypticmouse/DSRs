@@ -91,7 +91,7 @@ struct ConversationQA {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn forward_returns_chat_and_prediction() {
+async fn forward_returns_prediction_with_chat_metadata() {
     let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris")]);
     let _client = configure_test_lm(vec![response]).await;
@@ -101,16 +101,17 @@ async fn forward_returns_chat_and_prediction() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let (predicted, chat) = predict
+    let predicted = predict
         .forward(input, None)
         .await
         .expect("forward should succeed");
+    let chat = predicted.chat();
 
-    assert_eq!(predicted.into_inner().answer, "Paris");
     assert_eq!(chat.len(), 3);
     assert_eq!(chat.messages[0].role, Role::System);
     assert_eq!(chat.messages[1].role, Role::User);
     assert_eq!(chat.messages[2].role, Role::Assistant);
+    assert_eq!(predicted.into_inner().answer, "Paris");
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -126,10 +127,11 @@ async fn forward_with_history_supports_two_turn_roundtrip() {
         question: "Turn 1 question".to_string(),
     };
 
-    let (first_predicted, chat) = predict
+    let first_predicted = predict
         .forward(first_input, None)
         .await
         .expect("first turn forward should succeed");
+    let chat = first_predicted.chat().clone();
     assert_eq!(first_predicted.into_inner().answer, "First turn answer");
 
     // Second turn: typed follow-up with prior history
@@ -138,10 +140,11 @@ async fn forward_with_history_supports_two_turn_roundtrip() {
         question: caller_follow_up.to_string(),
     };
 
-    let (second_predicted, second_chat) = predict
+    let second_predicted = predict
         .forward(second_input, Some(chat))
         .await
         .expect("second turn forward should succeed");
+    let second_chat = second_predicted.chat().clone();
 
     assert_eq!(second_predicted.into_inner().answer, "Second turn answer");
     assert!(second_chat.len() >= 5);

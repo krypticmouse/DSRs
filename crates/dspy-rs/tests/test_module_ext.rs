@@ -1,4 +1,6 @@
-use dspy_rs::{BamlType, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted};
+use dspy_rs::{
+    BamlType, CallMetadata, Chat, Module, ModuleExt, ParseError, PredictError, Predicted,
+};
 
 struct MaybeFails;
 
@@ -44,6 +46,7 @@ impl Module for MaybeFails {
                     value: input_value * 2,
                 },
                 metadata,
+                Chat::new(vec![]),
             ))
         }
     }

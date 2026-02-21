@@ -13,7 +13,7 @@ use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signat
 use crate::data::example::Example as RawExample;
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
-    PredictError, Predicted, Prediction, SignatureSchema,
+    PredictError, Predicted, Prediction, Role, SignatureSchema, ToolLoopMode,
 };
 
 /// A typed input/output pair for few-shot prompting.
@@ -166,8 +166,7 @@ impl<S: Signature> Predict<S> {
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        let (predicted, _) = self.forward(input, None).await?;
-        Ok(predicted)
+        self.forward(input, None).await
     }
 
     /// Canonical typed predict path.
@@ -176,12 +175,13 @@ impl<S: Signature> Predict<S> {
     /// - `history = Some(chat)` continues a prior conversation by appending the
     ///   typed `input` as the next user turn.
     ///
-    /// Returns both the parsed prediction and updated chat history.
+    /// Returns the parsed prediction. Updated chat history is available via
+    /// [`Predicted::chat`](crate::Predicted::chat).
     pub async fn forward(
         &self,
         input: S::Input,
         history: Option<Chat>,
-    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    ) -> Result<Predicted<S::Output>, PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -204,7 +204,7 @@ impl<S: Signature> Predict<S> {
         );
 
         if let Some(mut chat) = history {
-            chat.push("user", &user);
+            chat.push(Role::User, &user);
             trace!(message_count = chat.len(), "chat continued");
             return Ok(chat);
         }
@@ -231,19 +231,19 @@ impl<S: Signature> Predict<S> {
         );
 
         let mut chat = Chat::new(vec![]);
-        chat.push("system", &system);
+        chat.push(Role::System, &system);
         for demo in &self.demos {
             let demo_user = chat_adapter.format_user_message_typed::<S>(&demo.input);
             let demo_assistant = chat_adapter.format_assistant_message_typed::<S>(&demo.output);
-            chat.push("user", &demo_user);
-            chat.push("assistant", &demo_assistant);
+            chat.push(Role::User, &demo_user);
+            chat.push(Role::Assistant, &demo_assistant);
         }
-        chat.push("user", &user);
+        chat.push(Role::User, &user);
         trace!(message_count = chat.len(), "chat constructed");
         Ok(chat)
     }
 
-    async fn execute_chat(&self, chat: Chat) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    async fn execute_chat(&self, chat: Chat) -> Result<Predicted<S::Output>, PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -254,7 +254,7 @@ impl<S: Signature> Predict<S> {
             Arc::clone(&settings.lm)
         };
 
-        let response = match lm.call(chat, self.tools.clone()).await {
+        let response = match lm.call(chat, self.tools.clone(), ToolLoopMode::Auto).await {
             Ok(response) => response,
             Err(err) => {
                 return Err(PredictError::Lm {
@@ -355,7 +355,7 @@ impl<S: Signature> Predict<S> {
             field_metas,
         );
 
-        Ok((Predicted::new(typed_output, metadata), chat))
+        Ok(Predicted::new(typed_output, metadata, chat))
     }
 }
 
@@ -570,8 +570,7 @@ where
         )
     )]
     async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        let (predicted, _) = Predict::forward(self, input, None).await?;
-        Ok(predicted)
+        Predict::forward(self, input, None).await
     }
 }
 

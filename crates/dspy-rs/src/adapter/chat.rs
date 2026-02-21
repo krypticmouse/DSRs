@@ -15,7 +15,7 @@ use tracing::{debug, trace};
 use super::Adapter;
 use crate::CallMetadata;
 use crate::{
-    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, InputRenderSpec,
+    BamlType, BamlValue, Chat, ConstraintLevel, ConstraintResult, FieldMeta, Flag, InputRenderSpec,
     JsonishError, Message, OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions,
     Signature, TypeIR,
 };
@@ -844,7 +844,7 @@ impl ChatAdapter {
             None,
             field_meta,
         );
-        Ok(Predicted::new(output, metadata))
+        Ok(Predicted::new(output, metadata, Chat::new(vec![response])))
     }
 }
 

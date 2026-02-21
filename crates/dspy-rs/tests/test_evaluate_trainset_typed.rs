@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    CallMetadata, Example, MetricOutcome, Module, PredictError, Predicted, Signature, TypedMetric,
-    average_score, evaluate_trainset,
+    CallMetadata, Chat, Example, MetricOutcome, Module, PredictError, Predicted, Signature,
+    TypedMetric, average_score, evaluate_trainset,
 };
 use std::sync::{Arc, Mutex};
 
@@ -26,6 +26,7 @@ impl Module for EchoModule {
                 answer: input.prompt,
             },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

@@ -1,4 +1,4 @@
-use dspy_rs::{Chat, LM, Message};
+use dspy_rs::{Chat, LM, Message, ToolLoopMode};
 use rig::completion::ToolDefinition;
 use rig::tool::ToolDyn;
 use std::error::Error;
@@ -99,7 +99,7 @@ async fn test_tool_call_with_no_tools() {
     chat.push_message(Message::user("What is 2 + 2?"));
 
     // Call without tools
-    let response = lm.call(chat, vec![]).await;
+    let response = lm.call(chat, vec![], ToolLoopMode::Auto).await;
 
     // Should get a text response (or network error if no real API key)
     if let Err(e) = &response {
@@ -135,7 +135,7 @@ async fn test_tool_call_with_calculator() {
     let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(calculator)];
 
     // Call with the calculator tool
-    let response = lm.call(chat, tools).await.unwrap();
+    let response = lm.call(chat, tools, ToolLoopMode::Auto).await.unwrap();
 
     assert_eq!(response.output.role, dspy_rs::Role::Assistant);
     let content = response.output.content();

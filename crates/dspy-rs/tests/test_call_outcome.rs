@@ -1,5 +1,5 @@
 use dspy_rs::{
-    CallMetadata, ConstraintResult, FieldMeta, LmUsage, ParseError, PredictError, Predicted,
+    CallMetadata, Chat, ConstraintResult, FieldMeta, LmUsage, ParseError, PredictError, Predicted,
 };
 use indexmap::IndexMap;
 
@@ -60,7 +60,7 @@ fn predicted_exposes_field_metadata() {
         field_meta,
     );
 
-    let predicted = Predicted::new("Paris".to_string(), metadata);
+    let predicted = Predicted::new("Paris".to_string(), metadata, Chat::new(vec![]));
     assert_eq!(predicted.metadata().field_raw("answer"), Some("Paris"));
     assert!(!predicted.metadata().has_failed_checks());
 

@@ -3,7 +3,7 @@ use std::ops::Deref;
 use indexmap::IndexMap;
 use rig::message::ToolCall;
 
-use crate::{Flag, LmUsage};
+use crate::{Chat, Flag, LmUsage};
 
 /// Per-field details from parsing an LM response.
 ///
@@ -159,22 +159,28 @@ impl CallMetadata {
 /// let result = Predicted::new(
 ///     QAOutput { answer: "42".into() },
 ///     CallMetadata::default(),
+///     dspy_rs::Chat::new(vec![]),
 /// );
 /// assert_eq!(result.answer, "42");             // output field via Deref
 /// let _usage = &result.metadata().lm_usage;    // runtime info, never in prompts
-/// let (output, meta) = result.into_parts();    // decompose for ownership
+/// let (output, meta, _chat) = result.into_parts(); // decompose for ownership
 /// assert_eq!(output.answer, "42");
 /// ```
 #[derive(Debug, Clone)]
 pub struct Predicted<O> {
     output: O,
     metadata: CallMetadata,
+    chat: Chat,
 }
 
 impl<O> Predicted<O> {
     /// Creates a new `Predicted` from an output value and call metadata.
-    pub fn new(output: O, metadata: CallMetadata) -> Self {
-        Self { output, metadata }
+    pub fn new(output: O, metadata: CallMetadata, chat: Chat) -> Self {
+        Self {
+            output,
+            metadata,
+            chat,
+        }
     }
 
     /// Returns the call metadata (raw response, token usage, tool calls, field-level details).
@@ -182,14 +188,19 @@ impl<O> Predicted<O> {
         &self.metadata
     }
 
+    /// Returns conversation history associated with this prediction.
+    pub fn chat(&self) -> &Chat {
+        &self.chat
+    }
+
     /// Unwraps the typed output, discarding metadata.
     pub fn into_inner(self) -> O {
         self.output
     }
 
-    /// Splits into the typed output and call metadata.
-    pub fn into_parts(self) -> (O, CallMetadata) {
-        (self.output, self.metadata)
+    /// Splits into typed output, call metadata, and conversation history.
+    pub fn into_parts(self) -> (O, CallMetadata, Chat) {
+        (self.output, self.metadata, self.chat)
     }
 }
 

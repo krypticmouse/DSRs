@@ -112,7 +112,7 @@ async fn react_builder_executes_multi_tool_calculator_loop_and_extracts_output()
         .await
         .expect("react call should succeed");
 
-    let (result, metadata) = predicted.into_parts();
+    let (result, metadata, _chat) = predicted.into_parts();
     assert_eq!(
         add_calls.load(Ordering::SeqCst),
         1,
@@ -208,7 +208,7 @@ async fn react_unknown_tool_name_does_not_execute_first_tool() {
         })
         .await
         .expect("react call should succeed");
-    let (_, metadata) = predicted.into_parts();
+    let (_, metadata, _chat) = predicted.into_parts();
 
     assert_eq!(
         add_calls.load(Ordering::SeqCst),

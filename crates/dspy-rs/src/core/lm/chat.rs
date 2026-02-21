@@ -76,18 +76,8 @@ pub struct Message {
 }
 
 impl Message {
-    /// Creates a text-only message from a role string.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `role` is not one of `"system"`, `"user"`, or `"assistant"`.
-    pub fn new(role: &str, content: &str) -> Self {
-        let role = match role {
-            "system" => Role::System,
-            "user" => Role::User,
-            "assistant" => Role::Assistant,
-            _ => panic!("Invalid role: {role}"),
-        };
+    /// Creates a text-only message for a typed role.
+    pub fn new(role: Role, content: impl Into<String>) -> Self {
         Self {
             role,
             content: vec![ContentBlock::text(content)],
@@ -240,7 +230,7 @@ impl Message {
     /// Converts this message to a rig message for provider API calls.
     ///
     /// Returns `None` for system messages (rig handles them as preamble).
-    pub fn to_rig_message(&self) -> Option<RigMessage> {
+    pub(crate) fn to_rig_message(&self) -> Option<RigMessage> {
         match self.role {
             Role::System => None,
             Role::User => {
@@ -458,7 +448,7 @@ impl Chat {
         self.messages.is_empty()
     }
 
-    pub fn push(&mut self, role: &str, content: &str) {
+    pub fn push(&mut self, role: Role, content: impl Into<String>) {
         self.messages.push(Message::new(role, content));
     }
 
@@ -497,7 +487,7 @@ impl Chat {
     // -- Rig interop ---------------------------------------------------------
 
     /// Extracts the system prompt text from the first system message.
-    pub fn system_prompt(&self) -> String {
+    pub(crate) fn system_prompt(&self) -> String {
         self.messages
             .iter()
             .find_map(|message| {
@@ -511,10 +501,113 @@ impl Chat {
     }
 
     /// Converts all non-system messages to rig messages for provider API calls.
-    pub fn to_rig_chat_history(&self) -> Vec<RigMessage> {
+    pub(crate) fn to_rig_chat_history(&self) -> Vec<RigMessage> {
         self.messages
             .iter()
             .filter_map(Message::to_rig_message)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rig::OneOrMany;
+    use rig::message::{ToolFunction, ToolResultContent};
+    use serde_json::json;
+
+    #[test]
+    fn rig_conversion_preserves_assistant_reasoning_and_tool_calls() {
+        let original = Message::with_content(
+            Role::Assistant,
+            vec![
+                ContentBlock::reasoning(Reasoning::new("step 1")),
+                ContentBlock::reasoning(Reasoning::new("step 2")),
+                ContentBlock::tool_call(ToolCall::new(
+                    "tc-1".to_string(),
+                    ToolFunction {
+                        name: "search".to_string(),
+                        arguments: json!({"q": "rust ownership"}),
+                    },
+                )),
+            ],
+        );
+
+        let rig_msg = original
+            .to_rig_message()
+            .expect("assistant message should convert to rig");
+        let roundtripped = Message::from(rig_msg);
+
+        assert_eq!(roundtripped.role, Role::Assistant);
+        assert_eq!(roundtripped.content.len(), 3);
+        assert!(matches!(
+            &roundtripped.content[0],
+            ContentBlock::Reasoning { .. }
+        ));
+        assert!(matches!(
+            &roundtripped.content[1],
+            ContentBlock::Reasoning { .. }
+        ));
+        assert!(
+            matches!(&roundtripped.content[2], ContentBlock::ToolCall { tool_call } if tool_call.function.name == "search")
+        );
+    }
+
+    #[test]
+    fn rig_conversion_preserves_user_text_and_tool_result() {
+        let original = Message::with_content(
+            Role::User,
+            vec![
+                ContentBlock::text("Here is context"),
+                ContentBlock::tool_result(ToolResult {
+                    id: "tr-1".to_string(),
+                    call_id: Some("tc-1".to_string()),
+                    content: OneOrMany::one(ToolResultContent::text("search result")),
+                }),
+            ],
+        );
+
+        let rig_msg = original
+            .to_rig_message()
+            .expect("user should convert to rig");
+        let roundtripped = Message::from(rig_msg);
+
+        assert_eq!(roundtripped.role, Role::User);
+        assert_eq!(roundtripped.content.len(), 2);
+        assert!(
+            matches!(&roundtripped.content[0], ContentBlock::Text { text } if text == "Here is context")
+        );
+        assert!(roundtripped.has_tool_results());
+    }
+
+    #[test]
+    fn rig_chat_history_excludes_system_message() {
+        let chat = Chat::new(vec![
+            Message::system("You are a helpful assistant."),
+            Message::user("What is the capital of France?"),
+            Message::assistant("Paris."),
+        ]);
+
+        let rig_history = chat.to_rig_chat_history();
+        assert_eq!(rig_history.len(), 2);
+    }
+
+    #[test]
+    fn system_messages_are_not_converted_to_rig_messages() {
+        let msg = Message::system("You are helpful");
+        assert!(msg.to_rig_message().is_none());
+    }
+
+    #[test]
+    fn assistant_message_id_survives_rig_roundtrip() {
+        let mut msg = Message::assistant("some text");
+        msg.id = Some("msg_abc123".to_string());
+
+        let rig_msg = msg
+            .to_rig_message()
+            .expect("assistant should convert to rig");
+        let roundtripped = Message::from(rig_msg);
+
+        assert_eq!(roundtripped.id, Some("msg_abc123".to_string()));
     }
 }

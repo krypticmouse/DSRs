@@ -506,7 +506,7 @@ mod tests {
 
     use super::*;
     use crate::evaluate::{MetricOutcome, TypedMetric};
-    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+    use crate::{CallMetadata, Chat, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
     struct GepaStateSig {
@@ -536,6 +536,7 @@ mod tests {
                     answer: input.prompt,
                 },
                 CallMetadata::default(),
+                Chat::new(vec![]),
             ))
         }
     }

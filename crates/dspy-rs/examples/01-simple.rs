@@ -17,8 +17,8 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::data::RawExample;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError, Predicted,
-    Prediction, configure, init_tracing,
+    CallMetadata, Chat, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError,
+    Predicted, Prediction, configure, init_tracing,
 };
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
@@ -115,7 +115,11 @@ impl Module for QARater {
             .data
             .insert("rating".into(), rate_result.rating.into());
 
-        Ok(Predicted::new(combined, CallMetadata::default()))
+        Ok(Predicted::new(
+            combined,
+            CallMetadata::default(),
+            Chat::new(vec![]),
+        ))
     }
 }
 
@@ -147,7 +151,7 @@ async fn main() -> Result<()> {
     println!("Reasoning: {}", output.reasoning);
     println!("Answer: {}", output.answer);
 
-    // Predicted carries both typed output and metadata.
+    // Predicted carries typed output, metadata, and chat history.
     let result = predict.call(input).await?;
     println!("\nWith metadata:");
     println!(

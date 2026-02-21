@@ -11,8 +11,8 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::data::RawExample;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
-    Signature, configure, init_tracing,
+    CallMetadata, Chat, ChatAdapter, LM, LmUsage, Module, Predict, PredictError, Predicted,
+    Prediction, Signature, configure, init_tracing,
     trace::{self, Executor},
 };
 use serde_json::json;
@@ -83,7 +83,11 @@ impl Module for QARater {
             },
         );
 
-        Ok(Predicted::new(prediction, CallMetadata::default()))
+        Ok(Predicted::new(
+            prediction,
+            CallMetadata::default(),
+            Chat::new(vec![]),
+        ))
     }
 }
 

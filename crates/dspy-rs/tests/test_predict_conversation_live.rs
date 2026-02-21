@@ -34,10 +34,11 @@ async fn live_forward_with_history_two_turn_roundtrip() {
     let first_input = LiveConversationInput {
         prompt: "Reply with the word ONE.".to_string(),
     };
-    let (first, chat) = predict
+    let first = predict
         .forward(first_input, None)
         .await
         .expect("first turn forward failed");
+    let chat = first.chat().clone();
     assert!(
         !first.answer.trim().is_empty(),
         "first turn answer should not be empty"
@@ -48,10 +49,11 @@ async fn live_forward_with_history_two_turn_roundtrip() {
         prompt: "Now reply with the word TWO. Use the same answer field format.".to_string(),
     };
 
-    let (second, chat2) = predict
+    let second = predict
         .forward(second_input, Some(chat))
         .await
         .expect("second turn forward failed");
+    let chat2 = second.chat();
 
     assert!(
         second.answer.to_ascii_lowercase().contains("two"),

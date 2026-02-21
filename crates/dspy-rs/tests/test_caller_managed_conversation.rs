@@ -81,10 +81,11 @@ async fn caller_managed_tool_loop_with_conversation() {
     };
 
     // Turn 1
-    let (first_result, chat) = predict
+    let first_result = predict
         .forward(input, None)
         .await
         .expect("first turn forward should succeed");
+    let chat = first_result.chat().clone();
     assert_eq!(
         first_result.into_inner().result,
         "Need to execute code first"
@@ -94,10 +95,11 @@ async fn caller_managed_tool_loop_with_conversation() {
     let follow_up = CodeExecInput {
         prompt: "Tool output: 42".to_string(),
     };
-    let (second_result, final_chat) = predict
+    let second_result = predict
         .forward(follow_up, Some(chat))
         .await
         .expect("second turn forward should succeed");
+    let final_chat = second_result.chat().clone();
     assert_eq!(second_result.into_inner().result, "42");
 
     // Verify chat grew across turns
@@ -136,7 +138,7 @@ async fn lm_caller_managed_returns_tool_calls_in_chat_history() {
 
     let chat = dspy_rs::Chat::new(vec![Message::user("Run some code")]);
     let response = lm
-        .call_with_tool_loop_mode(chat, vec![], ToolLoopMode::CallerManaged)
+        .call(chat, vec![], ToolLoopMode::CallerManaged)
         .await
         .expect("caller-managed call should succeed");
 
@@ -175,7 +177,8 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     };
 
     // Turn 1: succeeds
-    let (first_result, chat) = predict.forward(input, None).await.expect("turn 1");
+    let first_result = predict.forward(input, None).await.expect("turn 1");
+    let chat = first_result.chat().clone();
     assert_eq!(first_result.into_inner().result, "first answer");
 
     // Turn 2: should fail with parse error containing the bad response

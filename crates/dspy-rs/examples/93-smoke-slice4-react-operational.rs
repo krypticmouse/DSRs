@@ -83,7 +83,7 @@ async fn main() -> Result<()> {
         }
         anyhow::anyhow!("slice4 smoke failed")
     })?;
-    let (output, metadata) = predicted.into_parts();
+    let (output, metadata, _chat) = predicted.into_parts();
 
     println!("tool_calls: {}", metadata.tool_calls.len());
     println!("tool_executions: {}", metadata.tool_executions.len());
