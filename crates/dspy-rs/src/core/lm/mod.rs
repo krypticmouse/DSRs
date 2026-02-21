@@ -546,6 +546,7 @@ impl LM {
         let mut tool_loop_result = None;
         let mut returned_tool_calls = Vec::new();
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
+        let mut output_override: Option<Message> = None;
         let mut append_output_after_history = false;
         let classified = classify_choice(response.choice.clone());
         let first_choice = match classified {
@@ -553,7 +554,7 @@ impl LM {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
-                assistant_text,
+                assistant_text: _,
             } if tool_loop_mode == ToolLoopMode::Auto && !tools.is_empty() => {
                 debug!(count = calls.len(), "entering tool loop");
                 let result = self
@@ -593,10 +594,16 @@ impl LM {
                 full_content,
             } => {
                 returned_tool_calls = calls;
-                assistant_content_for_history = Some(*full_content);
+                let content = *full_content;
+                assistant_content_for_history = Some(content.clone());
+                output_override = Some(Message::from(rig::message::Message::Assistant {
+                    id: None,
+                    content,
+                }));
                 Message::assistant(assistant_text.unwrap_or_default())
             }
         };
+        let output = output_override.unwrap_or_else(|| first_choice.clone());
 
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
             Self::chat_from_rig_history(&system_prompt, &result.chat_history)
@@ -629,7 +636,7 @@ impl LM {
         );
 
         Ok(LMResponse {
-            output: first_choice,
+            output,
             usage: accumulated_usage,
             chat: full_chat,
             tool_calls: tool_loop_result
@@ -1000,7 +1007,8 @@ mod tests {
         assert_eq!(response.tool_calls.len(), 1);
         assert!(response.tool_executions.is_empty());
         assert_eq!(call_count.load(Ordering::SeqCst), 0);
-        assert_eq!(response.output.content(), "");
+        assert!(response.output.has_tool_calls());
+        assert!(response.output.content().contains("counter"));
         assert_eq!(response.chat.len(), 2);
         assert!(response.chat.messages[1].has_tool_calls());
     }

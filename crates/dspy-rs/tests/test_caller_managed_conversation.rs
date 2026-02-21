@@ -56,8 +56,8 @@ struct CodeExec {
 /// The full RLM-style loop:
 /// 1. Predict builds initial chat → calls LM → model requests a tool call
 /// 2. CallerManaged mode: LM returns the tool call without executing it
-/// 3. Caller manually executes the tool, appends result to chat
-/// 4. Caller calls forward_continue → LM returns the final text answer
+/// 3. Caller manually executes the tool, then calls Predict forward with prior chat history
+/// 4. LM returns the final text answer
 ///
 /// This is the exact pattern RLM will use for Python REPL interaction.
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -80,27 +80,24 @@ async fn caller_managed_tool_loop_with_conversation() {
         prompt: "Calculate 6 * 7".to_string(),
     };
 
-    // Turn 1: Build chat and call LM
-    let chat = predict
-        .build_chat(&input)
-        .expect("build_chat should succeed");
-    let (first_result, mut chat) = predict
-        .call_and_parse(chat)
+    // Turn 1
+    let (first_result, chat) = predict
+        .forward(input, None)
         .await
-        .expect("first turn should succeed");
+        .expect("first turn forward should succeed");
     assert_eq!(
         first_result.into_inner().result,
         "Need to execute code first"
     );
 
-    // Caller simulates tool execution: append user message with result
-    chat.push_message(Message::user("Tool output: 42"));
-
-    // Turn 2: Continue the conversation
+    // Turn 2: continue with prior chat and typed follow-up
+    let follow_up = CodeExecInput {
+        prompt: "Tool output: 42".to_string(),
+    };
     let (second_result, final_chat) = predict
-        .forward_continue(chat)
+        .forward(follow_up, Some(chat))
         .await
-        .expect("second turn should succeed");
+        .expect("second turn forward should succeed");
     assert_eq!(second_result.into_inner().result, "42");
 
     // Verify chat grew across turns
@@ -178,14 +175,15 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     };
 
     // Turn 1: succeeds
-    let chat = predict.build_chat(&input).expect("build_chat");
-    let (first_result, mut chat) = predict.call_and_parse(chat).await.expect("turn 1");
+    let (first_result, chat) = predict.forward(input, None).await.expect("turn 1");
     assert_eq!(first_result.into_inner().result, "first answer");
 
     // Turn 2: should fail with parse error containing the bad response
-    chat.push_message(Message::user("follow up"));
+    let follow_up = CodeExecInput {
+        prompt: "follow up".to_string(),
+    };
     let err = predict
-        .forward_continue(chat)
+        .forward(follow_up, Some(chat))
         .await
         .expect_err("second turn should fail");
 

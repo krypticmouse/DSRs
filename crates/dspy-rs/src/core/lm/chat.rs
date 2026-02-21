@@ -341,40 +341,13 @@ impl Message {
 
         let id = message.get("id").and_then(Value::as_str).map(String::from);
 
-        let content_val = message.get("content");
-
-        // Support both formats:
-        //   New: "content": [{ "type": "text", "text": "..." }, ...]
-        //   Legacy: "content": "plain string"
-        let content = match content_val {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .map(parse_content_block)
-                .collect::<Result<Vec<_>>>()?,
-            Some(Value::String(s)) => vec![ContentBlock::text(s.clone())],
-            _ => {
-                // Legacy type-tagged format: { "type": "tool_call", "tool_call": {...} }
-                match message.get("type").and_then(Value::as_str) {
-                    Some("tool_call") => {
-                        let tc: ToolCall = serde_json::from_value(message["tool_call"].clone())?;
-                        vec![ContentBlock::tool_call(tc)]
-                    }
-                    Some("tool_result") => {
-                        let tr: ToolResult =
-                            serde_json::from_value(message["tool_result"].clone())?;
-                        vec![ContentBlock::tool_result(tr)]
-                    }
-                    Some("reasoning") => {
-                        let r: Reasoning = serde_json::from_value(message["reasoning"].clone())?;
-                        vec![ContentBlock::reasoning(r)]
-                    }
-                    Some(other) => {
-                        return Err(anyhow::anyhow!("unsupported chat message type: {other}"));
-                    }
-                    None => return Err(anyhow::anyhow!("chat message missing content field")),
-                }
-            }
-        };
+        let content = message
+            .get("content")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow::anyhow!("chat message content must be an array"))?
+            .iter()
+            .map(parse_content_block)
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(Self { role, content, id })
     }
@@ -411,7 +384,7 @@ fn parse_content_block(value: &Value) -> Result<ContentBlock> {
 }
 
 // ---------------------------------------------------------------------------
-// From<RigMessage> — lossless conversion, one rig message → one DSRs message
+// From<RigMessage> — grouped conversion, one rig message → one DSRs message
 // ---------------------------------------------------------------------------
 
 impl From<RigMessage> for Message {

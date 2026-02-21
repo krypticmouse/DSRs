@@ -67,22 +67,14 @@ fn test_chat_to_json_and_back() {
 }
 
 #[rstest]
-fn test_chat_from_legacy_json() {
-    // Legacy format: "content" is a plain string
+fn test_chat_from_json_requires_grouped_content() {
     let json = json!([
         {"role":"system","content":"You are a helpful assistant."},
         {"role":"user","content":"Hello, world!"},
         {"role":"assistant","content":"Hello, world to you!"}
     ]);
-    let chat = Chat::new(vec![]).from_json(json).unwrap();
-
-    assert_eq!(chat.len(), 3);
-    assert_eq!(chat.messages[0].role, Role::System);
-    assert_eq!(chat.messages[0].content(), "You are a helpful assistant.");
-    assert_eq!(chat.messages[1].role, Role::User);
-    assert_eq!(chat.messages[1].content(), "Hello, world!");
-    assert_eq!(chat.messages[2].role, Role::Assistant);
-    assert_eq!(chat.messages[2].content(), "Hello, world to you!");
+    let err = Chat::new(vec![]).from_json(json).unwrap_err();
+    assert!(err.to_string().contains("content must be an array"));
 }
 
 #[rstest]

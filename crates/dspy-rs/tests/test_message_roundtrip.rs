@@ -227,20 +227,17 @@ fn grouped_message_json_roundtrip() {
     assert!(user.has_tool_results());
 }
 
-/// Legacy JSON format (content as plain string) still parses correctly.
+/// Legacy JSON format (content as plain string) is rejected.
 #[test]
-fn legacy_plain_string_json_parses_into_new_model() {
+fn legacy_plain_string_json_is_rejected() {
     let legacy_json = json!([
         {"role": "system", "content": "Be helpful"},
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": "Hi there!"}
     ]);
 
-    let chat = Chat::new(vec![]).from_json(legacy_json).unwrap();
-    assert_eq!(chat.len(), 3);
-    assert_eq!(chat.messages[0].role, Role::System);
-    assert_eq!(chat.messages[0].content(), "Be helpful");
-    assert_eq!(chat.messages[2].text_content(), "Hi there!");
+    let err = Chat::new(vec![]).from_json(legacy_json).unwrap_err();
+    assert!(err.to_string().contains("content must be an array"));
 }
 
 // ---------------------------------------------------------------------------

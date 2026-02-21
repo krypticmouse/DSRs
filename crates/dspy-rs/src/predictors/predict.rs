@@ -148,8 +148,7 @@ impl<S: Signature> Predict<S> {
 
     /// Calls the LM with this predictor's signature, demos, and tools.
     ///
-    /// Delegates to [`forward`](Predict::forward). Both exist for symmetry with the
-    /// [`Module`] trait; `call` is what you use, `forward` is the implementation.
+    /// Convenience wrapper around [`forward`](Predict::forward) with `history = None`.
     #[tracing::instrument(
         name = "dsrs.predict.call",
         level = "debug",
@@ -167,66 +166,49 @@ impl<S: Signature> Predict<S> {
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        self.forward(input).await
-    }
-
-    /// Builds the prompt, calls the LM, and parses the response.
-    ///
-    /// The full pipeline:
-    /// 1. Format system message from the signature's schema and instruction override
-    /// 2. Format demo examples as user/assistant exchanges
-    /// 3. Format the input as the final user message
-    /// 4. Call the LM (with any tools attached)
-    /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
-    /// 6. Record a trace node if inside a [`trace()`](crate::trace::trace) scope
-    ///
-    /// # Errors
-    ///
-    /// - [`PredictError::Lm`] if the LM call fails (network, rate limit, timeout)
-    /// - [`PredictError::Parse`] if the response can't be parsed into the output fields
-    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
-    where
-        S::Input: BamlType,
-        S::Output: BamlType,
-    {
-        let chat = self.build_chat(&input)?;
-        let (predicted, _) = self.call_and_parse(chat).await?;
+        let (predicted, _) = self.forward(input, None).await?;
         Ok(predicted)
     }
 
-    /// Continues a prior conversation and parses the LM's response.
+    /// Canonical typed predict path.
     ///
-    /// The caller owns the `Chat` between calls:
-    /// 1. Call [`forward`] to get the first turn's `(Predicted, Chat)`.
-    /// 2. Append a follow-up user message to the returned `Chat`.
-    /// 3. Call `forward_continue` with the updated `Chat`.
+    /// - `history = None` starts a new conversation (system + demos + input).
+    /// - `history = Some(chat)` continues a prior conversation by appending the
+    ///   typed `input` as the next user turn.
     ///
-    /// The LM response is parsed using the same `[[ ## field ## ]]` protocol.
-    /// The caller is responsible for including format instructions in follow-up
-    /// messages if the model needs reminding of the output format.
-    pub async fn forward_continue(
+    /// Returns both the parsed prediction and updated chat history.
+    pub async fn forward(
         &self,
-        chat: Chat,
+        input: S::Input,
+        history: Option<Chat>,
     ) -> Result<(Predicted<S::Output>, Chat), PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        trace!(message_count = chat.len(), "continuing prior chat");
-        self.call_and_parse(chat).await
+        let chat = self.compose_chat(&input, history)?;
+        self.execute_chat(chat).await
     }
 
-    /// Builds the first-turn chat from the signature, demos, and input.
-    ///
-    /// Returns a [`Chat`] ready to pass to [`call_and_parse`](Predict::call_and_parse)
-    /// or [`forward_continue`](Predict::forward_continue). Useful when you need to
-    /// inspect or modify the prompt before sending it to the LM.
     #[allow(clippy::result_large_err)]
-    pub fn build_chat(&self, input: &S::Input) -> Result<Chat, PredictError>
+    fn compose_chat(&self, input: &S::Input, history: Option<Chat>) -> Result<Chat, PredictError>
     where
         S::Input: BamlType,
     {
         let chat_adapter = ChatAdapter;
+        let user = chat_adapter.format_user_message_typed::<S>(input);
+        trace!(
+            user_len = user.len(),
+            continuing = history.is_some(),
+            "typed input formatted"
+        );
+
+        if let Some(mut chat) = history {
+            chat.push("user", &user);
+            trace!(message_count = chat.len(), "chat continued");
+            return Ok(chat);
+        }
+
         let system = match chat_adapter
             .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
         {
@@ -242,11 +224,10 @@ impl<S: Signature> Predict<S> {
             }
         };
 
-        let user = chat_adapter.format_user_message_typed::<S>(input);
         trace!(
             system_len = system.len(),
             user_len = user.len(),
-            "typed prompt formatted"
+            "typed prompt initialized"
         );
 
         let mut chat = Chat::new(vec![]);
@@ -262,15 +243,7 @@ impl<S: Signature> Predict<S> {
         Ok(chat)
     }
 
-    /// Calls the LM with the given chat and parses the response.
-    ///
-    /// This is the shared implementation behind [`forward`](Predict::forward) and
-    /// [`forward_continue`](Predict::forward_continue). Use it directly when you need
-    /// both the prediction and the updated conversation history.
-    pub async fn call_and_parse(
-        &self,
-        chat: Chat,
-    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    async fn execute_chat(&self, chat: Chat) -> Result<(Predicted<S::Output>, Chat), PredictError>
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -597,7 +570,8 @@ where
         )
     )]
     async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        Predict::forward(self, input).await
+        let (predicted, _) = Predict::forward(self, input, None).await?;
+        Ok(predicted)
     }
 }
 
