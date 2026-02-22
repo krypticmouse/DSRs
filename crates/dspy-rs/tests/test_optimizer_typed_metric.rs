@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    COPRO, CallMetadata, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric,
+    COPRO, CallMetadata, Chat, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
+    PredictError, Predicted, Signature, TypedMetric,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -35,6 +35,7 @@ impl Module for InstructionEchoModule {
                 answer: input.prompt,
             },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

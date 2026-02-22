@@ -7,7 +7,8 @@
 //! input, returns a predicted output) so that strategies are interchangeable.
 //!
 //! [`Predicted`] wraps a typed output with [`CallMetadata`] (raw response text, token
-//! usage, per-field parse results). The error hierarchy — [`PredictError`], [`ParseError`],
+//! usage, per-field parse results) and [`Chat`] (the conversation history from the LM
+//! call). The error hierarchy — [`PredictError`], [`ParseError`],
 //! [`LmError`] — distinguishes LM failures from parse failures so callers can handle
 //! retries differently. [`LM`] is the language model client itself.
 //!

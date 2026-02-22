@@ -4,7 +4,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Example, MetricOutcome, Module, Optimizer, Predict,
+    COPRO, CallMetadata, Chat, DataLoader, Example, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
     average_score, evaluate_trainset,
 };
@@ -54,6 +54,7 @@ impl Module for EchoModule {
                 answer: input.question,
             },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

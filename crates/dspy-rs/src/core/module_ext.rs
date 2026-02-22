@@ -77,8 +77,8 @@ where
 
     async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         let predicted = self.inner.call(input).await?;
-        let (output, metadata) = predicted.into_parts();
-        Ok(Predicted::new((self.map)(output), metadata))
+        let (output, metadata, chat) = predicted.into_parts();
+        Ok(Predicted::new((self.map)(output), metadata, chat))
     }
 }
 
@@ -107,8 +107,8 @@ where
 
     async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         let predicted = self.inner.call(input).await?;
-        let (output, metadata) = predicted.into_parts();
+        let (output, metadata, chat) = predicted.into_parts();
         let transformed = (self.and_then)(output)?;
-        Ok(Predicted::new(transformed, metadata))
+        Ok(Predicted::new(transformed, metadata, chat))
     }
 }

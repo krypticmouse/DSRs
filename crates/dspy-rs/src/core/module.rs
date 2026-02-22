@@ -17,13 +17,15 @@ type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
 /// implementors. `call` currently just delegates to `forward` — the split exists so we
 /// can add hooks or tracing around `call` without breaking module implementations.
 ///
-/// # Two kinds of output data
+/// # Three kinds of output data
 ///
 /// Every call returns [`Predicted<Output>`](crate::Predicted), which carries:
 /// - **`Output`** — what the LM was asked to produce. Shaped by your signature and any
 ///   augmentations. Accessible directly via `Deref`: `result.answer`, `result.reasoning`.
 /// - **[`CallMetadata`](crate::CallMetadata)** — what the runtime observed. Token counts,
 ///   raw response, constraint results. Never enters a prompt. Via `result.metadata()`.
+/// - **[`Chat`](crate::Chat)** — conversation history for the call, including the assistant
+///   response turn, so callers can continue multi-turn interactions via `result.chat()`.
 ///
 /// This drives the type system: [`ChainOfThought`](crate::ChainOfThought) changes `Output`
 /// because it modifies the prompt (adds a `reasoning` field). A wrapper like `BestOfN` keeps

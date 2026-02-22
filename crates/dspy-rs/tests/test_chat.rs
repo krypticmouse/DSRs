@@ -28,7 +28,7 @@ fn test_chat_init() {
 #[rstest]
 fn test_chat_push() {
     let mut chat = Chat::new(vec![]);
-    chat.push("user", "Hello, world!");
+    chat.push(Role::User, "Hello, world!");
 
     assert_eq!(chat.len(), 1);
     assert_eq!(chat.messages[0].role, Role::User);
@@ -38,7 +38,7 @@ fn test_chat_push() {
 #[rstest]
 fn test_chat_pop() {
     let mut chat = Chat::new(vec![]);
-    chat.push("user", "Hello, world!");
+    chat.push(Role::User, "Hello, world!");
     chat.pop();
 
     assert_eq!(chat.len(), 0);
@@ -67,22 +67,14 @@ fn test_chat_to_json_and_back() {
 }
 
 #[rstest]
-fn test_chat_from_legacy_json() {
-    // Legacy format: "content" is a plain string
+fn test_chat_from_json_requires_grouped_content() {
     let json = json!([
         {"role":"system","content":"You are a helpful assistant."},
         {"role":"user","content":"Hello, world!"},
         {"role":"assistant","content":"Hello, world to you!"}
     ]);
-    let chat = Chat::new(vec![]).from_json(json).unwrap();
-
-    assert_eq!(chat.len(), 3);
-    assert_eq!(chat.messages[0].role, Role::System);
-    assert_eq!(chat.messages[0].content(), "You are a helpful assistant.");
-    assert_eq!(chat.messages[1].role, Role::User);
-    assert_eq!(chat.messages[1].content(), "Hello, world!");
-    assert_eq!(chat.messages[2].role, Role::Assistant);
-    assert_eq!(chat.messages[2].content(), "Hello, world to you!");
+    let err = Chat::new(vec![]).from_json(json).unwrap_err();
+    assert!(err.to_string().contains("content must be an array"));
 }
 
 #[rstest]
@@ -167,28 +159,6 @@ fn test_new_variants_round_trip_json() {
 }
 
 #[rstest]
-fn test_system_prompt_and_rig_chat_history() {
-    let chat = Chat::new(vec![
-        Message::system("Be helpful"),
-        Message::user("Hello"),
-        Message::assistant("Hi!"),
-    ]);
-
-    assert_eq!(chat.system_prompt(), "Be helpful");
-    let history = chat.to_rig_chat_history();
-    assert_eq!(history.len(), 2); // system excluded
-}
-
-#[rstest]
-fn test_empty_chat_system_prompt_and_rig_history() {
-    let chat = Chat::new(vec![]);
-
-    assert_eq!(chat.system_prompt(), "");
-    let history = chat.to_rig_chat_history();
-    assert!(history.is_empty());
-}
-
-#[rstest]
 fn test_from_rig_message_preserves_all_content() {
     // User with text + tool result — both preserved
     let user_msg = RigMessage::User {
@@ -232,38 +202,6 @@ fn test_from_rig_message_preserves_all_content() {
     assert_eq!(converted.content.len(), 2);
     assert!(converted.has_reasoning());
     assert!(converted.has_tool_calls());
-}
-
-#[rstest]
-fn test_rig_round_trip_preserves_grouped_content() {
-    // Create a grouped assistant message with reasoning + tool call
-    let original_rig = RigMessage::Assistant {
-        id: None,
-        content: OneOrMany::many(vec![
-            AssistantContent::Reasoning(Reasoning::new("thinking")),
-            AssistantContent::ToolCall(ToolCall::new(
-                "tc-1".to_string(),
-                ToolFunction {
-                    name: "search".to_string(),
-                    arguments: json!({"q": "rust"}),
-                },
-            )),
-        ])
-        .unwrap(),
-    };
-
-    // Convert to DSRs Message
-    let dsrs_msg = Message::from(original_rig);
-    assert_eq!(dsrs_msg.content.len(), 2);
-
-    // Convert back to rig message
-    let round_tripped = dsrs_msg.to_rig_message().unwrap();
-    match round_tripped {
-        RigMessage::Assistant { content, .. } => {
-            assert_eq!(content.iter().count(), 2); // Both blocks preserved!
-        }
-        _ => panic!("expected assistant message"),
-    }
 }
 
 #[rstest]

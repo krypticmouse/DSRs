@@ -1,5 +1,5 @@
 use dspy_rs::{
-    ChatAdapter, LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure,
+    ChatAdapter, LM, LMClient, Predict, Role, Signature, TestCompletionModel, configure,
 };
 use rig::completion::{AssistantContent, CompletionRequest};
 use rig::message::{Message as RigMessage, Text, UserContent};
@@ -91,7 +91,7 @@ struct ConversationQA {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn forward_returns_chat_and_prediction() {
+async fn forward_returns_prediction_with_chat_metadata() {
     let _lock = SETTINGS_LOCK.lock().await;
     let response = response_with_fields(&[("answer", "Paris")]);
     let _client = configure_test_lm(vec![response]).await;
@@ -101,24 +101,22 @@ async fn forward_returns_chat_and_prediction() {
         question: "What is the capital of France?".to_string(),
     };
 
-    let chat = predict
-        .build_chat(&input)
-        .expect("build_chat should succeed");
-    let (predicted, chat) = predict
-        .call_and_parse(chat)
+    let predicted = predict
+        .forward(input, None)
         .await
-        .expect("first turn should succeed");
+        .expect("forward should succeed");
+    let chat = predicted.chat();
 
-    assert_eq!(predicted.into_inner().answer, "Paris");
     assert_eq!(chat.len(), 3);
     assert_eq!(chat.messages[0].role, Role::System);
     assert_eq!(chat.messages[1].role, Role::User);
     assert_eq!(chat.messages[2].role, Role::Assistant);
+    assert_eq!(predicted.into_inner().answer, "Paris");
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn forward_continue_supports_two_turn_roundtrip() {
+async fn forward_with_history_supports_two_turn_roundtrip() {
     let _lock = SETTINGS_LOCK.lock().await;
     let first_response = response_with_fields(&[("answer", "First turn answer")]);
     let second_response = response_with_fields(&[("answer", "Second turn answer")]);
@@ -129,24 +127,24 @@ async fn forward_continue_supports_two_turn_roundtrip() {
         question: "Turn 1 question".to_string(),
     };
 
-    // First turn: build fresh chat
-    let chat = predict
-        .build_chat(&first_input)
-        .expect("build_chat should succeed");
-    let (first_predicted, mut chat) = predict
-        .call_and_parse(chat)
+    let first_predicted = predict
+        .forward(first_input, None)
         .await
-        .expect("first turn should succeed");
+        .expect("first turn forward should succeed");
+    let chat = first_predicted.chat().clone();
     assert_eq!(first_predicted.into_inner().answer, "First turn answer");
 
-    // Second turn: append follow-up, continue conversation
+    // Second turn: typed follow-up with prior history
     let caller_follow_up = "Caller follow-up message";
-    chat.push_message(Message::user(caller_follow_up));
+    let second_input = ConversationQAInput {
+        question: caller_follow_up.to_string(),
+    };
 
-    let (second_predicted, second_chat) = predict
-        .forward_continue(chat)
+    let second_predicted = predict
+        .forward(second_input, Some(chat))
         .await
-        .expect("second turn should succeed");
+        .expect("second turn forward should succeed");
+    let second_chat = second_predicted.chat().clone();
 
     assert_eq!(second_predicted.into_inner().answer, "Second turn answer");
     assert!(second_chat.len() >= 5);

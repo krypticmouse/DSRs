@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, LM, Message, Predict, Signature, configure};
+use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure};
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
@@ -16,7 +16,7 @@ struct LiveConversation {
 
 #[tokio::test]
 #[ignore] // Requires real network access and provider API key(s)
-async fn live_forward_continue_two_turn_roundtrip() {
+async fn live_forward_with_history_two_turn_roundtrip() {
     let _lock = SETTINGS_LOCK.lock().await;
 
     let lm = LM::builder()
@@ -34,27 +34,26 @@ async fn live_forward_continue_two_turn_roundtrip() {
     let first_input = LiveConversationInput {
         prompt: "Reply with the word ONE.".to_string(),
     };
-    let chat = predict
-        .build_chat(&first_input)
-        .expect("build_chat should succeed");
-    let (first, mut chat) = predict
-        .call_and_parse(chat)
+    let first = predict
+        .forward(first_input, None)
         .await
-        .expect("first turn failed");
+        .expect("first turn forward failed");
+    let chat = first.chat().clone();
     assert!(
         !first.answer.trim().is_empty(),
         "first turn answer should not be empty"
     );
 
-    // Second turn: append follow-up, continue
-    chat.push_message(Message::user(
-        "Now reply with the word TWO. Use the same answer field format.",
-    ));
+    // Second turn: continue with typed follow-up and prior history
+    let second_input = LiveConversationInput {
+        prompt: "Now reply with the word TWO. Use the same answer field format.".to_string(),
+    };
 
-    let (second, chat2) = predict
-        .forward_continue(chat)
+    let second = predict
+        .forward(second_input, Some(chat))
         .await
-        .expect("second turn failed");
+        .expect("second turn forward failed");
+    let chat2 = second.chat();
 
     assert!(
         second.answer.to_ascii_lowercase().contains("two"),

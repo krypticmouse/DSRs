@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    COPRO, CallMetadata, Example, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    COPRO, CallMetadata, Chat, Example, MetricOutcome, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric,
 };
 
@@ -33,6 +33,7 @@ impl Module for InstructionEchoModule {
                 answer: input.prompt,
             },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

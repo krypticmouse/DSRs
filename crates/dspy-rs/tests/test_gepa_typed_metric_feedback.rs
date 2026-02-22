@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer, Predict,
+    CallMetadata, Chat, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -35,6 +35,7 @@ impl Module for InstructionEchoModule {
                 answer: input.prompt,
             },
             CallMetadata::default(),
+            Chat::new(vec![]),
         ))
     }
 }

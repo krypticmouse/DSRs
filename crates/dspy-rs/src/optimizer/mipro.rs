@@ -184,7 +184,7 @@ impl MIPROv2 {
             let input = example.input.clone();
             let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
             let outcome = metric.evaluate(example, &predicted).await?;
-            let (output, _) = predicted.into_parts();
+            let (output, _, _) = predicted.into_parts();
             traces.push(Trace::new(
                 example.input.clone(),
                 output.to_baml_value(),
@@ -417,7 +417,7 @@ mod tests {
 
     use super::*;
     use crate::evaluate::{MetricOutcome, TypedMetric};
-    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+    use crate::{CallMetadata, Chat, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
     struct MiproStateSig {
@@ -447,6 +447,7 @@ mod tests {
                     answer: input.prompt,
                 },
                 CallMetadata::default(),
+                Chat::new(vec![]),
             ))
         }
     }

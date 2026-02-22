@@ -158,7 +158,7 @@ where
                 ReActActionStepInput::new(serialized_input.clone(), trajectory_text.clone());
 
             let action_predicted = self.action.call(action_input).await?;
-            let (action_output, mut action_metadata) = action_predicted.into_parts();
+            let (action_output, mut action_metadata, _action_chat) = action_predicted.into_parts();
             tool_calls.append(&mut action_metadata.tool_calls);
             tool_executions.append(&mut action_metadata.tool_executions);
 
@@ -220,12 +220,16 @@ where
         let extract_input = ReActExtractStepInput::new(serialized_input, trajectory_text);
 
         let extract_predicted = self.extract.call(extract_input).await?;
-        let (extract_output, mut extract_metadata) = extract_predicted.into_parts();
+        let (extract_output, mut extract_metadata, extract_chat) = extract_predicted.into_parts();
         extract_metadata.tool_calls.extend(tool_calls);
         extract_metadata.tool_executions.extend(tool_executions);
 
         let output: ReActExtractStepOutput<S::Output> = extract_output;
-        Ok(Predicted::new(output.output, extract_metadata))
+        Ok(Predicted::new(
+            output.output,
+            extract_metadata,
+            extract_chat,
+        ))
     }
 }
 
