@@ -1236,6 +1236,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "temp-env",
  "tempfile",
  "thiserror 2.0.17",
  "tokio",
@@ -4238,6 +4239,16 @@ name = "target-triple"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ac9aa371f599d22256307c24a9d748c041e548cbf599f35d890f9d365361790"
+
+[[package]]
+name = "temp-env"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96374855068f47402c3121c6eed88d29cb1de8f3ab27090e273e420bdabcf050"
+dependencies = [
+ "futures",
+ "parking_lot",
+]
 
 [[package]]
 name = "tempfile"

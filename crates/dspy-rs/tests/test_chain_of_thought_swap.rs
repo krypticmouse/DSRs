@@ -23,19 +23,18 @@ fn text_response(text: impl Into<String>) -> AssistantContent {
 }
 
 async fn configure_test_lm(responses: Vec<String>) {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
-
     let client = TestCompletionModel::new(responses.into_iter().map(text_response));
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .build()
-        .await
-        .unwrap()
-        .with_client(LMClient::Test(client))
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
+    )
+    .await
+    .unwrap()
+    .with_client(LMClient::Test(client))
+    .await
+    .unwrap();
 
     configure(lm, ChatAdapter {});
 }

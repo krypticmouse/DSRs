@@ -108,13 +108,10 @@ async fn test_tool_call_with_no_tools() {
     }
 
     let response = response.unwrap();
-    match response.output {
-        Message::Assistant { content } => {
-            // The response should contain some mention of 4
-            println!("Assistant response: {}", content);
-        }
-        _ => panic!("Expected assistant message"),
-    }
+    assert_eq!(response.output.role, dspy_rs::Role::Assistant);
+    let content = response.output.content();
+    // The response should contain some mention of 4
+    println!("Assistant response: {}", content);
 }
 
 #[tokio::test]
@@ -140,12 +137,9 @@ async fn test_tool_call_with_calculator() {
     // Call with the calculator tool
     let response = lm.call(chat, tools).await.unwrap();
 
-    match response.output {
-        Message::Assistant { content } => {
-            println!("Assistant response after tool use: {}", content);
-            // The response should mention the result (100) or that the tool was called
-            assert!(content.contains("100") || content.contains("Tool call"));
-        }
-        _ => panic!("Expected assistant message"),
-    }
+    assert_eq!(response.output.role, dspy_rs::Role::Assistant);
+    let content = response.output.content();
+    println!("Assistant response after tool use: {}", content);
+    // The response should mention the result (100) or that the tool was called
+    assert!(content.contains("100") || content.contains("Tool call"));
 }

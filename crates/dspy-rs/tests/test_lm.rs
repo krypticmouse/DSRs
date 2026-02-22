@@ -84,16 +84,15 @@ fn test_lm_usage_add() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_with_cache_enabled() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
-    // Create LM with cache enabled
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .cache(true)
-        .build()
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .cache(true)
+            .build(),
+    )
+    .await
+    .unwrap();
 
     // Verify cache handler is initialized
     assert!(lm.cache_handler.is_some());
@@ -102,16 +101,15 @@ async fn test_lm_with_cache_enabled() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_with_cache_disabled() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
-    // Create LM with cache explicitly disabled
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .cache(false)
-        .build()
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .cache(false)
+            .build(),
+    )
+    .await
+    .unwrap();
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
@@ -120,16 +118,15 @@ async fn test_lm_with_cache_disabled() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_initialization_on_first_call() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
-    // Create LM with cache enabled
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .cache(true)
-        .build()
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .cache(true)
+            .build(),
+    )
+    .await
+    .unwrap();
 
     // After build, cache_handler should be initialized
     assert!(lm.cache_handler.is_some());
@@ -138,20 +135,19 @@ async fn test_lm_cache_initialization_on_first_call() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_direct_operations() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
     use dspy_rs::Prediction;
     use dspy_rs::data::RawExample;
     use std::collections::HashMap;
 
-    // Create LM with cache enabled
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .cache(true)
-        .build()
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .cache(true)
+            .build(),
+    )
+    .await
+    .unwrap();
 
     // Get cache handler
     let cache = lm
@@ -207,20 +203,19 @@ async fn test_lm_cache_direct_operations() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_with_different_models() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-        std::env::set_var("ANTHROPIC_API_KEY", "test");
-    }
     // Test that cache works with different model configurations
     let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
 
     for model in models {
-        let lm = LM::builder()
-            .model(model.to_string())
-            .cache(true)
-            .build()
-            .await
-            .unwrap();
+        let lm = temp_env::async_with_vars(
+            [
+                ("OPENAI_API_KEY", Some("test")),
+                ("ANTHROPIC_API_KEY", Some("test")),
+            ],
+            LM::builder().model(model.to_string()).cache(true).build(),
+        )
+        .await
+        .unwrap();
 
         // Cache should be initialized regardless of model
         assert!(
@@ -234,20 +229,19 @@ async fn test_lm_cache_with_different_models() {
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn test_cache_with_complex_inputs() {
-    unsafe {
-        std::env::set_var("OPENAI_API_KEY", "test");
-    }
     use dspy_rs::Prediction;
     use dspy_rs::data::RawExample;
     use std::collections::HashMap;
 
-    // Create LM with cache enabled
-    let lm = LM::builder()
-        .model("openai:gpt-4o-mini".to_string())
-        .cache(true)
-        .build()
-        .await
-        .unwrap();
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .cache(true)
+            .build(),
+    )
+    .await
+    .unwrap();
 
     let cache = lm
         .cache_handler

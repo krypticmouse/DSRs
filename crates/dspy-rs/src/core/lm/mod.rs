@@ -31,6 +31,12 @@ pub struct LMResponse {
     pub tool_executions: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ToolLoopMode {
+    Auto,
+    CallerManaged,
+}
+
 #[derive(Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LM {
@@ -179,7 +185,6 @@ impl<S: l_m_builder::State> LMBuilder<S> {
 
 struct ToolLoopResult {
     message: Message,
-    #[allow(unused)]
     chat_history: Vec<rig::message::Message>,
     tool_calls: Vec<ToolCall>,
     tool_executions: Vec<String>,
@@ -197,6 +202,7 @@ enum ChoiceAction {
     ToolCalls {
         calls: Vec<ToolCall>,
         full_content: Box<rig::OneOrMany<AssistantContent>>,
+        assistant_text: Option<String>,
     },
 }
 
@@ -224,6 +230,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
         return ChoiceAction::ToolCalls {
             calls: tool_calls,
             full_content: Box::new(choice),
+            assistant_text: text,
         };
     }
 
@@ -261,6 +268,17 @@ async fn find_and_execute_tool(
 }
 
 impl LM {
+    fn chat_from_rig_history(system_prompt: &str, history: &[rig::message::Message]) -> Chat {
+        let mut chat = Chat::new(Vec::new());
+        if !system_prompt.is_empty() {
+            chat.push_message(Message::system(system_prompt.to_string()));
+        }
+        for message in history {
+            chat.push_message(Message::from(message.clone()));
+        }
+        chat
+    }
+
     /// Execute all tool calls in a batch, returning results paired with their calls.
     async fn execute_tool_batch(
         tools: &mut [Arc<dyn ToolDyn>],
@@ -422,6 +440,7 @@ impl LM {
                 ChoiceAction::ToolCalls {
                     calls,
                     full_content,
+                    ..
                 } => {
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
@@ -445,39 +464,47 @@ impl LM {
         Err(anyhow::anyhow!("Max tool iterations reached"))
     }
 
+    pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
+        self.call_with_tool_loop_mode(messages, tools, ToolLoopMode::Auto)
+            .await
+    }
+
     #[tracing::instrument(
-        name = "dsrs.lm.call",
+        name = "dsrs.lm.call_with_tool_loop_mode",
         level = "debug",
         skip(self, messages, tools),
         fields(
             model = %self.model,
             message_count = messages.len(),
             tool_count = tools.len(),
-            cache_enabled = self.cache
+            cache_enabled = self.cache,
+            tool_loop_mode = ?tool_loop_mode
         )
     )]
-    pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
+    pub async fn call_with_tool_loop_mode(
+        &self,
+        messages: Chat,
+        tools: Vec<Arc<dyn ToolDyn>>,
+        tool_loop_mode: ToolLoopMode,
+    ) -> Result<LMResponse> {
         use rig::OneOrMany;
         use rig::completion::CompletionRequest;
-        let request_messages = messages.get_rig_messages();
+        let system_prompt = messages.system_prompt();
+        let chat_history = messages.to_rig_chat_history();
 
         let mut tool_definitions = Vec::new();
         for tool in &tools {
             tool_definitions.push(tool.definition("".to_string()).await);
         }
         trace!(
-            conversation_messages = request_messages.conversation.len(),
+            conversation_messages = chat_history.len(),
             tool_definitions = tool_definitions.len(),
             "prepared completion request inputs"
         );
 
-        // Build the completion request manually
-        let mut chat_history = request_messages.conversation;
-        chat_history.push(request_messages.prompt);
-
         let request = CompletionRequest {
             model: None,
-            preamble: Some(request_messages.system.clone()),
+            preamble: Some(system_prompt.clone()),
             chat_history: if chat_history.len() == 1 {
                 OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
             } else {
@@ -517,12 +544,17 @@ impl LM {
         // Scan ALL content blocks in the response — don't just look at .first().
         // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
         let mut tool_loop_result = None;
-        let first_choice = match classify_choice(response.choice) {
+        let mut returned_tool_calls = Vec::new();
+        let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
+        let mut append_output_after_history = false;
+        let classified = classify_choice(response.choice.clone());
+        let first_choice = match classified {
             ChoiceAction::Text(text) => Message::assistant(&text),
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
-            } if !tools.is_empty() => {
+                assistant_text,
+            } if tool_loop_mode == ToolLoopMode::Auto && !tools.is_empty() => {
                 debug!(count = calls.len(), "entering tool loop");
                 let result = self
                     .execute_tool_loop(
@@ -531,24 +563,58 @@ impl LM {
                         tools,
                         tool_definitions,
                         chat_history,
-                        request_messages.system,
+                        system_prompt.clone(),
                         &mut accumulated_usage,
                     )
                     .await?;
                 let message = result.message.clone();
                 tool_loop_result = Some(result);
+                append_output_after_history = true;
                 message
             }
-            ChoiceAction::ToolCalls { calls, .. } => {
+            ChoiceAction::ToolCalls { calls, .. }
+                if tool_loop_mode == ToolLoopMode::Auto && tools.is_empty() =>
+            {
                 let names: Vec<_> = calls.iter().map(|tc| tc.function.name.as_str()).collect();
                 warn!(?names, "tools requested but no tools available");
                 let msg = format!("Tool calls requested: {:?}, but no tools available", names);
+                assistant_content_for_history = Some(rig::OneOrMany::many(
+                    calls
+                        .into_iter()
+                        .map(AssistantContent::ToolCall)
+                        .collect::<Vec<_>>(),
+                )?);
+                append_output_after_history = true;
                 Message::assistant(&msg)
+            }
+            ChoiceAction::ToolCalls {
+                calls,
+                assistant_text,
+                full_content,
+            } => {
+                returned_tool_calls = calls;
+                assistant_content_for_history = Some(*full_content);
+                Message::assistant(assistant_text.unwrap_or_default())
             }
         };
 
-        let mut full_chat = messages.clone();
-        full_chat.push_message(first_choice.clone());
+        let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
+            Self::chat_from_rig_history(&system_prompt, &result.chat_history)
+        } else {
+            let mut chat = messages.clone();
+            if let Some(content) = assistant_content_for_history {
+                // Convert grouped rig content into a single grouped Message.
+                let rig_msg = rig::message::Message::Assistant { id: None, content };
+                chat.push_message(Message::from(rig_msg));
+            } else {
+                // Text-only path: preserve a single assistant response turn.
+                chat.push_message(first_choice.clone());
+            }
+            chat
+        };
+        if append_output_after_history {
+            full_chat.push_message(first_choice.clone());
+        }
         debug!(
             tool_calls = tool_loop_result
                 .as_ref()
@@ -569,7 +635,7 @@ impl LM {
             tool_calls: tool_loop_result
                 .as_ref()
                 .map(|result| result.tool_calls.clone())
-                .unwrap_or_default(),
+                .unwrap_or(returned_tool_calls),
             tool_executions: tool_loop_result
                 .map(|result| result.tool_executions)
                 .unwrap_or_default(),
@@ -648,9 +714,7 @@ impl DummyLM {
         prediction: String,
     ) -> Result<LMResponse> {
         let mut full_chat = messages.clone();
-        full_chat.push_message(Message::Assistant {
-            content: prediction.clone(),
-        });
+        full_chat.push_message(Message::assistant(prediction.clone()));
 
         if self.cache
             && let Some(cache) = self.cache_handler.as_ref()
@@ -682,9 +746,7 @@ impl DummyLM {
         }
 
         Ok(LMResponse {
-            output: Message::Assistant {
-                content: prediction.clone(),
-            },
+            output: Message::assistant(prediction.clone()),
             usage: LmUsage::default(),
             chat: full_chat,
             tool_calls: Vec::new(),
@@ -716,6 +778,10 @@ mod tests {
     use super::*;
     use rig::OneOrMany;
     use rig::completion::AssistantContent;
+    use rig::completion::ToolDefinition;
+    use rig::tool::Tool;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn make_tool_call(name: &str) -> AssistantContent {
         AssistantContent::tool_call(
@@ -749,10 +815,12 @@ mod tests {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
+                assistant_text,
             } => {
                 assert_eq!(calls.len(), 1);
                 assert_eq!(calls[0].function.name, "search");
                 assert_eq!(full_content.iter().count(), 1);
+                assert!(assistant_text.is_none());
             }
             ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
         }
@@ -770,11 +838,13 @@ mod tests {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
+                assistant_text,
             } => {
                 assert_eq!(calls.len(), 1);
                 assert_eq!(calls[0].function.name, "search");
                 // full_content preserves both blocks
                 assert_eq!(full_content.iter().count(), 2);
+                assert!(assistant_text.is_none());
             }
             ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
         }
@@ -809,9 +879,14 @@ mod tests {
             OneOrMany::many(vec![make_text("some text"), make_tool_call("search")]).unwrap();
 
         match classify_choice(choice) {
-            ChoiceAction::ToolCalls { calls, .. } => {
+            ChoiceAction::ToolCalls {
+                calls,
+                assistant_text,
+                ..
+            } => {
                 assert_eq!(calls.len(), 1);
                 assert_eq!(calls[0].function.name, "search");
+                assert_eq!(assistant_text.as_deref(), Some("some text"));
             }
             ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
         }
@@ -830,11 +905,13 @@ mod tests {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
+                assistant_text,
             } => {
                 assert_eq!(calls.len(), 2);
                 assert_eq!(calls[0].function.name, "search");
                 assert_eq!(calls[1].function.name, "calculate");
                 assert_eq!(full_content.iter().count(), 3);
+                assert!(assistant_text.is_none());
             }
             ChoiceAction::Text(_) => panic!("expected ToolCalls, got Text"),
         }
@@ -849,5 +926,108 @@ mod tests {
             ChoiceAction::Text(t) => assert!(t.is_empty()),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
+    }
+
+    #[derive(Clone)]
+    struct CountingTool {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[derive(Debug)]
+    struct CountingToolError;
+
+    impl std::fmt::Display for CountingToolError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "counting tool error")
+        }
+    }
+
+    impl std::error::Error for CountingToolError {}
+
+    impl Tool for CountingTool {
+        const NAME: &'static str = "counter";
+        type Error = CountingToolError;
+        type Args = serde_json::Value;
+        type Output = String;
+
+        async fn definition(&self, _prompt: String) -> ToolDefinition {
+            ToolDefinition {
+                name: Self::NAME.to_string(),
+                description: "counter tool".to_string(),
+                parameters: serde_json::json!({
+                    "type": "object",
+                    "additionalProperties": true
+                }),
+            }
+        }
+
+        async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok("counted".to_string())
+        }
+    }
+
+    fn test_lm_with_model(model: TestCompletionModel) -> LM {
+        LM {
+            base_url: None,
+            api_key: None,
+            model: "openai:gpt-4o-mini".to_string(),
+            temperature: 0.0,
+            max_tokens: 128,
+            max_tool_iterations: 4,
+            cache: false,
+            cache_handler: None,
+            client: Some(Arc::new(LMClient::Test(model))),
+        }
+    }
+
+    #[tokio::test]
+    async fn call_with_caller_managed_mode_returns_tool_calls_without_executing() {
+        let model = TestCompletionModel::new([make_tool_call("counter")]);
+        let lm = test_lm_with_model(model);
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(CountingTool {
+            calls: Arc::clone(&call_count),
+        })];
+
+        let chat = Chat::new(vec![Message::user("Use the counter tool")]);
+        let response = lm
+            .call_with_tool_loop_mode(chat, tools, ToolLoopMode::CallerManaged)
+            .await
+            .expect("caller-managed call should succeed");
+
+        assert_eq!(response.tool_calls.len(), 1);
+        assert!(response.tool_executions.is_empty());
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
+        assert_eq!(response.output.content(), "");
+        assert_eq!(response.chat.len(), 2);
+        assert!(response.chat.messages[1].has_tool_calls());
+    }
+
+    #[tokio::test]
+    async fn call_default_auto_mode_executes_tool_loop() {
+        let model = TestCompletionModel::new([make_tool_call("counter"), make_text("done")]);
+        let lm = test_lm_with_model(model);
+
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(CountingTool {
+            calls: Arc::clone(&call_count),
+        })];
+
+        let chat = Chat::new(vec![Message::user("Use the counter tool")]);
+        let response = lm
+            .call(chat, tools)
+            .await
+            .expect("auto call should succeed");
+
+        assert_eq!(response.tool_calls.len(), 1);
+        assert_eq!(response.tool_executions.len(), 1);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        assert_eq!(response.output.content(), "done");
+        assert_eq!(response.chat.len(), 4);
+        assert!(response.chat.messages[1].has_tool_calls());
+        assert!(response.chat.messages[2].has_tool_results());
+        assert_eq!(response.chat.messages[3].role, Role::Assistant);
     }
 }

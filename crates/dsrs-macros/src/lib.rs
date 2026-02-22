@@ -6,7 +6,6 @@ use syn::{
     Token, Visibility,
     parse::{Parse, ParseStream},
     parse_macro_input,
-    spanned::Spanned,
     visit::Visit,
 };
 
@@ -268,7 +267,7 @@ fn parse_single_field(field: &syn::Field) -> syn::Result<ParsedField> {
                 ));
             }
             let template = parse_render_jinja_attr(attr)?;
-            validate_jinja_template(&template, attr.span())?;
+            validate_jinja_template(&template, attr)?;
             render_jinja = Some(template);
         } else if attr.path().is_ident("flatten") {
             if saw_flatten {
@@ -367,7 +366,7 @@ fn parse_desc_from_attr(attr: &Attribute, attr_name: &str) -> syn::Result<Option
                 && let Some(Meta::NameValue(meta)) = metas.first()
                 && meta.path.is_ident("desc")
             {
-                return Ok(Some(parse_string_expr(&meta.value, meta.span())?));
+                return Ok(Some(parse_string_expr(&meta.value, meta)?));
             }
 
             Err(syn::Error::new_spanned(
@@ -386,7 +385,7 @@ fn parse_desc_from_attr(attr: &Attribute, attr_name: &str) -> syn::Result<Option
 
 fn parse_string_attr(attr: &Attribute, attr_name: &str) -> syn::Result<String> {
     match &attr.meta {
-        Meta::NameValue(meta) => parse_string_expr(&meta.value, meta.span()),
+        Meta::NameValue(meta) => parse_string_expr(&meta.value, meta),
         Meta::List(list) => {
             let lit: LitStr = list.parse_args()?;
             Ok(lit.value())
@@ -414,7 +413,7 @@ fn parse_render_jinja_attr(attr: &Attribute) -> syn::Result<String> {
 
             match metas.first() {
                 Some(Meta::NameValue(meta)) if meta.path.is_ident("jinja") => {
-                    parse_string_expr(&meta.value, meta.span())
+                    parse_string_expr(&meta.value, meta)
                 }
                 _ => Err(syn::Error::new_spanned(
                     attr,
@@ -429,10 +428,14 @@ fn parse_render_jinja_attr(attr: &Attribute) -> syn::Result<String> {
     }
 }
 
-fn validate_jinja_template(template: &str, span: proc_macro2::Span) -> syn::Result<()> {
+fn validate_jinja_template(template: &str, spanned: &impl quote::ToTokens) -> syn::Result<()> {
     let mut env = minijinja::Environment::new();
-    env.add_template("__input_field__", template)
-        .map_err(|_| syn::Error::new(span, "invalid Jinja syntax in #[render(jinja = \"...\")]"))?;
+    env.add_template("__input_field__", template).map_err(|_| {
+        syn::Error::new_spanned(
+            spanned,
+            "invalid Jinja syntax in #[render(jinja = \"...\")]",
+        )
+    })?;
     Ok(())
 }
 
@@ -531,13 +534,13 @@ fn collect_doc_comment(attrs: &[Attribute]) -> String {
     docs.join("\n")
 }
 
-fn parse_string_expr(expr: &Expr, span: proc_macro2::Span) -> syn::Result<String> {
+fn parse_string_expr(expr: &Expr, spanned: &impl quote::ToTokens) -> syn::Result<String> {
     match expr {
         Expr::Lit(ExprLit {
             lit: Lit::Str(s), ..
         }) => Ok(s.value()),
-        _ => Err(syn::Error::new(
-            span,
+        _ => Err(syn::Error::new_spanned(
+            spanned,
             "expected string literal; hint: wrap the value in quotes",
         )),
     }
