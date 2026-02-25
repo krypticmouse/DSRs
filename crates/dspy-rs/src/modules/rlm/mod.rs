@@ -11,11 +11,16 @@ use crate::{
     Predict, PredictError, Predicted, Signature, SignatureSchema,
 };
 
+mod exec;
+mod py_bridge;
 pub mod runtime;
+mod submit;
+mod tools;
 pub use runtime::{
-    DynRuntime, LlmTools, RlmRuntime, StubRuntime, SubmitError, SubmitHandler, SubmitResultDyn,
-    SubmitSlot, clear_submit_slot, take_submit_result,
+    DynRuntime, LlmTools, PyO3Runtime, RlmRuntime, StubRuntime, SubmitError, SubmitHandler,
+    SubmitResultDyn, SubmitSlot, clear_submit_slot, take_submit_result,
 };
+pub use tools::LlmQuery;
 
 const DEFAULT_MAX_ITERATIONS: usize = 20;
 const DEFAULT_MAX_LLM_CALLS: usize = 50;
@@ -316,10 +321,25 @@ where
         }
 
         let submit_slot: SubmitSlot = Arc::new(Mutex::new(None));
-        let submit_handler = SubmitHandler;
-        let llm_tools = LlmTools {
-            max_llm_calls: self.config.max_llm_calls,
-        };
+        let submit_handler = SubmitHandler::new::<S>(Arc::clone(&submit_slot));
+        let sub_lm = self
+            .sub_lm
+            .clone()
+            .or_else(|| {
+                let guard = crate::GLOBAL_SETTINGS.read().ok()?;
+                guard.as_ref().map(|settings| Arc::clone(&settings.lm))
+            })
+            .ok_or_else(|| RlmError::Configuration {
+                message: "Rlm requires a configured LM (global configure() or builder.sub_lm(...))"
+                    .to_string(),
+            })?;
+        let llm_tools = LlmTools::with_budget(
+            sub_lm,
+            self.config.max_llm_calls,
+            tokio::runtime::Handle::try_current().map_err(|err| RlmError::Configuration {
+                message: format!("Rlm requires an active Tokio runtime handle: {err}"),
+            })?,
+        );
         let globals: Py<PyDict> = Python::attach(|py| {
             self.runtime
                 .setup_interpreter_globals(py, input, &submit_handler, &llm_tools)

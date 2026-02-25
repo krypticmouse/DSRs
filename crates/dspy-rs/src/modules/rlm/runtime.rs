@@ -1,49 +1,20 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use indexmap::IndexMap;
+use super::exec;
+use super::py_bridge;
+use super::submit;
+use super::tools;
+use crate::Signature;
 use pyo3::types::PyDict;
 use pyo3::{Py, PyResult, Python};
 
-use crate::{BamlValue, FieldMeta, Signature};
+pub type SubmitResultDyn = submit::SubmitResultDyn;
+pub type SubmitSlot = submit::SubmitSlot;
+pub type SubmitError = submit::SubmitError;
+pub type SubmitHandler = submit::SubmitHandler;
+pub type LlmTools = tools::LlmTools;
 
-pub type SubmitResultDyn = Result<(BamlValue, IndexMap<String, FieldMeta>), SubmitError>;
-pub type SubmitSlot = Arc<Mutex<Option<SubmitResultDyn>>>;
-
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum SubmitError {
-    #[error("validation failed: {message}")]
-    ValidationError {
-        message: String,
-        errors: Vec<String>,
-    },
-
-    #[error("assertion `{label}` failed: {expression}")]
-    AssertionFailed { label: String, expression: String },
-}
-
-pub fn clear_submit_slot(slot: &SubmitSlot) {
-    let mut guard = slot.lock().expect("submit slot mutex poisoned");
-    *guard = None;
-}
-
-pub fn take_submit_result(slot: &SubmitSlot) -> Option<SubmitResultDyn> {
-    let mut guard = slot.lock().expect("submit slot mutex poisoned");
-    guard.take()
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct SubmitHandler;
-
-#[derive(Debug, Default, Clone)]
-pub struct LlmTools {
-    pub max_llm_calls: usize,
-}
-
-impl LlmTools {
-    pub fn remaining_calls(&self) -> usize {
-        self.max_llm_calls
-    }
-}
+pub use submit::{clear_submit_slot, take_submit_result};
 
 /// Runtime abstraction for REPL-backed RLM execution.
 ///
@@ -70,16 +41,12 @@ pub trait RlmRuntime<S: Signature>: Send + Sync {
     fn sub_lm_budget_remaining(&self, llm_tools: &LlmTools) -> usize;
 }
 
-#[derive(Debug)]
-pub struct StubRuntime {
-    sub_lm_remaining: Mutex<usize>,
-}
+#[derive(Default, Debug, Clone)]
+pub struct StubRuntime;
 
 impl StubRuntime {
-    pub fn new(max_llm_calls: usize) -> Self {
-        Self {
-            sub_lm_remaining: Mutex::new(max_llm_calls),
-        }
+    pub fn new(_max_llm_calls: usize) -> Self {
+        Self
     }
 }
 
@@ -105,10 +72,36 @@ impl<S: Signature> RlmRuntime<S> for StubRuntime {
     }
 
     fn sub_lm_budget_remaining(&self, _llm_tools: &LlmTools) -> usize {
-        *self
-            .sub_lm_remaining
-            .lock()
-            .expect("stub runtime budget mutex poisoned")
+        0
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct PyO3Runtime;
+
+impl<S: Signature> RlmRuntime<S> for PyO3Runtime {
+    fn setup_interpreter_globals(
+        &self,
+        py: Python<'_>,
+        input: &S::Input,
+        submit_handler: &SubmitHandler,
+        llm_tools: &LlmTools,
+    ) -> PyResult<Py<PyDict>> {
+        py_bridge::setup_interpreter_globals::<S>(py, input, submit_handler, llm_tools)
+    }
+
+    fn execute_repl_code(
+        &self,
+        py: Python<'_>,
+        globals: &Py<PyDict>,
+        code: &str,
+        max_output_chars: usize,
+    ) -> Result<String, String> {
+        exec::execute_repl_code(py, globals, code, max_output_chars)
+    }
+
+    fn sub_lm_budget_remaining(&self, llm_tools: &LlmTools) -> usize {
+        llm_tools.remaining_calls()
     }
 }
 
