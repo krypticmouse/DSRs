@@ -195,10 +195,12 @@ pub enum ExecOutcome {
     SubmitValidationError {
         message: String,
         errors: Vec<String>,
+        raw_output: String,
     },
     SubmitAssertionFailed {
         label: String,
         expression: String,
+        raw_output: String,
     },
     PythonException {
         message: String,
@@ -709,14 +711,27 @@ fn classify_exec_outcome(
     exec_result: Result<String, String>,
     submit_result: Option<SubmitResultDyn>,
 ) -> ExecOutcome {
+    let raw_exec_output = match &exec_result {
+        Ok(output) => output.clone(),
+        Err(message) => message.clone(),
+    };
+
     if let Some(submit_result) = submit_result {
         return match submit_result {
             Ok((value, field_meta)) => ExecOutcome::SubmitAccepted { value, field_meta },
             Err(SubmitError::ValidationError { message, errors }) => {
-                ExecOutcome::SubmitValidationError { message, errors }
+                ExecOutcome::SubmitValidationError {
+                    message,
+                    errors,
+                    raw_output: raw_exec_output,
+                }
             }
             Err(SubmitError::AssertionFailed { label, expression }) => {
-                ExecOutcome::SubmitAssertionFailed { label, expression }
+                ExecOutcome::SubmitAssertionFailed {
+                    label,
+                    expression,
+                    raw_output: raw_exec_output,
+                }
             }
         };
     }
@@ -731,14 +746,28 @@ fn outcome_to_raw_output(outcome: &ExecOutcome) -> String {
     match outcome {
         ExecOutcome::Continue { output, .. } => output.clone(),
         ExecOutcome::SubmitAccepted { .. } => String::new(),
-        ExecOutcome::SubmitValidationError { message, errors } => {
+        ExecOutcome::SubmitValidationError {
+            message,
+            errors,
+            raw_output,
+        } => {
+            if !raw_output.is_empty() {
+                return raw_output.clone();
+            }
             if errors.is_empty() {
                 message.clone()
             } else {
                 format!("{message}\n{}", errors.join("\n"))
             }
         }
-        ExecOutcome::SubmitAssertionFailed { label, expression } => {
+        ExecOutcome::SubmitAssertionFailed {
+            label,
+            expression,
+            raw_output,
+        } => {
+            if !raw_output.is_empty() {
+                return raw_output.clone();
+            }
             format!("Submit assertion failed: `{label}` ({expression})")
         }
         ExecOutcome::PythonException { message } => message.clone(),
