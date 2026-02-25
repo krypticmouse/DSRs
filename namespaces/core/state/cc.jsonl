@@ -1,0 +1,1 @@
+{"_at":[1772022556223,16],"_by":"darin@darins-Mac-Studio-2.local","created_at":[1772022556223,16],"created_by":"darin@darins-Mac-Studio-2.local","description":"Thread sub_lm into runtime setup and define behavior/policy when sub_lm is absent.","id":"bd-i5t.4","labels":{"cc":{"max":{}},"entries":{}},"priority":1,"status":"open","title":"Wire sub_lm into runtime","type":"task"}
