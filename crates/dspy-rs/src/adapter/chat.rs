@@ -552,15 +552,28 @@ impl ChatAdapter {
         let mut result = String::new();
         for field_spec in schema.input_fields() {
             if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
-                result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
-                result.push_str(&render_input_field(
-                    field_spec,
-                    value,
-                    &input_json,
-                    input_output_format,
-                    &vars,
-                ));
-                result.push_str("\n\n");
+                if self.is_structured_output() {
+                    result.push_str(&format!("[[ ## {} ## ]]\n", field_spec.lm_name));
+                    result.push_str(&render_input_field(
+                        field_spec,
+                        value,
+                        &input_json,
+                        input_output_format,
+                        &vars,
+                    ));
+                    result.push_str("\n\n");
+                } else {
+                    result.push_str(field_spec.lm_name);
+                    result.push_str(":\n");
+                    result.push_str(&render_input_field(
+                        field_spec,
+                        value,
+                        &input_json,
+                        input_output_format,
+                        &vars,
+                    ));
+                    result.push_str("\n\n");
+                }
             }
         }
 

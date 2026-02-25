@@ -185,6 +185,37 @@ fn typed_and_schema_user_builders_match_and_append_requirements() {
 }
 
 #[test]
+fn passthrough_user_message_has_no_marker_or_output_protocol_ceremony() {
+    let adapter = ChatAdapter::passthrough();
+    let input = PromptPartsSigInput {
+        question: "What is the capital of France?".to_string(),
+        context: "Facts: Paris is the capital city of France.".to_string(),
+    };
+
+    let typed = adapter.format_user_message_typed::<PromptPartsSig>(&input);
+    let schema = adapter.format_input(PromptPartsSig::schema(), &input);
+    assert_eq!(typed, schema);
+
+    assert!(
+        !typed.contains("[[ ##"),
+        "passthrough message should not include marker protocol:\n{typed}"
+    );
+    assert!(
+        !typed.contains("Respond with the corresponding output fields"),
+        "passthrough message should not include output format instructions:\n{typed}"
+    );
+    assert!(
+        !typed.contains("[[ ## completed ## ]]"),
+        "passthrough message should not include completion marker:\n{typed}"
+    );
+
+    assert!(typed.contains("question:"));
+    assert!(typed.contains("context:"));
+    assert!(typed.contains("What is the capital of France?"));
+    assert!(typed.contains("Facts: Paris is the capital city of France."));
+}
+
+#[test]
 fn demo_format_composes_user_and_assistant_parts() {
     let adapter = ChatAdapter::new();
     let demo = Example::<PromptPartsSig>::new(
