@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
         .model("groq:openai/gpt-oss-120b".to_string())
         .build()
         .await?;
-    configure(lm, ChatAdapter);
+    configure(lm, ChatAdapter::new());
 
     let predictor = Predict::<MathQuestionSignature>::builder()
         .instruction("You must call the calculator tool for arithmetic.")

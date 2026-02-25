@@ -1,3 +1,5 @@
+#[cfg(feature = "rlm")]
+use dspy_rs::Rlm;
 use dspy_rs::{ChainOfThought, Facet, ModuleExt, PredictError, ReAct, Signature};
 use facet::{self, Type, UserType};
 
@@ -111,4 +113,25 @@ fn and_then_shape_exposes_inner_chain_of_thought_shape() {
 
     let nested_predictor = find_field(inner.shape(), "predictor");
     assert_eq!(nested_predictor.shape().type_identifier, "Predict");
+}
+
+#[cfg(feature = "rlm")]
+#[test]
+fn rlm_shape_exposes_generate_action_and_extract_and_skips_runtime_fields() {
+    let module = Rlm::<QA>::new();
+    let shape = shape_of(&module);
+
+    let generate_action = find_field(shape, "generate_action");
+    let extract = find_field(shape, "extract");
+    assert!(!generate_action.should_skip_deserializing());
+    assert!(!extract.should_skip_deserializing());
+    assert_eq!(generate_action.shape().type_identifier, "Predict");
+    assert_eq!(extract.shape().type_identifier, "Predict");
+
+    let config = find_field(shape, "config");
+    let sub_lm = find_field(shape, "sub_lm");
+    let runtime = find_field(shape, "runtime");
+    assert!(config.should_skip_deserializing());
+    assert!(sub_lm.should_skip_deserializing());
+    assert!(runtime.should_skip_deserializing());
 }

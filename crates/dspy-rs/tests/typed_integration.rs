@@ -36,7 +36,7 @@ async fn configure_test_lm(responses: Vec<String>) -> TestCompletionModel {
     .await
     .unwrap();
 
-    configure(lm, ChatAdapter {});
+    configure(lm, ChatAdapter::new());
 
     client
 }

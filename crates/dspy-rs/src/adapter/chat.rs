@@ -20,7 +20,16 @@ use crate::{
     Signature, TypeIR,
 };
 
-/// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
+/// Output formatting/parsing dialect for [`ChatAdapter`].
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum Dialect {
+    #[default]
+    Chat,
+    Passthrough,
+    Xml,
+}
+
+/// Builds prompts and parses responses using signature-aware adapter dialects.
 ///
 /// The adapter is stateless — all state comes from the [`SignatureSchema`](crate::SignatureSchema)
 /// passed to each method. Two usage patterns:
@@ -32,8 +41,10 @@ use crate::{
 ///
 /// The building blocks exist so module authors can compose custom prompt flows (e.g.
 /// ReAct's action/extract loop) without reimplementing the delimiter protocol.
-#[derive(Default, Clone)]
-pub struct ChatAdapter;
+#[derive(Debug, Clone, Default)]
+pub struct ChatAdapter {
+    dialect: Dialect,
+}
 
 static FIELD_HEADER_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\[\[ ## ([^#]+?) ## \]\]").unwrap());
@@ -300,6 +311,32 @@ fn format_schema_for_prompt(schema: &str) -> String {
 }
 
 impl ChatAdapter {
+    pub fn new() -> Self {
+        Self {
+            dialect: Dialect::Chat,
+        }
+    }
+
+    pub fn passthrough() -> Self {
+        Self {
+            dialect: Dialect::Passthrough,
+        }
+    }
+
+    pub fn xml() -> Self {
+        Self {
+            dialect: Dialect::Xml,
+        }
+    }
+
+    pub fn dialect(&self) -> Dialect {
+        self.dialect
+    }
+
+    fn is_structured_output(&self) -> bool {
+        !matches!(self.dialect, Dialect::Passthrough)
+    }
+
     fn format_task_description_schema(
         &self,
         schema: &crate::SignatureSchema,
@@ -331,7 +368,11 @@ impl ChatAdapter {
             indented.push_str(line);
         }
 
-        format!("In adhering to this structure, your objective is: {indented}")
+        if self.is_structured_output() {
+            format!("In adhering to this structure, your objective is: {indented}")
+        } else {
+            format!("Your objective is: {indented}")
+        }
     }
 
     fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
@@ -396,12 +437,19 @@ impl ChatAdapter {
         schema: &crate::SignatureSchema,
         instruction_override: Option<&str>,
     ) -> Result<String> {
-        let parts = [
-            self.format_field_descriptions_schema(schema),
-            self.format_field_structure_schema(schema)?,
-            self.format_response_instructions_schema(schema),
-            self.format_task_description_schema(schema, instruction_override),
-        ];
+        let parts = if self.is_structured_output() {
+            vec![
+                self.format_field_descriptions_schema(schema),
+                self.format_field_structure_schema(schema)?,
+                self.format_response_instructions_schema(schema),
+                self.format_task_description_schema(schema, instruction_override),
+            ]
+        } else {
+            vec![
+                self.format_field_descriptions_schema(schema),
+                self.format_task_description_schema(schema, instruction_override),
+            ]
+        };
 
         let system = parts.join("\n\n");
         trace!(system_len = system.len(), "formatted schema system prompt");
@@ -488,8 +536,10 @@ impl ChatAdapter {
     /// Navigates the `BamlValue` using each field's [`FieldPath`](crate::FieldPath) to
     /// handle flattened structs correctly. A field with path `["inner", "question"]` is
     /// extracted from the nested structure but rendered as a flat `[[ ## question ## ]]`
-    /// section in the prompt. Appends response instructions so the LM sees
-    /// output-field ordering guidance in the latest user turn.
+    /// section in the prompt.
+    ///
+    /// Structured dialects append explicit output-field ordering guidance in the
+    /// user turn. Passthrough dialect omits output protocol instructions entirely.
     pub fn format_input<I>(&self, schema: &crate::SignatureSchema, input: &I) -> String
     where
         I: BamlType + for<'a> facet::Facet<'a>,
@@ -514,7 +564,9 @@ impl ChatAdapter {
             }
         }
 
-        result.push_str(&self.format_response_instructions_schema(schema));
+        if self.is_structured_output() {
+            result.push_str(&self.format_response_instructions_schema(schema));
+        }
         result
     }
 
@@ -618,6 +670,23 @@ impl ChatAdapter {
     ///
     /// Same as [`parse_response_typed`](ChatAdapter::parse_response_typed).
     pub fn parse_output_with_meta<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<(O, IndexMap<String, FieldMeta>), ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
+        match self.dialect {
+            Dialect::Chat | Dialect::Xml => {
+                self.parse_structured_output_with_meta::<O>(schema, response)
+            }
+            Dialect::Passthrough => self.parse_passthrough_output_with_meta::<O>(schema, response),
+        }
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn parse_structured_output_with_meta<O>(
         &self,
         schema: &crate::SignatureSchema,
         response: &Message,
@@ -787,6 +856,64 @@ impl ChatAdapter {
     }
 
     #[allow(clippy::result_large_err)]
+    fn parse_passthrough_output_with_meta<O>(
+        &self,
+        schema: &crate::SignatureSchema,
+        response: &Message,
+    ) -> std::result::Result<(O, IndexMap<String, FieldMeta>), ParseError>
+    where
+        O: BamlType + for<'a> facet::Facet<'a>,
+    {
+        let output_fields = schema.output_fields();
+        if output_fields.len() != 1 {
+            return Err(ParseError::ExtractionFailed {
+                field: "<all>".to_string(),
+                raw_response: response.content(),
+                reason: format!(
+                    "passthrough adapter requires exactly one output field, got {}",
+                    output_fields.len()
+                ),
+            });
+        }
+
+        let raw_response = response.content();
+        let code =
+            extract_passthrough_body(response).ok_or_else(|| ParseError::ExtractionFailed {
+                field: output_fields[0].rust_name.clone(),
+                raw_response: raw_response.clone(),
+                reason: "empty passthrough response".to_string(),
+            })?;
+
+        let mut output_map = bamltype::baml_types::BamlMap::new();
+        output_map.insert(
+            output_fields[0].rust_name.clone(),
+            BamlValue::String(code.clone()),
+        );
+
+        let typed_output = <O as BamlType>::try_from_baml_value(BamlValue::Class(
+            <O as BamlType>::baml_internal_name().to_string(),
+            output_map,
+        ))
+        .map_err(|err| ParseError::ExtractionFailed {
+            field: output_fields[0].rust_name.clone(),
+            raw_response: raw_response.clone(),
+            reason: err.to_string(),
+        })?;
+
+        let mut metas = IndexMap::new();
+        metas.insert(
+            output_fields[0].rust_name.clone(),
+            FieldMeta {
+                raw_text: code,
+                flags: Vec::new(),
+                checks: Vec::new(),
+            },
+        );
+
+        Ok((typed_output, metas))
+    }
+
+    #[allow(clippy::result_large_err)]
     /// Parses an LM response into a typed output, discarding field metadata.
     ///
     /// Convenience wrapper around [`parse_output_with_meta`](ChatAdapter::parse_output_with_meta).
@@ -829,12 +956,14 @@ impl ChatAdapter {
         response: Message,
     ) -> std::result::Result<Predicted<S::Output>, PredictError> {
         let raw_response = response.content();
+        let parse_chat = Chat::new(vec![response.clone()]);
         let (output, field_meta) = self
             .parse_response_typed::<S>(&response)
             .map_err(|source| PredictError::Parse {
                 source,
                 raw_response: raw_response.clone(),
                 lm_usage: crate::LmUsage::default(),
+                chat: parse_chat,
             })?;
         let metadata = CallMetadata::new(
             raw_response,
@@ -882,6 +1011,32 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     }
 
     parsed
+}
+
+fn extract_passthrough_body(response: &Message) -> Option<String> {
+    let text = response.text_content();
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.starts_with("```") {
+        let mut lines = trimmed.lines();
+        let _opening = lines.next();
+        let mut fence_body = Vec::new();
+        for line in lines {
+            if line.trim_start().starts_with("```") {
+                break;
+            }
+            fence_body.push(line);
+        }
+        let body = fence_body.join("\n").trim().to_string();
+        if !body.is_empty() {
+            return Some(body);
+        }
+    }
+
+    Some(trimmed.to_string())
 }
 
 fn value_for_path_relaxed<'a>(

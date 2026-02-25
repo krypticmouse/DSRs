@@ -11,7 +11,7 @@ struct QA {
 
 #[test]
 fn augmented_demo_roundtrips_through_adapter() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let demo = Example::<Augmented<QA, Reasoning>>::new(
         QAInput {
             question: "What is 2+2?".to_string(),

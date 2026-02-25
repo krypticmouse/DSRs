@@ -39,6 +39,7 @@ impl Module for MaybeFails {
                 },
                 raw_response: format!("raw:{input_value}"),
                 lm_usage: dspy_rs::LmUsage::default(),
+                chat: Chat::new(vec![]),
             })
         } else {
             Ok(Predicted::new(
@@ -69,6 +70,7 @@ fn transform_int_payload(value: IntPayload) -> Result<TextPayload, PredictError>
             },
             raw_response: "transform".to_string(),
             lm_usage: dspy_rs::LmUsage::default(),
+            chat: Chat::new(vec![]),
         })
     }
 }

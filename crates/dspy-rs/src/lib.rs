@@ -41,7 +41,7 @@
 //!     .build()
 //!     .await
 //!     .unwrap();
-//! dspy_rs::configure(lm, ChatAdapter);
+//! dspy_rs::configure(lm, ChatAdapter::new());
 //!
 //! // 2. Pick a strategy
 //! let cot = ChainOfThought::<QA>::new();

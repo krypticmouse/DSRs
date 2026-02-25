@@ -18,7 +18,7 @@ async fn main() -> Result<()> {
             .model("openai:gpt-5.2".to_string())
             .build()
             .await?,
-        ChatAdapter,
+        ChatAdapter::new(),
     );
 
     let module = Predict::<SmokeSig>::new();

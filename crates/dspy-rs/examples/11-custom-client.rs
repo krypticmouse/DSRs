@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
         .with_client(custom_lm_client)
         .await?;
 
-    configure(lm, ChatAdapter);
+    configure(lm, ChatAdapter::new());
 
     let predictor = Predict::<QA>::new();
     let prediction = predictor

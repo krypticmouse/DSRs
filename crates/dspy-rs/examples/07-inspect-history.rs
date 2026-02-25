@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         .model("openai:gpt-4o-mini".to_string())
         .build()
         .await?;
-    configure(lm, ChatAdapter);
+    configure(lm, ChatAdapter::new());
 
     let predictor = Predict::<QA>::new();
     let output = predictor

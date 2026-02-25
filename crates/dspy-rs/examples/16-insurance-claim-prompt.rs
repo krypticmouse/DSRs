@@ -196,7 +196,7 @@ pub struct InsuranceClaimInfo {
 fn main() {
     init_tracing().expect("failed to initialize tracing");
 
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<InsuranceClaimInfo>()
         .expect("system prompt");

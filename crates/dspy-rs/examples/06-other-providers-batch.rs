@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
             .model("anthropic:claude-sonnet-4-5-20250929".to_string())
             .build()
             .await?,
-        ChatAdapter,
+        ChatAdapter::new(),
     );
 
     let mut anthropic = Vec::new();
@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
             .model("gemini:gemini-2.0-flash".to_string())
             .build()
             .await?,
-        ChatAdapter,
+        ChatAdapter::new(),
     );
 
     let mut gemini = Vec::new();

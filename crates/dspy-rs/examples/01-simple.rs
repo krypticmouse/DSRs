@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,
+        ChatAdapter::new(),
     );
 
     // =========================================================================

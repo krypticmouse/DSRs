@@ -73,7 +73,7 @@ async fn caller_managed_tool_loop_with_conversation() {
     let final_response = text_response(response_with_fields(&[("result", "42")]));
 
     let (lm, _client) = build_test_lm(vec![tool_call_response, final_response]).await;
-    configure(lm, ChatAdapter {});
+    configure(lm, ChatAdapter::new());
 
     let predict = Predict::<CodeExec>::new();
     let input = CodeExecInput {
@@ -169,7 +169,7 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     let bad_response = text_response("This response has no field markers at all.");
 
     let (lm, _client) = build_test_lm(vec![good_response, bad_response]).await;
-    configure(lm, ChatAdapter {});
+    configure(lm, ChatAdapter::new());
 
     let predict = Predict::<CodeExec>::new();
     let input = CodeExecInput {

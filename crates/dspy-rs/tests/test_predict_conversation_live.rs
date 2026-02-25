@@ -26,7 +26,7 @@ async fn live_forward_with_history_two_turn_roundtrip() {
         .build()
         .await
         .expect("failed to build LM for live smoke test");
-    configure(lm, ChatAdapter {});
+    configure(lm, ChatAdapter::new());
 
     let predict = Predict::<LiveConversation>::new();
 

@@ -23,7 +23,7 @@ struct AliasSig {
 
 #[test]
 fn parse_response_typed_uses_schema_field_names() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let response = Message::assistant("[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]\n");
 
     let (output, field_meta) = adapter
@@ -51,7 +51,7 @@ fn parse_response_typed_uses_schema_field_names() {
 
 #[test]
 fn parse_response_typed_accepts_dotted_field_markers() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let response = Message::assistant("[[ ## answer.value ## ]]\nParis\n\n[[ ## completed ## ]]\n");
 
     let (output, field_meta) = adapter

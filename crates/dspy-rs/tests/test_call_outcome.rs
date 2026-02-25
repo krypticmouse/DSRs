@@ -17,6 +17,7 @@ fn parse_error_preserves_raw_response_and_usage() {
         },
         raw_response: "raw response".to_string(),
         lm_usage: usage.clone(),
+        chat: Chat::new(vec![]),
     };
 
     match err {
@@ -24,6 +25,7 @@ fn parse_error_preserves_raw_response_and_usage() {
             source: ParseError::MissingField { field, .. },
             raw_response,
             lm_usage,
+            ..
         } => {
             assert_eq!(field, "answer");
             assert_eq!(raw_response, "raw response");

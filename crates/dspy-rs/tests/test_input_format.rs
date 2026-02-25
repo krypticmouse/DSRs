@@ -161,7 +161,7 @@ fn extract_baml_field<'a>(value: &'a BamlValue, field_name: &str) -> &'a BamlVal
 
 #[test]
 fn typed_input_format_yaml_renders_field_names() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = FormatSigInput {
         question: "What is YAML?".to_string(),
         context: vec![Document {
@@ -179,7 +179,7 @@ fn typed_input_format_yaml_renders_field_names() {
 
 #[test]
 fn typed_input_format_json_is_parsable() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = FormatJsonSigInput {
         question: "What is JSON?".to_string(),
         context: vec![Document {
@@ -201,7 +201,7 @@ fn typed_input_format_json_is_parsable() {
 
 #[test]
 fn typed_input_format_toon_matches_formatter() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = FormatToonSigInput {
         question: "What is TOON?".to_string(),
         context: vec![Document {
@@ -224,7 +224,7 @@ fn typed_input_format_toon_matches_formatter() {
 
 #[test]
 fn typed_input_default_string_is_raw() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = DefaultFormatSigInput {
         question: "Raw string".to_string(),
         context: vec![Document {
@@ -240,7 +240,7 @@ fn typed_input_default_string_is_raw() {
 
 #[test]
 fn typed_input_default_non_string_is_json() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = DefaultFormatSigInput {
         question: "Default JSON".to_string(),
         context: vec![Document {
@@ -261,7 +261,7 @@ fn typed_input_default_non_string_is_json() {
 
 #[test]
 fn typed_input_appends_response_instruction_reminder() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = DefaultFormatSigInput {
         question: "Reminder check".to_string(),
         context: vec![Document {
@@ -277,7 +277,7 @@ fn typed_input_appends_response_instruction_reminder() {
 
 #[test]
 fn typed_input_render_jinja_uses_context_values() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = RenderJinjaSigInput {
         question: "Question".to_string(),
         context: Document {
@@ -296,7 +296,7 @@ fn typed_input_render_jinja_uses_context_values() {
 
 #[test]
 fn typed_input_render_jinja_missing_var_panics() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = RenderJinjaStrictSigInput {
         question: "Question".to_string(),
     };
@@ -309,7 +309,7 @@ fn typed_input_render_jinja_missing_var_panics() {
 
 #[test]
 fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = RenderJinjaFieldMetaSigInput {
         context: Document {
             text: "Hello".to_string(),
@@ -329,7 +329,7 @@ fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
 
 #[test]
 fn typed_input_render_jinja_non_string_primitives() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = RenderPrimitiveSigInput {
         count: 42,
         is_ready: true,
@@ -345,7 +345,7 @@ fn typed_input_render_jinja_non_string_primitives() {
 
 #[test]
 fn typed_input_render_jinja_supports_contrib_filters() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = RenderContribFilterSigInput {
         context: Document {
             text: "abcdefg".to_string(),

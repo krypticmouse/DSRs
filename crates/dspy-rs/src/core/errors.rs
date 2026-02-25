@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, time::Duration};
 
-use crate::{BamlConvertError, BamlValue, LmUsage};
+use crate::{BamlConvertError, BamlValue, Chat, LmUsage};
 
 /// Error from the jsonish coercion layer when LM output can't be parsed as a typed value.
 #[derive(Debug)]
@@ -56,6 +56,8 @@ pub enum ErrorClass {
 /// 3. **[`Conversion`](PredictError::Conversion)** — we parsed a valid `BamlValue`
 ///    from the response, but it doesn't fit the Rust output type. Code bug or schema
 ///    mismatch. **Not retryable** — the same parsed value will fail the same way.
+/// 4. **[`Module`](PredictError::Module)** — module-internal execution error outside
+///    of direct LM parsing/provider failure.
 ///
 /// Use [`is_retryable`](PredictError::is_retryable) for retry logic.
 /// Use [`class`](PredictError::class) for coarse [`ErrorClass`] bucketing.
@@ -78,6 +80,11 @@ pub enum PredictError {
         source: ParseError,
         raw_response: String,
         lm_usage: LmUsage,
+        /// Conversation history including the failed assistant turn.
+        ///
+        /// This enables callers (for example, multi-turn modules like RLM) to continue
+        /// the conversation after a recoverable parse failure.
+        chat: Chat,
     },
 
     /// The response parsed into a `BamlValue` but doesn't match the typed output struct.
@@ -91,6 +98,14 @@ pub enum PredictError {
         /// The successfully parsed `BamlValue` that failed type conversion.
         parsed: BamlValue,
     },
+
+    /// Module-level execution error not represented by LM/provider/parse conversion.
+    #[error("{module} module failed")]
+    Module {
+        module: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 }
 
 impl PredictError {
@@ -99,6 +114,7 @@ impl PredictError {
             Self::Lm { source } => source.class(),
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
+            Self::Module { .. } => ErrorClass::Internal,
         }
     }
 
@@ -107,6 +123,7 @@ impl PredictError {
             Self::Lm { source } => source.is_retryable(),
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
+            Self::Module { .. } => false,
         }
     }
 }

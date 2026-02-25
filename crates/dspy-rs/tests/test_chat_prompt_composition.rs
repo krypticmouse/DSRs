@@ -40,7 +40,7 @@ fn response_instruction_line(message: &str) -> &str {
 
 #[test]
 fn system_prompt_includes_all_sections_in_order_with_boundaries() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<PromptPartsSig>()
         .expect("system prompt should format");
@@ -80,7 +80,7 @@ fn system_prompt_includes_all_sections_in_order_with_boundaries() {
 
 #[test]
 fn system_prompt_field_descriptions_and_structure_are_present() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<PromptPartsSig>()
         .expect("system prompt should format");
@@ -101,7 +101,7 @@ fn system_prompt_field_descriptions_and_structure_are_present() {
 
 #[test]
 fn response_instruction_line_orders_output_fields() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<PromptPartsSig>()
         .expect("system prompt should format");
@@ -115,7 +115,7 @@ fn response_instruction_line_orders_output_fields() {
 
 #[test]
 fn instruction_override_is_used_in_objective_section() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let override_instruction = "Follow the rubric.\nCite the context.";
     let system = adapter
         .format_system_message_typed_with_instruction::<PromptPartsSig>(Some(override_instruction))
@@ -129,7 +129,7 @@ fn instruction_override_is_used_in_objective_section() {
 
 #[test]
 fn empty_instruction_uses_generated_fallback_objective() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<EmptyInstructionSig>()
         .expect("system prompt should format");
@@ -140,7 +140,7 @@ fn empty_instruction_uses_generated_fallback_objective() {
 
 #[test]
 fn typed_and_schema_system_builders_match() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let typed = adapter
         .format_system_message_typed_with_instruction::<PromptPartsSig>(Some("Override objective"))
         .expect("typed system prompt");
@@ -153,7 +153,7 @@ fn typed_and_schema_system_builders_match() {
 
 #[test]
 fn typed_and_schema_user_builders_match_and_append_requirements() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = PromptPartsSigInput {
         question: "What is the capital of France?".to_string(),
         context: "Facts: Paris is the capital city of France.".to_string(),
@@ -186,7 +186,7 @@ fn typed_and_schema_user_builders_match_and_append_requirements() {
 
 #[test]
 fn demo_format_composes_user_and_assistant_parts() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let demo = Example::<PromptPartsSig>::new(
         PromptPartsSigInput {
             question: "Question?".to_string(),
@@ -213,7 +213,7 @@ fn demo_format_composes_user_and_assistant_parts() {
 
 #[test]
 fn typed_and_schema_assistant_builders_match_and_end_with_completed_marker() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let output = PromptPartsSigOutput {
         answer: "Paris".to_string(),
         confidence: 0.9,

@@ -51,7 +51,7 @@ struct DeepFlattenSig {
 
 #[test]
 fn chat_adapter_formats_typed_system_prompt() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<BasicSignature>()
         .expect("system prompt should format");
@@ -65,7 +65,7 @@ fn chat_adapter_formats_typed_system_prompt() {
 
 #[test]
 fn chat_adapter_formats_user_and_assistant_messages() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
 
     let user = adapter.format_user_message_typed::<BasicSignature>(&BasicSignatureInput {
         problem: "What is the capital of France?".to_string(),
@@ -87,7 +87,7 @@ fn chat_adapter_formats_user_and_assistant_messages() {
 
 #[test]
 fn chat_adapter_parses_typed_response() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let response = Message::assistant("[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]");
 
     let (output, field_meta) = adapter
@@ -114,7 +114,7 @@ fn parse_sections_accepts_non_word_field_names() {
 
 #[test]
 fn chat_adapter_formats_user_messages_with_multi_level_flatten_paths() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let user = adapter.format_user_message_typed::<DeepFlattenSig>(&DeepFlattenSigInput {
         question: "What should we answer?".to_string(),
         middle: FlattenMiddleSigInput {

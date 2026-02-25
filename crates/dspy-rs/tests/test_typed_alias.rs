@@ -14,7 +14,7 @@ struct AliasSignature {
 
 #[test]
 fn typed_alias_is_used_in_prompt_and_user_message() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<AliasSignature>()
         .expect("system message");
@@ -37,7 +37,7 @@ fn typed_alias_is_used_in_prompt_and_user_message() {
 
 #[test]
 fn typed_alias_parses_output_and_maps_to_rust_name() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let response = Message::assistant("[[ ## final_answer ## ]]\nHi\n\n[[ ## completed ## ]]");
     let (output, metas) = adapter
         .parse_response_typed::<AliasSignature>(&response)

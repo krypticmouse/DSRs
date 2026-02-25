@@ -11,7 +11,7 @@ async fn test_settings() {
     )
     .await
     .unwrap();
-    configure(lm1, ChatAdapter {});
+    configure(lm1, ChatAdapter::new());
 
     let lm = get_lm();
     assert_eq!(lm.model, "openai:gpt-4o-mini");
@@ -22,7 +22,7 @@ async fn test_settings() {
     )
     .await
     .unwrap();
-    configure(lm2, ChatAdapter {});
+    configure(lm2, ChatAdapter::new());
 
     let lm = get_lm();
     assert_eq!(lm.model, "openai:gpt-4o");

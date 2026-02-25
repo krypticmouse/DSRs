@@ -127,6 +127,8 @@ pub struct Predict<S: Signature> {
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
+    adapter: Option<ChatAdapter>,
+    #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
 
@@ -137,6 +139,7 @@ impl<S: Signature> Predict<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            adapter: None,
             _marker: PhantomData,
         }
     }
@@ -144,6 +147,12 @@ impl<S: Signature> Predict<S> {
     /// Returns a builder for configuring demos, instruction, and tools.
     pub fn builder() -> PredictBuilder<S> {
         PredictBuilder::new()
+    }
+
+    /// Overrides the adapter used for prompt composition and response parsing.
+    pub fn adapter(mut self, adapter: ChatAdapter) -> Self {
+        self.adapter = Some(adapter);
+        self
     }
 
     /// Calls the LM with this predictor's signature, demos, and tools.
@@ -195,7 +204,7 @@ impl<S: Signature> Predict<S> {
     where
         S::Input: BamlType,
     {
-        let chat_adapter = ChatAdapter;
+        let chat_adapter = self.adapter.clone().unwrap_or_default();
         let user = chat_adapter.format_user_message_typed::<S>(input);
         trace!(
             user_len = user.len(),
@@ -294,7 +303,7 @@ impl<S: Signature> Predict<S> {
             None
         };
 
-        let chat_adapter = ChatAdapter;
+        let chat_adapter = self.adapter.clone().unwrap_or_default();
         let raw_response = output.content().to_string();
         let lm_usage = usage.clone();
 
@@ -312,6 +321,7 @@ impl<S: Signature> Predict<S> {
                     source: err,
                     raw_response,
                     lm_usage,
+                    chat: chat.clone(),
                 });
             }
         };
@@ -379,6 +389,7 @@ pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
+    adapter: Option<ChatAdapter>,
     _marker: PhantomData<S>,
 }
 
@@ -388,6 +399,7 @@ impl<S: Signature> PredictBuilder<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            adapter: None,
             _marker: PhantomData,
         }
     }
@@ -422,12 +434,19 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
+    /// Overrides the adapter used for prompt composition and parsing.
+    pub fn adapter(mut self, adapter: ChatAdapter) -> Self {
+        self.adapter = Some(adapter);
+        self
+    }
+
     /// Builds the [`Predict`].
     pub fn build(self) -> Predict<S> {
         Predict {
             tools: self.tools,
             demos: self.demos,
             instruction_override: self.instruction_override,
+            adapter: self.adapter,
             _marker: PhantomData,
         }
     }

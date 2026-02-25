@@ -63,7 +63,7 @@ struct DocsTypeEffectsSig {
 }
 
 fn system_message() -> String {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     adapter
         .format_system_message_typed::<DocsTypeEffectsSig>()
         .expect("system message")

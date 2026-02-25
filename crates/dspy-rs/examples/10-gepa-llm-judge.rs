@@ -150,7 +150,10 @@ fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordPro
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(
+        LM::builder().temperature(0.7).build().await?,
+        ChatAdapter::new(),
+    );
 
     let trainset = vec![
         training_example(

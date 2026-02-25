@@ -44,7 +44,7 @@ async fn configure_test_lm(responses: Vec<String>) {
     .await
     .unwrap();
 
-    configure(lm, ChatAdapter {});
+    configure(lm, ChatAdapter::new());
 }
 
 #[derive(Signature, Clone, Debug)]

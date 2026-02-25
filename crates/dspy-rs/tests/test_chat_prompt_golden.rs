@@ -11,7 +11,7 @@ struct GoldenSig {
 
 #[test]
 fn golden_system_prompt_is_stable() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let system = adapter
         .format_system_message_typed::<GoldenSig>()
         .expect("system prompt should format");
@@ -44,7 +44,7 @@ fn golden_system_prompt_is_stable() {
 
 #[test]
 fn golden_user_prompt_is_stable() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let input = GoldenSigInput {
         question: "What is 2+2?".to_string(),
     };
@@ -62,7 +62,7 @@ fn golden_user_prompt_is_stable() {
 
 #[test]
 fn golden_assistant_prompt_is_stable() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let output = GoldenSigOutput {
         answer: "4".to_string(),
     };
@@ -79,7 +79,7 @@ fn golden_assistant_prompt_is_stable() {
 
 #[test]
 fn golden_demo_messages_are_stable() {
-    let adapter = ChatAdapter;
+    let adapter = ChatAdapter::new();
     let demo = Example::<GoldenSig>::new(
         GoldenSigInput {
             question: "What is 2+2?".to_string(),

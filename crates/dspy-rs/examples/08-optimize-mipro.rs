@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
 
     println!("=== MIPROv2 Optimizer Example ===\n");
 
-    configure(LM::default(), ChatAdapter);
+    configure(LM::default(), ChatAdapter::new());
 
     println!("Loading training data from HuggingFace...");
     let train_examples = DataLoader::load_hf::<QuestionAnswering>(

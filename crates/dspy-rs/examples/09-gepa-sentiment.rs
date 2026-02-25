@@ -88,7 +88,10 @@ fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> 
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(
+        LM::builder().temperature(0.7).build().await?,
+        ChatAdapter::new(),
+    );
 
     let trainset = vec![
         sentiment_example(
