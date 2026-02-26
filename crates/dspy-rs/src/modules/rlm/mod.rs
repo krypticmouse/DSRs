@@ -154,7 +154,7 @@ struct MetadataAcc {
 
 impl MetadataAcc {
     fn absorb_call_metadata(&mut self, metadata: CallMetadata) {
-        self.lm_usage = self.lm_usage.clone() + metadata.lm_usage;
+        self.lm_usage = std::mem::take(&mut self.lm_usage) + metadata.lm_usage;
         self.tool_calls.extend(metadata.tool_calls);
         self.tool_executions.extend(metadata.tool_executions);
         self.raw_responses.push(metadata.raw_response);
@@ -162,11 +162,11 @@ impl MetadataAcc {
     }
 
     fn absorb_parse_metadata(&mut self, raw_response: String, lm_usage: LmUsage) {
-        self.lm_usage = self.lm_usage.clone() + lm_usage;
+        self.lm_usage = std::mem::take(&mut self.lm_usage) + lm_usage;
         self.raw_responses.push(raw_response);
     }
 
-    fn to_call_metadata(&self) -> CallMetadata {
+    fn into_call_metadata(self) -> CallMetadata {
         let raw_response = if self.raw_responses.is_empty() {
             String::new()
         } else {
@@ -175,11 +175,11 @@ impl MetadataAcc {
 
         CallMetadata::new(
             raw_response,
-            self.lm_usage.clone(),
-            self.tool_calls.clone(),
-            self.tool_executions.clone(),
+            self.lm_usage,
+            self.tool_calls,
+            self.tool_executions,
             None,
-            self.field_meta.clone(),
+            self.field_meta,
         )
     }
 }
@@ -392,7 +392,8 @@ where
                 budget_remaining,
             );
 
-            match self.run_action_turn(action_input, history.clone()).await? {
+            let turn_history = history.take();
+            match self.run_action_turn(action_input, turn_history).await? {
                 ActionTurn::RecoverableParse {
                     raw_response,
                     lm_usage,
@@ -450,7 +451,7 @@ where
                             let final_chat = history.unwrap_or_else(|| Chat::new(vec![]));
                             return Ok(Predicted::new(
                                 typed_output,
-                                acc.to_call_metadata(),
+                                acc.into_call_metadata(),
                                 final_chat,
                             ));
                         }
@@ -557,7 +558,8 @@ where
             .map_err(|source| RlmError::ExtractFallback { source })?;
         let (output, metadata, chat) = predicted.into_parts();
         acc.absorb_call_metadata(metadata);
-        Ok(Predicted::new(output, acc.to_call_metadata(), chat))
+        let metadata = std::mem::take(acc).into_call_metadata();
+        Ok(Predicted::new(output, metadata, chat))
     }
 
     fn finalization_directive(&self) -> String {
@@ -763,12 +765,11 @@ fn classify_exec_outcome(
     exec_result: Result<String, String>,
     submit_result: Option<SubmitResultDyn>,
 ) -> ExecOutcome {
-    let raw_exec_output = match &exec_result {
-        Ok(output) => output.clone(),
-        Err(message) => message.clone(),
-    };
-
     if let Some(submit_result) = submit_result {
+        let raw_exec_output = match exec_result {
+            Ok(output) => output,
+            Err(message) => message,
+        };
         return match submit_result {
             Ok((value, field_meta)) => ExecOutcome::SubmitAccepted { value, field_meta },
             Err(SubmitError::ValidationError { message, errors }) => {

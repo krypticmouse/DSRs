@@ -59,21 +59,14 @@ impl LlmTools {
         )
     }
 
-    pub fn budget_remaining(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.budget_remaining)
-    }
-
-    pub fn call_count(&self) -> usize {
+    #[cfg(test)]
+    fn call_count(&self) -> usize {
         self.max_llm_calls
             .saturating_sub(self.budget_remaining.load(Ordering::SeqCst))
     }
 
     pub fn remaining_calls(&self) -> usize {
         self.budget_remaining.load(Ordering::SeqCst)
-    }
-
-    pub fn max_llm_calls(&self) -> usize {
-        self.max_llm_calls
     }
 
     fn reserve_calls(&self, count: usize) -> PyResult<()> {

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAnyMethods, PyDict, PyDictMethods};
 
 use crate::{
-    BamlValue, ConstraintKind, ConstraintResult, FieldMeta, Flag, ResponseCheck, Signature,
+    BamlValue, ConstraintKind, ConstraintResult, FieldMeta, ResponseCheck, Signature,
     SignatureSchema,
 };
 
@@ -30,10 +30,9 @@ pub enum SubmitError {
     },
 }
 
-pub struct ParsedDyn {
-    pub baml_value: BamlValue,
-    pub flags: Vec<Flag>,
-    pub checks: Vec<ResponseCheck>,
+struct ParsedDyn {
+    baml_value: BamlValue,
+    checks: Vec<ResponseCheck>,
 }
 
 type ParseFn = dyn for<'py> Fn(Python<'py>, &Bound<'py, PyDict>) -> Result<ParsedDyn, BamlParseError>
@@ -54,11 +53,15 @@ pub fn is_submit_terminated(err: &PyErr, py: Python<'_>) -> bool {
 }
 
 pub fn clear_submit_slot(slot: &SubmitSlot) {
-    *slot.lock().expect("submit slot lock poisoned") = None;
+    set_submit_result(slot, None);
 }
 
 pub fn take_submit_result(slot: &SubmitSlot) -> Option<SubmitResultDyn> {
     slot.lock().expect("submit slot lock poisoned").take()
+}
+
+fn set_submit_result(slot: &SubmitSlot, value: Option<SubmitResultDyn>) {
+    *slot.lock().expect("submit slot lock poisoned") = value;
 }
 
 #[pyclass]
@@ -86,11 +89,7 @@ impl SubmitHandler {
         let parse_fn: Arc<ParseFn> = Arc::new(|py, kwargs| {
             let baml_value = super::py_bridge::kwargs_to_baml_value::<S>(py, kwargs)?;
             let checks = super::py_bridge::collect_checks_for_output::<S>(&baml_value)?;
-            Ok(ParsedDyn {
-                baml_value,
-                flags: Vec::new(),
-                checks,
-            })
+            Ok(ParsedDyn { baml_value, checks })
         });
 
         Self {
@@ -155,8 +154,10 @@ impl SubmitHandler {
             };
 
             let user_message = format_submit_error("Validation failed", &errors, None);
-            *self.slot.lock().expect("submit slot lock poisoned") =
-                Some(Err(SubmitError::ValidationError { message, errors }));
+            set_submit_result(
+                &self.slot,
+                Some(Err(SubmitError::ValidationError { message, errors })),
+            );
             return Ok(user_message);
         }
 
@@ -164,11 +165,11 @@ impl SubmitHandler {
 
         match parsed_result {
             Ok(parsed) => {
-                let raw_text = serde_json::to_string(&parsed.baml_value)
+                let ParsedDyn { baml_value, checks } = parsed;
+                let raw_text = serde_json::to_string(&baml_value)
                     .unwrap_or_else(|_| "<unserializable>".to_string());
-                let metas = build_field_metas(&parsed, &raw_text);
-                *self.slot.lock().expect("submit slot lock poisoned") =
-                    Some(Ok((parsed.baml_value.clone(), metas)));
+                let metas = build_field_metas(&checks, &raw_text);
+                set_submit_result(&self.slot, Some(Ok((baml_value, metas))));
 
                 Err(SubmitTerminated::new_err("SUBMIT accepted"))
             }
@@ -179,11 +180,13 @@ impl SubmitHandler {
                     )
                 })?;
 
-                *self.slot.lock().expect("submit slot lock poisoned") =
+                set_submit_result(
+                    &self.slot,
                     Some(Err(SubmitError::AssertionFailed {
                         label: failure.name.clone(),
                         expression: failure.expression.clone(),
-                    }));
+                    })),
+                );
 
                 Ok(format_submit_error(
                     "Assertion failed",
@@ -196,11 +199,13 @@ impl SubmitHandler {
             }
             Err(err) => {
                 let errors = format_parse_errors(kwargs, &self.schema, &err);
-                *self.slot.lock().expect("submit slot lock poisoned") =
+                set_submit_result(
+                    &self.slot,
                     Some(Err(SubmitError::ValidationError {
                         message: err.to_string(),
                         errors: errors.clone(),
-                    }));
+                    })),
+                );
 
                 Ok(format_submit_error(
                     "Validation failed",
@@ -220,7 +225,7 @@ impl SubmitHandler {
     }
 }
 
-fn build_field_metas(parsed: &ParsedDyn, raw_json: &str) -> IndexMap<String, FieldMeta> {
+fn build_field_metas(checks: &[ResponseCheck], raw_json: &str) -> IndexMap<String, FieldMeta> {
     let mut metas = IndexMap::new();
     let mut meta = FieldMeta {
         raw_text: raw_json.to_string(),
@@ -228,9 +233,7 @@ fn build_field_metas(parsed: &ParsedDyn, raw_json: &str) -> IndexMap<String, Fie
         checks: Vec::new(),
     };
 
-    meta.flags.extend(parsed.flags.iter().cloned());
-
-    for check in &parsed.checks {
+    for check in checks {
         meta.checks.push(ConstraintResult {
             label: check.name.clone(),
             expression: check.expression.clone(),
