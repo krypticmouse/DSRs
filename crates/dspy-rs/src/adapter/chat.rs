@@ -26,7 +26,6 @@ pub enum Dialect {
     #[default]
     Chat,
     Passthrough,
-    Xml,
 }
 
 /// Builds prompts and parses responses using signature-aware adapter dialects.
@@ -320,12 +319,6 @@ impl ChatAdapter {
     pub fn passthrough() -> Self {
         Self {
             dialect: Dialect::Passthrough,
-        }
-    }
-
-    pub fn xml() -> Self {
-        Self {
-            dialect: Dialect::Xml,
         }
     }
 
@@ -691,9 +684,7 @@ impl ChatAdapter {
         O: BamlType + for<'a> facet::Facet<'a>,
     {
         match self.dialect {
-            Dialect::Chat | Dialect::Xml => {
-                self.parse_structured_output_with_meta::<O>(schema, response)
-            }
+            Dialect::Chat => self.parse_structured_output_with_meta::<O>(schema, response),
             Dialect::Passthrough => self.parse_passthrough_output_with_meta::<O>(schema, response),
         }
     }
