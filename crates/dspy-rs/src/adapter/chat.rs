@@ -177,42 +177,16 @@ fn resolve_rendered_type_token(token: &str, output_format: Option<&OutputFormatC
         }
     }
 
-    token.rsplit("::").next().unwrap_or(token).to_string()
-}
-
-fn simplify_type_name(raw: &str, output_format: Option<&OutputFormatContent>) -> String {
-    let mut result = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(ch) = chars.next() {
-        if ch == '`' {
-            let mut token = String::new();
-            for next in chars.by_ref() {
-                if next == '`' {
-                    break;
-                }
-                token.push(next);
-            }
-            let rendered = resolve_rendered_type_token(&token, output_format);
-            result.push_str(&rendered);
-        } else {
-            result.push(ch);
-        }
-    }
-    result
+    crate::core::simplify_type_token(token)
 }
 
 fn render_type_name_for_prompt(
     type_ir: &TypeIR,
     output_format: Option<&OutputFormatContent>,
 ) -> String {
-    let raw = type_ir.diagnostic_repr().to_string();
-    let simplified = simplify_type_name(&raw, output_format);
-    simplified
-        .replace("class ", "")
-        .replace("enum ", "")
-        .replace(" | ", " or ")
-        .trim()
-        .to_string()
+    crate::core::render_type_name_for_prompt_with(type_ir, |token| {
+        resolve_rendered_type_token(token, output_format)
+    })
 }
 
 fn split_schema_definitions(schema: &str) -> Option<(String, String)> {

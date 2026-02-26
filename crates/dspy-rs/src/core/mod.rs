@@ -31,6 +31,7 @@ mod schema;
 pub mod settings;
 pub mod signature;
 pub mod specials;
+mod type_name;
 
 pub(crate) use dyn_predictor::*;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
@@ -42,3 +43,4 @@ pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, Sig
 pub use settings::*;
 pub use signature::*;
 pub use specials::*;
+pub(crate) use type_name::{render_type_name_for_prompt_with, simplify_type_token};
