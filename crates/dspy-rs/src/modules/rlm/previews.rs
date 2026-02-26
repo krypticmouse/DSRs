@@ -71,7 +71,7 @@ where
         }
     }
 
-    String::new()
+    unreachable!("preview budget cascade must return on final pass")
 }
 
 fn render_with_budget(
@@ -1060,6 +1060,8 @@ fn unit_enum_variant(value: Peek<'_, '_>) -> Option<String> {
 }
 
 fn is_media_shape(shape: &'static bamltype::facet::Shape) -> bool {
+    // TODO: Brittle - relies on type-name string matching. Replace with
+    // structural Facet type identity when available.
     shape.type_identifier.ends_with("BamlMedia")
         || shape.type_identifier.contains("::media::BamlMedia")
 }
