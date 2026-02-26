@@ -32,8 +32,6 @@ const DEFAULT_MAX_OUTPUT_CHARS: usize = 100_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
 const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
 
-const EXTRACT_INSTRUCTION: &str = "Extract the final typed answer from the REPL history.\n\
-Use the expected output schema exactly.";
 const REPL_HISTORY_INPUT_RENDER_TEMPLATE: &str = r#"{% if this.entries|length == 0 %}(no executed REPL turns captured){% else %}{% for entry in this.entries %}=== Turn {{ entry.turn }} ===
 Code:
 {{ entry.code }}
@@ -60,26 +58,26 @@ struct RlmActionSig {
 
 #[derive(Clone, Debug)]
 #[BamlType]
-pub struct REPLHistory {
-    pub entries: Vec<REPLEntry>,
+struct REPLHistory {
+    entries: Vec<REPLEntry>,
 }
 
 #[derive(Clone, Debug)]
 #[BamlType]
-pub struct REPLEntry {
-    pub turn: u32,
-    pub code: String,
-    pub output: String,
+struct REPLEntry {
+    turn: u32,
+    code: String,
+    output: String,
 }
 
 #[derive(Clone, Debug)]
 #[BamlType]
-pub struct RlmExtractInput {
-    pub variables_info: String,
-    pub repl_history: REPLHistory,
+struct RlmExtractInput {
+    variables_info: String,
+    repl_history: REPLHistory,
 }
 
-pub struct RlmExtractSig<S: Signature>(PhantomData<S>);
+struct RlmExtractSig<S: Signature>(PhantomData<S>);
 
 impl<S> Signature for RlmExtractSig<S>
 where
@@ -91,7 +89,7 @@ where
     type Output = S::Output;
 
     fn instruction() -> &'static str {
-        EXTRACT_INSTRUCTION
+        S::instruction()
     }
 
     fn input_shape() -> &'static facet::Shape {
@@ -146,12 +144,12 @@ impl Default for RlmConfig {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct MetadataAcc {
-    pub lm_usage: LmUsage,
-    pub tool_calls: Vec<ToolCall>,
-    pub tool_executions: Vec<String>,
-    pub raw_responses: Vec<String>,
-    pub field_meta: IndexMap<String, FieldMeta>,
+struct MetadataAcc {
+    lm_usage: LmUsage,
+    tool_calls: Vec<ToolCall>,
+    tool_executions: Vec<String>,
+    raw_responses: Vec<String>,
+    field_meta: IndexMap<String, FieldMeta>,
 }
 
 impl MetadataAcc {
@@ -186,7 +184,7 @@ impl MetadataAcc {
     }
 }
 
-pub enum ActionTurn {
+enum ActionTurn {
     Parsed(Predicted<RlmActionSigOutput>),
     RecoverableParse {
         raw_response: String,
@@ -196,9 +194,8 @@ pub enum ActionTurn {
     },
 }
 
-pub enum ExecOutcome {
+enum ExecOutcome {
     Continue {
-        code: String,
         output: String,
     },
     SubmitAccepted {
@@ -395,10 +392,7 @@ where
                 budget_remaining,
             );
 
-            match self
-                .run_action_turn(action_input, history.clone(), &mut acc)
-                .await?
-            {
+            match self.run_action_turn(action_input, history.clone()).await? {
                 ActionTurn::RecoverableParse {
                     raw_response,
                     lm_usage,
@@ -439,7 +433,7 @@ where
                         )
                     });
                     let submit_result = take_submit_result(&submit_slot);
-                    let outcome = classify_exec_outcome(code.clone(), exec_result, submit_result);
+                    let outcome = classify_exec_outcome(exec_result, submit_result);
 
                     match outcome {
                         ExecOutcome::SubmitAccepted { value, field_meta } => {
@@ -513,7 +507,6 @@ where
         &self,
         action_input: RlmActionSigInput,
         history: Option<Chat>,
-        _acc: &mut MetadataAcc,
     ) -> Result<ActionTurn, RlmError> {
         match self.generate_action.forward(action_input, history).await {
             Ok(predicted) => Ok(ActionTurn::Parsed(predicted)),
@@ -708,7 +701,7 @@ where
     }
 }
 
-pub fn format_feedback(
+fn format_feedback(
     turn_index: usize,
     budget_remaining: usize,
     sub_lm_remaining: usize,
@@ -732,7 +725,8 @@ pub fn format_feedback(
     rendered
 }
 
-pub fn recoverable_outcome_from_parse_error(error: &PredictError) -> Option<(String, Chat)> {
+#[cfg(test)]
+fn recoverable_outcome_from_parse_error(error: &PredictError) -> Option<(String, Chat)> {
     match error {
         PredictError::Parse {
             raw_response,
@@ -766,7 +760,6 @@ fn format_empty_response_recovery_reason(
 }
 
 fn classify_exec_outcome(
-    code: String,
     exec_result: Result<String, String>,
     submit_result: Option<SubmitResultDyn>,
 ) -> ExecOutcome {
@@ -796,7 +789,7 @@ fn classify_exec_outcome(
     }
 
     match exec_result {
-        Ok(output) => ExecOutcome::Continue { code, output },
+        Ok(output) => ExecOutcome::Continue { output },
         Err(message) => ExecOutcome::PythonException { message },
     }
 }
@@ -939,7 +932,6 @@ mod tests {
             50,
             50,
             &ExecOutcome::Continue {
-                code: "print('ok')".to_string(),
                 output: "ok".to_string(),
             },
             Some("This is your final turn. Call SUBMIT(answer=...) now with your best answer."),
@@ -952,16 +944,14 @@ mod tests {
 
     #[test]
     fn classify_exec_outcome_covers_all_variants_and_feedback_projection() {
-        let continue_outcome =
-            classify_exec_outcome("print('x')".to_string(), Ok("x\n".into()), None);
+        let continue_outcome = classify_exec_outcome(Ok("x\n".into()), None);
         assert!(matches!(
             continue_outcome,
-            ExecOutcome::Continue { ref code, ref output } if code == "print('x')" && output == "x\n"
+            ExecOutcome::Continue { ref output } if output == "x\n"
         ));
         assert_eq!(outcome_to_raw_output(&continue_outcome), "x\n");
 
         let submit_ok = classify_exec_outcome(
-            "SUBMIT(answer='ok')".to_string(),
             Ok(String::new()),
             Some(Ok((BamlValue::String("ok".to_string()), IndexMap::new()))),
         );
@@ -969,7 +959,6 @@ mod tests {
         assert!(outcome_to_raw_output(&submit_ok).is_empty());
 
         let submit_validation = classify_exec_outcome(
-            "SUBMIT(answer=123)".to_string(),
             Err("Traceback...\nSubmitError".to_string()),
             Some(Err(SubmitError::ValidationError {
                 message: "validation failed".to_string(),
@@ -986,7 +975,6 @@ mod tests {
         );
 
         let submit_assert = classify_exec_outcome(
-            "SUBMIT(answer='')".to_string(),
             Err("SubmitError: Assertion failed".to_string()),
             Some(Err(SubmitError::AssertionFailed {
                 label: "non_empty".to_string(),
@@ -1002,11 +990,7 @@ mod tests {
             "SubmitError: Assertion failed"
         );
 
-        let python_exception = classify_exec_outcome(
-            "raise ValueError('boom')".to_string(),
-            Err("Traceback...".into()),
-            None,
-        );
+        let python_exception = classify_exec_outcome(Err("Traceback...".into()), None);
         assert!(matches!(
             python_exception,
             ExecOutcome::PythonException { ref message } if message == "Traceback..."

@@ -357,7 +357,10 @@ fn generate_schema_description(schema: &SignatureSchema) -> String {
     desc.push_str(") where:\n");
 
     for field in fields {
-        let type_name = format_type_name(&field.type_ir);
+        let type_name = crate::core::render_type_name_for_prompt_with(
+            &field.type_ir,
+            crate::core::simplify_type_token,
+        );
         desc.push_str(&format!("  {}: {}", field.lm_name, type_name));
 
         if !field.docs.is_empty() {
@@ -386,10 +389,6 @@ fn generate_schema_description(schema: &SignatureSchema) -> String {
 
 fn py_err_to_value(err: pyo3::PyErr) -> pyo3::PyErr {
     pyo3::exceptions::PyValueError::new_err(err.to_string())
-}
-
-fn format_type_name(type_ir: &crate::TypeIR) -> String {
-    crate::core::render_type_name_for_prompt_with(type_ir, crate::core::simplify_type_token)
 }
 
 #[cfg(test)]

@@ -477,7 +477,7 @@ fn py_to_map_value(
         return Err(BamlParseError::Convert(BamlConvertError::new(
             path.clone(),
             "string",
-            format!("{}", key_type.diagnostic_repr()),
+            schema_type_name(key_type),
             "map keys must be strings",
         )));
     }
@@ -776,8 +776,12 @@ fn conversion_error(path: &[String], expected: &TypeIR, got: &Bound<'_, PyAny>) 
         path.to_vec(),
         "schema",
         got_type,
-        format!("expected {}", expected.diagnostic_repr()),
+        format!("expected {}", schema_type_name(expected)),
     ))
+}
+
+fn schema_type_name(type_ir: &TypeIR) -> String {
+    crate::core::render_type_name_for_prompt_with(type_ir, crate::core::simplify_type_token)
 }
 
 fn missing_field_error(path: &[String], field: &str) -> BamlParseError {
