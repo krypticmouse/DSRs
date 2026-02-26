@@ -2,8 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
-use pyo3::types::PyDict;
-use pyo3::{Py, Python};
+use pyo3::Python;
 use rig::message::ToolCall;
 
 use crate::{

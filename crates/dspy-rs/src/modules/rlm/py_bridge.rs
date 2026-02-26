@@ -1,10 +1,10 @@
 use anyhow::anyhow;
+use bamltype::BamlParseError;
 use bamltype::baml_types::ir_type::UnionTypeViewGeneric;
 use bamltype::baml_types::{BamlMap, BamlValue, LiteralValue, StreamingMode, TypeIR, TypeValue};
 use bamltype::internal_baml_jinja::types::{Class, OutputFormatContent};
 use bamltype::jsonish;
 use bamltype::jsonish::deserializer::coercer::run_user_checks;
-use bamltype::{BamlParseError, BamlType};
 use pyo3::IntoPyObjectExt;
 use pyo3::types::{
     PyAnyMethods, PyBool, PyDict, PyDictMethods, PyFloat, PyInt, PyList, PyListMethods, PyModule,
@@ -148,10 +148,7 @@ fn extract_trimmed_docstring(callable: &Bound<'_, PyAny>) -> PyResult<String> {
     Ok(raw_doc.trim().to_string())
 }
 
-fn extract_signature(
-    inspect: &Bound<'_, PyModule>,
-    callable: &Bound<'_, PyAny>,
-) -> Option<String> {
+fn extract_signature(inspect: &Bound<'_, PyModule>, callable: &Bound<'_, PyAny>) -> Option<String> {
     if let Ok(text_sig) = callable.getattr("__text_signature__")
         && let Ok(Some(text_sig)) = text_sig.extract::<Option<String>>()
     {
@@ -177,9 +174,7 @@ fn extract_signature(
                 .map(|sig| sig.trim().to_string())
                 .filter(|sig| !sig.is_empty())
         })
-        .or_else(|| {
-            None
-        })
+        .or_else(|| None)
 }
 
 fn sanitize_signature(raw_signature: &str) -> String {
@@ -234,9 +229,7 @@ fn simplify_qualified_type_paths(raw: &str) -> String {
 
 fn classify_method_source(name: &str) -> MethodSource {
     match name {
-        "__len__" | "__iter__" | "__getitem__" | "__repr__" | "__baml__" => {
-            MethodSource::Generated
-        }
+        "__len__" | "__iter__" | "__getitem__" | "__repr__" | "__baml__" => MethodSource::Generated,
         _ => MethodSource::Custom,
     }
 }
@@ -1022,6 +1015,7 @@ mod tests {
     use std::sync::Arc;
 
     use bamltype::baml_types::ir_type::UnionConstructor;
+    use pyo3::prelude::*;
     use pyo3::types::{PyDict, PyDictMethods};
     use tokio::runtime::Handle;
 
@@ -1059,6 +1053,45 @@ mod tests {
     struct ReservedNameSig {
         #[input]
         llm_query: String,
+
+        #[output]
+        answer: String,
+    }
+
+    #[pyclass]
+    #[BamlType]
+    #[derive(Clone, Debug)]
+    struct MethodFixture {
+        label: String,
+    }
+
+    #[pymethods]
+    impl MethodFixture {
+        #[new]
+        fn new(label: String) -> Self {
+            Self { label }
+        }
+
+        #[pyo3(text_signature = "(query)")]
+        /// Search entries by query text.
+        fn search(&self, query: String) -> String {
+            format!("{}:{query}", self.label)
+        }
+
+        /// Return the character count for this fixture label.
+        fn __len__(&self) -> usize {
+            self.label.chars().count()
+        }
+
+        fn undocumented(&self) -> String {
+            self.label.clone()
+        }
+    }
+
+    #[derive(Signature, Clone, Debug)]
+    struct MethodFixtureSig {
+        #[input]
+        trajectory: MethodFixture,
 
         #[output]
         answer: String,
@@ -1183,11 +1216,10 @@ mod tests {
                     count: 3,
                 };
 
-                let globals =
+                let setup =
                     setup_interpreter_globals::<BridgeSig>(py, &input, &submit, Some(&tools))
-                        .expect("setup globals")
-                        .bind(py)
-                        .clone();
+                        .expect("setup globals");
+                let globals = setup.globals.bind(py).clone();
 
                 assert!(globals.get_item("question").expect("getitem").is_some());
                 assert!(globals.get_item("count").expect("getitem").is_some());
@@ -1199,6 +1231,8 @@ mod tests {
                         .is_some()
                 );
                 assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
+                assert!(setup.methods_by_var.contains_key("question"));
+                assert!(setup.methods_by_var.contains_key("count"));
             });
         });
     }
@@ -1213,10 +1247,9 @@ mod tests {
                 count: 3,
             };
 
-            let globals = setup_interpreter_globals::<BridgeSig>(py, &input, &submit, None)
-                .expect("setup globals")
-                .bind(py)
-                .clone();
+            let setup = setup_interpreter_globals::<BridgeSig>(py, &input, &submit, None)
+                .expect("setup globals");
+            let globals = setup.globals.bind(py).clone();
 
             assert!(globals.get_item("question").expect("getitem").is_some());
             assert!(globals.get_item("count").expect("getitem").is_some());
@@ -1228,6 +1261,8 @@ mod tests {
                     .expect("getitem")
                     .is_none()
             );
+            assert!(setup.methods_by_var.contains_key("question"));
+            assert!(setup.methods_by_var.contains_key("count"));
         });
     }
 
@@ -1245,6 +1280,58 @@ mod tests {
             let message = err.to_string();
             assert!(message.contains("llm_query"));
             assert!(message.contains("reserved runtime binding"));
+        });
+    }
+
+    #[test]
+    fn setup_interpreter_globals_collects_filtered_method_metadata() {
+        Python::attach(|py| {
+            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
+            let submit = SubmitHandler::new::<MethodFixtureSig>(Arc::clone(&slot));
+            let input = MethodFixtureSigInput {
+                trajectory: MethodFixture {
+                    label: "root".to_string(),
+                },
+            };
+
+            let setup = setup_interpreter_globals::<MethodFixtureSig>(py, &input, &submit, None)
+                .expect("setup globals");
+            let methods = setup
+                .methods_by_var
+                .get("trajectory")
+                .expect("trajectory methods");
+
+            assert_eq!(
+                setup.methods_by_var.keys().collect::<Vec<_>>(),
+                vec![&"trajectory".to_string()],
+                "keys must match injected variable names"
+            );
+            assert!(
+                methods.windows(2).all(|w| w[0].name <= w[1].name),
+                "method list should be deterministic and sorted by name"
+            );
+            assert!(methods.iter().any(|m| m.name == "search"));
+            assert!(methods.iter().any(|m| m.name == "__len__"));
+            assert!(!methods.iter().any(|m| m.name == "undocumented"));
+            assert!(!methods.iter().any(|m| m.name == "__baml__"));
+
+            let search = methods
+                .iter()
+                .find(|m| m.name == "search")
+                .expect("search method metadata");
+            assert!(search.signature.contains("query"));
+            assert!(!search.signature.contains("self"));
+            assert!(search.doc.contains("Search entries"));
+            assert!(matches!(search.source, MethodSource::Custom));
+            assert!(!search.is_dunder);
+
+            let dunder_len = methods
+                .iter()
+                .find(|m| m.name == "__len__")
+                .expect("__len__ metadata");
+            assert!(dunder_len.is_dunder);
+            assert!(matches!(dunder_len.source, MethodSource::Generated));
+            assert!(!dunder_len.doc.trim().is_empty());
         });
     }
 

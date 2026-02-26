@@ -35,7 +35,7 @@ pub(super) fn render_action_instruction<S: Signature>(
         schema
             .input_fields()
             .iter()
-            .map(|field| field.lm_name)
+            .map(|field| field.rust_name.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     };

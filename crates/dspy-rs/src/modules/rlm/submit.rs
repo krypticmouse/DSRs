@@ -274,6 +274,8 @@ fn format_convert_error(
         .strip_prefix("expected ")
         .unwrap_or(err.expected)
         .trim();
+    let expected = to_python_type_name(expected);
+    let got = to_python_type_name(err.got.as_str());
 
     let field_path = err.path_string();
     let value_repr = first_path_value_repr(kwargs, schema, &err.path);
@@ -281,12 +283,26 @@ fn format_convert_error(
     match value_repr {
         Some(value_repr) => format!(
             "field '{}' expected {}, got {} {}",
-            field_path, expected, err.got, value_repr
+            field_path, expected, got, value_repr
         ),
-        None => format!(
-            "field '{}' expected {}, got {}",
-            field_path, expected, err.got
-        ),
+        None => format!("field '{}' expected {}, got {}", field_path, expected, got),
+    }
+}
+
+fn to_python_type_name(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let base = trimmed.strip_prefix("BamlValue::").unwrap_or(trimmed);
+    match base {
+        "String" => "str".to_string(),
+        "Int" => "int".to_string(),
+        "Float" => "float".to_string(),
+        "Bool" => "bool".to_string(),
+        "Null" => "None".to_string(),
+        "List" => "list".to_string(),
+        "Map" | "Class" => "dict".to_string(),
+        "Enum" => "enum".to_string(),
+        "Media" => "media".to_string(),
+        other => other.to_string(),
     }
 }
 
@@ -517,5 +533,19 @@ mod tests {
 
         clear_submit_slot(&slot);
         assert!(slot.lock().expect("lock").is_none());
+    }
+
+    #[test]
+    fn python_type_name_mapping_covers_baml_tokens() {
+        assert_eq!(to_python_type_name("BamlValue::String"), "str");
+        assert_eq!(to_python_type_name("BamlValue::Int"), "int");
+        assert_eq!(to_python_type_name("BamlValue::Float"), "float");
+        assert_eq!(to_python_type_name("BamlValue::Bool"), "bool");
+        assert_eq!(to_python_type_name("BamlValue::Null"), "None");
+        assert_eq!(to_python_type_name("BamlValue::List"), "list");
+        assert_eq!(to_python_type_name("BamlValue::Map"), "dict");
+        assert_eq!(to_python_type_name("BamlValue::Class"), "dict");
+        assert_eq!(to_python_type_name("BamlValue::Enum"), "enum");
+        assert_eq!(to_python_type_name("BamlValue::Media"), "media");
     }
 }

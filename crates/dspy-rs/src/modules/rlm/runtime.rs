@@ -32,7 +32,7 @@ pub struct MethodSignature {
     pub is_dunder: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InterpreterSetup {
     pub globals: Py<PyDict>,
     pub methods_by_var: BTreeMap<String, Vec<MethodSignature>>,
