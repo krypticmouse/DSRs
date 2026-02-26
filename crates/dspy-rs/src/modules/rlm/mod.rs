@@ -806,7 +806,7 @@ fn outcome_to_raw_output(outcome: &ExecOutcome) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Signature;
+    use crate::{ParseError, Signature};
     use std::sync::Arc;
     use temp_env::with_var;
 
@@ -865,6 +865,28 @@ mod tests {
     }
 
     #[test]
+    fn turn_policy_reserves_last_turn_for_finalization_then_fallback() {
+        let module = Rlm::<RuntimePolicySig>::builder().build();
+
+        assert!(matches!(
+            module.decide_turn_policy(1, 3),
+            TurnDecision::Continue
+        ));
+        assert!(matches!(
+            module.decide_turn_policy(2, 3),
+            TurnDecision::Continue
+        ));
+        assert!(matches!(
+            module.decide_turn_policy(3, 3),
+            TurnDecision::Finalization
+        ));
+        assert!(matches!(
+            module.decide_turn_policy(4, 3),
+            TurnDecision::Fallback
+        ));
+    }
+
+    #[test]
     fn feedback_uses_next_turn_framing_and_supports_finalization_directive() {
         let feedback = format_feedback(
             2,
@@ -881,6 +903,110 @@ mod tests {
         assert!(feedback.contains("[Turn 2 | 19 turns, 50/50 sub-model calls remaining]"));
         assert!(feedback.contains("\n\nok"));
         assert!(feedback.contains("This is your final turn. Call SUBMIT(answer=...) now"));
+    }
+
+    #[test]
+    fn classify_exec_outcome_covers_all_variants_and_feedback_projection() {
+        let continue_outcome =
+            classify_exec_outcome("print('x')".to_string(), Ok("x\n".into()), None);
+        assert!(matches!(
+            continue_outcome,
+            ExecOutcome::Continue { ref code, ref output } if code == "print('x')" && output == "x\n"
+        ));
+        assert_eq!(outcome_to_raw_output(&continue_outcome), "x\n");
+
+        let submit_ok = classify_exec_outcome(
+            "SUBMIT(answer='ok')".to_string(),
+            Ok(String::new()),
+            Some(Ok((BamlValue::String("ok".to_string()), IndexMap::new()))),
+        );
+        assert!(matches!(submit_ok, ExecOutcome::SubmitAccepted { .. }));
+        assert!(outcome_to_raw_output(&submit_ok).is_empty());
+
+        let submit_validation = classify_exec_outcome(
+            "SUBMIT(answer=123)".to_string(),
+            Err("Traceback...\nSubmitError".to_string()),
+            Some(Err(SubmitError::ValidationError {
+                message: "validation failed".to_string(),
+                errors: vec!["field `answer` expected string".to_string()],
+            })),
+        );
+        assert!(matches!(
+            submit_validation,
+            ExecOutcome::SubmitValidationError { .. }
+        ));
+        assert_eq!(
+            outcome_to_raw_output(&submit_validation),
+            "Traceback...\nSubmitError"
+        );
+
+        let submit_assert = classify_exec_outcome(
+            "SUBMIT(answer='')".to_string(),
+            Err("SubmitError: Assertion failed".to_string()),
+            Some(Err(SubmitError::AssertionFailed {
+                label: "non_empty".to_string(),
+                expression: "this.len() > 0".to_string(),
+            })),
+        );
+        assert!(matches!(
+            submit_assert,
+            ExecOutcome::SubmitAssertionFailed { .. }
+        ));
+        assert_eq!(
+            outcome_to_raw_output(&submit_assert),
+            "SubmitError: Assertion failed"
+        );
+
+        let python_exception = classify_exec_outcome(
+            "raise ValueError('boom')".to_string(),
+            Err("Traceback...".into()),
+            None,
+        );
+        assert!(matches!(
+            python_exception,
+            ExecOutcome::PythonException { ref message } if message == "Traceback..."
+        ));
+        assert_eq!(outcome_to_raw_output(&python_exception), "Traceback...");
+
+        let recoverable = ExecOutcome::RecoverableParse {
+            message: "Your response was empty.".to_string(),
+        };
+        assert_eq!(
+            outcome_to_raw_output(&recoverable),
+            "Your response was empty."
+        );
+    }
+
+    #[test]
+    fn recoverable_parse_error_detection_only_triggers_on_empty_response() {
+        let empty_err = PredictError::Parse {
+            source: ParseError::ExtractionFailed {
+                field: "code".to_string(),
+                raw_response: String::new(),
+                reason: "empty passthrough response".to_string(),
+            },
+            raw_response: "   \n\t".to_string(),
+            lm_usage: LmUsage::default(),
+            chat: Chat::new(vec![]),
+        };
+        let recovered = recoverable_outcome_from_parse_error(&empty_err)
+            .expect("empty response should be recoverable");
+        assert!(recovered.0.contains("Empty response from model"));
+
+        let non_empty_err = PredictError::Parse {
+            source: ParseError::ExtractionFailed {
+                field: "code".to_string(),
+                raw_response: "no code".to_string(),
+                reason: "failed extraction".to_string(),
+            },
+            raw_response: "I refuse".to_string(),
+            lm_usage: LmUsage::default(),
+            chat: Chat::new(vec![]),
+        };
+        assert!(
+            recoverable_outcome_from_parse_error(&non_empty_err).is_none(),
+            "non-empty parse failures should remain terminal"
+        );
     }
 
     #[tokio::test]

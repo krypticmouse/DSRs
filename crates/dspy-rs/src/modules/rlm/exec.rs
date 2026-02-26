@@ -5,12 +5,14 @@ use pyo3::{Py, PyResult, Python};
 use super::submit::{SUBMIT_STDOUT_ATTR, is_submit_terminated};
 
 const NO_OUTPUT_MESSAGE: &str = "(no output - did you forget to print?)";
+const TRACEBACK_ATTR: &str = "__dsrs_traceback__";
 
 static EXEC_HELPER_CODE: &std::ffi::CStr = c_str!(
     r#"
 import ast
 import contextlib
 import io
+import traceback
 
 
 def dsrs_exec(code, globals_dict, suppress_output):
@@ -43,6 +45,10 @@ def dsrs_exec(code, globals_dict, suppress_output):
                 setattr(exc, "__dsrs_stdout__", buffer.getvalue())
             except Exception:
                 pass
+            try:
+                setattr(exc, "__dsrs_traceback__", traceback.format_exc())
+            except Exception:
+                pass
             raise
     return buffer.getvalue(), (None if result is None else repr(result))
 "#
@@ -60,7 +66,9 @@ pub fn execute_repl_code(
         Ok(output) => Ok(output),
         Err(err) => {
             let stdout = extract_submit_stdout(py, &err).unwrap_or_default();
-            let traceback = format_python_traceback(py, &err).unwrap_or_else(|_| err.to_string());
+            let traceback = extract_traceback(py, &err)
+                .or_else(|| format_python_traceback(py, &err).ok())
+                .unwrap_or_else(|| err.to_string());
             let combined = combine_stdout_and_traceback(stdout, traceback);
             Err(truncate_capture_output(&combined, max_output_chars))
         }
@@ -98,6 +106,13 @@ fn run_exec(
 fn extract_submit_stdout(py: Python<'_>, err: &pyo3::PyErr) -> Option<String> {
     err.value(py)
         .getattr(SUBMIT_STDOUT_ATTR)
+        .ok()
+        .and_then(|value| value.extract::<String>().ok())
+}
+
+fn extract_traceback(py: Python<'_>, err: &pyo3::PyErr) -> Option<String> {
+    err.value(py)
+        .getattr(TRACEBACK_ATTR)
         .ok()
         .and_then(|value| value.extract::<String>().ok())
 }
@@ -268,6 +283,22 @@ mod tests {
     }
 
     #[test]
+    fn import_errors_include_traceback_and_exception_type() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py).unbind();
+            let err = execute_repl_code(py, &globals, "import definitely_missing_module_xyz", 500)
+                .expect_err("should fail");
+
+            assert!(err.contains("Traceback"));
+            assert!(
+                err.contains("ModuleNotFoundError") || err.contains("ImportError"),
+                "expected import failure class in traceback: {err}"
+            );
+            assert!(err.contains("definitely_missing_module_xyz"));
+        });
+    }
+
+    #[test]
     fn truncates_error_output_with_budget() {
         Python::attach(|py| {
             let globals = PyDict::new(py).unbind();
@@ -284,5 +315,15 @@ mod tests {
             ));
             assert!(err.chars().count() > 20);
         });
+    }
+
+    #[test]
+    fn truncation_is_unicode_safe_for_multibyte_characters() {
+        let text = "😀".repeat(40);
+        let truncated = truncate_capture_output(&text, 9);
+
+        assert!(truncated.contains("[output truncated at 9 chars"));
+        assert!(truncated.is_char_boundary(truncated.len()));
+        assert!(truncated.contains('😀'));
     }
 }
