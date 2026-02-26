@@ -19,7 +19,7 @@ pub mod runtime;
 mod submit;
 mod tools;
 use previews::render_previews;
-use prompt::render_action_instruction;
+use prompt::{render_action_instruction, render_extract_instruction};
 pub use runtime::{
     DynRuntime, LlmTools, PyO3Runtime, RlmRuntime, StubRuntime, SubmitError, SubmitHandler,
     SubmitResultDyn, SubmitSlot, clear_submit_slot, take_submit_result,
@@ -34,6 +34,14 @@ const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
 
 const EXTRACT_INSTRUCTION: &str = "Extract the final typed answer from the REPL history.\n\
 Use the expected output schema exactly.";
+const REPL_HISTORY_INPUT_RENDER_TEMPLATE: &str = r#"{% if this.entries|length == 0 %}(no executed REPL turns captured){% else %}{% for entry in this.entries %}=== Turn {{ entry.turn }} ===
+Code:
+{{ entry.code }}
+
+Output:
+{% if entry.output %}{{ entry.output }}{% else %}<empty>{% endif %}{% if not loop.last %}
+
+{% endif %}{% endfor %}{% endif %}"#;
 
 #[derive(Signature, Clone, Debug)]
 struct RlmActionSig {
@@ -106,7 +114,7 @@ where
                 rust_name: "repl_history",
                 alias: None,
                 constraints: &[],
-                input_render: crate::InputRenderSpec::Default,
+                input_render: crate::InputRenderSpec::Jinja(REPL_HISTORY_INPUT_RENDER_TEMPLATE),
             },
         ];
         &INPUT_META
@@ -651,12 +659,15 @@ where
     pub fn build(self) -> Rlm<S> {
         let action_instruction =
             render_action_instruction::<S>(&self.config, self.instruction_override.as_deref());
+        let extract_instruction =
+            render_extract_instruction::<S>(self.instruction_override.as_deref());
         let generate_action = Predict::<RlmActionSig>::builder()
             .instruction(action_instruction)
             .adapter(ChatAdapter::passthrough())
             .build();
         let extract = Predict::<RlmExtractSig<S>>::builder()
-            .instruction(EXTRACT_INSTRUCTION)
+            .instruction(extract_instruction)
+            .adapter(ChatAdapter::new())
             .build();
 
         let runtime = self
@@ -882,6 +893,20 @@ mod tests {
         assert!(turn2.variables_info.is_none());
         assert_eq!(turn2.execution_feedback.as_deref(), Some("feedback"));
         assert_eq!(turn2.budget_remaining, 19);
+    }
+
+    #[test]
+    fn extract_signature_uses_custom_repl_history_render_template() {
+        let fields = RlmExtractSig::<RuntimePolicySig>::input_field_metadata();
+        assert_eq!(fields.len(), 2);
+        match fields[1].input_render {
+            crate::InputRenderSpec::Jinja(template) => {
+                assert!(template.contains("=== Turn {{ entry.turn }} ==="));
+                assert!(template.contains("Code:"));
+                assert!(template.contains("Output:"));
+            }
+            other => panic!("expected jinja render template, got: {other:?}"),
+        }
     }
 
     #[test]

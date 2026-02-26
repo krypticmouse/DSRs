@@ -131,6 +131,23 @@ pub(super) fn render_action_instruction<S: Signature>(
     lines.join("\n")
 }
 
+pub(super) fn render_extract_instruction<S: Signature>(
+    instruction_override: Option<&str>,
+) -> String {
+    let schema = SignatureSchema::of::<S>();
+    let task = instruction_override
+        .unwrap_or_else(|| schema.instruction())
+        .trim();
+
+    [
+        "The following REPL session was generated for this task:",
+        task,
+        "",
+        "Based on the execution history, extract the final outputs. Review what was computed and provide the best answer from the trajectory.",
+    ]
+    .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use crate::Signature;
@@ -186,6 +203,23 @@ mod tests {
         );
 
         assert!(rendered.contains("You work in a Python REPL. Custom task sentence."));
+        assert!(!rendered.contains("Solve the query against the corpus."));
+    }
+
+    #[test]
+    fn extract_instruction_includes_task_and_extraction_guidance() {
+        let rendered = render_extract_instruction::<PromptSig>(None);
+
+        assert!(rendered.contains("The following REPL session was generated for this task:"));
+        assert!(rendered.contains("Solve the query against the corpus."));
+        assert!(rendered.contains("Based on the execution history, extract the final outputs."));
+    }
+
+    #[test]
+    fn extract_instruction_uses_override_when_present() {
+        let rendered = render_extract_instruction::<PromptSig>(Some("Custom extraction task."));
+
+        assert!(rendered.contains("Custom extraction task."));
         assert!(!rendered.contains("Solve the query against the corpus."));
     }
 }
