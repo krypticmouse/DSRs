@@ -453,9 +453,9 @@ fn py_to_class_value(
             }
         };
 
-        path.push(real.to_string());
-        let field_value = py_to_baml_value_inner(py, &value, field_type, output_format, path)?;
-        path.pop();
+        let field_value = with_path_segment(path, real.to_string(), |path| {
+            py_to_baml_value_inner(py, &value, field_type, output_format, path)
+        })?;
         fields.insert(real.to_string(), field_value);
     }
 
@@ -506,9 +506,9 @@ fn py_to_map_value(
         let key = key
             .extract::<String>()
             .map_err(|_| conversion_error(path, key_type, &key))?;
-        path.push(key.clone());
-        let value = py_to_baml_value_inner(py, &value, value_type, output_format, path)?;
-        path.pop();
+        let value = with_path_segment(path, key.clone(), |path| {
+            py_to_baml_value_inner(py, &value, value_type, output_format, path)
+        })?;
         map.insert(key, value);
     }
 
@@ -527,9 +527,9 @@ fn py_to_list_value(
     } else if let Ok(tuple) = obj.cast::<PyTuple>() {
         let mut items = Vec::with_capacity(tuple.len());
         for (idx, item) in tuple.iter().enumerate() {
-            path.push(idx.to_string());
-            let value = py_to_baml_value_inner(py, &item, item_type, output_format, path)?;
-            path.pop();
+            let value = with_path_segment(path, idx.to_string(), |path| {
+                py_to_baml_value_inner(py, &item, item_type, output_format, path)
+            })?;
             items.push(value);
         }
         return Ok(BamlValue::List(items));
@@ -548,9 +548,9 @@ fn py_to_list_value(
 
     let mut items = Vec::with_capacity(list.len());
     for (idx, item) in list.iter().enumerate() {
-        path.push(idx.to_string());
-        let value = py_to_baml_value_inner(py, &item, item_type, output_format, path)?;
-        path.pop();
+        let value = with_path_segment(path, idx.to_string(), |path| {
+            py_to_baml_value_inner(py, &item, item_type, output_format, path)
+        })?;
         items.push(value);
     }
 
@@ -570,9 +570,9 @@ fn py_to_tuple_value(
         }
         let mut values = Vec::with_capacity(items.len());
         for (idx, (item, item_type)) in tuple.iter().zip(items.iter()).enumerate() {
-            path.push(idx.to_string());
-            let value = py_to_baml_value_inner(py, &item, item_type, output_format, path)?;
-            path.pop();
+            let value = with_path_segment(path, idx.to_string(), |path| {
+                py_to_baml_value_inner(py, &item, item_type, output_format, path)
+            })?;
             values.push(value);
         }
         return Ok(BamlValue::List(values));
@@ -584,9 +584,9 @@ fn py_to_tuple_value(
         }
         let mut values = Vec::with_capacity(items.len());
         for (idx, (item, item_type)) in list.iter().zip(items.iter()).enumerate() {
-            path.push(idx.to_string());
-            let value = py_to_baml_value_inner(py, &item, item_type, output_format, path)?;
-            path.pop();
+            let value = with_path_segment(path, idx.to_string(), |path| {
+                py_to_baml_value_inner(py, &item, item_type, output_format, path)
+            })?;
             values.push(value);
         }
         return Ok(BamlValue::List(values));
@@ -780,6 +780,17 @@ fn conversion_error(path: &[String], expected: &TypeIR, got: &Bound<'_, PyAny>) 
     ))
 }
 
+fn with_path_segment<T>(
+    path: &mut Vec<String>,
+    segment: String,
+    convert: impl FnOnce(&mut Vec<String>) -> Result<T, BamlParseError>,
+) -> Result<T, BamlParseError> {
+    path.push(segment);
+    let result = convert(path);
+    path.pop();
+    result
+}
+
 fn schema_type_name(type_ir: &TypeIR) -> String {
     crate::core::render_type_name_for_prompt_with(type_ir, crate::core::simplify_type_token)
 }
@@ -823,6 +834,7 @@ fn orjson_fallback_to_baml(
 mod tests {
     use std::sync::Arc;
 
+    use bamltype::baml_types::ir_type::UnionConstructor;
     use pyo3::types::{PyDict, PyDictMethods};
     use tokio::runtime::Handle;
 
@@ -1020,6 +1032,33 @@ mod tests {
                     .expect("getitem")
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn union_attempts_do_not_leak_path_segments_between_branches() {
+        Python::attach(|py| {
+            let list = PyList::empty(py);
+            list.append(3).expect("append");
+
+            let union = TypeIR::union(vec![
+                TypeIR::list(TypeIR::literal_int(1)),
+                TypeIR::list(TypeIR::literal_int(2)),
+            ]);
+            let output_format = BridgeSig::schema().output_format();
+
+            let err = py_to_baml_value(py, list.as_any(), &union, output_format)
+                .expect_err("union should fail to parse mismatched literal");
+            match err {
+                BamlParseError::Convert(err) => {
+                    assert_eq!(
+                        err.path,
+                        vec!["0".to_string()],
+                        "path should represent one nesting level, not accumulate from prior union attempts"
+                    );
+                }
+                other => panic!("unexpected error: {other}"),
+            }
         });
     }
 }
