@@ -13,25 +13,7 @@ fn text_response(text: impl Into<String>) -> AssistantContent {
     AssistantContent::Text(Text { text: text.into() })
 }
 
-async fn configure_test_lm(responses: Vec<String>) -> LM {
-    let client = TestCompletionModel::new(responses.into_iter().map(text_response));
-    let lm = temp_env::async_with_vars(
-        [("OPENAI_API_KEY", Some("test"))],
-        LM::builder()
-            .model("openai:gpt-4o-mini".to_string())
-            .temperature(0.0)
-            .build(),
-    )
-    .await
-    .expect("build lm")
-    .with_client(LMClient::Test(client))
-    .await
-    .expect("install test client");
-    configure(lm.clone(), ChatAdapter::new());
-    lm
-}
-
-async fn configure_test_lm_with_client(responses: Vec<String>) -> (LM, TestCompletionModel) {
+async fn build_test_lm_with_client(responses: Vec<String>) -> (LM, TestCompletionModel) {
     let client = TestCompletionModel::new(responses.into_iter().map(text_response));
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -45,6 +27,17 @@ async fn configure_test_lm_with_client(responses: Vec<String>) -> (LM, TestCompl
     .with_client(LMClient::Test(client.clone()))
     .await
     .expect("install test client");
+    (lm, client)
+}
+
+async fn configure_test_lm(responses: Vec<String>) -> LM {
+    let (lm, _) = build_test_lm_with_client(responses).await;
+    configure(lm.clone(), ChatAdapter::new());
+    lm
+}
+
+async fn configure_test_lm_with_client(responses: Vec<String>) -> (LM, TestCompletionModel) {
+    let (lm, client) = build_test_lm_with_client(responses).await;
     configure(lm.clone(), ChatAdapter::new());
     (lm, client)
 }
@@ -205,4 +198,53 @@ async fn rlm_feedback_carries_truncation_marker_with_configured_budget() {
     assert!(request_debug.contains(
         "[output truncated at 10 chars - full content in variable. pass to llm_query() to analyze]"
     ));
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test(flavor = "multi_thread")]
+async fn rlm_sub_lm_tools_persist_state_and_decrement_budget_across_turns() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let (_action_lm, action_client) = configure_test_lm_with_client(vec![
+        "single = llm_query('single')\nbatch = llm_query_batched(['left', 'right'])\ncounter = 40 + len(batch)".to_string(),
+        "try:\n    llm_query('should_fail')\n    budget_state = 'not_exhausted'\nexcept Exception as err:\n    budget_state = 'exhausted' if 'budget exhausted' in str(err) else f'unexpected:{err}'\nSUBMIT(answer=f'{counter}:{budget_state}:{single}')".to_string(),
+    ])
+    .await;
+    let (sub_lm, _) = build_test_lm_with_client(vec![
+        "single-ok".to_string(),
+        "batch-a".to_string(),
+        "batch-b".to_string(),
+    ])
+    .await;
+
+    let rlm = Rlm::<RlmLoopSig>::builder()
+        .runtime(Arc::new(PyO3Runtime))
+        .sub_lm(Arc::new(sub_lm))
+        .max_iterations(2)
+        .max_llm_calls(3)
+        .enable_extraction_fallback(false)
+        .build();
+
+    let predicted = rlm
+        .call(RlmLoopSigInput {
+            prompt: "Use both sub-LM helpers, then submit on turn two.".to_string(),
+        })
+        .await
+        .expect("rlm should complete with persisted state and enforced budget");
+
+    assert_eq!(predicted.answer, "42:exhausted:single-ok");
+    assert!(
+        predicted
+            .metadata()
+            .raw_response
+            .contains("llm_query_batched")
+    );
+
+    let last_request = action_client
+        .last_request()
+        .expect("expected second-turn request with feedback");
+    let request_debug = format!("{last_request:?}");
+    assert!(
+        request_debug.contains("0/3 sub-model calls remaining"),
+        "second turn should see depleted sub-LM budget"
+    );
 }
