@@ -165,6 +165,7 @@ enum StructFieldValue<'mem, 'facet> {
 
 enum PeekSummary<'mem, 'facet> {
     None,
+    Media,
     String(&'mem str),
     Bool(bool),
     SignedInt(i128),
@@ -184,6 +185,10 @@ fn summarize_peek<'mem, 'facet>(value: Peek<'mem, 'facet>) -> PeekSummary<'mem, 
     let Some(value) = collapse_option_chain(value) else {
         return PeekSummary::None;
     };
+
+    if is_media_shape(value.shape()) {
+        return PeekSummary::Media;
+    }
 
     if let Some(text) = value.as_str() {
         return PeekSummary::String(text);
@@ -215,6 +220,7 @@ fn summarize_peek<'mem, 'facet>(value: Peek<'mem, 'facet>) -> PeekSummary<'mem, 
     if let Some((class_name, fields)) = struct_like_fields(value) {
         return PeekSummary::StructLike { class_name, fields };
     }
+    // Keep unknown types generic; known media goes through `PeekSummary::Media`.
     PeekSummary::Unknown(value)
 }
 
@@ -227,6 +233,7 @@ fn render_value_block_from_summary(
 ) -> Vec<String> {
     match summary {
         PeekSummary::None => vec!["None".to_string()],
+        PeekSummary::Media => vec!["Media (preview omitted)".to_string()],
         PeekSummary::String(text) => render_string_block(text, depth > 0, budget),
         PeekSummary::Bool(v) => vec![format!("Value: {v}")],
         PeekSummary::SignedInt(v) => vec![format!("Value: {v}")],
@@ -387,6 +394,7 @@ fn render_inline_value_from_summary(
 ) -> String {
     match summary {
         PeekSummary::None => "None".to_string(),
+        PeekSummary::Media => "Media".to_string(),
         PeekSummary::String(text) => truncate_string(text, budget.nested_limit),
         PeekSummary::Bool(v) => v.to_string(),
         PeekSummary::SignedInt(v) => v.to_string(),
@@ -907,6 +915,7 @@ fn render_inline_field_value(value: &StructFieldValue<'_, '_>, budget: RenderBud
         StructFieldValue::String(text) => truncate_string(text, budget.nested_limit),
         StructFieldValue::Peek(value) => match summarize_peek(*value) {
             PeekSummary::None => "None".to_string(),
+            PeekSummary::Media => "Media".to_string(),
             PeekSummary::String(text) => truncate_string(text, budget.nested_limit),
             PeekSummary::Bool(v) => v.to_string(),
             PeekSummary::SignedInt(v) => v.to_string(),
@@ -926,6 +935,7 @@ fn render_inline_field_value(value: &StructFieldValue<'_, '_>, budget: RenderBud
 fn primitive_type_name_peek(value: Peek<'_, '_>) -> &'static str {
     match summarize_peek(value) {
         PeekSummary::None => "null",
+        PeekSummary::Media => "media",
         PeekSummary::String(_) => "string",
         PeekSummary::Bool(_) => "bool",
         PeekSummary::SignedInt(_) | PeekSummary::UnsignedInt(_) => "int",
@@ -1047,6 +1057,11 @@ fn unit_enum_variant(value: Peek<'_, '_>) -> Option<String> {
             .effective_name()
             .to_string(),
     )
+}
+
+fn is_media_shape(shape: &'static bamltype::facet::Shape) -> bool {
+    shape.type_identifier.ends_with("BamlMedia")
+        || shape.type_identifier.contains("::media::BamlMedia")
 }
 
 fn enum_has_data_variants(shape: &'static bamltype::facet::Shape) -> bool {
