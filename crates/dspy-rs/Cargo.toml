@@ -52,7 +52,7 @@ ignored = ["rig-core"]
 
 [features]
 default = []
-rlm = ["dep:pyo3"]
+rlm = ["dep:pyo3", "dsrs_macros/rlm"]
 
 [dev-dependencies]
 temp-env = { version = "0.3.6", features = ["async_closure"] }

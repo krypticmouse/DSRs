@@ -404,6 +404,16 @@ impl ChatAdapter {
         schema: &crate::SignatureSchema,
         instruction_override: Option<&str>,
     ) -> Result<String> {
+        if !self.is_structured_output()
+            && let Some(instruction_override) = instruction_override
+        {
+            trace!(
+                system_len = instruction_override.len(),
+                "formatted schema system prompt"
+            );
+            return Ok(instruction_override.to_string());
+        }
+
         let parts = if self.is_structured_output() {
             vec![
                 self.format_field_descriptions_schema(schema),

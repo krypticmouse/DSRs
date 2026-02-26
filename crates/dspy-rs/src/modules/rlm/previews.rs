@@ -8,6 +8,7 @@ use bamltype::facet_reflect::{HasFields, Peek};
 use crate::{
     BamlType, ConstraintKind, Facet, FieldPath, OutputFormatContent, Signature, SignatureSchema,
 };
+use super::runtime::MethodSignature;
 
 const TOP_LEVEL_STRING_LIMIT: usize = 500;
 const NESTED_STRING_LIMIT: usize = 100;
@@ -50,7 +51,10 @@ impl RenderBudget {
     }
 }
 
-pub(super) fn render_previews<S: Signature>(input: &S::Input) -> String
+pub(super) fn render_previews<S: Signature>(
+    input: &S::Input,
+    _methods_by_var: &BTreeMap<String, Vec<MethodSignature>>,
+) -> String
 where
     S::Input: BamlType + for<'a> Facet<'a>,
 {
@@ -85,7 +89,7 @@ fn render_with_budget(
     for field in schema.input_fields() {
         lines.push(format!(
             "{}: {}",
-            field.lm_name,
+            field.rust_name,
             field.type_ir.diagnostic_repr()
         ));
 

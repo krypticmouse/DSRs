@@ -13,6 +13,10 @@ license = "Apache-2.0"
 [lib]
 proc-macro = true
 
+[features]
+default = []
+rlm = []
+
 [dependencies]
 syn   = { version = "2", features = ["full"] }
 quote = "1"

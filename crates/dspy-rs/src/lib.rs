@@ -131,6 +131,8 @@ pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOption
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
 pub use facet::Facet;
+#[cfg(feature = "rlm")]
+pub use modules::rlm::RlmInputFields;
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -153,6 +155,8 @@ pub mod __macro_support {
     pub use schemars;
     pub use serde;
     pub use serde_json;
+    #[cfg(feature = "rlm")]
+    pub use pyo3;
 }
 
 #[macro_export]

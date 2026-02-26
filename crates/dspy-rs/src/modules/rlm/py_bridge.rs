@@ -7,12 +7,13 @@ use bamltype::jsonish::deserializer::coercer::run_user_checks;
 use bamltype::{BamlParseError, BamlType};
 use pyo3::IntoPyObjectExt;
 use pyo3::types::{
-    PyAnyMethods, PyBool, PyDict, PyDictMethods, PyList, PyListMethods, PyModule, PyString,
-    PyTuple, PyTupleMethods, PyTypeMethods,
+    PyAnyMethods, PyBool, PyDict, PyDictMethods, PyFloat, PyInt, PyList, PyListMethods, PyModule,
+    PyString, PyTuple, PyTupleMethods, PyTypeMethods,
 };
 use pyo3::{Bound, Py, PyAny, PyResult, Python};
 use serde_json::Value as JsonValue;
 
+use super::runtime::{InterpreterSetup, MethodSignature, MethodSource, RlmInputFields};
 use super::submit::SubmitHandler;
 use super::tools::LlmTools;
 use crate::{BamlConvertError, ConstraintLevel, ResponseCheck, Signature};
@@ -24,32 +25,25 @@ pub fn setup_interpreter_globals<S: Signature>(
     input: &S::Input,
     submit_handler: &SubmitHandler,
     llm_tools: Option<&LlmTools>,
-) -> PyResult<Py<PyDict>> {
+) -> PyResult<InterpreterSetup>
+where
+    S::Input: RlmInputFields,
+{
     let globals = PyDict::new(py);
 
-    let input_value = input.to_baml_value();
-    match input_value {
-        BamlValue::Class(_, ref fields) | BamlValue::Map(ref fields) => {
-            if let Some(name) = fields
-                .keys()
-                .find(|name| RESERVED_GLOBAL_NAMES.contains(&name.as_str()))
-            {
-                return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                    "RLM input field '{name}' conflicts with reserved runtime binding. Rename this field (reserved names: {}).",
-                    RESERVED_GLOBAL_NAMES.join(", ")
-                )));
-            }
-            for (name, value) in fields {
-                globals.set_item(name, baml_value_to_py(py, value)?)?;
-            }
-        }
-        other => {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "RLM input must serialize to object-like BamlValue, got {}",
-                other.r#type()
-            )));
-        }
+    if let Some(name) = input
+        .rlm_field_names()
+        .iter()
+        .copied()
+        .find(|name| RESERVED_GLOBAL_NAMES.contains(name))
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "RLM input field '{name}' conflicts with reserved runtime binding. Rename this field (reserved names: {}).",
+            RESERVED_GLOBAL_NAMES.join(", ")
+        )));
     }
+    input.inject_into_python(py, &globals)?;
+    let methods_by_var = collect_methods_by_var(py, &globals, input.rlm_field_names())?;
 
     if let Some(llm_tools) = llm_tools {
         let tools_py = Py::new(py, llm_tools.clone())?;
@@ -62,7 +56,189 @@ pub fn setup_interpreter_globals<S: Signature>(
     }
     globals.set_item("SUBMIT", Py::new(py, submit_handler.clone())?)?;
 
-    Ok(globals.unbind())
+    Ok(InterpreterSetup {
+        globals: globals.unbind(),
+        methods_by_var,
+    })
+}
+
+fn collect_methods_by_var(
+    py: Python<'_>,
+    globals: &Bound<'_, PyDict>,
+    field_names: &[&str],
+) -> PyResult<std::collections::BTreeMap<String, Vec<MethodSignature>>> {
+    let inspect = PyModule::import(py, "inspect")?;
+    let mut methods_by_var = std::collections::BTreeMap::new();
+
+    for field_name in field_names {
+        let Some(value) = globals.get_item(field_name)? else {
+            continue;
+        };
+        let methods = collect_visible_methods_for_object(&inspect, &value)?;
+        methods_by_var.insert((*field_name).to_string(), methods);
+    }
+
+    Ok(methods_by_var)
+}
+
+fn collect_visible_methods_for_object(
+    inspect: &Bound<'_, PyModule>,
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<MethodSignature>> {
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBool>()
+        || value.is_instance_of::<PyInt>()
+        || value.is_instance_of::<PyFloat>()
+        || value.is_instance_of::<PyList>()
+        || value.is_instance_of::<PyDict>()
+        || value.is_instance_of::<PyTuple>()
+    {
+        return Ok(Vec::new());
+    }
+
+    let class = value.get_type();
+    let members = inspect.call_method1("getmembers", (&class, inspect.getattr("isroutine")?))?;
+    let members = members.cast::<PyList>()?;
+    let mut methods = Vec::new();
+
+    for member in members.iter() {
+        let tuple = member.cast::<PyTuple>()?;
+        if tuple.len() != 2 {
+            continue;
+        }
+        let name = tuple.get_item(0)?.extract::<String>()?;
+        let is_dunder = name.starts_with("__") && name.ends_with("__");
+        if name == "__baml__"
+            || (is_dunder && !matches!(name.as_str(), "__len__" | "__iter__" | "__getitem__"))
+        {
+            continue;
+        }
+
+        let callable = tuple.get_item(1)?;
+        let doc = extract_trimmed_docstring(&callable)?;
+        if doc.is_empty() {
+            continue;
+        }
+
+        methods.push(MethodSignature {
+            signature: sanitize_signature(
+                &extract_signature(inspect, &callable).unwrap_or_else(|| "()".to_string()),
+            ),
+            source: classify_method_source(&name),
+            name,
+            doc,
+            is_dunder,
+        });
+    }
+
+    methods.sort_by(|a, b| {
+        a.name
+            .cmp(&b.name)
+            .then(a.signature.cmp(&b.signature))
+            .then(a.doc.cmp(&b.doc))
+    });
+    methods.dedup_by(|a, b| a.name == b.name && a.signature == b.signature);
+    Ok(methods)
+}
+
+fn extract_trimmed_docstring(callable: &Bound<'_, PyAny>) -> PyResult<String> {
+    let Some(raw_doc) = callable.getattr("__doc__")?.extract::<Option<String>>()? else {
+        return Ok(String::new());
+    };
+    Ok(raw_doc.trim().to_string())
+}
+
+fn extract_signature(
+    inspect: &Bound<'_, PyModule>,
+    callable: &Bound<'_, PyAny>,
+) -> Option<String> {
+    if let Ok(text_sig) = callable.getattr("__text_signature__")
+        && let Ok(Some(text_sig)) = text_sig.extract::<Option<String>>()
+    {
+        let trimmed = text_sig.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    inspect
+        .call_method1("signature", (callable,))
+        .ok()
+        .and_then(|sig| sig.str().ok())
+        .and_then(|sig| sig.extract::<String>().ok())
+        .map(|sig| sig.trim().to_string())
+        .filter(|sig| !sig.is_empty())
+        .or_else(|| {
+            callable
+                .call_method0("__signature__")
+                .ok()
+                .and_then(|sig| sig.str().ok())
+                .and_then(|sig| sig.extract::<String>().ok())
+                .map(|sig| sig.trim().to_string())
+                .filter(|sig| !sig.is_empty())
+        })
+        .or_else(|| {
+            None
+        })
+}
+
+fn sanitize_signature(raw_signature: &str) -> String {
+    let mut signature = raw_signature.trim().to_string();
+
+    if signature.starts_with("(self, /, ") {
+        signature = signature.replacen("(self, /, ", "(", 1);
+    } else if signature.starts_with("(self, ") {
+        signature = signature.replacen("(self, ", "(", 1);
+    } else if signature == "(self)" || signature == "(self, /)" {
+        signature = "()".to_string();
+    }
+    signature = signature.replace(", /)", ")");
+    signature = signature.replace(", /, ", ", ");
+
+    if !signature.starts_with('(') {
+        signature = format!("({signature})");
+    }
+
+    simplify_qualified_type_paths(&signature)
+}
+
+fn simplify_qualified_type_paths(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut token = String::new();
+
+    let flush = |out: &mut String, token: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        if token.contains('.') {
+            if let Some(last) = token.rsplit('.').next() {
+                out.push_str(last);
+            }
+        } else {
+            out.push_str(token);
+        }
+        token.clear();
+    };
+
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == '.' {
+            token.push(ch);
+        } else {
+            flush(&mut out, &mut token);
+            out.push(ch);
+        }
+    }
+    flush(&mut out, &mut token);
+    out
+}
+
+fn classify_method_source(name: &str) -> MethodSource {
+    match name {
+        "__len__" | "__iter__" | "__getitem__" | "__repr__" | "__baml__" => {
+            MethodSource::Generated
+        }
+        _ => MethodSource::Custom,
+    }
 }
 
 /// Convert BamlValue tree to Python objects recursively.

@@ -216,6 +216,31 @@ fn passthrough_user_message_has_no_marker_or_output_protocol_ceremony() {
 }
 
 #[test]
+fn passthrough_system_with_instruction_override_is_raw_instruction_only() {
+    let adapter = ChatAdapter::passthrough();
+    let override_instruction = "Use Python only.\nCall SUBMIT when done.";
+    let system = adapter
+        .format_system_message_typed_with_instruction::<PromptPartsSig>(Some(override_instruction))
+        .expect("passthrough system prompt should format");
+
+    assert_eq!(system, override_instruction);
+    assert!(!system.contains("Your input fields are:"));
+    assert!(!system.contains("Your objective is:"));
+}
+
+#[test]
+fn passthrough_system_without_override_keeps_existing_scaffolding() {
+    let adapter = ChatAdapter::passthrough();
+    let system = adapter
+        .format_system_message_typed::<PromptPartsSig>()
+        .expect("passthrough system prompt should format");
+
+    assert!(system.contains("Your input fields are:"));
+    assert!(system.contains("Your objective is:"));
+    assert!(system.contains("Answer the prompt using the provided context."));
+}
+
+#[test]
 fn demo_format_composes_user_and_assistant_parts() {
     let adapter = ChatAdapter::new();
     let demo = Example::<PromptPartsSig>::new(

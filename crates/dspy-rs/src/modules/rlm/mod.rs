@@ -21,8 +21,8 @@ mod tools;
 use previews::render_previews;
 use prompt::{render_action_instruction, render_extract_instruction};
 pub use runtime::{
-    DynRuntime, LlmTools, PyO3Runtime, RlmRuntime, StubRuntime, SubmitError, SubmitHandler,
-    SubmitResultDyn, SubmitSlot, clear_submit_slot, take_submit_result,
+    DynRuntime, LlmTools, PyO3Runtime, RlmInputFields, RlmRuntime, StubRuntime, SubmitError,
+    SubmitHandler, SubmitResultDyn, SubmitSlot, clear_submit_slot, take_submit_result,
 };
 pub use tools::LlmQuery;
 
@@ -82,7 +82,7 @@ struct RlmExtractSig<S: Signature>(PhantomData<S>);
 impl<S> Signature for RlmExtractSig<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     type Input = RlmExtractInput;
@@ -271,7 +271,7 @@ impl From<RlmError> for PredictError {
 pub struct Rlm<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     generate_action: Predict<RlmActionSig>,
@@ -288,7 +288,7 @@ where
 impl<S> Default for Rlm<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     fn default() -> Self {
@@ -299,7 +299,7 @@ where
 impl<S> Rlm<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     pub fn new() -> Self {
@@ -348,15 +348,16 @@ where
         } else {
             None
         };
-        let globals: Py<PyDict> = Python::attach(|py| {
+        let setup = Python::attach(|py| {
             self.runtime
                 .setup_interpreter_globals(py, input, &submit_handler, llm_tools.as_ref())
         })
         .map_err(|err| RlmError::Configuration {
             message: err.to_string(),
         })?;
+        let globals = setup.globals;
 
-        let previews = render_previews::<S>(input);
+        let previews = render_previews::<S>(input, &setup.methods_by_var);
         let mut history: Option<Chat> = None;
         let mut feedback: Option<String> = None;
         let mut turn_index = 1usize;
@@ -576,7 +577,7 @@ where
 impl<S> Module for Rlm<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     type Input = S::Input;
@@ -590,7 +591,7 @@ where
 pub struct RlmBuilder<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     config: RlmConfig,
@@ -603,7 +604,7 @@ where
 impl<S> RlmBuilder<S>
 where
     S: Signature,
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     fn new() -> Self {
@@ -681,7 +682,7 @@ where
 
 fn default_runtime<S: Signature>(max_llm_calls: usize) -> Arc<dyn RlmRuntime<S>>
 where
-    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     if let Ok(runtime_override) = std::env::var("DSPY_RS_RLM_RUNTIME") {

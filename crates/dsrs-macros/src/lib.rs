@@ -706,12 +706,14 @@ fn generate_signature_code(
     let name = &input.ident;
     let vis = &input.vis;
     let generics = &input.generics;
+    let input_name = format_ident!("{}Input", name);
 
     let helper_structs = generate_helper_structs(name, generics, parsed, vis, runtime)?;
     let input_metadata = generate_field_metadata(name, &parsed.input_fields, "INPUT", runtime)?;
     let output_metadata = generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
     let baml_delegation = generate_baml_delegation(name, generics, parsed, runtime);
     let signature_impl = generate_signature_impl(name, generics, parsed, runtime);
+    let rlm_input_impl = generate_rlm_input_impl(&input_name, generics, parsed, runtime);
 
     Ok(quote! {
         #helper_structs
@@ -719,7 +721,65 @@ fn generate_signature_code(
         #output_metadata
         #baml_delegation
         #signature_impl
+        #rlm_input_impl
     })
+}
+
+#[cfg(feature = "rlm")]
+fn generate_rlm_input_impl(
+    input_name: &Ident,
+    generics: &syn::Generics,
+    parsed: &ParsedSignature,
+    runtime: &syn::Path,
+) -> proc_macro2::TokenStream {
+    let field_names: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| LitStr::new(&field.ident.to_string(), proc_macro2::Span::call_site()))
+        .collect();
+    let field_idents: Vec<_> = parsed.input_fields.iter().map(|field| &field.ident).collect();
+    let field_types: Vec<_> = parsed.input_fields.iter().map(|field| &field.ty).collect();
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    quote! {
+        impl #impl_generics #runtime::RlmInputFields for #input_name #ty_generics #where_clause {
+            fn rlm_field_names(&self) -> &'static [&'static str] {
+                &[#(#field_names),*]
+            }
+
+            fn rlm_py_fields(
+                &self,
+                py: #runtime::__macro_support::pyo3::Python<'_>,
+            ) -> #runtime::__macro_support::pyo3::PyResult<Vec<(String, #runtime::__macro_support::pyo3::Py<#runtime::__macro_support::pyo3::PyAny>)>> {
+                Ok(vec![
+                    #(
+                        (
+                            #field_names.to_string(),
+                            #runtime::__macro_support::pyo3::IntoPyObjectExt::into_py_any(self.#field_idents.clone(), py).map_err(|err| {
+                                #runtime::__macro_support::pyo3::exceptions::PyTypeError::new_err(format!(
+                                    "RLM input field `{}` on `{}` (Rust type `{}`) could not convert to a Python object: {}. If this is a custom struct, ensure it is annotated with #[rlm_type].",
+                                    #field_names,
+                                    stringify!(#input_name),
+                                    ::std::any::type_name::<#field_types>(),
+                                    err
+                                ))
+                            })?,
+                        )
+                    ),*
+                ])
+            }
+        }
+    }
+}
+
+#[cfg(not(feature = "rlm"))]
+fn generate_rlm_input_impl(
+    _input_name: &Ident,
+    _generics: &syn::Generics,
+    _parsed: &ParsedSignature,
+    _runtime: &syn::Path,
+) -> proc_macro2::TokenStream {
+    proc_macro2::TokenStream::new()
 }
 
 fn generate_helper_structs(
