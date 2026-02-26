@@ -1,0 +1,5 @@
+error: rlm_type currently supports named structs only (no generics or lifetimes)
+ --> tests/ui/generics_not_supported.rs:4:8
+  |
+4 | struct Generic<T> {
+  |        ^^^^^^^

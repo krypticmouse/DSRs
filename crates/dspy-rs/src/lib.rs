@@ -133,6 +133,8 @@ pub use dsrs_macros::*;
 pub use facet::Facet;
 #[cfg(feature = "rlm")]
 pub use modules::rlm::RlmInputFields;
+#[cfg(feature = "rlm")]
+pub use rlm_derive::{RlmType, rlm_type};
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -152,11 +154,11 @@ pub mod __macro_support {
     pub use anyhow;
     pub use bamltype;
     pub use indexmap;
+    #[cfg(feature = "rlm")]
+    pub use pyo3;
     pub use schemars;
     pub use serde;
     pub use serde_json;
-    #[cfg(feature = "rlm")]
-    pub use pyo3;
 }
 
 #[macro_export]

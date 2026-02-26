@@ -1233,6 +1233,7 @@ dependencies = [
  "regex",
  "reqwest 0.13.2",
  "rig-core",
+ "rlm-derive",
  "rstest 0.25.0",
  "schemars",
  "serde",
@@ -3694,6 +3695,19 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "rlm-derive"
+version = "0.1.0"
+dependencies = [
+ "dspy-rs",
+ "facet",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+ "trybuild",
 ]
 
 [[package]]

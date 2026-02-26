@@ -46,13 +46,14 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["builtins", "serde"] }
 pyo3 = { version = "0.27", features = ["auto-initialize"], optional = true }
+rlm-derive = { path = "../rlm-derive", optional = true }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
 
 [features]
 default = []
-rlm = ["dep:pyo3", "dsrs_macros/rlm"]
+rlm = ["dep:pyo3", "dep:rlm-derive", "dsrs_macros/rlm"]
 
 [dev-dependencies]
 temp-env = { version = "0.3.6", features = ["async_closure"] }

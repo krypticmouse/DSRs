@@ -1,0 +1,5 @@
+error: RlmType requires a #[pyclass] attribute; use #[rlm_type] instead of deriving RlmType directly
+ --> tests/ui/missing_pyclass.rs:4:8
+  |
+4 | struct MissingPyclass {
+  |        ^^^^^^^^^^^^^^
