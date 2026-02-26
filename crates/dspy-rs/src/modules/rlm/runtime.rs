@@ -22,12 +22,18 @@ pub use submit::{clear_submit_slot, take_submit_result};
 /// a concrete PyO3-backed implementation by implementing this trait and wiring it
 /// through `RlmBuilder::runtime(...)`.
 pub trait RlmRuntime<S: Signature>: Send + Sync {
+    /// Whether this runtime needs sub-LM tools (`llm_query*`) to be installed.
+    /// Stub runtimes can return `false` so tests can run without sub-LM wiring.
+    fn requires_sub_lm_tools(&self) -> bool {
+        true
+    }
+
     fn setup_interpreter_globals(
         &self,
         py: Python<'_>,
         input: &S::Input,
         submit_handler: &SubmitHandler,
-        llm_tools: &LlmTools,
+        llm_tools: Option<&LlmTools>,
     ) -> PyResult<Py<PyDict>>;
 
     fn execute_repl_code(
@@ -38,7 +44,7 @@ pub trait RlmRuntime<S: Signature>: Send + Sync {
         max_output_chars: usize,
     ) -> Result<String, String>;
 
-    fn sub_lm_budget_remaining(&self, llm_tools: &LlmTools) -> usize;
+    fn sub_lm_budget_remaining(&self, llm_tools: Option<&LlmTools>) -> usize;
 }
 
 #[derive(Default, Debug, Clone)]
@@ -51,12 +57,16 @@ impl StubRuntime {
 }
 
 impl<S: Signature> RlmRuntime<S> for StubRuntime {
+    fn requires_sub_lm_tools(&self) -> bool {
+        false
+    }
+
     fn setup_interpreter_globals(
         &self,
         py: Python<'_>,
         _input: &S::Input,
         _submit_handler: &SubmitHandler,
-        _llm_tools: &LlmTools,
+        _llm_tools: Option<&LlmTools>,
     ) -> PyResult<Py<PyDict>> {
         Ok(PyDict::new(py).unbind())
     }
@@ -71,7 +81,7 @@ impl<S: Signature> RlmRuntime<S> for StubRuntime {
         Ok(String::new())
     }
 
-    fn sub_lm_budget_remaining(&self, _llm_tools: &LlmTools) -> usize {
+    fn sub_lm_budget_remaining(&self, _llm_tools: Option<&LlmTools>) -> usize {
         0
     }
 }
@@ -85,7 +95,7 @@ impl<S: Signature> RlmRuntime<S> for PyO3Runtime {
         py: Python<'_>,
         input: &S::Input,
         submit_handler: &SubmitHandler,
-        llm_tools: &LlmTools,
+        llm_tools: Option<&LlmTools>,
     ) -> PyResult<Py<PyDict>> {
         py_bridge::setup_interpreter_globals::<S>(py, input, submit_handler, llm_tools)
     }
@@ -100,8 +110,8 @@ impl<S: Signature> RlmRuntime<S> for PyO3Runtime {
         exec::execute_repl_code(py, globals, code, max_output_chars)
     }
 
-    fn sub_lm_budget_remaining(&self, llm_tools: &LlmTools) -> usize {
-        llm_tools.remaining_calls()
+    fn sub_lm_budget_remaining(&self, llm_tools: Option<&LlmTools>) -> usize {
+        llm_tools.map(LlmTools::remaining_calls).unwrap_or(0)
     }
 }
 

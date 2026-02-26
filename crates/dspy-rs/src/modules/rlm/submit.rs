@@ -140,37 +140,21 @@ impl SubmitHandler {
             let usage = format_submit_usage(&self.output_fields_lm);
             let mut errors = Vec::new();
             if !missing.is_empty() {
-                errors.push(format!("Missing fields: {:?}", missing));
+                errors.push(format!("missing fields: {:?}", missing));
             }
             if !unexpected.is_empty() {
-                errors.push(format!("Unexpected fields: {:?}", unexpected));
+                errors.push(format!("unexpected fields: {:?}", unexpected));
             }
+            errors.push(format!("use SUBMIT({usage})"));
 
-            let (message, user_message) = match (missing.is_empty(), unexpected.is_empty()) {
-                (false, true) => (
-                    "Missing output fields".to_string(),
-                    format!(
-                        "[Error] Missing output fields: {:?}. Use SUBMIT({usage})",
-                        missing
-                    ),
-                ),
-                (true, false) => (
-                    "Unexpected output fields".to_string(),
-                    format!(
-                        "[Error] Unexpected output fields: {:?}. Use SUBMIT({usage})",
-                        unexpected
-                    ),
-                ),
-                (false, false) => (
-                    "Invalid output fields".to_string(),
-                    format!(
-                        "[Error] Invalid output fields. Missing: {:?}. Unexpected: {:?}. Use SUBMIT({usage})",
-                        missing, unexpected
-                    ),
-                ),
+            let message = match (missing.is_empty(), unexpected.is_empty()) {
+                (false, true) => "Missing output fields".to_string(),
+                (true, false) => "Unexpected output fields".to_string(),
+                (false, false) => "Invalid output fields".to_string(),
                 (true, true) => unreachable!(),
             };
 
+            let user_message = format_submit_error("Validation failed", &errors, None);
             *self.slot.lock().expect("submit slot lock poisoned") =
                 Some(Err(SubmitError::ValidationError { message, errors }));
             return Ok(user_message);
@@ -201,9 +185,13 @@ impl SubmitHandler {
                         expression: failure.expression.clone(),
                     }));
 
-                Ok(format!(
-                    "[Error] Assertion '{}' failed: {}\nPlease fix and try again.",
-                    failure.name, failure.expression
+                Ok(format_submit_error(
+                    "Assertion failed",
+                    &[format!(
+                        "'{}': {} (please fix and try again)",
+                        failure.name, failure.expression
+                    )],
+                    None,
                 ))
             }
             Err(err) => {
@@ -214,15 +202,15 @@ impl SubmitHandler {
                         errors: errors.clone(),
                     }));
 
-                let joined = errors.join("\n");
-                if self.schema_description.is_empty() {
-                    Ok(joined)
-                } else {
-                    Ok(format!(
-                        "{}\n\nExpected schema:\n{}",
-                        joined, self.schema_description
-                    ))
-                }
+                Ok(format_submit_error(
+                    "Validation failed",
+                    &errors,
+                    if self.schema_description.is_empty() {
+                        None
+                    } else {
+                        Some(self.schema_description.as_str())
+                    },
+                ))
             }
         }
     }
@@ -261,15 +249,10 @@ fn format_parse_errors(
 ) -> Vec<String> {
     match err {
         BamlParseError::Convert(err) => vec![format_convert_error(kwargs, schema, err)],
-        BamlParseError::Jsonish(err) => vec![format!("[Error] {err}")],
+        BamlParseError::Jsonish(err) => vec![err.to_string()],
         BamlParseError::ConstraintAssertsFailed { failed } => failed
             .iter()
-            .map(|check| {
-                format!(
-                    "[Error] Assertion '{}' failed: {}",
-                    check.name, check.expression
-                )
-            })
+            .map(|check| format!("assertion '{}' failed: {}", check.name, check.expression))
             .collect(),
     }
 }
@@ -280,7 +263,7 @@ fn format_convert_error(
     err: &crate::BamlConvertError,
 ) -> String {
     if err.expected == "field" && err.got == "missing" {
-        return format!("[Error] Missing required field: {}", err.path_string());
+        return format!("missing required field: {}", err.path_string());
     }
 
     let expected = err
@@ -294,14 +277,32 @@ fn format_convert_error(
 
     match value_repr {
         Some(value_repr) => format!(
-            "[Error] field '{}' expected {}, got {} {}",
+            "field '{}' expected {}, got {} {}",
             field_path, expected, err.got, value_repr
         ),
         None => format!(
-            "[Error] field '{}' expected {}, got {}",
+            "field '{}' expected {}, got {}",
             field_path, expected, err.got
         ),
     }
+}
+
+fn format_submit_error(summary: &str, details: &[String], schema: Option<&str>) -> String {
+    let mut message = format!("SubmitError: {summary}");
+    if !details.is_empty() {
+        message.push('\n');
+        for detail in details {
+            message.push_str("  - ");
+            message.push_str(detail);
+            message.push('\n');
+        }
+        message.pop();
+    }
+    if let Some(schema) = schema {
+        message.push_str("\n\nExpected schema:\n");
+        message.push_str(schema);
+    }
+    message
 }
 
 fn first_path_value_repr(
@@ -475,12 +476,12 @@ mod tests {
             let message = handler
                 .__call__(py, Some(&kwargs))
                 .expect("missing field should return recoverable message");
-            assert!(message.contains("Missing output fields"));
+            assert!(message.contains("SubmitError: Validation failed"));
 
             let stored = take_submit_result(&slot).expect("slot must be populated");
             match stored {
                 Err(SubmitError::ValidationError { errors, .. }) => {
-                    assert!(errors.iter().any(|err| err.contains("Missing fields")));
+                    assert!(errors.iter().any(|err| err.contains("missing fields")));
                 }
                 other => panic!("unexpected stored result: {other:?}"),
             }
@@ -517,7 +518,7 @@ mod tests {
             let message = handler
                 .__call__(py, Some(&kwargs))
                 .expect("assertion failure should be recoverable");
-            assert!(message.contains("Assertion 'positive' failed"));
+            assert!(message.contains("SubmitError: Assertion failed"));
 
             let stored = take_submit_result(&slot).expect("slot must be populated");
             match stored {

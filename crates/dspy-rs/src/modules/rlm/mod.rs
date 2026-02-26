@@ -8,14 +8,18 @@ use rig::message::ToolCall;
 
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Facet, FieldMeta, LmUsage, Module,
-    Predict, PredictError, Predicted, Signature, SignatureSchema,
+    Predict, PredictError, Predicted, Signature,
 };
 
 mod exec;
+mod previews;
+mod prompt;
 mod py_bridge;
 pub mod runtime;
 mod submit;
 mod tools;
+use previews::render_previews;
+use prompt::render_action_instruction;
 pub use runtime::{
     DynRuntime, LlmTools, PyO3Runtime, RlmRuntime, StubRuntime, SubmitError, SubmitHandler,
     SubmitResultDyn, SubmitSlot, clear_submit_slot, take_submit_result,
@@ -26,11 +30,6 @@ const DEFAULT_MAX_ITERATIONS: usize = 20;
 const DEFAULT_MAX_LLM_CALLS: usize = 50;
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 100_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
-
-const ACTION_INSTRUCTION: &str = "You are operating inside a persistent Python REPL.\n\
-Write executable Python code that advances the task.\n\
-Use SUBMIT(field=value, ...) once you can return the final typed answer.\n\
-Do not add prose or markdown fences unless needed by the task.";
 
 const EXTRACT_INSTRUCTION: &str = "Extract the final typed answer from the REPL history.\n\
 Use the expected output schema exactly.";
@@ -322,27 +321,30 @@ where
 
         let submit_slot: SubmitSlot = Arc::new(Mutex::new(None));
         let submit_handler = SubmitHandler::new::<S>(Arc::clone(&submit_slot));
-        let sub_lm = self
-            .sub_lm
-            .clone()
-            .or_else(|| {
-                let guard = crate::GLOBAL_SETTINGS.read().ok()?;
-                guard.as_ref().map(|settings| Arc::clone(&settings.lm))
-            })
-            .ok_or_else(|| RlmError::Configuration {
-                message: "Rlm requires a configured LM (global configure() or builder.sub_lm(...))"
+        let sub_lm = self.sub_lm.clone().or_else(|| {
+            let guard = crate::GLOBAL_SETTINGS.read().ok()?;
+            guard.as_ref().map(|settings| Arc::clone(&settings.lm))
+        });
+        if self.runtime.requires_sub_lm_tools() && sub_lm.is_none() {
+            return Err(RlmError::Configuration {
+                message: "Rlm runtime requires a configured sub-LM (global configure() or builder.sub_lm(...))"
                     .to_string(),
-            })?;
-        let llm_tools = LlmTools::with_budget(
-            sub_lm,
-            self.config.max_llm_calls,
-            tokio::runtime::Handle::try_current().map_err(|err| RlmError::Configuration {
-                message: format!("Rlm requires an active Tokio runtime handle: {err}"),
-            })?,
-        );
+            });
+        }
+        let llm_tools = if self.runtime.requires_sub_lm_tools() {
+            Some(LlmTools::with_budget(
+                sub_lm.expect("sub_lm present when required by runtime"),
+                self.config.max_llm_calls,
+                tokio::runtime::Handle::try_current().map_err(|err| RlmError::Configuration {
+                    message: format!("Rlm requires an active Tokio runtime handle: {err}"),
+                })?,
+            ))
+        } else {
+            None
+        };
         let globals: Py<PyDict> = Python::attach(|py| {
             self.runtime
-                .setup_interpreter_globals(py, input, &submit_handler, &llm_tools)
+                .setup_interpreter_globals(py, input, &submit_handler, llm_tools.as_ref())
         })
         .map_err(|err| RlmError::Configuration {
             message: err.to_string(),
@@ -372,18 +374,6 @@ where
                 TurnDecision::Continue | TurnDecision::Finalization => {}
             }
 
-            let mut execution_feedback = feedback.clone();
-            if matches!(
-                self.decide_turn_policy(turn_index, self.config.max_iterations),
-                TurnDecision::Finalization
-            ) {
-                let directive = self.finalization_directive();
-                execution_feedback = Some(match execution_feedback {
-                    Some(existing) if !existing.is_empty() => format!("{existing}\n\n{directive}"),
-                    _ => directive,
-                });
-            }
-
             let budget_remaining = self
                 .config
                 .max_iterations
@@ -392,7 +382,7 @@ where
             let action_input = self.build_action_input(
                 turn_index,
                 Some(previews.as_str()),
-                execution_feedback.as_deref(),
+                feedback.as_deref(),
                 budget_remaining,
             );
 
@@ -408,13 +398,17 @@ where
                 } => {
                     acc.absorb_parse_metadata(raw_response, lm_usage);
                     history = Some(chat);
-                    let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(&llm_tools);
+                    let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+                    let next_turn_index = turn_index.saturating_add(1);
+                    let finalization_directive = (next_turn_index == self.config.max_iterations)
+                        .then(|| self.finalization_directive());
                     let parsed_feedback = format_feedback(
-                        turn_index,
+                        next_turn_index,
                         self.config.max_iterations.saturating_sub(turn_index),
                         sub_lm_remaining,
                         self.config.max_llm_calls,
                         &ExecOutcome::RecoverableParse { message: reason },
+                        finalization_directive.as_deref(),
                     );
                     feedback = Some(parsed_feedback);
                     turn_index += 1;
@@ -458,13 +452,19 @@ where
                             ));
                         }
                         other => {
-                            let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(&llm_tools);
+                            let sub_lm_remaining =
+                                self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+                            let next_turn_index = turn_index.saturating_add(1);
+                            let finalization_directive = (next_turn_index
+                                == self.config.max_iterations)
+                                .then(|| self.finalization_directive());
                             let rendered_feedback = format_feedback(
-                                turn_index,
+                                next_turn_index,
                                 self.config.max_iterations.saturating_sub(turn_index),
                                 sub_lm_remaining,
                                 self.config.max_llm_calls,
                                 &other,
+                                finalization_directive.as_deref(),
                             );
                             feedback = Some(rendered_feedback);
                             repl_history.entries.push(REPLEntry {
@@ -589,6 +589,7 @@ where
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
     config: RlmConfig,
+    instruction_override: Option<String>,
     sub_lm: Option<Arc<crate::LM>>,
     runtime: Option<Arc<dyn RlmRuntime<S>>>,
     _marker: PhantomData<S>,
@@ -603,6 +604,7 @@ where
     fn new() -> Self {
         Self {
             config: RlmConfig::default(),
+            instruction_override: None,
             sub_lm: None,
             runtime: None,
             _marker: PhantomData,
@@ -629,6 +631,11 @@ where
         self
     }
 
+    pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
+        self.instruction_override = Some(instruction.into());
+        self
+    }
+
     pub fn sub_lm(mut self, sub_lm: Arc<crate::LM>) -> Self {
         self.sub_lm = Some(sub_lm);
         self
@@ -640,8 +647,10 @@ where
     }
 
     pub fn build(self) -> Rlm<S> {
+        let action_instruction =
+            render_action_instruction::<S>(&self.config, self.instruction_override.as_deref());
         let generate_action = Predict::<RlmActionSig>::builder()
-            .instruction(ACTION_INSTRUCTION)
+            .instruction(action_instruction)
             .adapter(ChatAdapter::passthrough())
             .build();
         let extract = Predict::<RlmExtractSig<S>>::builder()
@@ -650,7 +659,7 @@ where
 
         let runtime = self
             .runtime
-            .unwrap_or_else(|| Arc::new(StubRuntime::new(self.config.max_llm_calls)));
+            .unwrap_or_else(|| default_runtime::<S>(self.config.max_llm_calls));
 
         Rlm {
             generate_action,
@@ -662,22 +671,52 @@ where
     }
 }
 
+fn default_runtime<S: Signature>(max_llm_calls: usize) -> Arc<dyn RlmRuntime<S>>
+where
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+    S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
+{
+    if let Ok(runtime_override) = std::env::var("DSPY_RS_RLM_RUNTIME") {
+        match runtime_override.trim().to_ascii_lowercase().as_str() {
+            "stub" => return Arc::new(StubRuntime::new(max_llm_calls)),
+            "pyo3" => return Arc::new(PyO3Runtime),
+            _ => {}
+        }
+    }
+
+    #[cfg(test)]
+    {
+        Arc::new(StubRuntime::new(max_llm_calls))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = max_llm_calls;
+        Arc::new(PyO3Runtime)
+    }
+}
+
 pub fn format_feedback(
     turn_index: usize,
     budget_remaining: usize,
     sub_lm_remaining: usize,
     max_llm_calls: usize,
     outcome: &ExecOutcome,
+    finalization_directive: Option<&str>,
 ) -> String {
     let header = format!(
-        "[Turn {turn_index} | {budget_remaining} turns remaining, {sub_lm_remaining}/{max_llm_calls} sub-model calls remaining]"
+        "[Turn {turn_index} | {budget_remaining} turns, {sub_lm_remaining}/{max_llm_calls} sub-model calls remaining]"
     );
     let body = outcome_to_raw_output(outcome);
-    if body.is_empty() {
+    let mut rendered = if body.is_empty() {
         header
     } else {
-        format!("{header}\n{body}")
+        format!("{header}\n\n{body}")
+    };
+    if let Some(directive) = finalization_directive {
+        rendered.push_str("\n\n");
+        rendered.push_str(directive);
     }
+    rendered
 }
 
 pub fn recoverable_outcome_from_parse_error(error: &PredictError) -> Option<(String, Chat)> {
@@ -693,37 +732,6 @@ pub fn recoverable_outcome_from_parse_error(error: &PredictError) -> Option<(Str
         )),
         _ => None,
     }
-}
-
-pub fn render_previews<S: Signature>(input: &S::Input) -> String
-where
-    S::Input: BamlType + for<'a> Facet<'a>,
-{
-    let schema = SignatureSchema::of::<S>();
-    let value = input.to_baml_value();
-
-    let mut lines = vec!["## Variables".to_string(), String::new()];
-    for field in schema.input_fields() {
-        let rendered_type = field.type_ir.diagnostic_repr().to_string();
-        lines.push(format!("{}: {}", field.lm_name, rendered_type));
-        if let Some(field_value) = schema.navigate_field(field.path(), &value) {
-            lines.push(format!("  {}", render_value_preview(field_value, 0)));
-        } else {
-            lines.push("  <missing>".to_string());
-        }
-    }
-
-    lines.push(String::new());
-    lines.push("## Expected Output".to_string());
-    for field in schema.output_fields() {
-        lines.push(format!(
-            "{}: {}",
-            field.lm_name,
-            field.type_ir.diagnostic_repr()
-        ));
-    }
-
-    lines.join("\n")
 }
 
 fn classify_exec_outcome(
@@ -795,93 +803,106 @@ fn outcome_to_raw_output(outcome: &ExecOutcome) -> String {
     }
 }
 
-fn render_value_preview(value: &BamlValue, depth: usize) -> String {
-    const MAX_DEPTH: usize = 2;
-    if depth >= MAX_DEPTH {
-        return summarize_value_shape(value);
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Signature;
+    use std::sync::Arc;
+    use temp_env::with_var;
+
+    #[derive(Signature, Clone, Debug)]
+    struct RuntimePolicySig {
+        #[input]
+        prompt: String,
+        #[output]
+        answer: String,
     }
 
-    match value {
-        BamlValue::String(s) => {
-            let len = s.chars().count();
-            if len <= 200 {
-                format!("String ({len} chars): {:?}", s)
-            } else {
-                let head: String = s.chars().take(100).collect();
-                let tail: String = s
-                    .chars()
-                    .rev()
-                    .take(100)
-                    .collect::<String>()
-                    .chars()
-                    .rev()
-                    .collect();
-                format!(
-                    "String ({len} chars): {:?} ... ({} chars omitted) ... {:?}",
-                    head,
-                    len.saturating_sub(200),
-                    tail
-                )
-            }
-        }
-        BamlValue::Int(n) => format!("Int: {n}"),
-        BamlValue::Float(f) => format!("Float: {f}"),
-        BamlValue::Bool(b) => format!("Bool: {b}"),
-        BamlValue::Null => "Null".to_string(),
-        BamlValue::Enum(name, variant) => format!("Enum {name}::{variant}"),
-        BamlValue::Media(_) => "Media (preview omitted)".to_string(),
-        BamlValue::List(items) => {
-            if items.is_empty() {
-                return "List (0 items)".to_string();
-            }
-            let mut sample_indices = vec![0usize];
-            let mid = items.len() / 2;
-            if mid != 0 && mid != items.len() - 1 {
-                sample_indices.push(mid);
-            }
-            if items.len() > 1 {
-                sample_indices.push(items.len() - 1);
-            }
-            sample_indices.sort_unstable();
-            sample_indices.dedup();
-
-            let samples = sample_indices
-                .into_iter()
-                .map(|idx| {
-                    format!(
-                        "sample[{idx}] = {}",
-                        render_value_preview(&items[idx], depth + 1)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("; ");
-            format!("List ({} items): {samples}", items.len())
-        }
-        BamlValue::Map(map) | BamlValue::Class(_, map) => {
-            let mut fields = map
-                .iter()
-                .take(4)
-                .map(|(k, v)| format!("{k}: {}", summarize_value_shape(v)))
-                .collect::<Vec<_>>();
-            if map.len() > 4 {
-                fields.push(format!("... ({} more)", map.len() - 4));
-            }
-            format!("Object {{{}}}", fields.join(", "))
-        }
+    #[test]
+    fn default_runtime_in_tests_uses_stub_policy() {
+        let runtime = default_runtime::<RuntimePolicySig>(3);
+        assert!(
+            !runtime.requires_sub_lm_tools(),
+            "test default runtime should be StubRuntime without required sub-LM tools"
+        );
     }
-}
 
-fn summarize_value_shape(value: &BamlValue) -> String {
-    match value {
-        BamlValue::String(s) => format!("String({} chars)", s.chars().count()),
-        BamlValue::Int(_) => "Int".to_string(),
-        BamlValue::Float(_) => "Float".to_string(),
-        BamlValue::Bool(_) => "Bool".to_string(),
-        BamlValue::Null => "Null".to_string(),
-        BamlValue::Enum(name, variant) => format!("Enum {name}::{variant}"),
-        BamlValue::Media(_) => "Media".to_string(),
-        BamlValue::List(items) => format!("List({} items)", items.len()),
-        BamlValue::Map(map) => format!("Map({} keys)", map.len()),
-        BamlValue::Class(name, map) => format!("Class {name}({} fields)", map.len()),
+    #[test]
+    fn default_runtime_override_to_pyo3_is_explicit() {
+        with_var("DSPY_RS_RLM_RUNTIME", Some("pyo3"), || {
+            let runtime = default_runtime::<RuntimePolicySig>(3);
+            assert!(
+                runtime.requires_sub_lm_tools(),
+                "explicit pyo3 override should require sub-LM tools"
+            );
+        });
+    }
+
+    #[test]
+    fn default_runtime_override_to_stub_is_explicit() {
+        with_var("DSPY_RS_RLM_RUNTIME", Some("stub"), || {
+            let runtime = default_runtime::<RuntimePolicySig>(3);
+            assert!(
+                !runtime.requires_sub_lm_tools(),
+                "explicit stub override should not require sub-LM tools"
+            );
+        });
+    }
+
+    #[test]
+    fn action_input_is_asymmetric_between_first_and_later_turns() {
+        let module = Rlm::<RuntimePolicySig>::builder().build();
+
+        let turn1 = module.build_action_input(1, Some("preview block"), Some("feedback"), 20);
+        assert_eq!(turn1.variables_info.as_deref(), Some("preview block"));
+        assert!(turn1.execution_feedback.is_none());
+        assert_eq!(turn1.budget_remaining, 20);
+
+        let turn2 = module.build_action_input(2, Some("preview block"), Some("feedback"), 19);
+        assert!(turn2.variables_info.is_none());
+        assert_eq!(turn2.execution_feedback.as_deref(), Some("feedback"));
+        assert_eq!(turn2.budget_remaining, 19);
+    }
+
+    #[test]
+    fn feedback_uses_next_turn_framing_and_supports_finalization_directive() {
+        let feedback = format_feedback(
+            2,
+            19,
+            50,
+            50,
+            &ExecOutcome::Continue {
+                code: "print('ok')".to_string(),
+                output: "ok".to_string(),
+            },
+            Some("This is your final turn. Call SUBMIT(answer=...) now with your best answer."),
+        );
+
+        assert!(feedback.contains("[Turn 2 | 19 turns, 50/50 sub-model calls remaining]"));
+        assert!(feedback.contains("\n\nok"));
+        assert!(feedback.contains("This is your final turn. Call SUBMIT(answer=...) now"));
+    }
+
+    #[tokio::test]
+    async fn pyo3_runtime_requires_sub_lm_when_not_configured() {
+        let module = Rlm::<RuntimePolicySig>::builder()
+            .runtime(Arc::new(PyO3Runtime))
+            .build();
+
+        let err = module
+            .call(RuntimePolicySigInput {
+                prompt: "ping".to_string(),
+            })
+            .await
+            .expect_err("missing sub-LM should fail before first action turn");
+        match err {
+            PredictError::Module { source, .. } => {
+                assert!(
+                    source.to_string().contains("configured sub-LM"),
+                    "expected sub-LM config error, got: {source}"
+                );
+            }
+            other => panic!("expected module error, got: {other}"),
+        }
     }
 }

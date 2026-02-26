@@ -204,7 +204,11 @@ async fn test_lm_cache_direct_operations() {
 #[cfg_attr(miri, ignore)]
 async fn test_lm_cache_with_different_models() {
     // Test that cache works with different model configurations
-    let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
+    let models = vec![
+        "openai:gpt-3.5-turbo",
+        "openai-responses:gpt-4o-mini",
+        "anthropic:claude-3-haiku-20240307",
+    ];
 
     for model in models {
         let lm = temp_env::async_with_vars(
@@ -224,6 +228,19 @@ async fn test_lm_cache_with_different_models() {
             model
         );
     }
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn test_lm_local_openai_responses_provider_builds() {
+    let lm = LM::builder()
+        .base_url("http://localhost:11434/v1".to_string())
+        .model("openai-responses:gpt-5.2".to_string())
+        .build()
+        .await
+        .expect("openai-responses local build should succeed");
+
+    assert_eq!(lm.model, "openai-responses:gpt-5.2");
 }
 
 #[tokio::test]

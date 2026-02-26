@@ -77,6 +77,7 @@ impl CompletionProvider for TestCompletionModel {
 #[derive(Clone)]
 pub enum LMClient {
     OpenAI(openai::completion::CompletionModel),
+    OpenAIResponses(openai::responses_api::ResponsesCompletionModel),
     Gemini(gemini::completion::CompletionModel),
     Anthropic(anthropic::completion::CompletionModel),
     Groq(groq::CompletionModel<reqwest::Client>),
@@ -99,6 +100,16 @@ impl CompletionProvider for openai::completion::CompletionModel {
     ) -> Result<CompletionResponse<()>, CompletionError> {
         let response = rig::completion::CompletionModel::completion(self, request).await?;
         // Convert the typed response to unit type
+        Ok(to_unit_completion_response(response))
+    }
+}
+
+impl CompletionProvider for openai::responses_api::ResponsesCompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        let response = rig::completion::CompletionModel::completion(self, request).await?;
         Ok(to_unit_completion_response(response))
     }
 }
@@ -213,6 +224,20 @@ impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
 }
 
 impl LMClient {
+    fn parse_openai_model(model: &str) -> (&str, bool) {
+        if let Some(rest) = model
+            .strip_prefix("openai-responses:")
+            .or_else(|| model.strip_prefix("openai_responses:"))
+            .or_else(|| model.strip_prefix("openai.responses:"))
+        {
+            return (rest, true);
+        }
+        if let Some(rest) = model.strip_prefix("openai:") {
+            return (rest, false);
+        }
+        (model, false)
+    }
+
     #[tracing::instrument(
         name = "dsrs.lm.client.get_api_key",
         level = "trace",
@@ -236,15 +261,27 @@ impl LMClient {
         fields(model, base_url_present = true, api_key_present = true)
     )]
     pub fn from_openai_compatible(base_url: &str, api_key: &str, model: &str) -> Result<Self> {
-        trace!(base_url, "creating openai-compatible client");
-        let client = openai::CompletionsClient::builder()
-            .api_key(api_key)
-            .base_url(base_url)
-            .build()?;
-        debug!("openai-compatible client ready");
-        Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
-            client, model,
-        )))
+        let (model, use_responses) = Self::parse_openai_model(model);
+        trace!(base_url, use_responses, "creating openai-compatible client");
+        if use_responses {
+            let client = openai::Client::builder()
+                .api_key(api_key)
+                .base_url(base_url)
+                .build()?;
+            debug!("openai-compatible responses client ready");
+            Ok(LMClient::OpenAIResponses(
+                openai::responses_api::ResponsesCompletionModel::new(client, model),
+            ))
+        } else {
+            let client = openai::CompletionsClient::builder()
+                .api_key(api_key)
+                .base_url(base_url)
+                .build()?;
+            debug!("openai-compatible client ready");
+            Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
+                client, model,
+            )))
+        }
     }
 
     /// Build case 2: Local OpenAI-compatible model from base_url (vLLM, etc.)
@@ -256,15 +293,30 @@ impl LMClient {
         fields(model, base_url_present = true)
     )]
     pub fn from_local(base_url: &str, model: &str) -> Result<Self> {
-        trace!(base_url, "creating local openai-compatible client");
-        let client = openai::CompletionsClient::builder()
-            .api_key("dummy-key-for-local-server")
-            .base_url(base_url)
-            .build()?;
-        debug!("local openai-compatible client ready");
-        Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
-            client, model,
-        )))
+        let (model, use_responses) = Self::parse_openai_model(model);
+        trace!(
+            base_url,
+            use_responses, "creating local openai-compatible client"
+        );
+        if use_responses {
+            let client = openai::Client::builder()
+                .api_key("dummy-key-for-local-server")
+                .base_url(base_url)
+                .build()?;
+            debug!("local openai-compatible responses client ready");
+            Ok(LMClient::OpenAIResponses(
+                openai::responses_api::ResponsesCompletionModel::new(client, model),
+            ))
+        } else {
+            let client = openai::CompletionsClient::builder()
+                .api_key("dummy-key-for-local-server")
+                .base_url(base_url)
+                .build()?;
+            debug!("local openai-compatible client ready");
+            Ok(LMClient::OpenAI(openai::completion::CompletionModel::new(
+                client, model,
+            )))
+        }
     }
 
     /// Build case 3: From provider via model name (provider:model format)
@@ -286,6 +338,14 @@ impl LMClient {
         tracing::Span::current().record("model_id", tracing::field::display(model_id));
 
         match provider {
+            "openai-responses" | "openai_responses" | "openai.responses" => {
+                debug!("selecting openai responses provider");
+                let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
+                let client = openai::Client::builder().api_key(key.as_ref()).build()?;
+                Ok(LMClient::OpenAIResponses(
+                    openai::responses_api::ResponsesCompletionModel::new(client, model_id),
+                ))
+            }
             "openai" => {
                 debug!("selecting openai provider");
                 let key = Self::get_api_key(api_key, "OPENAI_API_KEY")?;
@@ -340,7 +400,7 @@ impl LMClient {
             _ => {
                 warn!(provider, "unsupported provider");
                 anyhow::bail!(
-                    "Unsupported provider: {}. Supported providers are: openai, anthropic, gemini, groq, openrouter, ollama",
+                    "Unsupported provider: {}. Supported providers are: openai, openai-responses, anthropic, gemini, groq, openrouter, ollama",
                     provider
                 );
             }

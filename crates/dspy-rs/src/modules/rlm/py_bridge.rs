@@ -21,7 +21,7 @@ pub fn setup_interpreter_globals<S: Signature>(
     py: Python<'_>,
     input: &S::Input,
     submit_handler: &SubmitHandler,
-    llm_tools: &LlmTools,
+    llm_tools: Option<&LlmTools>,
 ) -> PyResult<Py<PyDict>> {
     let globals = PyDict::new(py);
 
@@ -40,13 +40,15 @@ pub fn setup_interpreter_globals<S: Signature>(
         }
     }
 
-    let tools_py = Py::new(py, llm_tools.clone())?;
-    let tools_bound = tools_py.bind(py);
-    globals.set_item("llm_query", tools_bound.getattr("llm_query")?)?;
-    globals.set_item(
-        "llm_query_batched",
-        tools_bound.getattr("llm_query_batched")?,
-    )?;
+    if let Some(llm_tools) = llm_tools {
+        let tools_py = Py::new(py, llm_tools.clone())?;
+        let tools_bound = tools_py.bind(py);
+        globals.set_item("llm_query", tools_bound.getattr("llm_query")?)?;
+        globals.set_item(
+            "llm_query_batched",
+            tools_bound.getattr("llm_query_batched")?,
+        )?;
+    }
     globals.set_item("SUBMIT", Py::new(py, submit_handler.clone())?)?;
 
     Ok(globals.unbind())
@@ -969,10 +971,11 @@ mod tests {
                     count: 3,
                 };
 
-                let globals = setup_interpreter_globals::<BridgeSig>(py, &input, &submit, &tools)
-                    .expect("setup globals")
-                    .bind(py)
-                    .clone();
+                let globals =
+                    setup_interpreter_globals::<BridgeSig>(py, &input, &submit, Some(&tools))
+                        .expect("setup globals")
+                        .bind(py)
+                        .clone();
 
                 assert!(globals.get_item("question").expect("getitem").is_some());
                 assert!(globals.get_item("count").expect("getitem").is_some());
@@ -985,6 +988,34 @@ mod tests {
                 );
                 assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
             });
+        });
+    }
+
+    #[test]
+    fn setup_interpreter_globals_without_sub_lm_tools_still_injects_submit_and_inputs() {
+        Python::attach(|py| {
+            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
+            let submit = SubmitHandler::new::<BridgeSig>(Arc::clone(&slot));
+            let input = BridgeSigInput {
+                question: "what?".to_string(),
+                count: 3,
+            };
+
+            let globals = setup_interpreter_globals::<BridgeSig>(py, &input, &submit, None)
+                .expect("setup globals")
+                .bind(py)
+                .clone();
+
+            assert!(globals.get_item("question").expect("getitem").is_some());
+            assert!(globals.get_item("count").expect("getitem").is_some());
+            assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
+            assert!(globals.get_item("llm_query").expect("getitem").is_none());
+            assert!(
+                globals
+                    .get_item("llm_query_batched")
+                    .expect("getitem")
+                    .is_none()
+            );
         });
     }
 }

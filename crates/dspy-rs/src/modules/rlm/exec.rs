@@ -155,7 +155,9 @@ fn truncate_capture_output(text: &str, max_chars: usize) -> String {
     let head: String = text.chars().take(head_len).collect();
     let tail: String = text.chars().skip(total.saturating_sub(tail_len)).collect();
 
-    format!("{head}\n... (truncated)\n{tail}")
+    format!(
+        "{head}\n[output truncated at {max_chars} chars - full content in variable. pass to llm_query() to analyze]\n{tail}"
+    )
 }
 
 #[cfg(test)]
@@ -207,7 +209,9 @@ mod tests {
             let globals = PyDict::new(py).unbind();
             let output = execute_repl_code(py, &globals, "print('abcdefghijklmnopqrstuvwxyz')", 10)
                 .expect("exec");
-            assert!(output.contains("... (truncated)"));
+            assert!(output.contains(
+                "[output truncated at 10 chars - full content in variable. pass to llm_query() to analyze]"
+            ));
             assert!(output.starts_with("abcde"));
             assert!(output.ends_with("wxyz\n"));
         });
@@ -275,7 +279,9 @@ mod tests {
             )
             .expect_err("should fail");
 
-            assert!(err.contains("... (truncated)"));
+            assert!(err.contains(
+                "[output truncated at 20 chars - full content in variable. pass to llm_query() to analyze]"
+            ));
             assert!(err.chars().count() > 20);
         });
     }
