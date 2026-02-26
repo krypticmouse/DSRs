@@ -30,6 +30,7 @@ const DEFAULT_MAX_ITERATIONS: usize = 20;
 const DEFAULT_MAX_LLM_CALLS: usize = 50;
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 100_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
+const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
 
 const EXTRACT_INSTRUCTION: &str = "Extract the final typed answer from the REPL history.\n\
 Use the expected output schema exactly.";
@@ -514,14 +515,15 @@ where
                     raw_response,
                     lm_usage,
                     chat,
-                } if raw_response.trim().is_empty() => Ok(ActionTurn::RecoverableParse {
-                    raw_response,
-                    lm_usage,
-                    chat,
-                    reason: format!(
-                        "Empty response from model ({source}). Write executable Python code."
-                    ),
-                }),
+                } if raw_response.trim().is_empty() => {
+                    let reason = format_empty_response_recovery_reason(&raw_response, &source);
+                    Ok(ActionTurn::RecoverableParse {
+                        raw_response,
+                        lm_usage,
+                        chat,
+                        reason,
+                    })
+                }
                 other => Err(RlmError::ActionPredict { source: other }),
             },
         }
@@ -727,11 +729,29 @@ pub fn recoverable_outcome_from_parse_error(error: &PredictError) -> Option<(Str
             source,
             ..
         } if raw_response.trim().is_empty() => Some((
-            format!("Empty response from model ({source}). Write executable Python code."),
+            format_empty_response_recovery_reason(raw_response, source),
             chat.clone(),
         )),
         _ => None,
     }
+}
+
+fn format_empty_response_recovery_reason(
+    raw_response: &str,
+    source: &impl std::fmt::Display,
+) -> String {
+    let total_chars = raw_response.chars().count();
+    let mut snippet = raw_response
+        .chars()
+        .take(MAX_RECOVERABLE_PARSE_SNIPPET_CHARS)
+        .collect::<String>();
+    if total_chars > MAX_RECOVERABLE_PARSE_SNIPPET_CHARS {
+        snippet.push_str("...");
+    }
+
+    format!(
+        "Empty response from model ({source}). Write executable Python code. Raw response: len={total_chars}, snippet={snippet:?}."
+    )
 }
 
 fn classify_exec_outcome(
@@ -992,6 +1012,8 @@ mod tests {
         let recovered = recoverable_outcome_from_parse_error(&empty_err)
             .expect("empty response should be recoverable");
         assert!(recovered.0.contains("Empty response from model"));
+        assert!(recovered.0.contains("Raw response: len="));
+        assert!(recovered.0.contains("\\n\\t"));
 
         let non_empty_err = PredictError::Parse {
             source: ParseError::ExtractionFailed {
