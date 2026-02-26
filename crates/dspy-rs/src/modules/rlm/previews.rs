@@ -5,10 +5,10 @@ use bamltype::baml_types::ir_type::{TypeGeneric, UnionTypeViewGeneric};
 use bamltype::facet::{Type, UserType};
 use bamltype::facet_reflect::{HasFields, Peek};
 
+use super::runtime::{MethodSignature, MethodSource};
 use crate::{
     BamlType, ConstraintKind, Facet, FieldPath, OutputFormatContent, Signature, SignatureSchema,
 };
-use super::runtime::MethodSignature;
 
 const TOP_LEVEL_STRING_LIMIT: usize = 500;
 const NESTED_STRING_LIMIT: usize = 100;
@@ -17,6 +17,9 @@ const STRUCT_PREVIEW_BREADTH_CAP: usize = 8;
 const SOFT_PREVIEW_BUDGET: usize = 4 * 1024;
 const FIELD_STATS_FULL_SCAN: usize = 2_000;
 const FIELD_STATS_SAMPLE: usize = 512;
+const MAX_METHODS_DEFAULT: usize = 5;
+const MAX_METHODS_SHORT: usize = 4;
+const MAX_METHODS_TIGHT: usize = 3;
 
 #[derive(Clone, Copy)]
 struct RenderBudget {
@@ -53,7 +56,7 @@ impl RenderBudget {
 
 pub(super) fn render_previews<S: Signature>(
     input: &S::Input,
-    _methods_by_var: &BTreeMap<String, Vec<MethodSignature>>,
+    methods_by_var: &BTreeMap<String, Vec<MethodSignature>>,
 ) -> String
 where
     S::Input: BamlType + for<'a> Facet<'a>,
@@ -69,7 +72,7 @@ where
     ];
 
     for budget in budgets {
-        let rendered = render_with_budget(schema, root, input_format, budget);
+        let rendered = render_with_budget(schema, root, input_format, methods_by_var, budget);
         if rendered.chars().count() <= SOFT_PREVIEW_BUDGET || !budget.include_middle_samples {
             return rendered;
         }
@@ -82,6 +85,7 @@ fn render_with_budget(
     schema: &SignatureSchema,
     root: Peek<'_, '_>,
     input_format: &OutputFormatContent,
+    methods_by_var: &BTreeMap<String, Vec<MethodSignature>>,
     budget: RenderBudget,
 ) -> String {
     let mut lines = vec!["## Variables".to_string(), String::new()];
@@ -115,6 +119,12 @@ fn render_with_budget(
         } else {
             lines.push("  <missing>".to_string());
         }
+        render_methods_section(
+            &mut lines,
+            &field.rust_name,
+            methods_by_var.get(&field.rust_name).map(Vec::as_slice),
+            budget,
+        );
 
         lines.push(String::new());
     }
@@ -133,6 +143,92 @@ fn render_with_budget(
     }
 
     lines.join("\n")
+}
+
+fn render_methods_section(
+    lines: &mut Vec<String>,
+    var_name: &str,
+    methods: Option<&[MethodSignature]>,
+    budget: RenderBudget,
+) {
+    let Some(methods) = methods else {
+        return;
+    };
+    if methods.is_empty() {
+        return;
+    }
+
+    let mut ordered = methods.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|method| {
+        (
+            method_source_rank(method.source),
+            method.is_dunder,
+            method.name.as_str(),
+        )
+    });
+
+    lines.push("  Methods:".to_string());
+    let max_methods = max_methods_for_budget(budget);
+    let doc_limit = budget.nested_limit.max(48);
+
+    for method in ordered.iter().take(max_methods) {
+        lines.push(format!(
+            "    .{}{}",
+            method.name,
+            normalized_signature(&method.signature)
+        ));
+        let doc = truncate_one_line(&method.doc, doc_limit);
+        if !doc.is_empty() {
+            lines.push(format!("      {doc}"));
+        }
+    }
+
+    if ordered.len() > max_methods {
+        lines.push(format!(
+            "    ... ({} more methods; use help({var_name}) for full list)",
+            ordered.len() - max_methods
+        ));
+    }
+}
+
+const fn max_methods_for_budget(budget: RenderBudget) -> usize {
+    if !budget.include_middle_samples {
+        MAX_METHODS_TIGHT
+    } else if budget.top_level_limit <= 320 {
+        MAX_METHODS_SHORT
+    } else {
+        MAX_METHODS_DEFAULT
+    }
+}
+
+const fn method_source_rank(source: MethodSource) -> u8 {
+    match source {
+        MethodSource::Custom => 0,
+        MethodSource::Generated => 1,
+    }
+}
+
+fn normalized_signature(signature: &str) -> String {
+    let sig = signature.trim();
+    if sig.is_empty() {
+        "()".to_string()
+    } else if sig.starts_with('(') {
+        sig.to_string()
+    } else {
+        format!("({sig})")
+    }
+}
+
+fn truncate_one_line(text: &str, limit: usize) -> String {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= limit {
+        return collapsed;
+    }
+    let head = collapsed
+        .chars()
+        .take(limit.saturating_sub(3))
+        .collect::<String>();
+    format!("{head}...")
 }
 
 fn render_value_block(
@@ -1194,11 +1290,19 @@ fn number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use crate::{BamlType, Signature};
 
-    use super::render_previews;
+    use super::super::runtime::{MethodSignature, MethodSource};
+    use super::render_previews as render_previews_with_methods;
+
+    fn render_previews<S: Signature>(input: &S::Input) -> String
+    where
+        S::Input: BamlType + for<'a> crate::Facet<'a>,
+    {
+        render_previews_with_methods::<S>(input, &BTreeMap::new())
+    }
 
     #[derive(Clone, Debug)]
     #[BamlType]
@@ -1428,6 +1532,71 @@ mod tests {
         assert!(rendered.contains("Distribution:"));
         assert!(rendered.contains("Ready: 2"));
         assert!(rendered.contains("Count: 3 items"));
+    }
+
+    #[test]
+    fn method_preview_renders_custom_methods_before_dunders() {
+        let rendered = render_previews_with_methods::<ScalarSig>(
+            &ScalarSigInput {
+                text: "hello".to_string(),
+                payload: "{}".to_string(),
+            },
+            &BTreeMap::from([(
+                "text".to_string(),
+                vec![
+                    MethodSignature {
+                        name: "__len__".to_string(),
+                        signature: "()".to_string(),
+                        doc: "Length of this value.".to_string(),
+                        source: MethodSource::Generated,
+                        is_dunder: true,
+                    },
+                    MethodSignature {
+                        name: "search".to_string(),
+                        signature: "(query: str) -> list[Step]".to_string(),
+                        doc: "Search matching entries.".to_string(),
+                        source: MethodSource::Custom,
+                        is_dunder: false,
+                    },
+                ],
+            )]),
+        );
+
+        let search = rendered.find(".search(").expect("search should be visible");
+        let dunder_len = rendered
+            .find(".__len__()")
+            .expect("__len__ should be visible");
+        assert!(search < dunder_len);
+        assert!(rendered.contains("Methods:"));
+    }
+
+    #[test]
+    fn method_preview_truncates_and_reports_remaining_methods() {
+        let methods = (0..7)
+            .rev()
+            .map(|idx| MethodSignature {
+                name: format!("m{idx}"),
+                signature: "()".to_string(),
+                doc: format!(
+                    "Long description for method {idx}. This should truncate to keep preview compact."
+                ),
+                source: MethodSource::Custom,
+                is_dunder: false,
+            })
+            .collect::<Vec<_>>();
+
+        let rendered = render_previews_with_methods::<ScalarSig>(
+            &ScalarSigInput {
+                text: "hello".to_string(),
+                payload: "{}".to_string(),
+            },
+            &BTreeMap::from([("text".to_string(), methods)]),
+        );
+
+        assert!(rendered.contains(".m0()"));
+        assert!(rendered.contains(".m4()"));
+        assert!(!rendered.contains(".m5()"));
+        assert!(rendered.contains("... (2 more methods; use help(text) for full list)"));
     }
 
     #[test]
