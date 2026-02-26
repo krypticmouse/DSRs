@@ -279,4 +279,49 @@ mod tests {
             assert!(err.to_string().contains("mock failure for bad"));
         });
     }
+
+    #[test]
+    fn shared_budget_is_enforced_across_single_and_batched_calls() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let tools = LlmTools::with_budget(Arc::new(MockLm::default()), 3, Handle::current());
+
+            let first = tools.llm_query("one".to_string()).expect("first call");
+            assert_eq!(first, "answer:one");
+            assert_eq!(tools.remaining_calls(), 2);
+
+            let responses = tools
+                .llm_query_batched(vec!["two".to_string(), "three".to_string()])
+                .expect("batched call");
+            assert_eq!(responses, vec!["answer:two", "answer:three"]);
+            assert_eq!(tools.remaining_calls(), 0);
+
+            let err = tools
+                .llm_query("four".to_string())
+                .expect_err("budget should be exhausted");
+            assert!(err.to_string().contains("budget exhausted"));
+        });
+    }
+
+    #[test]
+    fn empty_batched_call_returns_immediately_without_consuming_budget() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let tools = LlmTools::with_budget(Arc::new(MockLm::default()), 2, Handle::current());
+
+            let responses = tools
+                .llm_query_batched(Vec::new())
+                .expect("empty batch should be valid");
+            assert!(responses.is_empty());
+            assert_eq!(tools.remaining_calls(), 2);
+        });
+    }
 }
