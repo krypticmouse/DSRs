@@ -17,6 +17,8 @@ use super::submit::SubmitHandler;
 use super::tools::LlmTools;
 use crate::{BamlConvertError, ConstraintLevel, ResponseCheck, Signature};
 
+const RESERVED_GLOBAL_NAMES: [&str; 3] = ["llm_query", "llm_query_batched", "SUBMIT"];
+
 pub fn setup_interpreter_globals<S: Signature>(
     py: Python<'_>,
     input: &S::Input,
@@ -28,6 +30,15 @@ pub fn setup_interpreter_globals<S: Signature>(
     let input_value = input.to_baml_value();
     match input_value {
         BamlValue::Class(_, ref fields) | BamlValue::Map(ref fields) => {
+            if let Some(name) = fields
+                .keys()
+                .find(|name| RESERVED_GLOBAL_NAMES.contains(&name.as_str()))
+            {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "RLM input field '{name}' conflicts with reserved runtime binding. Rename this field (reserved names: {}).",
+                    RESERVED_GLOBAL_NAMES.join(", ")
+                )));
+            }
             for (name, value) in fields {
                 globals.set_item(name, baml_value_to_py(py, value)?)?;
             }
@@ -868,6 +879,15 @@ mod tests {
         score: i64,
     }
 
+    #[derive(Signature, Clone, Debug)]
+    struct ReservedNameSig {
+        #[input]
+        llm_query: String,
+
+        #[output]
+        answer: String,
+    }
+
     struct MockLm;
 
     #[async_trait::async_trait]
@@ -1032,6 +1052,23 @@ mod tests {
                     .expect("getitem")
                     .is_none()
             );
+        });
+    }
+
+    #[test]
+    fn setup_interpreter_globals_rejects_reserved_input_names() {
+        Python::attach(|py| {
+            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
+            let submit = SubmitHandler::new::<ReservedNameSig>(Arc::clone(&slot));
+            let input = ReservedNameSigInput {
+                llm_query: "collision".to_string(),
+            };
+
+            let err = setup_interpreter_globals::<ReservedNameSig>(py, &input, &submit, None)
+                .expect_err("reserved input names should fail setup");
+            let message = err.to_string();
+            assert!(message.contains("llm_query"));
+            assert!(message.contains("reserved runtime binding"));
         });
     }
 

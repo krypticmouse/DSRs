@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use tokio::runtime::Handle;
+use tokio::runtime::{Handle, RuntimeFlavor};
 
 use crate::LM;
 use crate::core::lm::{Chat, Message, ToolLoopMode};
@@ -98,11 +98,27 @@ impl LlmTools {
         Ok(())
     }
 
-    fn block_with_runtime<F, T>(&self, fut: F) -> T
+    fn block_with_runtime<F, T>(&self, fut: F) -> PyResult<T>
     where
         F: Future<Output = T>,
     {
-        tokio::task::block_in_place(|| self.handle.block_on(fut))
+        let current_handle = Handle::try_current().map_err(|err| {
+            Self::runtime_error(format!("an active Tokio runtime is required: {err}"))
+        })?;
+        if current_handle.runtime_flavor() == RuntimeFlavor::CurrentThread {
+            return Err(Self::runtime_error(
+                "llm_query requires a multi-thread Tokio runtime; current-thread runtime is not supported",
+            ));
+        }
+
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tokio::task::block_in_place(|| self.handle.block_on(fut))
+        }))
+        .map_err(|_| {
+            Self::runtime_error(
+                "failed to block in the current Tokio runtime; use a multi-thread runtime",
+            )
+        })
     }
 
     fn runtime_error(err: impl std::fmt::Display) -> PyErr {
@@ -116,9 +132,8 @@ impl LlmTools {
         Self::ensure_prompt(&prompt)?;
         self.reserve_calls(1)?;
 
-        let response = self
-            .block_with_runtime(self.lm.query(&prompt))
-            .map_err(Self::runtime_error)?;
+        let response = self.block_with_runtime(self.lm.query(&prompt))?;
+        let response = response.map_err(Self::runtime_error)?;
 
         Ok(response)
     }
@@ -137,7 +152,7 @@ impl LlmTools {
         let responses = self.block_with_runtime(async {
             let futures = prompts.iter().map(|prompt| self.lm.query(prompt));
             futures::future::join_all(futures).await
-        });
+        })?;
 
         let mut results = Vec::with_capacity(responses.len());
         for response in responses {
@@ -315,6 +330,25 @@ mod tests {
                 .expect("empty batch should be valid");
             assert!(responses.is_empty());
             assert_eq!(tools.remaining_calls(), 2);
+        });
+    }
+
+    #[test]
+    fn current_thread_runtime_returns_clear_error_instead_of_panicking() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let tools = LlmTools::with_budget(Arc::new(MockLm::default()), 1, Handle::current());
+            let err = tools
+                .llm_query("hello".to_string())
+                .expect_err("current-thread runtime should fail gracefully");
+
+            let message = err.to_string();
+            assert!(message.contains("multi-thread Tokio runtime"));
+            assert!(message.contains("current-thread"));
         });
     }
 }
