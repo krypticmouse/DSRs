@@ -14,6 +14,11 @@ use std::{
 };
 use tracing::{debug, trace, warn};
 
+#[derive(Clone, Debug, Default)]
+pub struct ProviderOptions {
+    pub anthropic_prompt_caching: bool,
+}
+
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
 pub trait CompletionProvider {
@@ -331,6 +336,25 @@ impl LMClient {
         )
     )]
     pub fn from_model_string(model_str: &str, api_key: Option<&str>) -> Result<Self> {
+        Self::from_model_string_with_options(model_str, api_key, &ProviderOptions::default())
+    }
+
+    #[tracing::instrument(
+        name = "dsrs.lm.client.from_model_string_with_options",
+        level = "debug",
+        skip(model_str, api_key, options),
+        fields(
+            provider = tracing::field::Empty,
+            model_id = tracing::field::Empty,
+            api_key_present = api_key.is_some(),
+            anthropic_prompt_caching = options.anthropic_prompt_caching
+        )
+    )]
+    pub fn from_model_string_with_options(
+        model_str: &str,
+        api_key: Option<&str>,
+        options: &ProviderOptions,
+    ) -> Result<Self> {
         let (provider, model_id) = model_str.split_once(':').ok_or(anyhow::anyhow!(
             "Model string must be in format 'provider:model_name'"
         ))?;
@@ -360,9 +384,11 @@ impl LMClient {
                 debug!("selecting anthropic provider");
                 let key = Self::get_api_key(api_key, "ANTHROPIC_API_KEY")?;
                 let client = anthropic::Client::builder().api_key(key.as_ref()).build()?;
-                Ok(LMClient::Anthropic(
-                    anthropic::completion::CompletionModel::new(client, model_id),
-                ))
+                let mut model = anthropic::completion::CompletionModel::new(client, model_id);
+                if options.anthropic_prompt_caching {
+                    model = model.with_prompt_caching();
+                }
+                Ok(LMClient::Anthropic(model))
             }
             "gemini" => {
                 debug!("selecting gemini provider");
@@ -414,5 +440,42 @@ impl LMClient {
     /// each variant type, so you can use this with any concrete completion model.
     pub fn from_custom<T: Into<LMClient>>(client: T) -> Self {
         client.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn anthropic_prompt_caching_option_enables_model_flag() {
+        let client = LMClient::from_model_string_with_options(
+            "anthropic:claude-opus-4-0",
+            Some("test-key"),
+            &ProviderOptions {
+                anthropic_prompt_caching: true,
+            },
+        )
+        .expect("anthropic client should build");
+
+        match client {
+            LMClient::Anthropic(model) => assert!(model.prompt_caching),
+            _ => panic!("expected anthropic client"),
+        }
+    }
+
+    #[test]
+    fn anthropic_prompt_caching_defaults_to_disabled() {
+        let client = LMClient::from_model_string_with_options(
+            "anthropic:claude-opus-4-0",
+            Some("test-key"),
+            &ProviderOptions::default(),
+        )
+        .expect("anthropic client should build");
+
+        match client {
+            LMClient::Anthropic(model) => assert!(!model.prompt_caching),
+            _ => panic!("expected anthropic client"),
+        }
     }
 }

@@ -8,6 +8,7 @@ pub use usage::*;
 
 use anyhow::Result;
 use rig::{completion::AssistantContent, message::ToolCall, message::ToolChoice, tool::ToolDyn};
+use serde_json::Value;
 
 use bon::Builder;
 use std::{collections::HashMap, sync::Arc};
@@ -50,6 +51,11 @@ pub struct LM {
     pub max_tokens: u32,
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
+    /// Provider-specific request parameters forwarded to rig `CompletionRequest.additional_params`.
+    pub additional_params: Option<Value>,
+    /// Enables Anthropic prompt caching when using `anthropic:model` model strings.
+    #[builder(default = false)]
+    pub anthropic_prompt_caching: bool,
     #[builder(default = false)]
     pub cache: bool,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
@@ -72,6 +78,8 @@ impl Clone for LM {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             max_tool_iterations: self.max_tool_iterations,
+            additional_params: self.additional_params.clone(),
+            anthropic_prompt_caching: self.anthropic_prompt_caching,
             cache: self.cache,
             cache_handler: self.cache_handler.clone(),
             client: self.client.clone(),
@@ -127,7 +135,13 @@ impl LM {
             // Uses provider-specific clients
             (None, api_key, model) if model.contains(':') => {
                 debug!(build_case = 3, "using provider:model client");
-                Arc::new(LMClient::from_model_string(model, api_key.as_deref())?)
+                Arc::new(LMClient::from_model_string_with_options(
+                    model,
+                    api_key.as_deref(),
+                    &ProviderOptions {
+                        anthropic_prompt_caching: self.anthropic_prompt_caching,
+                    },
+                )?)
             }
             // Default case: assume OpenAI provider if no colon in model name
             (None, api_key, model) => {
@@ -137,7 +151,13 @@ impl LM {
                 } else {
                     format!("openai:{}", model)
                 };
-                Arc::new(LMClient::from_model_string(&model_str, api_key.as_deref())?)
+                Arc::new(LMClient::from_model_string_with_options(
+                    &model_str,
+                    api_key.as_deref(),
+                    &ProviderOptions {
+                        anthropic_prompt_caching: self.anthropic_prompt_caching,
+                    },
+                )?)
             }
         };
 
@@ -425,7 +445,7 @@ impl LM {
                 temperature: Some(self.temperature as f64),
                 max_tokens: Some(self.max_tokens as u64),
                 tool_choice: Some(ToolChoice::Auto),
-                additional_params: None,
+                additional_params: self.additional_params.clone(),
                 output_schema: None,
             };
 
@@ -534,7 +554,7 @@ impl LM {
             } else {
                 None
             },
-            additional_params: None,
+            additional_params: self.additional_params.clone(),
             output_schema: None,
         };
 
@@ -1018,9 +1038,18 @@ mod tests {
             temperature: 0.0,
             max_tokens: 128,
             max_tool_iterations: 4,
+            additional_params: None,
+            anthropic_prompt_caching: false,
             cache: false,
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
+        }
+    }
+
+    fn test_lm_with_model_and_params(model: TestCompletionModel, additional_params: Value) -> LM {
+        LM {
+            additional_params: Some(additional_params),
+            ..test_lm_with_model(model)
         }
     }
 
@@ -1047,6 +1076,29 @@ mod tests {
         assert!(response.output.content().contains("counter"));
         assert_eq!(response.chat.len(), 2);
         assert!(response.chat.messages[1].has_tool_calls());
+    }
+
+    #[tokio::test]
+    async fn call_forwards_additional_params_to_completion_request() {
+        let model = TestCompletionModel::new([make_text("ok")]);
+        let lm = test_lm_with_model_and_params(
+            model.clone(),
+            serde_json::json!({
+                "reasoning": { "effort": "high" }
+            }),
+        );
+
+        let chat = Chat::new(vec![Message::user("hello")]);
+        let _ = lm
+            .call(chat, Vec::new(), ToolLoopMode::CallerManaged)
+            .await
+            .expect("call should succeed");
+
+        let request = model.last_request().expect("request should be captured");
+        assert_eq!(
+            request.additional_params,
+            Some(serde_json::json!({ "reasoning": { "effort": "high" } }))
+        );
     }
 
     #[tokio::test]
