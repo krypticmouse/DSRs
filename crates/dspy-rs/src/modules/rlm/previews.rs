@@ -4,6 +4,7 @@ use bamltype::baml_types::TypeIR;
 use bamltype::baml_types::ir_type::{TypeGeneric, UnionTypeViewGeneric};
 use bamltype::facet::{Type, UserType};
 use bamltype::facet_reflect::{HasFields, Peek};
+use tracing::{debug, info_span, trace};
 
 use super::runtime::{MethodSignature, MethodSource};
 use crate::{
@@ -62,6 +63,14 @@ where
     S::Input: BamlType + for<'a> Facet<'a>,
 {
     let schema = SignatureSchema::of::<S>();
+    let render_span = info_span!(
+        "rlm.preview.render",
+        input_fields = schema.input_fields().len(),
+        method_vars = methods_by_var.len(),
+        soft_budget = SOFT_PREVIEW_BUDGET,
+        output_len = tracing::field::Empty
+    );
+    let _render_guard = render_span.enter();
     let root = Peek::new(input);
     let input_format = <S::Input as BamlType>::baml_output_format();
 
@@ -71,9 +80,23 @@ where
         RenderBudget::no_middle_samples(),
     ];
 
-    for budget in budgets {
+    for (attempt, budget) in budgets.into_iter().enumerate() {
         let rendered = render_with_budget(schema, root, input_format, methods_by_var, budget);
-        if rendered.chars().count() <= SOFT_PREVIEW_BUDGET || !budget.include_middle_samples {
+        let output_len = rendered.chars().count();
+        let within_budget = output_len <= SOFT_PREVIEW_BUDGET;
+        debug!(
+            attempt = attempt + 1,
+            top_level_limit = budget.top_level_limit,
+            nested_limit = budget.nested_limit,
+            include_middle_samples = budget.include_middle_samples,
+            output_len,
+            budget_consumed = output_len,
+            budget_remaining = SOFT_PREVIEW_BUDGET.saturating_sub(output_len),
+            within_budget,
+            "preview budget pass rendered"
+        );
+        if within_budget || !budget.include_middle_samples {
+            render_span.record("output_len", output_len);
             return rendered;
         }
     }
@@ -386,6 +409,7 @@ fn render_list_block(
     depth: usize,
     budget: RenderBudget,
 ) -> Vec<String> {
+    trace!(depth, size = items.len(), "rendering list preview");
     let mut lines = vec![format!("Count: {} items", items.len())];
 
     if let Some(schema_line) = class_schema_line(item_type, input_format) {
@@ -426,6 +450,7 @@ fn render_map_block(
     depth: usize,
     budget: RenderBudget,
 ) -> Vec<String> {
+    trace!(depth, size = entries.len(), "rendering map preview");
     let mut lines = vec![format!("Keys: {} items", entries.len())];
     if entries.is_empty() || depth >= STRUCT_PREVIEW_DEPTH_CAP {
         return lines;

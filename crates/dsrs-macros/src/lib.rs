@@ -737,7 +737,11 @@ fn generate_rlm_input_impl(
         .iter()
         .map(|field| LitStr::new(&field.ident.to_string(), proc_macro2::Span::call_site()))
         .collect();
-    let field_idents: Vec<_> = parsed.input_fields.iter().map(|field| &field.ident).collect();
+    let field_idents: Vec<_> = parsed
+        .input_fields
+        .iter()
+        .map(|field| &field.ident)
+        .collect();
     let field_types: Vec<_> = parsed.input_fields.iter().map(|field| &field.ty).collect();
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 

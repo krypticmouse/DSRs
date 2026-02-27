@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use indexmap::IndexMap;
 use pyo3::Python;
 use rig::message::ToolCall;
+use tracing::{debug, info, info_span};
 
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Facet, FieldMeta, LmUsage, Module,
@@ -323,6 +324,13 @@ where
                 message: "max_iterations must be >= 1".to_string(),
             });
         }
+        info!(
+            max_iterations = self.config.max_iterations,
+            max_llm_calls = self.config.max_llm_calls,
+            max_output_chars = self.config.max_output_chars,
+            extraction_fallback = self.config.enable_extraction_fallback,
+            "rlm run started"
+        );
 
         let submit_slot: SubmitSlot = Arc::new(Mutex::new(None));
         let submit_handler = SubmitHandler::new::<S>(Arc::clone(&submit_slot));
@@ -347,16 +355,45 @@ where
         } else {
             None
         };
-        let setup = Python::attach(|py| {
-            self.runtime
-                .setup_interpreter_globals(py, input, &submit_handler, llm_tools.as_ref())
-        })
+        let input_fields = input.rlm_field_names().len();
+        let setup = {
+            let _inject_span = info_span!(
+                "rlm.inject",
+                input_fields,
+                sub_lm_tools = llm_tools.is_some()
+            )
+            .entered();
+            Python::attach(|py| {
+                self.runtime.setup_interpreter_globals(
+                    py,
+                    input,
+                    &submit_handler,
+                    llm_tools.as_ref(),
+                )
+            })
+        }
         .map_err(|err| RlmError::Configuration {
             message: err.to_string(),
         })?;
+        debug!(
+            input_fields,
+            injected_objects = setup.methods_by_var.len(),
+            "interpreter globals injected"
+        );
         let globals = setup.globals;
 
-        let previews = render_previews::<S>(input, &setup.methods_by_var);
+        let preview_span = info_span!(
+            "rlm.preview",
+            input_fields,
+            preview_len = tracing::field::Empty
+        );
+        let previews = {
+            let _preview_span = preview_span.enter();
+            render_previews::<S>(input, &setup.methods_by_var)
+        };
+        let preview_len = previews.chars().count();
+        preview_span.record("preview_len", preview_len);
+        info!(preview_len, "rlm preview generated");
         let mut history: Option<Chat> = None;
         let mut feedback: Option<String> = None;
         let mut turn_index = 1usize;
@@ -366,6 +403,13 @@ where
         };
 
         loop {
+            let is_first_turn = turn_index == 1;
+            let _turn_span = info_span!(
+                "rlm.turn",
+                iteration = turn_index,
+                first_turn = is_first_turn
+            )
+            .entered();
             match self.decide_turn_policy(turn_index, self.config.max_iterations) {
                 TurnDecision::Fallback => {
                     if self.config.enable_extraction_fallback {
@@ -392,6 +436,12 @@ where
                 budget_remaining,
             );
 
+            info!(
+                iteration = turn_index,
+                first_turn = is_first_turn,
+                budget_remaining,
+                "running action predict call"
+            );
             let turn_history = history.take();
             match self.run_action_turn(action_input, turn_history).await? {
                 ActionTurn::RecoverableParse {
@@ -400,6 +450,12 @@ where
                     chat,
                     reason,
                 } => {
+                    debug!(
+                        iteration = turn_index,
+                        response_kind = "error",
+                        error_kind = "recoverable_parse",
+                        "predict response received"
+                    );
                     acc.absorb_parse_metadata(raw_response, lm_usage);
                     history = Some(chat);
                     let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
@@ -438,6 +494,11 @@ where
 
                     match outcome {
                         ExecOutcome::SubmitAccepted { value, field_meta } => {
+                            info!(
+                                iteration = turn_index,
+                                response_kind = "submit",
+                                "predict response received"
+                            );
                             let typed_output =
                                 S::Output::try_from_baml_value(value).map_err(|err| {
                                     RlmError::Invariant {
@@ -456,6 +517,12 @@ where
                             ));
                         }
                         other => {
+                            debug!(
+                                iteration = turn_index,
+                                response_kind = predict_response_kind_from_outcome(&other),
+                                outcome = exec_outcome_kind(&other),
+                                "predict response received"
+                            );
                             let sub_lm_remaining =
                                 self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
                             let next_turn_index = turn_index.saturating_add(1);
@@ -792,6 +859,28 @@ fn classify_exec_outcome(
     match exec_result {
         Ok(output) => ExecOutcome::Continue { output },
         Err(message) => ExecOutcome::PythonException { message },
+    }
+}
+
+fn predict_response_kind_from_outcome(outcome: &ExecOutcome) -> &'static str {
+    match outcome {
+        ExecOutcome::SubmitAccepted { .. } => "submit",
+        ExecOutcome::Continue { .. } => "code",
+        ExecOutcome::SubmitValidationError { .. }
+        | ExecOutcome::SubmitAssertionFailed { .. }
+        | ExecOutcome::PythonException { .. }
+        | ExecOutcome::RecoverableParse { .. } => "error",
+    }
+}
+
+fn exec_outcome_kind(outcome: &ExecOutcome) -> &'static str {
+    match outcome {
+        ExecOutcome::Continue { .. } => "continue",
+        ExecOutcome::SubmitAccepted { .. } => "submit_accepted",
+        ExecOutcome::SubmitValidationError { .. } => "submit_validation_error",
+        ExecOutcome::SubmitAssertionFailed { .. } => "submit_assertion_failed",
+        ExecOutcome::PythonException { .. } => "python_exception",
+        ExecOutcome::RecoverableParse { .. } => "recoverable_parse",
     }
 }
 
