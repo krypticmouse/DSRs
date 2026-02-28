@@ -473,8 +473,14 @@ where
             match self.decide_turn_policy(turn_index, self.config.max_iterations) {
                 TurnDecision::Fallback => {
                     if self.config.enable_extraction_fallback {
+                        let action_history = history.take();
                         return self
-                            .run_extraction_fallback(&previews, repl_history, &mut acc)
+                            .run_extraction_fallback(
+                                &previews,
+                                repl_history,
+                                action_history,
+                                &mut acc,
+                            )
                             .await;
                     }
                     return Err(RlmError::MaxIterationsReached {
@@ -642,6 +648,7 @@ where
         &self,
         previews: &str,
         repl_history: REPLHistory,
+        action_history: Option<Chat>,
         acc: &mut MetadataAcc,
     ) -> Result<Predicted<S::Output>, RlmError> {
         let extract_input = RlmExtractInput {
@@ -653,10 +660,14 @@ where
             .forward(extract_input, None)
             .await
             .map_err(|source| RlmError::ExtractFallback { source })?;
-        let (output, metadata, chat) = predicted.into_parts();
+        let (output, metadata, extract_chat) = predicted.into_parts();
         acc.absorb_call_metadata(metadata);
         let metadata = std::mem::take(acc).into_call_metadata();
-        Ok(Predicted::new(output, metadata, chat))
+        // Preserve action-loop chat when fallback extraction runs so downstream
+        // transcripts still reflect the REPL interaction that produced the evidence.
+        // If no action history exists, fall back to the extractor chat.
+        let final_chat = action_history.unwrap_or(extract_chat);
+        Ok(Predicted::new(output, metadata, final_chat))
     }
 }
 
