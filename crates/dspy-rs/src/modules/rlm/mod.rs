@@ -963,6 +963,7 @@ where
         turn_index,
         budget_remaining,
         sub_lm_remaining,
+        namespace_sections.namespace_snapshot.len(),
     ));
 
     Ok(PerceptionMessage {
@@ -996,7 +997,7 @@ fn build_synthetic_turn_zero_user_message(
         "[Stable]".to_string(),
         "(none)".to_string(),
         String::new(),
-        render_repl_prompt(0, budget_remaining, sub_lm_remaining),
+        render_repl_prompt(0, budget_remaining, sub_lm_remaining, 0),
     ]
     .join("\n")
 }
@@ -1116,10 +1117,11 @@ fn render_repl_prompt(
     turn_index: usize,
     turns_remaining: usize,
     sub_lm_remaining: usize,
+    namespace_var_count: usize,
 ) -> String {
     format!(
-        "[T{turn_index} | {} | {sub_lm_remaining} llm] >>>",
-        turns_label(turns_remaining)
+        "[T{turn_index} | {} | {sub_lm_remaining} llm | {namespace_var_count} vars] >>>",
+        turns_label(turns_remaining),
     )
 }
 
@@ -1560,7 +1562,7 @@ mod tests {
             assert!(message.contains("prompt ="));
             assert!(message.contains("result_count = 7"));
             assert!(!message.contains("_tmp ="));
-            assert!(message.ends_with("[T1 | 3 turns | 11 llm] >>>"));
+            assert!(message.ends_with("[T1 | 3 turns | 11 llm | 2 vars] >>>"));
         });
     }
 
@@ -1611,7 +1613,7 @@ mod tests {
         assert!(message.contains("=== Execution Receipt (Turn 0) ==="));
         assert!(message.contains("Budget: 12 turns remaining | 20 sub-LLM calls remaining"));
         assert!(message.contains("=== Namespace ==="));
-        assert!(message.ends_with("[T0 | 12 turns | 20 llm] >>>"));
+        assert!(message.ends_with("[T0 | 12 turns | 20 llm | 0 vars] >>>"));
         assert!(!message.contains("[query]"));
     }
 
