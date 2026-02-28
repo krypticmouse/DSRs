@@ -129,6 +129,9 @@ pub(super) fn render_action_instruction<S: Signature>(
     lines.push("- `llm_query(prompt)` — query a sub-LLM (~500K char capacity)".to_string());
     lines.push("- `llm_query_batched(prompts)` — batch query concurrently".to_string());
     lines.push("- `SUBMIT(field1=value1, ...)` — submit final answer".to_string());
+    lines.push(
+        "- `cleanup(*keep)` — clear scratch vars; optionally preserve named vars".to_string(),
+    );
     lines.push("- `print()` — ALWAYS print to see results".to_string());
     lines.push("- Standard libraries available (import as needed)".to_string());
     lines.push("Plus any user-provided tools with their descriptions.".to_string());
@@ -311,6 +314,7 @@ mod tests {
         assert!(rendered.contains("## Sub-LLM Patterns"));
         assert!(rendered.contains("No markdown fences"));
         assert!(rendered.contains("SUBMIT safely for long answers"));
+        assert!(rendered.contains("`cleanup(*keep)`"));
     }
 
     #[test]
