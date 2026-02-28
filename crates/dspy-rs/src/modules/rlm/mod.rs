@@ -13,7 +13,7 @@ use tracing::{debug, info, info_span};
 
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, Facet, FieldMeta, LmUsage, Module,
-    Predict, PredictError, Predicted, Signature,
+    Predict, PredictError, Predicted, Role, Signature,
 };
 
 mod exec;
@@ -36,6 +36,8 @@ const DEFAULT_MAX_LLM_CALLS: usize = 50;
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 100_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
 const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
+const SYNTHETIC_TURN_ZERO_ASSISTANT_CODE: &str =
+    "# sanity check: does this thing work?\nprint('hello world')";
 
 const REPL_HISTORY_INPUT_RENDER_TEMPLATE: &str = r#"{% if this.entries|length == 0 %}(no executed REPL turns captured){% else %}{% for entry in this.entries %}=== Turn {{ entry.turn }} ===
 Code:
@@ -412,7 +414,7 @@ where
         // 1) public post-build instruction override on Predict, or
         // 2) build-time instruction composition using compile-time method metadata.
         let generate_action = Predict::<RlmActionSig>::builder()
-            .instruction(action_instruction)
+            .instruction(action_instruction.clone())
             .adapter(ChatAdapter::passthrough())
             .build();
         let task_hint = task_hint_from_input::<S>(input).unwrap_or_else(|| {
@@ -423,8 +425,37 @@ where
             }
         });
 
-        let mut history: Option<Chat> = None;
-        let mut feedback: Option<PerceptionFeedback> = None;
+        let initial_sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+        let synthetic_turn_zero_user = build_synthetic_turn_zero_user_message(
+            self.config.max_iterations,
+            initial_sub_lm_remaining,
+        );
+        let mut synthetic_history = Chat::new(vec![]);
+        synthetic_history.push(Role::System, &action_instruction);
+        synthetic_history.push(Role::User, &synthetic_turn_zero_user);
+        synthetic_history.push(Role::Assistant, SYNTHETIC_TURN_ZERO_ASSISTANT_CODE);
+
+        clear_submit_slot(&submit_slot);
+        let synthetic_feedback = Python::attach(|py| {
+            self.runtime.execute_repl_code(
+                py,
+                &globals,
+                SYNTHETIC_TURN_ZERO_ASSISTANT_CODE,
+                self.config.max_output_chars,
+            )
+        });
+
+        let mut history: Option<Chat> = Some(synthetic_history);
+        let mut feedback: Option<PerceptionFeedback> = Some(match synthetic_feedback {
+            Ok(stdout) => PerceptionFeedback {
+                stdout: Some(stdout),
+                stderr: None,
+            },
+            Err(stderr) => PerceptionFeedback {
+                stdout: None,
+                stderr: Some(stderr),
+            },
+        });
         let mut turn_index = 1usize;
         let mut acc = MetadataAcc::default();
         let mut repl_history = REPLHistory {
@@ -796,10 +827,6 @@ where
         "[env] {turns_label} | {sub_lm_remaining} sub-LLM calls"
     ));
 
-    if first_turn {
-        lines.push(format!("[query] {}", truncate_chars(task_hint, 180)));
-    }
-
     if let Some(feedback) = feedback {
         if let Some(stdout) = feedback.stdout.as_deref()
             && !stdout.trim().is_empty()
@@ -815,6 +842,13 @@ where
             lines.push("[stderr]".to_string());
             lines.push(stderr.to_string());
         }
+    }
+
+    if first_turn {
+        if !lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines.push(format!("[query] {}", truncate_chars(task_hint, 180)));
     }
 
     if budget_remaining == 1 {
@@ -836,6 +870,24 @@ where
     lines.push(">>>".to_string());
 
     Ok(lines.join("\n"))
+}
+
+fn build_synthetic_turn_zero_user_message(
+    budget_remaining: usize,
+    sub_lm_remaining: usize,
+) -> String {
+    let turns_label = if budget_remaining == 1 {
+        "1 turn".to_string()
+    } else {
+        format!("{budget_remaining} turns")
+    };
+    [
+        format!("[env] {turns_label} | {sub_lm_remaining} sub-LLM calls"),
+        String::new(),
+        "--- namespace ---".to_string(),
+        ">>>".to_string(),
+    ]
+    .join("\n")
 }
 
 fn collect_namespace_snapshot(
@@ -1293,6 +1345,44 @@ mod tests {
                 message.contains("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer.")
             );
             assert!(!message.contains("[query]"));
+        });
+    }
+
+    #[test]
+    fn synthetic_turn_zero_user_message_matches_demo_shape() {
+        let message = build_synthetic_turn_zero_user_message(12, 20);
+        assert!(message.contains("[env] 12 turns | 20 sub-LLM calls"));
+        assert!(message.contains("--- namespace ---"));
+        assert!(message.ends_with(">>>"));
+        assert!(!message.contains("[query]"));
+    }
+
+    #[test]
+    fn first_turn_with_feedback_places_stdout_before_query() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            let input = RuntimePolicySigInput {
+                prompt: "x".to_string(),
+            };
+            let feedback = PerceptionFeedback {
+                stdout: Some("hello world".to_string()),
+                stderr: None,
+            };
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                Some(&feedback),
+                12,
+                20,
+                true,
+            )
+            .expect("message");
+            let stdout_idx = message.find("[stdout]").expect("stdout marker");
+            let query_idx = message.find("[query]").expect("query marker");
+            assert!(stdout_idx < query_idx, "stdout should appear before query");
         });
     }
 
