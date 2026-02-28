@@ -959,7 +959,11 @@ where
     render_namespace_section(&mut lines, "Recent", &namespace_sections.recent);
     render_namespace_section(&mut lines, "Stable", &namespace_sections.stable);
     lines.push(String::new());
-    lines.push(">>>".to_string());
+    lines.push(render_repl_prompt(
+        turn_index,
+        budget_remaining,
+        sub_lm_remaining,
+    ));
 
     Ok(PerceptionMessage {
         text: lines.join("\n"),
@@ -992,7 +996,7 @@ fn build_synthetic_turn_zero_user_message(
         "[Stable]".to_string(),
         "(none)".to_string(),
         String::new(),
-        ">>>".to_string(),
+        render_repl_prompt(0, budget_remaining, sub_lm_remaining),
     ]
     .join("\n")
 }
@@ -1106,6 +1110,17 @@ fn turns_label(turns: usize) -> String {
     } else {
         format!("{turns} turns")
     }
+}
+
+fn render_repl_prompt(
+    turn_index: usize,
+    turns_remaining: usize,
+    sub_lm_remaining: usize,
+) -> String {
+    format!(
+        "[T{turn_index} | {} | {sub_lm_remaining} llm] >>>",
+        turns_label(turns_remaining)
+    )
 }
 
 fn plural_suffix(count: usize) -> &'static str {
@@ -1545,7 +1560,7 @@ mod tests {
             assert!(message.contains("prompt ="));
             assert!(message.contains("result_count = 7"));
             assert!(!message.contains("_tmp ="));
-            assert!(message.ends_with(">>>"));
+            assert!(message.ends_with("[T1 | 3 turns | 11 llm] >>>"));
         });
     }
 
@@ -1596,7 +1611,7 @@ mod tests {
         assert!(message.contains("=== Execution Receipt (Turn 0) ==="));
         assert!(message.contains("Budget: 12 turns remaining | 20 sub-LLM calls remaining"));
         assert!(message.contains("=== Namespace ==="));
-        assert!(message.ends_with(">>>"));
+        assert!(message.ends_with("[T0 | 12 turns | 20 llm] >>>"));
         assert!(!message.contains("[query]"));
     }
 

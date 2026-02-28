@@ -7,6 +7,7 @@ use super::submit::{SUBMIT_STDOUT_ATTR, is_submit_terminated};
 
 const NO_OUTPUT_MESSAGE: &str = "(no output - did you forget to print?)";
 const TRACEBACK_ATTR: &str = "__dsrs_traceback__";
+const LLM_BUDGET_EXHAUSTED_PREFIX: &str = "LLM call budget exhausted: requested ";
 
 static EXEC_HELPER_CODE: &std::ffi::CStr = c_str!(
     r#"
@@ -89,6 +90,10 @@ pub fn execute_repl_code(
             let traceback = extract_traceback(py, &err)
                 .or_else(|| format_python_traceback(py, &err).ok())
                 .unwrap_or_else(|| err.to_string());
+            if let Some(resource_message) = format_resource_budget_message(&traceback) {
+                let combined = combine_stdout_and_message(stdout, resource_message);
+                return Err(truncate_capture_output(&combined, max_output_chars));
+            }
             let combined = combine_stdout_and_traceback(stdout, traceback);
             Err(truncate_capture_output(&combined, max_output_chars))
         }
@@ -255,6 +260,38 @@ fn combine_stdout_and_traceback(stdout: String, traceback: String) -> String {
     } else {
         format!("{stdout}\n{traceback}")
     }
+}
+
+fn combine_stdout_and_message(stdout: String, message: String) -> String {
+    if stdout.is_empty() {
+        return message;
+    }
+    if stdout.ends_with('\n') {
+        format!("{stdout}{message}")
+    } else {
+        format!("{stdout}\n{message}")
+    }
+}
+
+fn format_resource_budget_message(traceback: &str) -> Option<String> {
+    let after_prefix = traceback.split_once(LLM_BUDGET_EXHAUSTED_PREFIX)?.1;
+    let (requested_raw, after_requested) = after_prefix.split_once(", remaining ")?;
+    let (remaining_raw, after_remaining) = after_requested.split_once(", max ")?;
+    let max_raw: String = after_remaining
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect();
+    if max_raw.is_empty() {
+        return None;
+    }
+
+    let requested = requested_raw.trim().parse::<usize>().ok()?;
+    let remaining = remaining_raw.trim().parse::<usize>().ok()?;
+    let max = max_raw.parse::<usize>().ok()?;
+
+    Some(format!(
+        "⛔ RESOURCE: llm_query({requested}) refused — {remaining} of {max} calls remain.\ncode was valid. namespace unchanged."
+    ))
 }
 
 fn format_output(stdout: String, repr: Option<String>, max_chars: usize) -> String {
@@ -519,6 +556,28 @@ mod tests {
             let output = execute_repl_code(py, &globals, "SUBMIT(direct_answer=\"\"\"hello", 500)
                 .expect("submit should recover");
             assert_eq!(output, NO_OUTPUT_MESSAGE);
+        });
+    }
+
+    #[test]
+    fn budget_exhaustion_errors_are_rendered_as_resource_messages_without_traceback() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            py.run(
+                c_str!(
+                    "def llm_query(prompt):\n    raise RuntimeError(\"[Error] RuntimeError: LLM call budget exhausted: requested 1, remaining 0, max 20. This is retryable after reducing llm_query usage.\")\n"
+                ),
+                Some(&globals),
+                Some(&globals),
+            )
+            .expect("define llm_query");
+            let globals = globals.unbind();
+
+            let err = execute_repl_code(py, &globals, "llm_query('hello')", 500)
+                .expect_err("budget exhaustion should fail");
+            assert!(err.contains("⛔ RESOURCE: llm_query(1) refused — 0 of 20 calls remain."));
+            assert!(err.contains("code was valid. namespace unchanged."));
+            assert!(!err.contains("Traceback"));
         });
     }
 }
