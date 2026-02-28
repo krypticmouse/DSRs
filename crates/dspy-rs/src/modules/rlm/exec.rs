@@ -61,9 +61,16 @@ pub fn execute_repl_code(
     code: &str,
     max_output_chars: usize,
 ) -> Result<String, String> {
-    let suppress_output = code.trim_end().ends_with(';');
+    let prepared_code = preprocess_repl_code(code);
+    let suppress_output = prepared_code.trim_end().ends_with(';');
 
-    match run_exec(py, globals, code, suppress_output, max_output_chars) {
+    match run_exec(
+        py,
+        globals,
+        &prepared_code,
+        suppress_output,
+        max_output_chars,
+    ) {
         Ok(output) => Ok(output),
         Err(err) => {
             let stdout = extract_submit_stdout(py, &err).unwrap_or_default();
@@ -74,6 +81,58 @@ pub fn execute_repl_code(
             Err(truncate_capture_output(&combined, max_output_chars))
         }
     }
+}
+
+fn preprocess_repl_code(code: &str) -> String {
+    let without_fences = strip_markdown_fence_lines(code);
+    strip_leading_non_python_lines(&without_fences)
+}
+
+fn strip_markdown_fence_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn strip_leading_non_python_lines(text: &str) -> String {
+    let lines = text.lines().collect::<Vec<_>>();
+    let first_code_index = lines.iter().position(|line| {
+        let trimmed = line.trim();
+        !trimmed.is_empty() && looks_like_python_line(trimmed)
+    });
+
+    let selected = match first_code_index {
+        Some(index) => lines[index..].join("\n"),
+        None => text.to_string(),
+    };
+    selected.trim_end().to_string()
+}
+
+fn looks_like_python_line(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.is_empty() {
+        return false;
+    }
+    if trimmed.starts_with('#')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with('{')
+        || trimmed.contains('=')
+        || trimmed.contains('(')
+    {
+        return true;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    for prefix in [
+        "import ", "from ", "print", "def ", "for ", "if ", "while ", "try:", "with ", "class ",
+    ] {
+        if lower.starts_with(prefix) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn run_exec(
@@ -334,5 +393,29 @@ mod tests {
         assert!(truncated.contains("[output truncated at 9 chars"));
         assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.contains('😀'));
+    }
+
+    #[test]
+    fn preprocess_strips_markdown_fences() {
+        let raw = "```python\nprint('a')\n```\n```py\nprint('b')\n```\n```\nprint('c')\n```";
+        let prepared = preprocess_repl_code(raw);
+        assert_eq!(prepared, "print('a')\nprint('b')\nprint('c')");
+    }
+
+    #[test]
+    fn preprocess_strips_leading_prose_until_python() {
+        let raw = "Let me start by exploring the data first.\n\n```python\n# First, inspect\na = 1\nprint(a)\n```";
+        let prepared = preprocess_repl_code(raw);
+        assert_eq!(prepared, "# First, inspect\na = 1\nprint(a)");
+    }
+
+    #[test]
+    fn execute_repl_code_handles_failed_turn_one_pattern() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py).unbind();
+            let raw = "Let me start by exploring the data to understand the structure and then systematically find recurring corrections.\n\n```python\n# First, explore the data structure\nprint('ok')\n```";
+            let output = execute_repl_code(py, &globals, raw, 500).expect("exec");
+            assert_eq!(output, "ok\n");
+        });
     }
 }
