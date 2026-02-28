@@ -1011,29 +1011,89 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
 }
 
 fn extract_passthrough_body(response: &Message) -> Option<String> {
-    let text = response.text_content();
+    extract_passthrough_body_from_text(&response.text_content())
+}
+
+fn extract_passthrough_body_from_text(text: &str) -> Option<String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    if trimmed.starts_with("```") {
-        let mut lines = trimmed.lines();
-        let _opening = lines.next();
-        let mut fence_body = Vec::new();
-        for line in lines {
-            if line.trim_start().starts_with("```") {
-                break;
-            }
-            fence_body.push(line);
-        }
-        let body = fence_body.join("\n").trim().to_string();
-        if !body.is_empty() {
-            return Some(body);
-        }
+    let fenced_blocks = extract_fenced_code_blocks(trimmed);
+    if !fenced_blocks.is_empty() {
+        return Some(fenced_blocks.join("\n\n"));
     }
 
     Some(trimmed.to_string())
+}
+
+fn extract_fenced_code_blocks(text: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut current = Vec::new();
+
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            if in_fence {
+                let block = current.join("\n").trim().to_string();
+                if !block.is_empty() {
+                    blocks.push(block);
+                }
+                current.clear();
+                in_fence = false;
+            } else {
+                in_fence = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if in_fence {
+            current.push(line);
+        }
+    }
+
+    if in_fence {
+        let block = current.join("\n").trim().to_string();
+        if !block.is_empty() {
+            blocks.push(block);
+        }
+    }
+
+    blocks
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn passthrough_extracts_all_fenced_blocks() {
+        let text = "```python\nx = 1\n```\n\nSome prose.\n\n```py\ny = 2\n```\n``` \nz = 3\n```";
+        assert_eq!(
+            extract_passthrough_body_from_text(text),
+            Some("x = 1\n\ny = 2\n\nz = 3".to_string())
+        );
+    }
+
+    #[test]
+    fn passthrough_extracts_unclosed_fenced_block() {
+        let text = "```python\nx = 1\ny = 2";
+        assert_eq!(
+            extract_passthrough_body_from_text(text),
+            Some("x = 1\ny = 2".to_string())
+        );
+    }
+
+    #[test]
+    fn passthrough_falls_back_to_full_text_without_fences() {
+        let text = "  x = 1\ny = x + 1  ";
+        assert_eq!(
+            extract_passthrough_body_from_text(text),
+            Some("x = 1\ny = x + 1".to_string())
+        );
+    }
 }
 
 fn value_for_path_relaxed<'a>(
