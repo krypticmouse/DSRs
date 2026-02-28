@@ -18,7 +18,7 @@ use super::submit::SubmitHandler;
 use super::tools::LlmTools;
 use crate::{BamlConvertError, ConstraintLevel, ResponseCheck, Signature};
 
-const RESERVED_GLOBAL_NAMES: [&str; 4] = ["llm_query", "llm_query_batched", "SUBMIT", "cleanup"];
+const RESERVED_GLOBAL_NAMES: [&str; 3] = ["llm_query", "llm_query_batched", "SUBMIT"];
 
 pub fn setup_interpreter_globals<S: Signature>(
     py: Python<'_>,
@@ -55,79 +55,11 @@ where
         )?;
     }
     globals.set_item("SUBMIT", Py::new(py, submit_handler.clone())?)?;
-    inject_cleanup_helper(py, &globals, input.rlm_field_names())?;
 
     Ok(InterpreterSetup {
         globals: globals.unbind(),
         methods_by_var,
     })
-}
-
-fn inject_cleanup_helper(
-    py: Python<'_>,
-    globals: &Bound<'_, PyDict>,
-    injected_roots: &[&str],
-) -> PyResult<()> {
-    let mut protected_names = injected_roots
-        .iter()
-        .map(|name| (*name).to_string())
-        .collect::<Vec<_>>();
-    protected_names.extend(RESERVED_GLOBAL_NAMES.iter().map(|name| (*name).to_string()));
-    protected_names.sort();
-    protected_names.dedup();
-
-    let protected_names_literal = protected_names
-        .iter()
-        .map(|name| format!("{name:?}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let source = format!(
-        r#"def cleanup(*keep, _protected=frozenset([{protected_names_literal}])):
-    """Clear user-created globals while preserving injected/runtime bindings.
-
-    Usage:
-        cleanup()
-        cleanup("name_to_keep", "other_name")
-    """
-    namespace = globals()
-    keep_names = [str(name) for name in keep]
-    protected = set(_protected)
-    protected.update(keep_names)
-
-    cleared = []
-    for name in list(namespace.keys()):
-        if name in protected or name.startswith("__"):
-            continue
-        del namespace[name]
-        cleared.append(name)
-
-    cleared.sort()
-    kept_present = sorted(name for name in protected if name in namespace)
-    missing_requested = sorted(name for name in keep_names if name not in namespace)
-
-    def _fmt(names):
-        return ", ".join(f"`{{item}}`" for item in names) if names else "(none)"
-
-    message = (
-        f"cleanup(): cleared {{len(cleared)}} var(s): {{_fmt(cleared)}}\n"
-        f"kept: {{_fmt(kept_present)}}"
-    )
-    if missing_requested:
-        message += f"\nrequested but not found: {{_fmt(missing_requested)}}"
-    return message
-"#
-    );
-
-    let builtins = PyModule::import(py, "builtins")?;
-    builtins
-        .getattr("exec")?
-        .call1((source.as_str(), globals, globals))?;
-
-    if let Some(cleanup_fn) = globals.get_item("cleanup")? {
-        cleanup_fn.setattr("__source__", source.as_str())?;
-    }
-    Ok(())
 }
 
 fn collect_methods_by_var(
@@ -1310,7 +1242,6 @@ mod tests {
                         .is_some()
                 );
                 assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
-                assert!(globals.get_item("cleanup").expect("getitem").is_some());
                 assert!(setup.methods_by_var.contains_key("question"));
                 assert!(setup.methods_by_var.contains_key("count"));
             });
@@ -1334,7 +1265,6 @@ mod tests {
             assert!(globals.get_item("question").expect("getitem").is_some());
             assert!(globals.get_item("count").expect("getitem").is_some());
             assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
-            assert!(globals.get_item("cleanup").expect("getitem").is_some());
             assert!(globals.get_item("llm_query").expect("getitem").is_none());
             assert!(
                 globals
@@ -1344,59 +1274,6 @@ mod tests {
             );
             assert!(setup.methods_by_var.contains_key("question"));
             assert!(setup.methods_by_var.contains_key("count"));
-        });
-    }
-
-    #[test]
-    fn cleanup_helper_clears_scratch_variables_and_exposes_source() {
-        Python::attach(|py| {
-            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
-            let submit = SubmitHandler::new::<BridgeSig>(Arc::clone(&slot));
-            let input = BridgeSigInput {
-                question: "what?".to_string(),
-                count: 3,
-            };
-
-            let setup = setup_interpreter_globals::<BridgeSig>(py, &input, &submit, None)
-                .expect("setup globals");
-            let globals = setup.globals.bind(py).clone();
-            globals
-                .set_item("retro_corrections", vec!["a", "b"])
-                .expect("set scratch");
-            globals
-                .set_item("themes", vec!["x"])
-                .expect("set keep target");
-
-            let cleanup_fn = globals
-                .get_item("cleanup")
-                .expect("getitem")
-                .expect("cleanup fn");
-            let message = cleanup_fn
-                .call1(("themes",))
-                .expect("call cleanup")
-                .extract::<String>()
-                .expect("cleanup message");
-
-            assert!(message.contains("cleared 1 var(s)"));
-            assert!(message.contains("`retro_corrections`"));
-            assert!(message.contains("`themes`"));
-            assert!(
-                globals
-                    .get_item("retro_corrections")
-                    .expect("getitem")
-                    .is_none()
-            );
-            assert!(globals.get_item("themes").expect("getitem").is_some());
-            assert!(globals.get_item("question").expect("getitem").is_some());
-            assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
-
-            let source = cleanup_fn
-                .getattr("__source__")
-                .expect("cleanup source attr")
-                .extract::<String>()
-                .expect("cleanup source string");
-            assert!(source.contains("def cleanup("));
-            assert!(source.contains("Clear user-created globals"));
         });
     }
 
