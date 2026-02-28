@@ -287,9 +287,25 @@ fn truncate_capture_output(text: &str, max_chars: usize) -> String {
 
     let head: String = text.chars().take(head_len).collect();
     let tail: String = text.chars().skip(total.saturating_sub(tail_len)).collect();
-    let truncation_notice = format!("... [STDOUT TRUNCATED: Exceeded {max_chars} char threshold]");
+    let truncation_notice = format!(
+        "[STDOUT TRUNCATED at {} chars ({} total)]",
+        format_count(max_chars),
+        format_count(total)
+    );
 
     format!("{head}\n{tail}\n{truncation_notice}")
+}
+
+fn format_count(value: usize) -> String {
+    let raw = value.to_string();
+    let mut out = String::with_capacity(raw.len() + raw.len() / 3);
+    for (index, ch) in raw.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out.chars().rev().collect()
 }
 
 #[cfg(test)]
@@ -341,10 +357,10 @@ mod tests {
             let globals = PyDict::new(py).unbind();
             let output = execute_repl_code(py, &globals, "print('abcdefghijklmnopqrstuvwxyz')", 10)
                 .expect("exec");
-            assert!(output.contains("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
+            assert!(output.contains("[STDOUT TRUNCATED at 10 chars (27 total)]"));
             assert!(output.starts_with("abcde"));
             assert!(output.contains("wxyz\n"));
-            assert!(output.ends_with("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
+            assert!(output.ends_with("[STDOUT TRUNCATED at 10 chars (27 total)]"));
         });
     }
 
@@ -432,7 +448,7 @@ mod tests {
             )
             .expect_err("should fail");
 
-            assert!(err.contains("... [STDOUT TRUNCATED: Exceeded 20 char threshold]"));
+            assert!(err.contains("[STDOUT TRUNCATED at 20 chars ("));
             assert!(err.chars().count() > 20);
         });
     }
@@ -442,9 +458,16 @@ mod tests {
         let text = "😀".repeat(40);
         let truncated = truncate_capture_output(&text, 9);
 
-        assert!(truncated.contains("... [STDOUT TRUNCATED: Exceeded 9 char threshold]"));
+        assert!(truncated.contains("[STDOUT TRUNCATED at 9 chars (40 total)]"));
         assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.contains('😀'));
+    }
+
+    #[test]
+    fn format_count_uses_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(10_000), "10,000");
+        assert_eq!(format_count(2_345_678), "2,345,678");
     }
 
     #[test]

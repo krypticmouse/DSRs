@@ -34,9 +34,10 @@ pub use tools::LlmQuery;
 
 const DEFAULT_MAX_ITERATIONS: usize = 20;
 const DEFAULT_MAX_LLM_CALLS: usize = 50;
-const DEFAULT_MAX_OUTPUT_CHARS: usize = 100_000;
+const DEFAULT_MAX_OUTPUT_CHARS: usize = 10_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
 const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
+const STDOUT_TRUNCATION_NOTICE_PREFIX: &str = "[STDOUT TRUNCATED at ";
 const SYNTHETIC_TURN_ZERO_ASSISTANT_CODE: &str =
     "# sanity check: does this thing work?\nprint('hello world')";
 
@@ -924,7 +925,11 @@ where
         {
             lines.push(String::new());
             lines.push("--- stdout ---".to_string());
-            lines.push(stdout.to_string());
+            append_stdout_lines_with_truncation_hint(
+                &mut lines,
+                stdout,
+                &namespace_sections.updated_names,
+            );
             lines.push("--------------".to_string());
         }
         if let Some(stderr) = feedback.stderr.as_deref()
@@ -1058,8 +1063,31 @@ fn render_updated_names(sections: &NamespaceSections) -> String {
     if sections.updated_names.is_empty() {
         return "none".to_string();
     }
-    sections
-        .updated_names
+    render_updated_var_names_inline(&sections.updated_names)
+}
+
+fn append_stdout_lines_with_truncation_hint(
+    lines: &mut Vec<String>,
+    stdout: &str,
+    updated_names: &[String],
+) {
+    for line in stdout.lines() {
+        lines.push(line.to_string());
+        if line
+            .trim_start()
+            .starts_with(STDOUT_TRUNCATION_NOTICE_PREFIX)
+            && !updated_names.is_empty()
+        {
+            lines.push(format!(
+                "hint: updated vars this turn: {} — query directly",
+                render_updated_var_names_inline(updated_names)
+            ));
+        }
+    }
+}
+
+fn render_updated_var_names_inline(updated_names: &[String]) -> String {
+    updated_names
         .iter()
         .map(|name| format!("`{name}`"))
         .collect::<Vec<_>>()
@@ -1603,6 +1631,98 @@ mod tests {
             let stdout_idx = message.find("--- stdout ---").expect("stdout marker");
             let query_idx = message.find("[query]").expect("query marker");
             assert!(stdout_idx < query_idx, "stdout should appear before query");
+        });
+    }
+
+    #[test]
+    fn perception_message_adds_truncation_hint_when_vars_updated() {
+        Python::attach(|py| {
+            let baseline = PyDict::new(py);
+            baseline.set_item("prompt", "x").expect("set prompt");
+            let baseline = baseline.unbind();
+            let previous_snapshot = collect_namespace_snapshot(py, &baseline, &["prompt"])
+                .map(|snapshot| namespace_snapshot_map(&snapshot))
+                .expect("previous snapshot");
+
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            globals
+                .set_item("retro_corrections", vec!["a", "b"])
+                .expect("set updated var");
+
+            let input = RuntimePolicySigInput {
+                prompt: "x".to_string(),
+            };
+            let feedback = PerceptionFeedback {
+                stdout: Some(
+                    "partial output\n[STDOUT TRUNCATED at 10,000 chars (24,847 total)]".to_string(),
+                ),
+                stderr: None,
+                execution_time: Some(Duration::from_millis(220)),
+            };
+
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                Some(&feedback),
+                7,
+                0,
+                false,
+                6,
+                Some(20),
+                Some(&previous_snapshot),
+            )
+            .expect("message")
+            .text;
+
+            assert!(message.contains("[STDOUT TRUNCATED at 10,000 chars (24,847 total)]"));
+            assert!(
+                message
+                    .contains("hint: updated vars this turn: `retro_corrections` — query directly"),
+                "{message}"
+            );
+        });
+    }
+
+    #[test]
+    fn perception_message_skips_truncation_hint_when_no_vars_updated() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            globals.set_item("stable_value", 1).expect("set stable");
+            let globals = globals.unbind();
+            let previous_snapshot = collect_namespace_snapshot(py, &globals, &["prompt"])
+                .map(|snapshot| namespace_snapshot_map(&snapshot))
+                .expect("previous snapshot");
+
+            let input = RuntimePolicySigInput {
+                prompt: "x".to_string(),
+            };
+            let feedback = PerceptionFeedback {
+                stdout: Some("[STDOUT TRUNCATED at 10,000 chars (24,847 total)]".to_string()),
+                stderr: None,
+                execution_time: Some(Duration::from_millis(180)),
+            };
+
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals,
+                &input,
+                "Inspect trajectories",
+                Some(&feedback),
+                7,
+                0,
+                false,
+                6,
+                Some(0),
+                Some(&previous_snapshot),
+            )
+            .expect("message")
+            .text;
+
+            assert!(!message.contains("hint: updated vars this turn:"));
         });
     }
 

@@ -193,7 +193,7 @@ async fn rlm_feedback_carries_truncation_marker_with_configured_budget() {
         .last_request()
         .expect("expected request carrying truncated feedback");
     let request_debug = format!("{last_request:?}");
-    assert!(request_debug.contains("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
+    assert!(request_debug.contains("[STDOUT TRUNCATED at 10 chars ("));
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
