@@ -221,12 +221,21 @@ async fn integration_preview_matches_spec_and_prompt_is_clean() {
         "{request_debug}"
     );
     assert!(request_debug.contains("title: string"), "{request_debug}");
-    assert!(request_debug.contains("[env] 1 turn |"), "{request_debug}");
-    assert!(request_debug.contains("[query]"), "{request_debug}");
     assert!(
-        request_debug.contains("--- namespace ---"),
+        request_debug.contains("=== Execution Receipt (Turn 1) ==="),
         "{request_debug}"
     );
+    assert!(
+        request_debug.contains("Budget: 1 turn remaining |"),
+        "{request_debug}"
+    );
+    assert!(request_debug.contains("[query]"), "{request_debug}");
+    assert!(
+        request_debug.contains("=== Namespace ==="),
+        "{request_debug}"
+    );
+    assert!(request_debug.contains("[Injected]"), "{request_debug}");
+    assert!(request_debug.contains("[Recent]"), "{request_debug}");
     assert!(request_debug.contains(">>>"), "{request_debug}");
     assert!(
         !request_debug.contains("__baml__"),

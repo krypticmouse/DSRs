@@ -25,7 +25,20 @@ parts = llm_query_batched([f"Summarize: {c}" for c in chunks])
 summary = llm_query(f"Combine:\n" + "\n".join(parts))
 
 # Direct
-quick_answer = llm_query(f"Answer directly: {question}")"#;
+quick_answer = llm_query(f"Answer directly: {question}")
+
+# SUBMIT safely for long answers
+# Build long strings via variables first to avoid unterminated triple-quote/parens errors.
+direct_answer = (
+    "Line 1...\n"
+    "Line 2..."
+)
+key_findings = (
+    "1. First finding...\n"
+    "2. Second finding..."
+)
+
+SUBMIT(direct_answer=direct_answer, key_findings=key_findings)"#;
 
 pub(super) fn render_action_instruction<S: Signature>(
     _config: &RlmConfig,
@@ -297,6 +310,7 @@ mod tests {
         assert!(rendered.contains("## Constraints"));
         assert!(rendered.contains("## Sub-LLM Patterns"));
         assert!(rendered.contains("No markdown fences"));
+        assert!(rendered.contains("SUBMIT safely for long answers"));
     }
 
     #[test]

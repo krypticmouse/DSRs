@@ -193,9 +193,7 @@ async fn rlm_feedback_carries_truncation_marker_with_configured_budget() {
         .last_request()
         .expect("expected request carrying truncated feedback");
     let request_debug = format!("{last_request:?}");
-    assert!(request_debug.contains(
-        "[output truncated at 10 chars - full content in variable. pass to llm_query() to analyze]"
-    ));
+    assert!(request_debug.contains("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -242,7 +240,7 @@ async fn rlm_sub_lm_tools_persist_state_and_decrement_budget_across_turns() {
         .expect("expected second-turn request with feedback");
     let request_debug = format!("{last_request:?}");
     assert!(
-        request_debug.contains("[env] 1 turn | 0 sub-LLM calls"),
+        request_debug.contains("Budget: 1 turn remaining | 0 sub-LLM calls remaining"),
         "second turn should see depleted sub-LM budget"
     );
 }

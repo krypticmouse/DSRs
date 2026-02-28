@@ -1,6 +1,7 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use indexmap::IndexMap;
 use pyo3::types::{
@@ -231,6 +232,23 @@ enum TurnDecision {
 struct PerceptionFeedback {
     stdout: Option<String>,
     stderr: Option<String>,
+    execution_time: Option<Duration>,
+}
+
+#[derive(Debug, Clone)]
+struct PerceptionMessage {
+    text: String,
+    namespace_snapshot: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct NamespaceSections {
+    injected: Vec<(String, String)>,
+    recent: Vec<(String, String)>,
+    stable: Vec<(String, String)>,
+    updated_names: Vec<String>,
+    namespace_snapshot: BTreeMap<String, String>,
+    initial_state: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -425,37 +443,62 @@ where
             }
         });
 
-        let initial_sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
-        let synthetic_turn_zero_user = build_synthetic_turn_zero_user_message(
-            self.config.max_iterations,
-            initial_sub_lm_remaining,
-        );
-        let mut synthetic_history = Chat::new(vec![]);
-        synthetic_history.push(Role::System, &action_instruction);
-        synthetic_history.push(Role::User, &synthetic_turn_zero_user);
-        synthetic_history.push(Role::Assistant, SYNTHETIC_TURN_ZERO_ASSISTANT_CODE);
+        let enable_turn_zero_demo = true;
+        let mut previous_namespace_snapshot: Option<BTreeMap<String, String>> = None;
+        let mut previous_sub_lm_remaining: Option<usize> = None;
+        let (mut history, mut feedback): (Option<Chat>, Option<PerceptionFeedback>) =
+            if enable_turn_zero_demo {
+                let initial_sub_lm_remaining =
+                    self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+                previous_sub_lm_remaining = Some(initial_sub_lm_remaining);
+                let synthetic_turn_zero_user = build_synthetic_turn_zero_user_message(
+                    self.config.max_iterations,
+                    initial_sub_lm_remaining,
+                );
+                let mut synthetic_history = Chat::new(vec![]);
+                synthetic_history.push(Role::System, &action_instruction);
+                synthetic_history.push(Role::User, &synthetic_turn_zero_user);
+                synthetic_history.push(Role::Assistant, SYNTHETIC_TURN_ZERO_ASSISTANT_CODE);
 
-        clear_submit_slot(&submit_slot);
-        let synthetic_feedback = Python::attach(|py| {
-            self.runtime.execute_repl_code(
-                py,
-                &globals,
-                SYNTHETIC_TURN_ZERO_ASSISTANT_CODE,
-                self.config.max_output_chars,
-            )
-        });
+                clear_submit_slot(&submit_slot);
+                let synthetic_start = Instant::now();
+                let synthetic_feedback = Python::attach(|py| {
+                    self.runtime.execute_repl_code(
+                        py,
+                        &globals,
+                        SYNTHETIC_TURN_ZERO_ASSISTANT_CODE,
+                        self.config.max_output_chars,
+                    )
+                });
+                let synthetic_execution_time = synthetic_start.elapsed();
 
-        let mut history: Option<Chat> = Some(synthetic_history);
-        let mut feedback: Option<PerceptionFeedback> = Some(match synthetic_feedback {
-            Ok(stdout) => PerceptionFeedback {
-                stdout: Some(stdout),
-                stderr: None,
-            },
-            Err(stderr) => PerceptionFeedback {
-                stdout: None,
-                stderr: Some(stderr),
-            },
-        });
+                (
+                    Some(synthetic_history),
+                    Some(match synthetic_feedback {
+                        Ok(stdout) => PerceptionFeedback {
+                            stdout: Some(stdout),
+                            stderr: None,
+                            execution_time: Some(synthetic_execution_time),
+                        },
+                        Err(stderr) => PerceptionFeedback {
+                            stdout: None,
+                            stderr: Some(stderr),
+                            execution_time: Some(synthetic_execution_time),
+                        },
+                    }),
+                )
+            } else {
+                (None, None)
+            };
+        if enable_turn_zero_demo {
+            previous_namespace_snapshot = Some(
+                Python::attach(|py| {
+                    collect_namespace_snapshot(py, &globals, input.rlm_field_names())
+                        .map(|snapshot| namespace_snapshot_map(&snapshot))
+                })
+                .map_err(|message| RlmError::Configuration { message })?,
+            );
+        }
         let mut turn_index = 1usize;
         let mut acc = MetadataAcc::default();
         let mut repl_history = REPLHistory {
@@ -496,6 +539,8 @@ where
                 .saturating_sub(turn_index)
                 .saturating_add(1);
             let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+            let sub_lm_spent_last_turn =
+                previous_sub_lm_remaining.map(|prev| prev.saturating_sub(sub_lm_remaining));
             let perception = Python::attach(|py| {
                 build_perception_message::<S>(
                     py,
@@ -506,10 +551,15 @@ where
                     budget_remaining,
                     sub_lm_remaining,
                     is_first_turn,
+                    turn_index,
+                    sub_lm_spent_last_turn,
+                    previous_namespace_snapshot.as_ref(),
                 )
             })
             .map_err(|message| RlmError::Configuration { message })?;
-            let action_input = RlmActionSigInput::new(perception);
+            previous_sub_lm_remaining = Some(sub_lm_remaining);
+            previous_namespace_snapshot = Some(perception.namespace_snapshot);
+            let action_input = RlmActionSigInput::new(perception.text);
 
             info!(
                 iteration = turn_index,
@@ -539,6 +589,7 @@ where
                     feedback = Some(PerceptionFeedback {
                         stdout: None,
                         stderr: Some(reason),
+                        execution_time: None,
                     });
                     turn_index += 1;
                 }
@@ -550,6 +601,7 @@ where
                     let code = action_output.code;
                     clear_submit_slot(&submit_slot);
 
+                    let execution_started = Instant::now();
                     let exec_result = Python::attach(|py| {
                         self.runtime.execute_repl_code(
                             py,
@@ -558,6 +610,7 @@ where
                             self.config.max_output_chars,
                         )
                     });
+                    let execution_time = execution_started.elapsed();
                     let submit_result = take_submit_result(&submit_slot);
                     let outcome = classify_exec_outcome(exec_result, submit_result);
 
@@ -592,7 +645,10 @@ where
                                 outcome = exec_outcome_kind(&other),
                                 "predict response received"
                             );
-                            feedback = Some(perception_feedback_from_outcome(&other));
+                            feedback = Some(perception_feedback_from_outcome(
+                                &other,
+                                Some(execution_time),
+                            ));
                             repl_history.entries.push(REPLEntry {
                                 turn: turn_index.min(u32::MAX as usize) as u32,
                                 code,
@@ -823,19 +879,43 @@ fn build_perception_message<S>(
     budget_remaining: usize,
     sub_lm_remaining: usize,
     first_turn: bool,
-) -> Result<String, String>
+    turn_index: usize,
+    sub_lm_spent_last_turn: Option<usize>,
+    previous_namespace_snapshot: Option<&BTreeMap<String, String>>,
+) -> Result<PerceptionMessage, String>
 where
     S: Signature,
     S::Input: BamlType + RlmInputFields,
 {
+    let namespace = collect_namespace_snapshot(py, globals, input.rlm_field_names())?;
+    let namespace_sections = partition_namespace_snapshot(
+        &namespace,
+        input.rlm_field_names(),
+        previous_namespace_snapshot,
+    );
+
     let mut lines = Vec::new();
-    let turns_label = if budget_remaining == 1 {
-        "1 turn".to_string()
-    } else {
-        format!("{budget_remaining} turns")
-    };
+    lines.push(format!("=== Execution Receipt (Turn {turn_index}) ==="));
     lines.push(format!(
-        "[env] {turns_label} | {sub_lm_remaining} sub-LLM calls"
+        "Time: {}",
+        format_execution_time(feedback.and_then(|item| item.execution_time))
+    ));
+    lines.push(format!(
+        "Budget: {} remaining | {} sub-LLM calls remaining",
+        turns_label(budget_remaining),
+        sub_lm_remaining
+    ));
+    let sub_lm_cost_line = match sub_lm_spent_last_turn {
+        Some(spent) => format!(
+            "Sub-LLM cost: {spent} call{} spent last turn",
+            plural_suffix(spent)
+        ),
+        None => "Sub-LLM cost: n/a (first turn)".to_string(),
+    };
+    lines.push(sub_lm_cost_line);
+    lines.push(format!(
+        "Updated: {}",
+        render_updated_names(&namespace_sections)
     ));
 
     if let Some(feedback) = feedback {
@@ -843,8 +923,9 @@ where
             && !stdout.trim().is_empty()
         {
             lines.push(String::new());
-            lines.push("[stdout]".to_string());
+            lines.push("--- stdout ---".to_string());
             lines.push(stdout.to_string());
+            lines.push("--------------".to_string());
         }
         if let Some(stderr) = feedback.stderr.as_deref()
             && !stderr.trim().is_empty()
@@ -867,38 +948,140 @@ where
         lines.push("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer.".to_string());
     }
 
-    let namespace = collect_namespace_snapshot(py, globals, input.rlm_field_names())?;
     lines.push(String::new());
-    if first_turn {
-        lines.push("--- namespace ---".to_string());
-    } else {
-        lines.push(format!("--- namespace ({} names) ---", namespace.len()));
-    }
-    for (name, repr_value) in namespace {
-        lines.push(format!("{name} = {repr_value}"));
-    }
+    lines.push("=== Namespace ===".to_string());
+    render_namespace_section(&mut lines, "Injected", &namespace_sections.injected);
+    render_namespace_section(&mut lines, "Recent", &namespace_sections.recent);
+    render_namespace_section(&mut lines, "Stable", &namespace_sections.stable);
     lines.push(String::new());
     lines.push(">>>".to_string());
 
-    Ok(lines.join("\n"))
+    Ok(PerceptionMessage {
+        text: lines.join("\n"),
+        namespace_snapshot: namespace_sections.namespace_snapshot,
+    })
 }
 
 fn build_synthetic_turn_zero_user_message(
     budget_remaining: usize,
     sub_lm_remaining: usize,
 ) -> String {
-    let turns_label = if budget_remaining == 1 {
-        "1 turn".to_string()
-    } else {
-        format!("{budget_remaining} turns")
-    };
     [
-        format!("[env] {turns_label} | {sub_lm_remaining} sub-LLM calls"),
+        "=== Execution Receipt (Turn 0) ===".to_string(),
+        "Time: n/a".to_string(),
+        format!(
+            "Budget: {} remaining | {} sub-LLM calls remaining",
+            turns_label(budget_remaining),
+            sub_lm_remaining
+        ),
+        "Sub-LLM cost: n/a (synthetic setup turn)".to_string(),
+        "Updated: (initial state — no prior diff)".to_string(),
         String::new(),
-        "--- namespace ---".to_string(),
+        "=== Namespace ===".to_string(),
+        "[Injected]".to_string(),
+        "(none)".to_string(),
+        String::new(),
+        "[Recent]".to_string(),
+        "(none)".to_string(),
+        String::new(),
+        "[Stable]".to_string(),
+        "(none)".to_string(),
+        String::new(),
         ">>>".to_string(),
     ]
     .join("\n")
+}
+
+fn partition_namespace_snapshot(
+    namespace: &[(String, String)],
+    injected_roots: &[&str],
+    previous_namespace_snapshot: Option<&BTreeMap<String, String>>,
+) -> NamespaceSections {
+    let roots = injected_roots
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<BTreeSet<_>>();
+    let mut sections = NamespaceSections {
+        initial_state: previous_namespace_snapshot.is_none(),
+        ..NamespaceSections::default()
+    };
+
+    for (name, repr_value) in namespace {
+        sections
+            .namespace_snapshot
+            .insert(name.clone(), repr_value.clone());
+
+        let changed_since_last_turn = previous_namespace_snapshot
+            .and_then(|snapshot| snapshot.get(name))
+            .map(|previous| previous != repr_value)
+            .unwrap_or(previous_namespace_snapshot.is_some());
+
+        if changed_since_last_turn {
+            sections.updated_names.push(name.clone());
+        }
+
+        if roots.contains(name) {
+            sections.injected.push((name.clone(), repr_value.clone()));
+        } else if previous_namespace_snapshot.is_none() || changed_since_last_turn {
+            sections.recent.push((name.clone(), repr_value.clone()));
+        } else {
+            sections.stable.push((name.clone(), repr_value.clone()));
+        }
+    }
+
+    sections
+}
+
+fn namespace_snapshot_map(namespace: &[(String, String)]) -> BTreeMap<String, String> {
+    namespace
+        .iter()
+        .map(|(name, repr_value)| (name.clone(), repr_value.clone()))
+        .collect()
+}
+
+fn render_namespace_section(lines: &mut Vec<String>, title: &str, entries: &[(String, String)]) {
+    lines.push(String::new());
+    lines.push(format!("[{title}]"));
+    if entries.is_empty() {
+        lines.push("(none)".to_string());
+        return;
+    }
+    for (name, repr_value) in entries {
+        lines.push(format!("{name} = {repr_value}"));
+    }
+}
+
+fn render_updated_names(sections: &NamespaceSections) -> String {
+    if sections.initial_state {
+        return "(initial state — no prior diff)".to_string();
+    }
+    if sections.updated_names.is_empty() {
+        return "none".to_string();
+    }
+    sections
+        .updated_names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_execution_time(duration: Option<Duration>) -> String {
+    duration
+        .map(|value| format!("{:.1}s", value.as_secs_f64()))
+        .unwrap_or_else(|| "n/a".to_string())
+}
+
+fn turns_label(turns: usize) -> String {
+    if turns == 1 {
+        "1 turn".to_string()
+    } else {
+        format!("{turns} turns")
+    }
+}
+
+fn plural_suffix(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 fn collect_namespace_snapshot(
@@ -1087,11 +1270,15 @@ fn sanitize_python_surface(text: &str) -> String {
     out
 }
 
-fn perception_feedback_from_outcome(outcome: &ExecOutcome) -> PerceptionFeedback {
+fn perception_feedback_from_outcome(
+    outcome: &ExecOutcome,
+    execution_time: Option<Duration>,
+) -> PerceptionFeedback {
     match outcome {
         ExecOutcome::Continue { output } => PerceptionFeedback {
             stdout: (!output.trim().is_empty()).then(|| output.clone()),
             stderr: None,
+            execution_time,
         },
         ExecOutcome::SubmitAccepted { .. } => PerceptionFeedback::default(),
         ExecOutcome::SubmitValidationError { .. }
@@ -1100,6 +1287,7 @@ fn perception_feedback_from_outcome(outcome: &ExecOutcome) -> PerceptionFeedback
         | ExecOutcome::RecoverableParse { .. } => PerceptionFeedback {
             stdout: None,
             stderr: Some(outcome_to_raw_output(outcome)),
+            execution_time,
         },
     }
 }
@@ -1288,7 +1476,7 @@ mod tests {
     }
 
     #[test]
-    fn perception_message_uses_env_task_namespace_and_prompt_markers() {
+    fn perception_message_uses_execution_receipt_and_namespace_sections() {
         Python::attach(|py| {
             let globals = PyDict::new(py);
             globals
@@ -1311,12 +1499,21 @@ mod tests {
                 3,
                 11,
                 true,
+                1,
+                None,
+                None,
             )
             .expect("message");
+            let message = message.text;
 
-            assert!(message.contains("[env] 3 turns | 11 sub-LLM calls"));
+            assert!(message.contains("=== Execution Receipt (Turn 1) ==="));
+            assert!(message.contains("Budget: 3 turns remaining | 11 sub-LLM calls remaining"));
+            assert!(message.contains("Sub-LLM cost: n/a (first turn)"));
             assert!(message.contains("[query] Inspect trajectories"));
-            assert!(message.contains("--- namespace ---"));
+            assert!(message.contains("=== Namespace ==="));
+            assert!(message.contains("[Injected]"));
+            assert!(message.contains("[Recent]"));
+            assert!(message.contains("[Stable]"));
             assert!(message.contains("prompt ="));
             assert!(message.contains("result_count = 7"));
             assert!(!message.contains("_tmp ="));
@@ -1335,6 +1532,7 @@ mod tests {
             let feedback = PerceptionFeedback {
                 stdout: Some("computed summary".to_string()),
                 stderr: None,
+                execution_time: Some(Duration::from_millis(1250)),
             };
 
             let message = build_perception_message::<RuntimePolicySig>(
@@ -1346,11 +1544,16 @@ mod tests {
                 1,
                 3,
                 false,
+                2,
+                Some(2),
+                None,
             )
             .expect("message");
+            let message = message.text;
 
-            assert!(message.contains("[env] 1 turn | 3 sub-LLM calls"));
-            assert!(message.contains("[stdout]"));
+            assert!(message.contains("Time: 1.2s"));
+            assert!(message.contains("Sub-LLM cost: 2 calls spent last turn"));
+            assert!(message.contains("--- stdout ---"));
             assert!(message.contains("computed summary"));
             assert!(
                 message.contains("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer.")
@@ -1362,8 +1565,9 @@ mod tests {
     #[test]
     fn synthetic_turn_zero_user_message_matches_demo_shape() {
         let message = build_synthetic_turn_zero_user_message(12, 20);
-        assert!(message.contains("[env] 12 turns | 20 sub-LLM calls"));
-        assert!(message.contains("--- namespace ---"));
+        assert!(message.contains("=== Execution Receipt (Turn 0) ==="));
+        assert!(message.contains("Budget: 12 turns remaining | 20 sub-LLM calls remaining"));
+        assert!(message.contains("=== Namespace ==="));
         assert!(message.ends_with(">>>"));
         assert!(!message.contains("[query]"));
     }
@@ -1379,6 +1583,7 @@ mod tests {
             let feedback = PerceptionFeedback {
                 stdout: Some("hello world".to_string()),
                 stderr: None,
+                execution_time: Some(Duration::from_millis(100)),
             };
             let message = build_perception_message::<RuntimePolicySig>(
                 py,
@@ -1389,11 +1594,62 @@ mod tests {
                 12,
                 20,
                 true,
+                1,
+                None,
+                None,
             )
             .expect("message");
-            let stdout_idx = message.find("[stdout]").expect("stdout marker");
+            let message = message.text;
+            let stdout_idx = message.find("--- stdout ---").expect("stdout marker");
             let query_idx = message.find("[query]").expect("query marker");
             assert!(stdout_idx < query_idx, "stdout should appear before query");
+        });
+    }
+
+    #[test]
+    fn perception_message_partitions_recent_and_stable_with_snapshot_diff() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            globals
+                .set_item("stable_value", 1)
+                .expect("set stable value");
+            let globals = globals.unbind();
+            let previous_snapshot = collect_namespace_snapshot(py, &globals, &["prompt"])
+                .map(|snapshot| namespace_snapshot_map(&snapshot))
+                .expect("previous snapshot");
+
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            globals
+                .set_item("stable_value", 1)
+                .expect("set stable value");
+            globals
+                .set_item("recent_value", 2)
+                .expect("set recent value");
+
+            let input = RuntimePolicySigInput {
+                prompt: "x".to_string(),
+            };
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                None,
+                8,
+                5,
+                false,
+                4,
+                Some(1),
+                Some(&previous_snapshot),
+            )
+            .expect("message")
+            .text;
+
+            assert!(message.contains("Updated: `recent_value`"));
+            assert!(message.contains("[Recent]\nrecent_value = 2"));
+            assert!(message.contains("[Stable]\nstable_value = 1"));
         });
     }
 
@@ -1436,8 +1692,12 @@ mod tests {
                 3,
                 9,
                 true,
+                1,
+                None,
+                None,
             )
             .expect("message");
+            let message = message.text;
 
             assert!(message.contains("prompt ="));
             assert!(message.contains("kept_value = 42"));
@@ -1517,17 +1777,35 @@ mod tests {
 
     #[test]
     fn perception_feedback_maps_stdout_and_stderr_honestly() {
-        let continue_feedback = perception_feedback_from_outcome(&ExecOutcome::Continue {
-            output: "ok".to_string(),
-        });
+        let continue_feedback = perception_feedback_from_outcome(
+            &ExecOutcome::Continue {
+                output: "ok".to_string(),
+            },
+            Some(Duration::from_secs(2)),
+        );
         assert_eq!(continue_feedback.stdout.as_deref(), Some("ok"));
         assert!(continue_feedback.stderr.is_none());
+        assert_eq!(
+            continue_feedback
+                .execution_time
+                .map(|value| value.as_secs()),
+            Some(2)
+        );
 
-        let error_feedback = perception_feedback_from_outcome(&ExecOutcome::PythonException {
-            message: "Traceback...".to_string(),
-        });
+        let error_feedback = perception_feedback_from_outcome(
+            &ExecOutcome::PythonException {
+                message: "Traceback...".to_string(),
+            },
+            Some(Duration::from_millis(750)),
+        );
         assert_eq!(error_feedback.stderr.as_deref(), Some("Traceback..."));
         assert!(error_feedback.stdout.is_none());
+        assert_eq!(
+            error_feedback
+                .execution_time
+                .map(|value| value.as_millis() as u64),
+            Some(750)
+        );
     }
 
     #[test]

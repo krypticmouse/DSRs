@@ -287,10 +287,9 @@ fn truncate_capture_output(text: &str, max_chars: usize) -> String {
 
     let head: String = text.chars().take(head_len).collect();
     let tail: String = text.chars().skip(total.saturating_sub(tail_len)).collect();
+    let truncation_notice = format!("... [STDOUT TRUNCATED: Exceeded {max_chars} char threshold]");
 
-    format!(
-        "{head}\n[output truncated at {max_chars} chars - full content in variable. pass to llm_query() to analyze]\n{tail}"
-    )
+    format!("{head}\n{tail}\n{truncation_notice}")
 }
 
 #[cfg(test)]
@@ -342,11 +341,10 @@ mod tests {
             let globals = PyDict::new(py).unbind();
             let output = execute_repl_code(py, &globals, "print('abcdefghijklmnopqrstuvwxyz')", 10)
                 .expect("exec");
-            assert!(output.contains(
-                "[output truncated at 10 chars - full content in variable. pass to llm_query() to analyze]"
-            ));
+            assert!(output.contains("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
             assert!(output.starts_with("abcde"));
-            assert!(output.ends_with("wxyz\n"));
+            assert!(output.contains("wxyz\n"));
+            assert!(output.ends_with("... [STDOUT TRUNCATED: Exceeded 10 char threshold]"));
         });
     }
 
@@ -434,9 +432,7 @@ mod tests {
             )
             .expect_err("should fail");
 
-            assert!(err.contains(
-                "[output truncated at 20 chars - full content in variable. pass to llm_query() to analyze]"
-            ));
+            assert!(err.contains("... [STDOUT TRUNCATED: Exceeded 20 char threshold]"));
             assert!(err.chars().count() > 20);
         });
     }
@@ -446,7 +442,7 @@ mod tests {
         let text = "😀".repeat(40);
         let truncated = truncate_capture_output(&text, 9);
 
-        assert!(truncated.contains("[output truncated at 9 chars"));
+        assert!(truncated.contains("... [STDOUT TRUNCATED: Exceeded 9 char threshold]"));
         assert!(truncated.is_char_boundary(truncated.len()));
         assert!(truncated.contains('😀'));
     }
