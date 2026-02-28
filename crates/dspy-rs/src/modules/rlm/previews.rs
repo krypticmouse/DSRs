@@ -637,7 +637,12 @@ fn short_name(path: &str) -> String {
 }
 
 fn normalize_doc_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    text.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
 }
 
 fn spaces(count: usize) -> String {

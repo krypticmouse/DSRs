@@ -73,6 +73,18 @@ pub fn execute_repl_code(
     ) {
         Ok(output) => Ok(output),
         Err(err) => {
+            if let Some(repaired_code) = maybe_repair_submit_code(py, &prepared_code, &err) {
+                match run_exec(
+                    py,
+                    globals,
+                    &repaired_code,
+                    suppress_output,
+                    max_output_chars,
+                ) {
+                    Ok(output) => return Ok(output),
+                    Err(_repaired_err) => {}
+                }
+            }
             let stdout = extract_submit_stdout(py, &err).unwrap_or_default();
             let traceback = extract_traceback(py, &err)
                 .or_else(|| format_python_traceback(py, &err).ok())
@@ -81,6 +93,50 @@ pub fn execute_repl_code(
             Err(truncate_capture_output(&combined, max_output_chars))
         }
     }
+}
+
+fn maybe_repair_submit_code(py: Python<'_>, code: &str, err: &pyo3::PyErr) -> Option<String> {
+    if !code.contains("SUBMIT(") {
+        return None;
+    }
+
+    let traceback = extract_traceback(py, err).or_else(|| format_python_traceback(py, err).ok())?;
+    if !traceback.contains("SyntaxError")
+        || (!traceback.contains("unterminated triple-quoted string literal")
+            && !traceback.contains("unterminated string literal"))
+    {
+        return None;
+    }
+
+    repair_submit_code(code)
+}
+
+fn repair_submit_code(code: &str) -> Option<String> {
+    if !code.contains("SUBMIT(") {
+        return None;
+    }
+
+    let mut repaired = code.trim_end().to_string();
+    let mut changed = false;
+
+    for quote in ["\"\"\"", "'''"] {
+        if repaired.matches(quote).count() % 2 != 0 {
+            repaired.push_str(quote);
+            changed = true;
+        }
+    }
+
+    if let Some(submit_start) = repaired.rfind("SUBMIT(") {
+        let tail = &repaired[submit_start..];
+        let open_parens = tail.chars().filter(|&c| c == '(').count();
+        let close_parens = tail.chars().filter(|&c| c == ')').count();
+        if open_parens > close_parens {
+            repaired.push_str(&")".repeat(open_parens - close_parens));
+            changed = true;
+        }
+    }
+
+    if changed { Some(repaired) } else { None }
 }
 
 fn preprocess_repl_code(code: &str) -> String {
@@ -416,6 +472,34 @@ mod tests {
             let raw = "Let me start by exploring the data to understand the structure and then systematically find recurring corrections.\n\n```python\n# First, explore the data structure\nprint('ok')\n```";
             let output = execute_repl_code(py, &globals, raw, 500).expect("exec");
             assert_eq!(output, "ok\n");
+        });
+    }
+
+    #[test]
+    fn repair_submit_code_closes_unterminated_triple_quote_and_paren() {
+        let repaired = repair_submit_code("SUBMIT(direct_answer=\"\"\"hello")
+            .expect("repair should produce code");
+        assert_eq!(repaired, "SUBMIT(direct_answer=\"\"\"hello\"\"\")");
+    }
+
+    #[test]
+    fn execute_repl_code_repairs_unterminated_submit_payload() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals
+                .set_item("SubmitTerminated", py.get_type::<SubmitTerminated>())
+                .expect("set type");
+            py.run(
+                c_str!("def SUBMIT(**kwargs):\n    raise SubmitTerminated('done')\n"),
+                Some(&globals),
+                Some(&globals),
+            )
+            .expect("submit helper");
+            let globals = globals.unbind();
+
+            let output = execute_repl_code(py, &globals, "SUBMIT(direct_answer=\"\"\"hello", 500)
+                .expect("submit should recover");
+            assert_eq!(output, NO_OUTPUT_MESSAGE);
         });
     }
 }

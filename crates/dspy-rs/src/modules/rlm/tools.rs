@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use async_trait::async_trait;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyModule;
 use tokio::runtime::{Handle, RuntimeFlavor};
 
 use crate::LM;
@@ -89,6 +90,43 @@ impl LlmTools {
         }
     }
 
+    fn reserve_calls_for_batch(&self, requested: usize) -> usize {
+        loop {
+            let current = self.budget_remaining.load(Ordering::SeqCst);
+            let to_execute = current.min(requested);
+            if self
+                .budget_remaining
+                .compare_exchange(
+                    current,
+                    current.saturating_sub(to_execute),
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
+                return to_execute;
+            }
+        }
+    }
+
+    fn emit_budget_warning(&self, executed: usize, requested: usize) {
+        if executed >= requested {
+            return;
+        }
+        let remaining = self.remaining_calls();
+        let warning = format!(
+            "⚠ Budget: executed {executed} of {requested} requested queries ({remaining} remaining of {} max)",
+            self.max_llm_calls
+        );
+        Python::attach(|py| {
+            if let Ok(builtins) = PyModule::import(py, "builtins")
+                && let Ok(print_fn) = builtins.getattr("print")
+            {
+                let _ = print_fn.call1((warning,));
+            }
+        });
+    }
+
     fn ensure_prompt(prompt: &str) -> PyResult<()> {
         if prompt.trim().is_empty() {
             return Err(PyValueError::new_err(
@@ -147,10 +185,19 @@ impl LlmTools {
             Self::ensure_prompt(prompt)?;
         }
 
-        self.reserve_calls(prompts.len())?;
+        let requested = prompts.len();
+        let executable = self.reserve_calls_for_batch(requested);
+        if executable == 0 {
+            self.emit_budget_warning(0, requested);
+            return Ok(Vec::new());
+        }
+        self.emit_budget_warning(executable, requested);
 
         let responses = self.block_with_runtime(async {
-            let futures = prompts.iter().map(|prompt| self.lm.query(prompt));
+            let futures = prompts
+                .iter()
+                .take(executable)
+                .map(|prompt| self.lm.query(prompt));
             futures::future::join_all(futures).await
         })?;
 
@@ -285,6 +332,55 @@ mod tests {
                 .expect_err("second prompt should fail");
 
             assert!(err.to_string().contains("mock failure for bad"));
+        });
+    }
+
+    #[test]
+    fn llm_query_batched_executes_partial_batch_when_budget_is_short() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let lm = Arc::new(MockLm::default());
+            let tools = LlmTools::with_budget(lm.clone(), 2, Handle::current());
+
+            let responses = tools
+                .llm_query_batched(vec![
+                    "one".to_string(),
+                    "two".to_string(),
+                    "three".to_string(),
+                ])
+                .expect("partial batch should succeed");
+            assert_eq!(responses, vec!["answer:one", "answer:two"]);
+            assert_eq!(tools.remaining_calls(), 0);
+
+            let calls = lm.calls.lock().expect("calls lock").clone();
+            assert_eq!(calls, vec!["one".to_string(), "two".to_string()]);
+        });
+    }
+
+    #[test]
+    fn llm_query_batched_returns_empty_when_budget_is_zero() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        rt.block_on(async {
+            let lm = Arc::new(MockLm::default());
+            let tools = LlmTools::with_budget(lm.clone(), 1, Handle::current());
+            let _ = tools.llm_query("one".to_string()).expect("first call");
+            assert_eq!(tools.remaining_calls(), 0);
+
+            let responses = tools
+                .llm_query_batched(vec!["two".to_string(), "three".to_string()])
+                .expect("zero-budget batch should not error");
+            assert!(responses.is_empty());
+
+            let calls = lm.calls.lock().expect("calls lock").clone();
+            assert_eq!(calls, vec!["one".to_string()]);
         });
     }
 
