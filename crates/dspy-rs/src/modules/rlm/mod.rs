@@ -957,7 +957,7 @@ where
     lines.push("=== Namespace ===".to_string());
     render_namespace_section(&mut lines, "Injected", &namespace_sections.injected);
     render_namespace_section(&mut lines, "Recent", &namespace_sections.recent);
-    render_namespace_section(&mut lines, "Stable", &namespace_sections.stable);
+    render_stable_namespace_summary(&mut lines, namespace_sections.stable.len());
     lines.push(String::new());
     lines.push(render_repl_prompt(
         turn_index,
@@ -994,8 +994,7 @@ fn build_synthetic_turn_zero_user_message(
         "[Recent]".to_string(),
         "(none)".to_string(),
         String::new(),
-        "[Stable]".to_string(),
-        "(none)".to_string(),
+        "[Stable] 0 variables".to_string(),
         String::new(),
         render_repl_prompt(0, budget_remaining, sub_lm_remaining, 0),
     ]
@@ -1059,6 +1058,18 @@ fn render_namespace_section(lines: &mut Vec<String>, title: &str, entries: &[(St
     for (name, repr_value) in entries {
         lines.push(format!("{name} = {repr_value}"));
     }
+}
+
+fn render_stable_namespace_summary(lines: &mut Vec<String>, stable_count: usize) {
+    lines.push(String::new());
+    lines.push(format!(
+        "[Stable] {stable_count} {}",
+        if stable_count == 1 {
+            "variable"
+        } else {
+            "variables"
+        }
+    ));
 }
 
 fn render_updated_names(sections: &NamespaceSections) -> String {
@@ -1786,7 +1797,7 @@ mod tests {
 
             assert!(message.contains("Updated: `recent_value`"));
             assert!(message.contains("[Recent]\nrecent_value = 2"));
-            assert!(message.contains("[Stable]\nstable_value = 1"));
+            assert!(message.contains("[Stable] 1 variable"));
         });
     }
 
