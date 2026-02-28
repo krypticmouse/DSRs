@@ -1,8 +1,13 @@
+use std::collections::BTreeSet;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
-use pyo3::Python;
+use pyo3::types::{
+    PyAnyMethods, PyBool, PyDict, PyDictMethods, PyFloat, PyInt, PyList, PyListMethods, PyModule,
+    PySet, PyString, PyStringMethods, PyTuple, PyTypeMethods,
+};
+use pyo3::{Bound, Py, Python};
 use rig::message::ToolCall;
 use tracing::{debug, info, info_span};
 
@@ -44,13 +49,7 @@ Output:
 #[derive(Signature, Clone, Debug)]
 struct RlmActionSig {
     #[input]
-    variables_info: Option<String>,
-
-    #[input]
-    execution_feedback: Option<String>,
-
-    #[input]
-    budget_remaining: u32,
+    perception: String,
 
     #[output]
     code: String,
@@ -226,6 +225,12 @@ enum TurnDecision {
     Fallback,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PerceptionFeedback {
+    stdout: Option<String>,
+    stderr: Option<String>,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RlmError {
     #[error("configuration error: {message}")]
@@ -274,11 +279,12 @@ where
     S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
     S::Output: BamlType + for<'a> Facet<'a> + Clone + Send + Sync,
 {
-    generate_action: Predict<RlmActionSig>,
     extract: Predict<RlmExtractSig<S>>,
 
     #[facet(skip)]
     config: RlmConfig,
+    #[facet(skip)]
+    instruction_override: Option<String>,
     #[facet(skip, opaque)]
     sub_lm: Option<Arc<crate::LM>>,
     #[facet(skip, opaque)]
@@ -394,8 +400,31 @@ where
         let preview_len = previews.chars().count();
         preview_span.record("preview_len", preview_len);
         info!(preview_len, "rlm preview generated");
+
+        let action_instruction = render_action_instruction::<S>(
+            &self.config,
+            self.instruction_override.as_deref(),
+            &previews,
+        );
+        // TODO(dsrs-rlm): This local Predict is a runtime-workaround so instruction
+        // composition can include runtime-collected method metadata and rendered
+        // input schemas. Structural fix options:
+        // 1) public post-build instruction override on Predict, or
+        // 2) build-time instruction composition using compile-time method metadata.
+        let generate_action = Predict::<RlmActionSig>::builder()
+            .instruction(action_instruction)
+            .adapter(ChatAdapter::passthrough())
+            .build();
+        let task_hint = task_hint_from_input::<S>(input).unwrap_or_else(|| {
+            if let Some(instruction) = self.instruction_override.as_deref() {
+                instruction.trim().to_string()
+            } else {
+                S::instruction().trim().to_string()
+            }
+        });
+
         let mut history: Option<Chat> = None;
-        let mut feedback: Option<String> = None;
+        let mut feedback: Option<PerceptionFeedback> = None;
         let mut turn_index = 1usize;
         let mut acc = MetadataAcc::default();
         let mut repl_history = REPLHistory {
@@ -429,12 +458,21 @@ where
                 .max_iterations
                 .saturating_sub(turn_index)
                 .saturating_add(1);
-            let action_input = self.build_action_input(
-                turn_index,
-                Some(previews.as_str()),
-                feedback.as_deref(),
-                budget_remaining,
-            );
+            let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
+            let perception = Python::attach(|py| {
+                build_perception_message::<S>(
+                    py,
+                    &globals,
+                    input,
+                    &task_hint,
+                    feedback.as_ref(),
+                    budget_remaining,
+                    sub_lm_remaining,
+                    is_first_turn,
+                )
+            })
+            .map_err(|message| RlmError::Configuration { message })?;
+            let action_input = RlmActionSigInput::new(perception);
 
             info!(
                 iteration = turn_index,
@@ -443,7 +481,10 @@ where
                 "running action predict call"
             );
             let turn_history = history.take();
-            match self.run_action_turn(action_input, turn_history).await? {
+            match self
+                .run_action_turn(&generate_action, action_input, turn_history)
+                .await?
+            {
                 ActionTurn::RecoverableParse {
                     raw_response,
                     lm_usage,
@@ -458,19 +499,10 @@ where
                     );
                     acc.absorb_parse_metadata(raw_response, lm_usage);
                     history = Some(chat);
-                    let sub_lm_remaining = self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
-                    let next_turn_index = turn_index.saturating_add(1);
-                    let finalization_directive = (next_turn_index == self.config.max_iterations)
-                        .then(|| self.finalization_directive());
-                    let parsed_feedback = format_feedback(
-                        next_turn_index,
-                        self.config.max_iterations.saturating_sub(turn_index),
-                        sub_lm_remaining,
-                        self.config.max_llm_calls,
-                        &ExecOutcome::RecoverableParse { message: reason },
-                        finalization_directive.as_deref(),
-                    );
-                    feedback = Some(parsed_feedback);
+                    feedback = Some(PerceptionFeedback {
+                        stdout: None,
+                        stderr: Some(reason),
+                    });
                     turn_index += 1;
                 }
                 ActionTurn::Parsed(predicted) => {
@@ -523,21 +555,7 @@ where
                                 outcome = exec_outcome_kind(&other),
                                 "predict response received"
                             );
-                            let sub_lm_remaining =
-                                self.runtime.sub_lm_budget_remaining(llm_tools.as_ref());
-                            let next_turn_index = turn_index.saturating_add(1);
-                            let finalization_directive = (next_turn_index
-                                == self.config.max_iterations)
-                                .then(|| self.finalization_directive());
-                            let rendered_feedback = format_feedback(
-                                next_turn_index,
-                                self.config.max_iterations.saturating_sub(turn_index),
-                                sub_lm_remaining,
-                                self.config.max_llm_calls,
-                                &other,
-                                finalization_directive.as_deref(),
-                            );
-                            feedback = Some(rendered_feedback);
+                            feedback = Some(perception_feedback_from_outcome(&other));
                             repl_history.entries.push(REPLEntry {
                                 turn: turn_index.min(u32::MAX as usize) as u32,
                                 code,
@@ -551,32 +569,13 @@ where
         }
     }
 
-    fn build_action_input(
-        &self,
-        turn_index: usize,
-        previews: Option<&str>,
-        execution_feedback: Option<&str>,
-        budget_remaining: usize,
-    ) -> RlmActionSigInput {
-        let (variables_info, execution_feedback) = if turn_index == 1 {
-            (previews.map(ToOwned::to_owned), None)
-        } else {
-            (None, execution_feedback.map(ToOwned::to_owned))
-        };
-
-        RlmActionSigInput::new(
-            variables_info,
-            execution_feedback,
-            budget_remaining.min(u32::MAX as usize) as u32,
-        )
-    }
-
     async fn run_action_turn(
         &self,
+        generate_action: &Predict<RlmActionSig>,
         action_input: RlmActionSigInput,
         history: Option<Chat>,
     ) -> Result<ActionTurn, RlmError> {
-        match self.generate_action.forward(action_input, history).await {
+        match generate_action.forward(action_input, history).await {
             Ok(predicted) => Ok(ActionTurn::Parsed(predicted)),
             Err(error) => match error {
                 PredictError::Parse {
@@ -627,16 +626,6 @@ where
         acc.absorb_call_metadata(metadata);
         let metadata = std::mem::take(acc).into_call_metadata();
         Ok(Predicted::new(output, metadata, chat))
-    }
-
-    fn finalization_directive(&self) -> String {
-        let output_fields = S::schema()
-            .output_fields()
-            .iter()
-            .map(|field| format!("{}=...", field.lm_name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("This is your final turn. Call SUBMIT({output_fields}) now with your best answer.")
     }
 }
 
@@ -719,14 +708,8 @@ where
     }
 
     pub fn build(self) -> Rlm<S> {
-        let action_instruction =
-            render_action_instruction::<S>(&self.config, self.instruction_override.as_deref());
         let extract_instruction =
             render_extract_instruction::<S>(self.instruction_override.as_deref());
-        let generate_action = Predict::<RlmActionSig>::builder()
-            .instruction(action_instruction)
-            .adapter(ChatAdapter::passthrough())
-            .build();
         let extract = Predict::<RlmExtractSig<S>>::builder()
             .instruction(extract_instruction)
             .adapter(ChatAdapter::new())
@@ -737,9 +720,9 @@ where
             .unwrap_or_else(|| default_runtime::<S>(self.config.max_llm_calls));
 
         Rlm {
-            generate_action,
             extract,
             config: self.config,
+            instruction_override: self.instruction_override,
             sub_lm: self.sub_lm,
             runtime,
         }
@@ -770,28 +753,304 @@ where
     }
 }
 
-fn format_feedback(
-    turn_index: usize,
+fn task_hint_from_input<S>(input: &S::Input) -> Option<String>
+where
+    S: Signature,
+    S::Input: BamlType,
+{
+    let value = input.to_baml_value();
+    let question = match &value {
+        BamlValue::Class(_, fields) | BamlValue::Map(fields) => fields.get("question"),
+        _ => None,
+    }?;
+    if let BamlValue::String(text) = question {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+fn build_perception_message<S>(
+    py: Python<'_>,
+    globals: &Py<PyDict>,
+    input: &S::Input,
+    task_hint: &str,
+    feedback: Option<&PerceptionFeedback>,
     budget_remaining: usize,
     sub_lm_remaining: usize,
-    max_llm_calls: usize,
-    outcome: &ExecOutcome,
-    finalization_directive: Option<&str>,
-) -> String {
-    let header = format!(
-        "[Turn {turn_index} | {budget_remaining} turns, {sub_lm_remaining}/{max_llm_calls} sub-model calls remaining]"
-    );
-    let body = outcome_to_raw_output(outcome);
-    let mut rendered = if body.is_empty() {
-        header
+    first_turn: bool,
+) -> Result<String, String>
+where
+    S: Signature,
+    S::Input: BamlType + RlmInputFields,
+{
+    let mut lines = Vec::new();
+    let turns_label = if budget_remaining == 1 {
+        "1 turn".to_string()
     } else {
-        format!("{header}\n\n{body}")
+        format!("{budget_remaining} turns")
     };
-    if let Some(directive) = finalization_directive {
-        rendered.push_str("\n\n");
-        rendered.push_str(directive);
+    lines.push(format!(
+        "[env] {turns_label} | {sub_lm_remaining} sub-LLM calls"
+    ));
+
+    if first_turn {
+        lines.push(format!("[query] {}", truncate_chars(task_hint, 180)));
     }
-    rendered
+
+    if let Some(feedback) = feedback {
+        if let Some(stdout) = feedback.stdout.as_deref()
+            && !stdout.trim().is_empty()
+        {
+            lines.push(String::new());
+            lines.push("[stdout]".to_string());
+            lines.push(stdout.to_string());
+        }
+        if let Some(stderr) = feedback.stderr.as_deref()
+            && !stderr.trim().is_empty()
+        {
+            lines.push(String::new());
+            lines.push("[stderr]".to_string());
+            lines.push(stderr.to_string());
+        }
+    }
+
+    if budget_remaining == 1 {
+        lines.push(String::new());
+        lines.push("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer.".to_string());
+    }
+
+    let namespace = collect_namespace_snapshot(py, globals, input.rlm_field_names())?;
+    lines.push(String::new());
+    if first_turn {
+        lines.push("--- namespace ---".to_string());
+    } else {
+        lines.push(format!("--- namespace ({} names) ---", namespace.len()));
+    }
+    for (name, repr_value) in namespace {
+        lines.push(format!("{name} = {repr_value}"));
+    }
+    lines.push(String::new());
+    lines.push(">>>".to_string());
+
+    Ok(lines.join("\n"))
+}
+
+fn collect_namespace_snapshot(
+    py: Python<'_>,
+    globals: &Py<PyDict>,
+    injected_roots: &[&str],
+) -> Result<Vec<(String, String)>, String> {
+    let dict = globals.bind(py);
+    let roots = injected_roots
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect::<BTreeSet<_>>();
+
+    let mut out = Vec::new();
+    for root in injected_roots {
+        if let Some(value) = dict
+            .get_item(*root)
+            .map_err(|err| format!("failed to fetch root `{root}` from globals: {err}"))?
+        {
+            out.push(((*root).to_string(), safe_namespace_repr(&value, true)?));
+        }
+    }
+
+    let mut extras = Vec::new();
+    for (name, value) in dict.iter() {
+        let Ok(name) = name.extract::<String>() else {
+            continue;
+        };
+        if roots.contains(name.as_str()) {
+            continue;
+        }
+        if !include_in_namespace(name.as_str(), &value, &roots) {
+            continue;
+        }
+        extras.push((name, safe_namespace_repr(&value, false)?));
+    }
+    extras.sort_by(|a, b| a.0.cmp(&b.0));
+    out.extend(extras);
+
+    Ok(out)
+}
+
+fn include_in_namespace(
+    name: &str,
+    value: &Bound<'_, pyo3::PyAny>,
+    roots: &BTreeSet<String>,
+) -> bool {
+    if roots.contains(name) {
+        return true;
+    }
+    if name.starts_with('_') {
+        return false;
+    }
+    if name.chars().count() <= 1 {
+        return false;
+    }
+    if value.is_instance_of::<PyModule>() {
+        return false;
+    }
+    if value.is_callable() {
+        return false;
+    }
+    true
+}
+
+fn safe_namespace_repr(value: &Bound<'_, pyo3::PyAny>, is_root: bool) -> Result<String, String> {
+    if is_root {
+        if value.is_instance_of::<PyList>() {
+            let len = value.len().unwrap_or_default();
+            if len > 5 {
+                if let Ok(list) = value.cast::<PyList>() {
+                    let mut preview = Vec::new();
+                    for item in list.iter().take(2) {
+                        let rendered = sanitize_python_surface(&repr_value(&item)?);
+                        preview.push(truncate_chars(&rendered, 100));
+                    }
+                    if !preview.is_empty() {
+                        return Ok(format!("[{}, ... ({} total)]", preview.join(", "), len));
+                    }
+                }
+                return Ok(format!("list({len} items)"));
+            }
+        }
+        return Ok(truncate_chars(&repr_value(value)?, 200));
+    }
+
+    if value.is_instance_of::<PyString>() {
+        let text = value
+            .extract::<String>()
+            .map_err(|err| format!("string extract failed: {err}"))?;
+        return Ok(format!("{:?}", truncate_chars(&text, 50)));
+    }
+    if value.is_instance_of::<PyBool>()
+        || value.is_instance_of::<PyInt>()
+        || value.is_instance_of::<PyFloat>()
+    {
+        return repr_value(value);
+    }
+
+    if value.is_instance_of::<PyList>() {
+        let len = value.len().unwrap_or_default();
+        if len <= 5 {
+            return Ok(truncate_chars(
+                &sanitize_python_surface(&repr_value(value)?),
+                120,
+            ));
+        }
+        return Ok(format!("<list of {len} items>"));
+    }
+    if value.is_instance_of::<PyTuple>() {
+        let len = value.len().unwrap_or_default();
+        if len <= 5 {
+            return Ok(truncate_chars(
+                &sanitize_python_surface(&repr_value(value)?),
+                120,
+            ));
+        }
+        return Ok(format!("<tuple of {len} items>"));
+    }
+    if value.is_instance_of::<PySet>() {
+        let len = value.len().unwrap_or_default();
+        if len <= 5 {
+            return Ok(truncate_chars(
+                &sanitize_python_surface(&repr_value(value)?),
+                120,
+            ));
+        }
+        return Ok(format!("<set of {len} items>"));
+    }
+    if value.is_instance_of::<PyDict>() {
+        let len = value.len().unwrap_or_default();
+        if len <= 5 {
+            return Ok(truncate_chars(
+                &sanitize_python_surface(&repr_value(value)?),
+                120,
+            ));
+        }
+        return Ok(format!("<dict of {len} items>"));
+    }
+
+    let class_name = value
+        .get_type()
+        .name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|_| "Object".to_string());
+
+    if let Ok(len) = value.len() {
+        return Ok(format!("<{class_name}: {len} items>"));
+    }
+
+    Ok(format!("<{class_name}>"))
+}
+
+fn repr_value(value: &Bound<'_, pyo3::PyAny>) -> Result<String, String> {
+    let repr = value
+        .repr()
+        .map_err(|err| format!("repr() failed: {err}"))?;
+    Ok(repr.to_string_lossy().to_string())
+}
+
+fn sanitize_python_surface(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut token = String::new();
+
+    let flush = |out: &mut String, token: &mut String| {
+        if token.is_empty() {
+            return;
+        }
+        if let Some(last) = token.rsplit("::").next() {
+            out.push_str(last);
+        } else {
+            out.push_str(token);
+        }
+        token.clear();
+    };
+
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' {
+            token.push(ch);
+        } else {
+            flush(&mut out, &mut token);
+            out.push(ch);
+        }
+    }
+    flush(&mut out, &mut token);
+    out
+}
+
+fn perception_feedback_from_outcome(outcome: &ExecOutcome) -> PerceptionFeedback {
+    match outcome {
+        ExecOutcome::Continue { output } => PerceptionFeedback {
+            stdout: (!output.trim().is_empty()).then(|| output.clone()),
+            stderr: None,
+        },
+        ExecOutcome::SubmitAccepted { .. } => PerceptionFeedback::default(),
+        ExecOutcome::SubmitValidationError { .. }
+        | ExecOutcome::SubmitAssertionFailed { .. }
+        | ExecOutcome::PythonException { .. }
+        | ExecOutcome::RecoverableParse { .. } => PerceptionFeedback {
+            stdout: None,
+            stderr: Some(outcome_to_raw_output(outcome)),
+        },
+    }
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for ch in text.chars().take(max_chars) {
+        out.push(ch);
+    }
+    out.push_str("...");
+    out
 }
 
 #[cfg(test)]
@@ -921,6 +1180,8 @@ fn outcome_to_raw_output(outcome: &ExecOutcome) -> String {
 mod tests {
     use super::*;
     use crate::{ParseError, Signature};
+    use pyo3::Python;
+    use pyo3::types::{PyDict, PyDictMethods, PyModule};
     use std::sync::Arc;
     use temp_env::with_var;
 
@@ -964,18 +1225,157 @@ mod tests {
     }
 
     #[test]
-    fn action_input_is_asymmetric_between_first_and_later_turns() {
-        let module = Rlm::<RuntimePolicySig>::builder().build();
+    fn perception_message_uses_env_task_namespace_and_prompt_markers() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals
+                .set_item("prompt", "Where did signal drop?")
+                .expect("set prompt");
+            globals
+                .set_item("result_count", 7)
+                .expect("set result_count");
+            globals.set_item("_tmp", 99).expect("set tmp");
 
-        let turn1 = module.build_action_input(1, Some("preview block"), Some("feedback"), 20);
-        assert_eq!(turn1.variables_info.as_deref(), Some("preview block"));
-        assert!(turn1.execution_feedback.is_none());
-        assert_eq!(turn1.budget_remaining, 20);
+            let input = RuntimePolicySigInput {
+                prompt: "Where did signal drop?".to_string(),
+            };
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                None,
+                3,
+                11,
+                true,
+            )
+            .expect("message");
 
-        let turn2 = module.build_action_input(2, Some("preview block"), Some("feedback"), 19);
-        assert!(turn2.variables_info.is_none());
-        assert_eq!(turn2.execution_feedback.as_deref(), Some("feedback"));
-        assert_eq!(turn2.budget_remaining, 19);
+            assert!(message.contains("[env] 3 turns | 11 sub-LLM calls"));
+            assert!(message.contains("[query] Inspect trajectories"));
+            assert!(message.contains("--- namespace ---"));
+            assert!(message.contains("prompt ="));
+            assert!(message.contains("result_count = 7"));
+            assert!(!message.contains("_tmp ="));
+            assert!(message.ends_with(">>>"));
+        });
+    }
+
+    #[test]
+    fn perception_message_turn_two_includes_stdout_and_last_turn_warning() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals.set_item("prompt", "x").expect("set prompt");
+            let input = RuntimePolicySigInput {
+                prompt: "x".to_string(),
+            };
+            let feedback = PerceptionFeedback {
+                stdout: Some("computed summary".to_string()),
+                stderr: None,
+            };
+
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                Some(&feedback),
+                1,
+                3,
+                false,
+            )
+            .expect("message");
+
+            assert!(message.contains("[env] 1 turn | 3 sub-LLM calls"));
+            assert!(message.contains("[stdout]"));
+            assert!(message.contains("computed summary"));
+            assert!(
+                message.contains("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer.")
+            );
+            assert!(!message.contains("[query]"));
+        });
+    }
+
+    #[test]
+    fn namespace_filtering_excludes_noise_and_keeps_roots() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            globals
+                .set_item("prompt", "Where did signal drop?")
+                .expect("set prompt root");
+            globals.set_item("i", 1).expect("set single char");
+            globals
+                .set_item("_scratch", "temp")
+                .expect("set private name");
+
+            let json_mod = PyModule::import(py, "json").expect("import json");
+            globals
+                .set_item("json", json_mod)
+                .expect("set module variable");
+
+            let builtins = PyModule::import(py, "builtins").expect("import builtins");
+            let len_fn = builtins.getattr("len").expect("load len");
+            globals
+                .set_item("callable_fn", len_fn)
+                .expect("set callable variable");
+
+            globals
+                .set_item("kept_value", 42)
+                .expect("set regular value");
+
+            let input = RuntimePolicySigInput {
+                prompt: "Where did signal drop?".to_string(),
+            };
+            let message = build_perception_message::<RuntimePolicySig>(
+                py,
+                &globals.unbind(),
+                &input,
+                "Inspect trajectories",
+                None,
+                3,
+                9,
+                true,
+            )
+            .expect("message");
+
+            assert!(message.contains("prompt ="));
+            assert!(message.contains("kept_value = 42"));
+            assert!(!message.contains("\ni = "));
+            assert!(!message.contains("_scratch = "));
+            assert!(!message.contains("json = "));
+            assert!(!message.contains("callable_fn = "));
+        });
+    }
+
+    #[test]
+    fn sanitize_python_surface_strips_module_paths() {
+        let rendered = sanitize_python_surface(
+            "Sessions(items=[tanha::types::Session(id='abc')], kind=tanha::types::Kind::Fast)",
+        );
+        assert!(!rendered.contains("tanha::types::"));
+        assert!(rendered.contains("Session(id='abc')"));
+        assert!(rendered.contains("kind=Fast"));
+    }
+
+    #[test]
+    fn root_namespace_repr_uses_object_repr_without_custom_heuristics() {
+        Python::attach(|py| {
+            let globals = PyDict::new(py);
+            py.run(
+                pyo3::ffi::c_str!(
+                    "class Sessions:\n  def __repr__(self):\n    return 'Sessions(CUSTOM_REPR)'\nsessions = Sessions()\n"
+                ),
+                Some(&globals),
+                Some(&globals),
+            )
+            .expect("python setup");
+            let sessions = globals
+                .get_item("sessions")
+                .expect("sessions lookup should succeed")
+                .expect("sessions should exist");
+            let rendered = safe_namespace_repr(&sessions, true).expect("repr");
+            assert_eq!(rendered, "Sessions(CUSTOM_REPR)");
+        });
     }
 
     #[test]
@@ -1015,21 +1415,18 @@ mod tests {
     }
 
     #[test]
-    fn feedback_uses_next_turn_framing_and_supports_finalization_directive() {
-        let feedback = format_feedback(
-            2,
-            19,
-            50,
-            50,
-            &ExecOutcome::Continue {
-                output: "ok".to_string(),
-            },
-            Some("This is your final turn. Call SUBMIT(answer=...) now with your best answer."),
-        );
+    fn perception_feedback_maps_stdout_and_stderr_honestly() {
+        let continue_feedback = perception_feedback_from_outcome(&ExecOutcome::Continue {
+            output: "ok".to_string(),
+        });
+        assert_eq!(continue_feedback.stdout.as_deref(), Some("ok"));
+        assert!(continue_feedback.stderr.is_none());
 
-        assert!(feedback.contains("[Turn 2 | 19 turns, 50/50 sub-model calls remaining]"));
-        assert!(feedback.contains("\n\nok"));
-        assert!(feedback.contains("This is your final turn. Call SUBMIT(answer=...) now"));
+        let error_feedback = perception_feedback_from_outcome(&ExecOutcome::PythonException {
+            message: "Traceback...".to_string(),
+        });
+        assert_eq!(error_feedback.stderr.as_deref(), Some("Traceback..."));
+        assert!(error_feedback.stdout.is_none());
     }
 
     #[test]

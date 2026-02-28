@@ -196,9 +196,12 @@ async fn integration_preview_matches_spec_and_prompt_is_clean() {
     let request_debug = format!("{request:?}");
 
     assert!(
-        request_debug
-            .contains("You work in a Python REPL. Find the most relevant papers for the query."),
-        "system prompt must start with developer instruction"
+        request_debug.contains("## Task"),
+        "system prompt should include Task section"
+    );
+    assert!(
+        request_debug.contains("Find the most relevant papers for the query."),
+        "system prompt should include developer instruction"
     );
     assert!(
         !request_debug.contains("Your input fields are:"),
@@ -209,9 +212,22 @@ async fn integration_preview_matches_spec_and_prompt_is_clean() {
         "adapter wrapping should be absent"
     );
 
-    assert!(request_debug.contains("## Variables"), "{request_debug}");
-    assert!(request_debug.contains("papers:"), "{request_debug}");
+    assert!(
+        request_debug.contains("## Input Variables"),
+        "{request_debug}"
+    );
+    assert!(
+        request_debug.contains("Variable: `papers` (access it in your code)"),
+        "{request_debug}"
+    );
     assert!(request_debug.contains("title: string"), "{request_debug}");
+    assert!(request_debug.contains("[env] 1 turn |"), "{request_debug}");
+    assert!(request_debug.contains("[query]"), "{request_debug}");
+    assert!(
+        request_debug.contains("--- namespace ---"),
+        "{request_debug}"
+    );
+    assert!(request_debug.contains(">>>"), "{request_debug}");
     assert!(
         !request_debug.contains("__baml__"),
         "preview should hide __baml__"
@@ -243,10 +259,23 @@ async fn integration_preview_shows_paper_fields_and_methods() {
         .last_request()
         .expect("expected preview request capture");
     let request_debug = format!("{request:?}");
-    assert!(request_debug.contains("paper:"), "{request_debug}");
+    assert!(
+        request_debug.contains("Variable: `paper` (access it in your code)"),
+        "{request_debug}"
+    );
     assert!(request_debug.contains("title: string"), "{request_debug}");
-    assert!(request_debug.contains("Methods:"), "{request_debug}");
-    assert!(request_debug.contains(".__len__("), "{request_debug}");
+    assert!(
+        request_debug.contains("## Input Variables"),
+        "{request_debug}"
+    );
+    assert!(
+        !request_debug.contains("Methods:"),
+        "legacy methods block should not appear in new schema format"
+    );
+    assert!(
+        !request_debug.contains(".__len__("),
+        "dunder methods should not appear in schema-facing method surface"
+    );
     assert!(
         !request_debug.contains("__baml__"),
         "preview should hide __baml__"

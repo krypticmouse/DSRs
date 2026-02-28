@@ -158,9 +158,7 @@ async fn rlm_v3_demo_recovers_empty_then_python_error_then_finalization_submit()
         "finalization turn should include prior python error feedback"
     );
     assert!(
-        request_debug.contains(
-            "This is your final turn. Call SUBMIT(answer=...) now with your best answer."
-        ),
+        request_debug.contains("⚠ LAST TURN — you MUST call SUBMIT() now with your best answer."),
         "finalization directive should be present on last repair turn"
     );
 }
@@ -244,7 +242,7 @@ async fn rlm_sub_lm_tools_persist_state_and_decrement_budget_across_turns() {
         .expect("expected second-turn request with feedback");
     let request_debug = format!("{last_request:?}");
     assert!(
-        request_debug.contains("0/3 sub-model calls remaining"),
+        request_debug.contains("[env] 1 turn | 0 sub-LLM calls"),
         "second turn should see depleted sub-LM budget"
     );
 }

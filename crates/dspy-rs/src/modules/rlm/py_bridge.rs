@@ -180,13 +180,23 @@ fn extract_signature(inspect: &Bound<'_, PyModule>, callable: &Bound<'_, PyAny>)
 fn sanitize_signature(raw_signature: &str) -> String {
     let mut signature = raw_signature.trim().to_string();
 
-    if signature.starts_with("(self, /, ") {
+    if signature == "($self)" || signature == "($self, /)" {
+        signature = "()".to_string();
+    } else if signature.starts_with("($self, /, ") {
+        signature = signature.replacen("($self, /, ", "(", 1);
+    } else if signature.starts_with("($self, ") {
+        signature = signature.replacen("($self, ", "(", 1);
+    }
+
+    if signature == "(self)" || signature == "(self, /)" {
+        signature = "()".to_string();
+    } else if signature.starts_with("(self, /, ") {
         signature = signature.replacen("(self, /, ", "(", 1);
     } else if signature.starts_with("(self, ") {
         signature = signature.replacen("(self, ", "(", 1);
-    } else if signature == "(self)" || signature == "(self, /)" {
-        signature = "()".to_string();
     }
+    signature = signature.replace("($self, /)", "()");
+    signature = signature.replace("($self,)", "()");
     signature = signature.replace(", /)", ")");
     signature = signature.replace(", /, ", ", ");
 
@@ -1020,6 +1030,7 @@ mod tests {
     use tokio::runtime::Handle;
 
     use super::*;
+    use crate::BamlType;
     use crate::Signature;
     use crate::modules::rlm::{LlmQuery, SubmitSlot};
 
@@ -1333,6 +1344,33 @@ mod tests {
             assert!(matches!(dunder_len.source, MethodSource::Generated));
             assert!(!dunder_len.doc.trim().is_empty());
         });
+    }
+
+    #[test]
+    fn sanitize_signature_removes_python_self_variants() {
+        assert_eq!(
+            sanitize_signature("($self, path_fragment)"),
+            "(path_fragment)"
+        );
+        assert_eq!(
+            sanitize_signature("($self, /, path_fragment)"),
+            "(path_fragment)"
+        );
+        assert_eq!(
+            sanitize_signature("(self, /, path_fragment)"),
+            "(path_fragment)"
+        );
+        assert_eq!(sanitize_signature("($self, /)"), "()");
+    }
+
+    #[test]
+    fn sanitize_signature_simplifies_qualified_type_paths() {
+        let raw = "(query: builtins.str, other: tanha.types.Sessions) -> tanha.types.Sessions";
+        let sanitized = sanitize_signature(raw);
+        assert!(!sanitized.contains("builtins."));
+        assert!(!sanitized.contains("tanha.types."));
+        assert!(sanitized.contains("str"));
+        assert!(sanitized.contains("Sessions"));
     }
 
     #[test]

@@ -527,6 +527,9 @@ impl ChatAdapter {
         let vars = Value::Object(serde_json::Map::new());
 
         let mut result = String::new();
+        let raw_perception_mode = !self.is_structured_output()
+            && schema.input_fields().len() == 1
+            && schema.input_fields()[0].lm_name == "perception";
         for field_spec in schema.input_fields() {
             if let Some(value) = value_for_path_relaxed(&baml_value, field_spec.path()) {
                 if self.is_structured_output() {
@@ -540,16 +543,22 @@ impl ChatAdapter {
                     ));
                     result.push_str("\n\n");
                 } else {
-                    result.push_str(field_spec.lm_name);
-                    result.push_str(":\n");
-                    result.push_str(&render_input_field(
+                    let rendered = render_input_field(
                         field_spec,
                         value,
                         &input_json,
                         input_output_format,
                         &vars,
-                    ));
-                    result.push_str("\n\n");
+                    );
+                    if raw_perception_mode {
+                        result.push_str(&rendered);
+                        result.push_str("\n");
+                    } else {
+                        result.push_str(field_spec.lm_name);
+                        result.push_str(":\n");
+                        result.push_str(&rendered);
+                        result.push_str("\n\n");
+                    }
                 }
             }
         }

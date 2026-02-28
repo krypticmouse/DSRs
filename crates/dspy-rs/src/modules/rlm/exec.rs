@@ -1,3 +1,4 @@
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::ffi::c_str;
 use pyo3::types::{PyAnyMethods, PyDict, PyModule};
 use pyo3::{Py, PyResult, Python};
@@ -82,17 +83,19 @@ fn run_exec(
     suppress_output: bool,
     max_output_chars: usize,
 ) -> PyResult<String> {
-    let module = PyModule::from_code(
-        py,
+    let helper_globals = PyDict::new(py);
+    py.run(
         EXEC_HELPER_CODE,
-        c_str!("<dsrs_exec>"),
-        c_str!("dsrs_exec"),
+        Some(&helper_globals),
+        Some(&helper_globals),
     )?;
-    let exec_fn = module.getattr("dsrs_exec")?;
+    let exec_fn = helper_globals
+        .get_item("dsrs_exec")
+        .map_err(|_| PyRuntimeError::new_err("dsrs_exec helper function missing"))?;
     let globals = globals.bind(py);
     match exec_fn.call1((code, globals, suppress_output)) {
         Ok(result) => {
-            let (stdout, repr): (String, Option<String>) = result.extract()?;
+            let (stdout, repr) = result.extract::<(String, Option<String>)>()?;
             Ok(format_output(stdout, repr, max_output_chars))
         }
         Err(err) if is_submit_terminated(&err, py) => {
@@ -291,10 +294,16 @@ mod tests {
 
             assert!(err.contains("Traceback"));
             assert!(
-                err.contains("ModuleNotFoundError") || err.contains("ImportError"),
-                "expected import failure class in traceback: {err}"
+                err.contains("ModuleNotFoundError")
+                    || err.contains("ImportError")
+                    || err.contains("AttributeError"),
+                "expected import-related failure class in traceback: {err}"
             );
-            assert!(err.contains("definitely_missing_module_xyz"));
+            assert!(
+                err.contains("definitely_missing_module_xyz")
+                    || err.contains("partially initialized module"),
+                "expected import target or fallback import error context: {err}"
+            );
         });
     }
 

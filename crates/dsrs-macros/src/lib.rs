@@ -743,10 +743,34 @@ fn generate_rlm_input_impl(
         .map(|field| &field.ident)
         .collect();
     let field_types: Vec<_> = parsed.input_fields.iter().map(|field| &field.ty).collect();
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let (impl_generics, ty_generics, _where_clause) = generics.split_for_impl();
+    let py_bounds = field_types
+        .iter()
+        .map(|field_ty| {
+            quote! {
+                #field_ty: for<'py> #runtime::__macro_support::pyo3::conversion::IntoPyObject<'py>
+            }
+        })
+        .collect::<Vec<_>>();
+    let combined_where = match (&generics.where_clause, py_bounds.is_empty()) {
+        (Some(where_clause), false) => {
+            let existing = where_clause.predicates.iter();
+            quote! {
+                where
+                    #(#existing,)*
+                    #(#py_bounds),*
+            }
+        }
+        (Some(where_clause), true) => quote! { #where_clause },
+        (None, false) => quote! {
+            where
+                #(#py_bounds),*
+        },
+        (None, true) => quote! {},
+    };
 
     quote! {
-        impl #impl_generics #runtime::RlmInputFields for #input_name #ty_generics #where_clause {
+        impl #impl_generics #runtime::RlmInputFields for #input_name #ty_generics #combined_where {
             fn rlm_field_names(&self) -> &'static [&'static str] {
                 &[#(#field_names),*]
             }

@@ -29,7 +29,7 @@ pub(crate) fn derive(input: DeriveInput) -> syn::Result<TokenStream> {
         .filter(|f| !f.skip_python)
         .map(generate_getter_method)
         .collect::<Vec<_>>();
-    let repr_method = generate_repr_method(&runtime);
+    let repr_method = (!options.skip_repr).then(|| generate_repr_method(&runtime));
     let baml_method = generate_baml_method(&runtime);
     let mut extra_methods = Vec::new();
     if let Some(iter_field) = options.iter_field {
@@ -65,6 +65,7 @@ struct FieldSpec {
 struct ContainerOptions {
     iter_field: Option<String>,
     index_field: Option<String>,
+    skip_repr: bool,
 }
 
 fn validate_struct_surface(input: &DeriveInput) -> syn::Result<()> {
@@ -132,8 +133,13 @@ fn parse_container_options(attrs: &[syn::Attribute]) -> syn::Result<ContainerOpt
                 out.index_field = Some(lit.value());
                 return Ok(());
             }
-
-            Err(meta.error("unsupported #[rlm(...)] key for structs; supported keys in V1 are `iter` and `index`"))
+            if meta.path.is_ident("skip_repr") {
+                out.skip_repr = true;
+                return Ok(());
+            }
+            Err(meta.error(
+                "unsupported #[rlm(...)] key for structs; supported keys in V1 are `iter`, `index`, and `skip_repr`",
+            ))
         })?;
     }
 

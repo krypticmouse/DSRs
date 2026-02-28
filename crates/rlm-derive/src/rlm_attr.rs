@@ -6,14 +6,24 @@ use syn::{Data, DeriveInput, Fields, Meta, parse_macro_input};
 use crate::runtime_path::{ensure_facet_resolvable, resolve_dspy_rs_path};
 
 pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let attr_args = parse_macro_input!(attr with syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated);
-    if !attr_args.is_empty() {
-        return syn::Error::new_spanned(
-            quote!(#attr_args),
-            "rlm_type does not accept arguments in V1",
-        )
-        .to_compile_error()
-        .into();
+    let attr_args = parse_macro_input!(
+        attr with syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated
+    );
+    let mut skip_repr = false;
+    for meta in attr_args {
+        match meta {
+            Meta::Path(path) if path.is_ident("skip_repr") => {
+                skip_repr = true;
+            }
+            other => {
+                return syn::Error::new_spanned(
+                    quote!(#other),
+                    "unsupported #[rlm_type(...)] key; supported keys in V1: skip_repr",
+                )
+                .to_compile_error()
+                .into();
+            }
+        }
     }
 
     let mut input = parse_macro_input!(item as DeriveInput);
@@ -44,6 +54,9 @@ pub(crate) fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         .push(syn::parse_quote!(#[#runtime::__macro_support::pyo3::pyclass(crate = #pyo3_crate)]));
     input.attrs.push(syn::parse_quote!(#[#runtime::BamlType]));
     merge_derive(&mut input.attrs, &[syn::parse_quote!(#runtime::RlmType)]);
+    if skip_repr {
+        input.attrs.push(syn::parse_quote!(#[rlm(skip_repr)]));
+    }
 
     TokenStream::from(quote! { #input })
 }
