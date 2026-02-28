@@ -115,8 +115,9 @@ impl LlmTools {
         }
         let remaining = self.remaining_calls();
         let warning = format!(
-            "⚠ Budget: executed {executed} of {requested} requested queries ({remaining} remaining of {} max)",
-            self.max_llm_calls
+            "⚠ Budget: executed first {executed} of {requested} requested queries ({remaining} remaining of {} max). \
+results[i] aligns to prompts[i] for i < {executed}; skipped prompts[{executed}..{requested}].",
+            self.max_llm_calls,
         );
         Python::attach(|py| {
             if let Ok(builtins) = PyModule::import(py, "builtins")
