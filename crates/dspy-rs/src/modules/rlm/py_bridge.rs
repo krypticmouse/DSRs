@@ -1,3 +1,5 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use anyhow::anyhow;
 use bamltype::BamlParseError;
 use bamltype::baml_types::ir_type::UnionTypeViewGeneric;
@@ -16,9 +18,11 @@ use serde_json::Value as JsonValue;
 use super::runtime::{InterpreterSetup, MethodSignature, MethodSource, RlmInputFields};
 use super::submit::SubmitHandler;
 use super::tools::LlmTools;
-use crate::{BamlConvertError, ConstraintLevel, ResponseCheck, Signature};
+use crate::{BamlConvertError, BamlType, ConstraintLevel, ResponseCheck, Signature};
 
 const RESERVED_GLOBAL_NAMES: [&str; 3] = ["llm_query", "llm_query_batched", "SUBMIT"];
+const MAX_METHOD_COLLECTION_DEPTH: usize = 8;
+const MAX_METHOD_COLLECTION_ITEMS: usize = 12;
 
 pub fn setup_interpreter_globals<S: Signature>(
     py: Python<'_>,
@@ -43,7 +47,9 @@ where
         )));
     }
     input.inject_into_python(py, &globals)?;
-    let methods_by_var = collect_methods_by_var(py, &globals, input.rlm_field_names())?;
+    let input_format = <S::Input as BamlType>::baml_output_format();
+    let (methods_by_var, methods_by_type) =
+        collect_methods_by_var(py, &globals, input.rlm_field_names(), input_format)?;
 
     if let Some(llm_tools) = llm_tools {
         let tools_py = Py::new(py, llm_tools.clone())?;
@@ -59,6 +65,7 @@ where
     Ok(InterpreterSetup {
         globals: globals.unbind(),
         methods_by_var,
+        methods_by_type,
     })
 }
 
@@ -66,9 +73,16 @@ fn collect_methods_by_var(
     py: Python<'_>,
     globals: &Bound<'_, PyDict>,
     field_names: &[&str],
-) -> PyResult<std::collections::BTreeMap<String, Vec<MethodSignature>>> {
+    output_format: &OutputFormatContent,
+) -> PyResult<(BTreeMap<String, Vec<MethodSignature>>, BTreeMap<String, Vec<MethodSignature>>)> {
     let inspect = PyModule::import(py, "inspect")?;
-    let mut methods_by_var = std::collections::BTreeMap::new();
+    let mut methods_by_var = BTreeMap::new();
+    let mut methods_by_type = BTreeMap::new();
+    let mut observed_classes_by_name = BTreeMap::new();
+    let mut observed_instances_by_name = BTreeMap::new();
+    let mut candidate_modules = BTreeSet::new();
+    let mut visited_object_ids = BTreeSet::new();
+    let mut visited_type_names = BTreeSet::new();
 
     for field_name in field_names {
         let Some(value) = globals.get_item(field_name)? else {
@@ -76,9 +90,30 @@ fn collect_methods_by_var(
         };
         let methods = collect_visible_methods_for_object(&inspect, &value)?;
         methods_by_var.insert((*field_name).to_string(), methods);
+        collect_methods_for_reachable_types(
+            &inspect,
+            &value,
+            &mut methods_by_type,
+            &mut observed_classes_by_name,
+            &mut observed_instances_by_name,
+            &mut candidate_modules,
+            &mut visited_object_ids,
+            &mut visited_type_names,
+            0,
+        )?;
     }
 
-    Ok(methods_by_var)
+    collect_methods_for_schema_types(
+        py,
+        &inspect,
+        output_format,
+        &mut methods_by_type,
+        &observed_classes_by_name,
+        &observed_instances_by_name,
+        &candidate_modules,
+    )?;
+
+    Ok((methods_by_var, methods_by_type))
 }
 
 fn collect_visible_methods_for_object(
@@ -97,6 +132,13 @@ fn collect_visible_methods_for_object(
     }
 
     let class = value.get_type();
+    collect_visible_methods_for_class(inspect, class.as_any())
+}
+
+fn collect_visible_methods_for_class(
+    inspect: &Bound<'_, PyModule>,
+    class: &Bound<'_, PyAny>,
+) -> PyResult<Vec<MethodSignature>> {
     let members = inspect.call_method1("getmembers", (&class, inspect.getattr("isroutine")?))?;
     let members = members.cast::<PyList>()?;
     let mut methods = Vec::new();
@@ -116,9 +158,6 @@ fn collect_visible_methods_for_object(
 
         let callable = tuple.get_item(1)?;
         let doc = extract_trimmed_docstring(&callable)?;
-        if doc.is_empty() {
-            continue;
-        }
 
         methods.push(MethodSignature {
             signature: sanitize_signature(
@@ -139,6 +178,524 @@ fn collect_visible_methods_for_object(
     });
     methods.dedup_by(|a, b| a.name == b.name && a.signature == b.signature);
     Ok(methods)
+}
+
+fn collect_methods_for_reachable_types(
+    inspect: &Bound<'_, PyModule>,
+    value: &Bound<'_, PyAny>,
+    methods_by_type: &mut BTreeMap<String, Vec<MethodSignature>>,
+    observed_classes_by_name: &mut BTreeMap<String, Py<PyAny>>,
+    observed_instances_by_name: &mut BTreeMap<String, Py<PyAny>>,
+    candidate_modules: &mut BTreeSet<String>,
+    visited_object_ids: &mut BTreeSet<usize>,
+    visited_type_names: &mut BTreeSet<String>,
+    depth: usize,
+) -> PyResult<()> {
+    if depth > MAX_METHOD_COLLECTION_DEPTH {
+        return Ok(());
+    }
+
+    let object_id = value.as_ptr() as usize;
+    if !visited_object_ids.insert(object_id) {
+        return Ok(());
+    }
+
+    let class = value.get_type();
+    let class_name = class
+        .name()
+        .ok()
+        .and_then(|name| name.extract::<String>().ok())
+        .unwrap_or_else(|| "<unknown>".to_string());
+    if visited_type_names.insert(class_name.clone()) {
+        let methods = collect_visible_methods_for_class(inspect, class.as_any())?;
+        methods_by_type.insert(class_name.clone(), methods);
+    }
+    if let Ok(module_name) = class
+        .getattr("__module__")
+        .and_then(|name| name.extract::<String>())
+    {
+        candidate_modules.insert(module_name);
+    }
+    if let Ok(py_name) = class.name().and_then(|name| name.extract::<String>()) {
+        observed_classes_by_name
+            .entry(py_name)
+            .or_insert_with(|| class.as_any().clone().unbind());
+    }
+    observed_instances_by_name
+        .entry(class_name)
+        .or_insert_with(|| value.clone().unbind());
+
+    if value.is_instance_of::<PyString>()
+        || value.is_instance_of::<PyBool>()
+        || value.is_instance_of::<PyInt>()
+        || value.is_instance_of::<PyFloat>()
+    {
+        return Ok(());
+    }
+
+    if let Ok(list) = value.cast::<PyList>() {
+        for item in list.iter().take(MAX_METHOD_COLLECTION_ITEMS) {
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if let Ok(tuple) = value.cast::<PyTuple>() {
+        for item in tuple.iter().take(MAX_METHOD_COLLECTION_ITEMS) {
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if let Ok(dict) = value.cast::<PyDict>() {
+        for (key, item) in dict.iter().take(MAX_METHOD_COLLECTION_ITEMS) {
+            collect_methods_for_reachable_types(
+                inspect,
+                &key,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if let Ok(object_dict) = value.getattr("__dict__")
+        && let Ok(object_dict) = object_dict.cast::<PyDict>()
+    {
+        for (_name, item) in object_dict.iter() {
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+    }
+
+    if let Ok(class_dict_any) = class.getattr("__dict__")
+        && let Ok(class_dict) = class_dict_any.cast::<PyDict>()
+    {
+        for (name, _) in class_dict.iter() {
+            let Ok(name) = name.extract::<String>() else {
+                continue;
+            };
+            if name.starts_with("__") {
+                continue;
+            }
+            let Ok(item) = value.getattr(name.as_str()) else {
+                continue;
+            };
+            if item.is_callable() {
+                continue;
+            }
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+    }
+
+    if let Ok(annotations_any) = class.getattr("__annotations__")
+        && let Ok(annotations) = annotations_any.cast::<PyDict>()
+    {
+        for (name, _) in annotations.iter() {
+            let Ok(name) = name.extract::<String>() else {
+                continue;
+            };
+            if name.starts_with("__") {
+                continue;
+            }
+            let Ok(item) = value.getattr(name.as_str()) else {
+                continue;
+            };
+            collect_methods_for_reachable_types(
+                inspect,
+                &item,
+                methods_by_type,
+                observed_classes_by_name,
+                observed_instances_by_name,
+                candidate_modules,
+                visited_object_ids,
+                visited_type_names,
+                depth + 1,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_methods_for_schema_types(
+    py: Python<'_>,
+    inspect: &Bound<'_, PyModule>,
+    output_format: &OutputFormatContent,
+    methods_by_type: &mut BTreeMap<String, Vec<MethodSignature>>,
+    observed_classes_by_name: &BTreeMap<String, Py<PyAny>>,
+    observed_instances_by_name: &BTreeMap<String, Py<PyAny>>,
+    candidate_modules: &BTreeSet<String>,
+) -> PyResult<()> {
+    let module_classes = collect_module_class_objects(py, inspect, candidate_modules)?;
+    let object_subclasses = collect_object_subclass_index(py)?;
+    let schema_type_names = collect_schema_type_names(output_format);
+    let runtime_type_names = observed_classes_by_name
+        .keys()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+
+    let mut schema_class_names = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut schema_fields = BTreeMap::<String, Vec<String>>::new();
+    for ((raw_name, _streaming), class) in output_format.classes.iter() {
+        let rendered_name = class.name.rendered_name().to_string();
+        let aliases = schema_class_names.entry(rendered_name.clone()).or_default();
+        aliases.insert(rendered_name);
+        aliases.insert(raw_name.clone());
+        schema_fields.entry(class.name.rendered_name().to_string()).or_insert_with(|| {
+            class
+                .fields
+                .iter()
+                .map(|(field_name, _, _, _)| field_name.real_name().to_string())
+                .collect()
+        });
+    }
+
+    let mut resolved_classes = BTreeMap::<String, Py<PyAny>>::new();
+    let mut resolved_instances = BTreeMap::<String, Py<PyAny>>::new();
+    for (rendered_name, aliases) in &schema_class_names {
+        if let Some(class_obj) = resolve_schema_class_object(
+            py,
+            aliases,
+            observed_classes_by_name,
+            &module_classes,
+            &object_subclasses,
+        ) {
+            resolved_classes.insert(rendered_name.clone(), class_obj);
+        }
+        if let Some(instance_obj) = resolve_schema_instance_object(py, aliases, observed_instances_by_name)
+        {
+            resolved_instances.insert(rendered_name.clone(), instance_obj);
+        }
+        if !resolved_classes.contains_key(rendered_name)
+            && let Some(instance) = resolved_instances.get(rendered_name)
+        {
+            resolved_classes.insert(
+                rendered_name.clone(),
+                instance.bind(py).get_type().as_any().clone().unbind(),
+            );
+        }
+    }
+
+    loop {
+        let unresolved = schema_class_names
+            .keys()
+            .filter(|name| !resolved_classes.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unresolved.is_empty() {
+            break;
+        }
+        let progressed = project_unresolved_schema_classes_from_runtime_fields(
+            py,
+            &unresolved,
+            &schema_class_names,
+            &schema_fields,
+            &mut resolved_classes,
+            &mut resolved_instances,
+        )?;
+        if !progressed {
+            break;
+        }
+    }
+
+    for (rendered_name, aliases) in schema_class_names {
+        let synthetic_by_alias = rendered_name.contains('_') && aliases.iter().any(|a| a.contains("__"));
+        if synthetic_by_alias
+            || is_synthetic_variant_class_name(&rendered_name, &schema_type_names, &runtime_type_names)
+        {
+            methods_by_type.insert(rendered_name, Vec::new());
+            continue;
+        }
+        if methods_by_type.contains_key(&rendered_name) {
+            continue;
+        }
+        let methods = if let Some(class_obj) = resolved_classes.get(&rendered_name) {
+            let class_obj = class_obj.bind(py);
+            let resolved_name = class_obj
+                .getattr("__name__")
+                .ok()
+                .and_then(|name| name.extract::<String>().ok())
+                .unwrap_or_default();
+            if resolved_name == rendered_name {
+                collect_visible_methods_for_class(inspect, class_obj)?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        let _ = aliases;
+        methods_by_type.insert(rendered_name, methods);
+    }
+
+    Ok(())
+}
+
+fn collect_module_class_objects(
+    py: Python<'_>,
+    inspect: &Bound<'_, PyModule>,
+    module_names: &BTreeSet<String>,
+) -> PyResult<BTreeMap<String, Py<PyAny>>> {
+    let is_class = inspect.getattr("isclass")?;
+    let mut classes = BTreeMap::new();
+    for module_name in module_names {
+        let Ok(module) = PyModule::import(py, module_name.as_str()) else {
+            continue;
+        };
+        let Ok(members_any) = inspect.call_method1("getmembers", (&module, &is_class)) else {
+            continue;
+        };
+        let Ok(members) = members_any.cast::<PyList>() else {
+            continue;
+        };
+        for member in members.iter() {
+            let Ok(tuple) = member.cast::<PyTuple>() else {
+                continue;
+            };
+            if tuple.len() != 2 {
+                continue;
+            }
+            let Ok(name) = tuple.get_item(0)?.extract::<String>() else {
+                continue;
+            };
+            let Ok(class_obj) = tuple.get_item(1) else {
+                continue;
+            };
+            classes
+                .entry(name)
+                .or_insert_with(|| class_obj.clone().unbind());
+        }
+    }
+    Ok(classes)
+}
+
+fn collect_object_subclass_index(py: Python<'_>) -> PyResult<BTreeMap<String, Py<PyAny>>> {
+    let builtins = PyModule::import(py, "builtins")?;
+    let object_type = builtins.getattr("object")?;
+    let subclasses_any = object_type.call_method0("__subclasses__")?;
+    let subclasses = subclasses_any.cast::<PyList>()?;
+    let mut classes = BTreeMap::new();
+    for subclass in subclasses.iter() {
+        let Ok(name) = subclass.getattr("__name__").and_then(|name| name.extract::<String>()) else {
+            continue;
+        };
+        classes.entry(name).or_insert_with(|| subclass.clone().unbind());
+    }
+    Ok(classes)
+}
+
+fn resolve_schema_class_object(
+    py: Python<'_>,
+    aliases: &BTreeSet<String>,
+    observed_classes_by_name: &BTreeMap<String, Py<PyAny>>,
+    module_classes: &BTreeMap<String, Py<PyAny>>,
+    object_subclasses: &BTreeMap<String, Py<PyAny>>,
+) -> Option<Py<PyAny>> {
+    for alias in aliases {
+        if let Some(class_obj) = observed_classes_by_name.get(alias) {
+            return Some(class_obj.clone_ref(py));
+        }
+    }
+    for alias in aliases {
+        if let Some(class_obj) = module_classes.get(alias) {
+            return Some(class_obj.clone_ref(py));
+        }
+    }
+    for alias in aliases {
+        if let Some(class_obj) = object_subclasses.get(alias) {
+            return Some(class_obj.clone_ref(py));
+        }
+    }
+    None
+}
+
+fn resolve_schema_instance_object(
+    py: Python<'_>,
+    aliases: &BTreeSet<String>,
+    observed_instances_by_name: &BTreeMap<String, Py<PyAny>>,
+) -> Option<Py<PyAny>> {
+    for alias in aliases {
+        if let Some(instance) = observed_instances_by_name.get(alias) {
+            return Some(instance.clone_ref(py));
+        }
+    }
+    None
+}
+
+fn collect_schema_type_names(output_format: &OutputFormatContent) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for class in output_format.classes.values() {
+        names.insert(class.name.rendered_name().to_string());
+    }
+    for enm in output_format.enums.values() {
+        names.insert(enm.name.rendered_name().to_string());
+    }
+    names
+}
+
+fn is_synthetic_variant_class_name(
+    rendered_name: &str,
+    schema_type_names: &BTreeSet<String>,
+    runtime_type_names: &BTreeSet<String>,
+) -> bool {
+    let Some((prefix, suffix)) = rendered_name.split_once('_') else {
+        return false;
+    };
+    if prefix.is_empty() || suffix.is_empty() {
+        return false;
+    }
+    let Some(first) = suffix.chars().next() else {
+        return false;
+    };
+    first.is_ascii_uppercase()
+        && (schema_type_names.contains(prefix) || runtime_type_names.contains(prefix))
+}
+
+fn project_unresolved_schema_classes_from_runtime_fields(
+    py: Python<'_>,
+    unresolved: &[String],
+    schema_aliases: &BTreeMap<String, BTreeSet<String>>,
+    schema_fields: &BTreeMap<String, Vec<String>>,
+    resolved_classes: &mut BTreeMap<String, Py<PyAny>>,
+    resolved_instances: &mut BTreeMap<String, Py<PyAny>>,
+) -> PyResult<bool> {
+    let mut progressed = false;
+    let mut discovered = Vec::<(String, Py<PyAny>, Py<PyAny>)>::new();
+    let parents = resolved_instances
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+
+    for parent in parents {
+        let Some(instance) = resolved_instances.get(&parent) else {
+            continue;
+        };
+        let Some(field_names) = schema_fields.get(&parent) else {
+            continue;
+        };
+        let instance = instance.bind(py);
+        for field_name in field_names {
+            let Ok(field_value) = instance.getattr(field_name.as_str()) else {
+                continue;
+            };
+
+            let candidate = if let Ok(list) = field_value.cast::<PyList>() {
+                if list.is_empty() {
+                    None
+                } else {
+                    list.get_item(0).ok()
+                }
+            } else if let Ok(tuple) = field_value.cast::<PyTuple>() {
+                if tuple.is_empty() {
+                    None
+                } else {
+                    tuple.get_item(0).ok()
+                }
+            } else {
+                Some(field_value)
+            };
+
+            let Some(candidate) = candidate else {
+                continue;
+            };
+            if candidate.is_none() || candidate.is_callable() {
+                continue;
+            }
+
+            let candidate_class = candidate.get_type();
+            let Ok(candidate_name) = candidate_class
+                .name()
+                .and_then(|name| name.extract::<String>())
+            else {
+                continue;
+            };
+
+            for target in unresolved {
+                if resolved_classes.contains_key(target) {
+                    continue;
+                }
+                let Some(aliases) = schema_aliases.get(target) else {
+                    continue;
+                };
+                if !aliases.contains(&candidate_name) {
+                    continue;
+                }
+
+                discovered.push((
+                    target.clone(),
+                    candidate_class.as_any().clone().unbind(),
+                    candidate.clone().unbind(),
+                ));
+            }
+        }
+    }
+
+    for (target, class_obj, instance_obj) in discovered {
+        if resolved_classes.contains_key(&target) {
+            continue;
+        }
+        resolved_classes.insert(target.clone(), class_obj);
+        resolved_instances.entry(target).or_insert(instance_obj);
+        progressed = true;
+    }
+
+    Ok(progressed)
 }
 
 fn extract_trimmed_docstring(callable: &Bound<'_, PyAny>) -> PyResult<String> {
@@ -1108,6 +1665,51 @@ mod tests {
         answer: String,
     }
 
+    #[derive(Signature, Clone, Debug)]
+    struct MethodFixtureListSig {
+        #[input]
+        trajectories: Vec<MethodFixture>,
+
+        #[output]
+        answer: String,
+    }
+
+    #[pyclass]
+    #[BamlType]
+    #[derive(Clone, Debug)]
+    struct NoAnnotationsChild {
+        label: String,
+    }
+
+    #[pymethods]
+    impl NoAnnotationsChild {
+        #[new]
+        fn new(label: String) -> Self {
+            Self { label }
+        }
+
+        /// Thread view for this child fixture.
+        fn thread(&self, participants: Vec<String>) -> String {
+            format!("{}:{}", self.label, participants.join(","))
+        }
+    }
+
+    #[pyclass]
+    #[BamlType]
+    #[derive(Clone, Debug)]
+    struct NoAnnotationsContainer {
+        items: Vec<NoAnnotationsChild>,
+    }
+
+    #[derive(Signature, Clone, Debug)]
+    struct NoAnnotationsSig {
+        #[input]
+        container: NoAnnotationsContainer,
+
+        #[output]
+        answer: String,
+    }
+
     struct MockLm;
 
     #[async_trait::async_trait]
@@ -1244,6 +1846,8 @@ mod tests {
                 assert!(globals.get_item("SUBMIT").expect("getitem").is_some());
                 assert!(setup.methods_by_var.contains_key("question"));
                 assert!(setup.methods_by_var.contains_key("count"));
+                assert!(setup.methods_by_type.contains_key("str"));
+                assert!(setup.methods_by_type.contains_key("int"));
             });
         });
     }
@@ -1274,6 +1878,8 @@ mod tests {
             );
             assert!(setup.methods_by_var.contains_key("question"));
             assert!(setup.methods_by_var.contains_key("count"));
+            assert!(setup.methods_by_type.contains_key("str"));
+            assert!(setup.methods_by_type.contains_key("int"));
         });
     }
 
@@ -1311,6 +1917,10 @@ mod tests {
                 .methods_by_var
                 .get("trajectory")
                 .expect("trajectory methods");
+            let type_methods = setup
+                .methods_by_type
+                .get("MethodFixture")
+                .expect("MethodFixture methods");
 
             assert_eq!(
                 setup.methods_by_var.keys().collect::<Vec<_>>(),
@@ -1323,8 +1933,9 @@ mod tests {
             );
             assert!(methods.iter().any(|m| m.name == "search"));
             assert!(methods.iter().any(|m| m.name == "__len__"));
-            assert!(!methods.iter().any(|m| m.name == "undocumented"));
+            assert!(methods.iter().any(|m| m.name == "undocumented"));
             assert!(!methods.iter().any(|m| m.name == "__baml__"));
+            assert!(type_methods.iter().any(|m| m.name == "search"));
 
             let search = methods
                 .iter()
@@ -1336,6 +1947,14 @@ mod tests {
             assert!(matches!(search.source, MethodSource::Custom));
             assert!(!search.is_dunder);
 
+            let undocumented = methods
+                .iter()
+                .find(|m| m.name == "undocumented")
+                .expect("undocumented method metadata");
+            assert!(undocumented.doc.is_empty());
+            assert!(matches!(undocumented.source, MethodSource::Custom));
+            assert!(!undocumented.is_dunder);
+
             let dunder_len = methods
                 .iter()
                 .find(|m| m.name == "__len__")
@@ -1343,6 +1962,63 @@ mod tests {
             assert!(dunder_len.is_dunder);
             assert!(matches!(dunder_len.source, MethodSource::Generated));
             assert!(!dunder_len.doc.trim().is_empty());
+        });
+    }
+
+    #[test]
+    fn setup_interpreter_globals_collects_reachable_nested_type_methods() {
+        Python::attach(|py| {
+            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
+            let submit = SubmitHandler::new::<MethodFixtureListSig>(Arc::clone(&slot));
+            let input = MethodFixtureListSigInput {
+                trajectories: vec![MethodFixture {
+                    label: "root".to_string(),
+                }],
+            };
+
+            let setup = setup_interpreter_globals::<MethodFixtureListSig>(py, &input, &submit, None)
+                .expect("setup globals");
+            let nested_type_methods = setup
+                .methods_by_type
+                .get("MethodFixture")
+                .expect("nested MethodFixture methods");
+
+            assert!(
+                nested_type_methods.iter().any(|m| m.name == "search"),
+                "nested type methods should include custom MethodFixture methods"
+            );
+        });
+    }
+
+    #[test]
+    fn setup_interpreter_globals_collects_schema_nested_type_methods_without_runtime_instance() {
+        Python::attach(|py| {
+            let _unused = Py::new(
+                py,
+                NoAnnotationsChild {
+                    label: "seed".to_string(),
+                },
+            )
+            .expect("seed nested class type object");
+
+            let slot: SubmitSlot = Arc::new(std::sync::Mutex::new(None));
+            let submit = SubmitHandler::new::<NoAnnotationsSig>(Arc::clone(&slot));
+            let input = NoAnnotationsSigInput {
+                container: NoAnnotationsContainer { items: Vec::new() },
+            };
+
+            let setup =
+                setup_interpreter_globals::<NoAnnotationsSig>(py, &input, &submit, None)
+                    .expect("setup globals");
+            let nested_methods = setup
+                .methods_by_type
+                .get("NoAnnotationsChild")
+                .expect("nested schema type methods");
+
+            assert!(
+                nested_methods.iter().any(|m| m.name == "thread"),
+                "schema-driven class lookup should collect nested type methods even when the input graph has no nested instances"
+            );
         });
     }
 

@@ -38,8 +38,14 @@ const DEFAULT_MAX_OUTPUT_CHARS: usize = 10_000;
 const DEFAULT_ENABLE_EXTRACTION_FALLBACK: bool = true;
 const MAX_RECOVERABLE_PARSE_SNIPPET_CHARS: usize = 80;
 const STDOUT_TRUNCATION_NOTICE_PREFIX: &str = "[STDOUT TRUNCATED at ";
-const SYNTHETIC_TURN_ZERO_ASSISTANT_CODE: &str =
-    "# sanity check: does this thing work?\nprint('hello world')";
+const SYNTHETIC_TURN_ZERO_ASSISTANT_CODE: &str = r#"# turn-0 API orientation
+if "sessions" in globals() and hasattr(sessions, "items") and len(sessions.items) > 0:
+    s = sessions.items[0]
+    print(s.render()[:500])
+    msgs = s.thread("darin")
+    print(f"darin messages: {len(msgs)}")
+else:
+    print("hello world")"#;
 
 const REPL_HISTORY_INPUT_RENDER_TEMPLATE: &str = r#"{% if this.entries|length == 0 %}(no executed REPL turns captured){% else %}{% for entry in this.entries %}=== Turn {{ entry.turn }} ===
 Code:
@@ -416,7 +422,7 @@ where
         );
         let previews = {
             let _preview_span = preview_span.enter();
-            render_previews::<S>(input, &setup.methods_by_var)
+            render_previews::<S>(input, &setup.methods_by_var, &setup.methods_by_type)
         };
         let preview_len = previews.chars().count();
         preview_span.record("preview_len", preview_len);

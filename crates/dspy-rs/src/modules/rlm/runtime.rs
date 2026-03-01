@@ -36,6 +36,7 @@ pub struct MethodSignature {
 pub struct InterpreterSetup {
     pub globals: Py<PyDict>,
     pub methods_by_var: BTreeMap<String, Vec<MethodSignature>>,
+    pub methods_by_type: BTreeMap<String, Vec<MethodSignature>>,
 }
 
 pub trait RlmInputFields {
@@ -115,6 +116,7 @@ impl<S: Signature> RlmRuntime<S> for StubRuntime {
         Ok(InterpreterSetup {
             globals: PyDict::new(py).unbind(),
             methods_by_var: BTreeMap::new(),
+            methods_by_type: BTreeMap::new(),
         })
     }
 
