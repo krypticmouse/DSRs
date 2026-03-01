@@ -53,6 +53,8 @@ pub struct LM {
     pub max_tool_iterations: u32,
     /// Provider-specific request parameters forwarded to rig `CompletionRequest.additional_params`.
     pub additional_params: Option<Value>,
+    /// System prompt prepended to every `LlmQuery::query` call.
+    pub system_prompt: Option<String>,
     /// Enables Anthropic prompt caching when using `anthropic:model` model strings.
     #[builder(default = false)]
     pub anthropic_prompt_caching: bool,
@@ -79,6 +81,7 @@ impl Clone for LM {
             max_tokens: self.max_tokens,
             max_tool_iterations: self.max_tool_iterations,
             additional_params: self.additional_params.clone(),
+            system_prompt: self.system_prompt.clone(),
             anthropic_prompt_caching: self.anthropic_prompt_caching,
             cache: self.cache,
             cache_handler: self.cache_handler.clone(),

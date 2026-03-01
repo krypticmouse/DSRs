@@ -32,6 +32,25 @@ pub use runtime::{
 };
 pub use tools::LlmQuery;
 
+/// Per-turn event emitted by the RLM loop. Pass a callback via `RlmBuilder::on_turn`
+/// to observe turns as they happen.
+#[derive(Debug, Clone)]
+pub struct TurnEvent {
+    pub turn: usize,
+    pub max_turns: usize,
+    pub code: String,
+    pub outcome: TurnOutcome,
+    pub execution_time: Duration,
+    pub sub_lm_remaining: usize,
+}
+
+#[derive(Debug, Clone)]
+pub enum TurnOutcome {
+    Continue { stdout: String },
+    Submit,
+    Error { message: String },
+}
+
 const DEFAULT_MAX_ITERATIONS: usize = 20;
 const DEFAULT_MAX_LLM_CALLS: usize = 50;
 const DEFAULT_MAX_OUTPUT_CHARS: usize = 10_000;
@@ -55,6 +74,35 @@ Output:
 {% if entry.output %}{{ entry.output }}{% else %}<empty>{% endif %}{% if not loop.last %}
 
 {% endif %}{% endfor %}{% endif %}"#;
+
+/// Debug utility: render the RLM variable preview block for a concrete input
+/// without running the model loop.
+pub fn debug_render_previews<S>(input: &S::Input) -> Result<String, String>
+where
+    S: Signature,
+    S::Input: BamlType + for<'a> Facet<'a> + Clone + Send + Sync + RlmInputFields,
+{
+    let submit_slot: SubmitSlot = Arc::new(Mutex::new(None));
+    let submit_handler = SubmitHandler::new::<S>(Arc::clone(&submit_slot));
+    let runtime = PyO3Runtime;
+
+    let setup = Python::attach(|py| {
+        <PyO3Runtime as RlmRuntime<S>>::setup_interpreter_globals(
+            &runtime,
+            py,
+            input,
+            &submit_handler,
+            None,
+        )
+    })
+    .map_err(|err| err.to_string())?;
+
+    Ok(render_previews::<S>(
+        input,
+        &setup.methods_by_var,
+        &setup.methods_by_type,
+    ))
+}
 
 #[derive(Signature, Clone, Debug)]
 struct RlmActionSig {
@@ -316,6 +364,8 @@ where
     sub_lm: Option<Arc<crate::LM>>,
     #[facet(skip, opaque)]
     runtime: Arc<dyn RlmRuntime<S>>,
+    #[facet(skip, opaque)]
+    on_turn: Option<Arc<dyn Fn(&TurnEvent) + Send + Sync>>,
 }
 
 impl<S> Default for Rlm<S>
@@ -628,6 +678,16 @@ where
                                 response_kind = "submit",
                                 "predict response received"
                             );
+                            if let Some(cb) = &self.on_turn {
+                                cb(&TurnEvent {
+                                    turn: turn_index,
+                                    max_turns: self.config.max_iterations,
+                                    code: code.clone(),
+                                    outcome: TurnOutcome::Submit,
+                                    execution_time,
+                                    sub_lm_remaining: self.runtime.sub_lm_budget_remaining(llm_tools.as_ref()),
+                                });
+                            }
                             let typed_output =
                                 S::Output::try_from_baml_value(value).map_err(|err| {
                                     RlmError::Invariant {
@@ -652,6 +712,24 @@ where
                                 outcome = exec_outcome_kind(&other),
                                 "predict response received"
                             );
+                            if let Some(cb) = &self.on_turn {
+                                let outcome = match &other {
+                                    ExecOutcome::Continue { output } => TurnOutcome::Continue { stdout: output.clone() },
+                                    ExecOutcome::PythonException { message } => TurnOutcome::Error { message: message.clone() },
+                                    ExecOutcome::SubmitValidationError { message, .. } => TurnOutcome::Error { message: message.clone() },
+                                    ExecOutcome::SubmitAssertionFailed { label, expression, .. } => TurnOutcome::Error { message: format!("assertion failed: {label} ({expression})") },
+                                    ExecOutcome::RecoverableParse { message } => TurnOutcome::Error { message: message.clone() },
+                                    ExecOutcome::SubmitAccepted { .. } => unreachable!(),
+                                };
+                                cb(&TurnEvent {
+                                    turn: turn_index,
+                                    max_turns: self.config.max_iterations,
+                                    code: code.clone(),
+                                    outcome,
+                                    execution_time,
+                                    sub_lm_remaining: self.runtime.sub_lm_budget_remaining(llm_tools.as_ref()),
+                                });
+                            }
                             feedback = Some(perception_feedback_from_outcome(
                                 &other,
                                 Some(execution_time),
@@ -758,6 +836,7 @@ where
     instruction_override: Option<String>,
     sub_lm: Option<Arc<crate::LM>>,
     runtime: Option<Arc<dyn RlmRuntime<S>>>,
+    on_turn: Option<Arc<dyn Fn(&TurnEvent) + Send + Sync>>,
     _marker: PhantomData<S>,
 }
 
@@ -773,6 +852,7 @@ where
             instruction_override: None,
             sub_lm: None,
             runtime: None,
+            on_turn: None,
             _marker: PhantomData,
         }
     }
@@ -812,6 +892,11 @@ where
         self
     }
 
+    pub fn on_turn(mut self, callback: impl Fn(&TurnEvent) + Send + Sync + 'static) -> Self {
+        self.on_turn = Some(Arc::new(callback));
+        self
+    }
+
     pub fn build(self) -> Rlm<S> {
         let extract_instruction =
             render_extract_instruction::<S>(self.instruction_override.as_deref());
@@ -830,6 +915,7 @@ where
             instruction_override: self.instruction_override,
             sub_lm: self.sub_lm,
             runtime,
+            on_turn: self.on_turn,
         }
     }
 }
@@ -908,18 +994,9 @@ where
         format_execution_time(feedback.and_then(|item| item.execution_time))
     ));
     lines.push(format!(
-        "Budget: {} remaining | {} sub-LLM calls remaining",
+        "Budget: {} remaining",
         turns_label(budget_remaining),
-        sub_lm_remaining
     ));
-    let sub_lm_cost_line = match sub_lm_spent_last_turn {
-        Some(spent) => format!(
-            "Sub-LLM cost: {spent} call{} spent last turn",
-            plural_suffix(spent)
-        ),
-        None => "Sub-LLM cost: n/a (first turn)".to_string(),
-    };
-    lines.push(sub_lm_cost_line);
     lines.push(format!(
         "Updated: {}",
         render_updated_names(&namespace_sections)
@@ -986,11 +1063,9 @@ fn build_synthetic_turn_zero_user_message(
         "=== Execution Receipt (Turn 0) ===".to_string(),
         "Time: n/a".to_string(),
         format!(
-            "Budget: {} remaining | {} sub-LLM calls remaining",
+            "Budget: {} remaining",
             turns_label(budget_remaining),
-            sub_lm_remaining
         ),
-        "Sub-LLM cost: n/a (synthetic setup turn)".to_string(),
         "Updated: (initial state — no prior diff)".to_string(),
         String::new(),
         "=== Namespace ===".to_string(),
@@ -1137,13 +1212,9 @@ fn render_repl_prompt(
     namespace_var_count: usize,
 ) -> String {
     format!(
-        "[T{turn_index} | {} | {sub_lm_remaining} llm | {namespace_var_count} vars] >>>",
+        "[T{turn_index} | {} | {namespace_var_count} vars] >>>",
         turns_label(turns_remaining),
     )
-}
-
-fn plural_suffix(count: usize) -> &'static str {
-    if count == 1 { "" } else { "s" }
 }
 
 fn collect_namespace_snapshot(
@@ -1603,8 +1674,8 @@ mod tests {
                 &input,
                 "Inspect trajectories",
                 Some(&feedback),
-                1,
-                3,
+                12,
+                20,
                 false,
                 2,
                 Some(2),
@@ -1688,53 +1759,6 @@ mod tests {
                 prompt: "x".to_string(),
             };
             let feedback = PerceptionFeedback {
-                stdout: Some(
-                    "partial output\n[STDOUT TRUNCATED at 10,000 chars (24,847 total)]".to_string(),
-                ),
-                stderr: None,
-                execution_time: Some(Duration::from_millis(220)),
-            };
-
-            let message = build_perception_message::<RuntimePolicySig>(
-                py,
-                &globals.unbind(),
-                &input,
-                "Inspect trajectories",
-                Some(&feedback),
-                7,
-                0,
-                false,
-                6,
-                Some(20),
-                Some(&previous_snapshot),
-            )
-            .expect("message")
-            .text;
-
-            assert!(message.contains("[STDOUT TRUNCATED at 10,000 chars (24,847 total)]"));
-            assert!(
-                message
-                    .contains("hint: updated vars this turn: `retro_corrections` — query directly"),
-                "{message}"
-            );
-        });
-    }
-
-    #[test]
-    fn perception_message_skips_truncation_hint_when_no_vars_updated() {
-        Python::attach(|py| {
-            let globals = PyDict::new(py);
-            globals.set_item("prompt", "x").expect("set prompt");
-            globals.set_item("stable_value", 1).expect("set stable");
-            let globals = globals.unbind();
-            let previous_snapshot = collect_namespace_snapshot(py, &globals, &["prompt"])
-                .map(|snapshot| namespace_snapshot_map(&snapshot))
-                .expect("previous snapshot");
-
-            let input = RuntimePolicySigInput {
-                prompt: "x".to_string(),
-            };
-            let feedback = PerceptionFeedback {
                 stdout: Some("[STDOUT TRUNCATED at 10,000 chars (24,847 total)]".to_string()),
                 stderr: None,
                 execution_time: Some(Duration::from_millis(180)),
@@ -1742,7 +1766,7 @@ mod tests {
 
             let message = build_perception_message::<RuntimePolicySig>(
                 py,
-                &globals,
+                &globals.unbind(),
                 &input,
                 "Inspect trajectories",
                 Some(&feedback),

@@ -19,7 +19,12 @@ pub trait LlmQuery: Send + Sync {
 #[async_trait]
 impl LlmQuery for LM {
     async fn query(&self, prompt: &str) -> anyhow::Result<String> {
-        let messages = Chat::new(vec![Message::user(prompt)]);
+        let mut msgs = Vec::new();
+        if let Some(sys) = &self.system_prompt {
+            msgs.push(Message::system(sys));
+        }
+        msgs.push(Message::user(prompt));
+        let messages = Chat::new(msgs);
         let response = self
             .call(messages, Vec::new(), ToolLoopMode::CallerManaged)
             .await?;

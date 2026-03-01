@@ -5,12 +5,14 @@ use bamltype::internal_baml_jinja::types::OutputFormatContent;
 use super::RlmConfig;
 use super::previews::{is_primitive_input_type, render_type_shape, type_label};
 
-const PATTERNS_BLOCK: &str = r#"## Sub-LLM Patterns
+const PATTERNS_BLOCK: &str = r#"## Analysis Patterns
 
-Use these patterns when direct string operations are not enough.
+llm_query handles meaning. string operations handle structure.
+combine them freely. here are common compositions:
 
 # Semantic filter
-# Budget-aware: llm_query_batched uses 1 call per item. Slice first!
+# batch queries work best on focused, pre-filtered sets.
+# narrow with .search() first, then batch-analyze the results.
 relevant = [x for x, r in zip(items, llm_query_batched(
     [f"Is {x.label} about {topic}? yes/no" for x in items[:5]]
 )) if 'yes' in r.lower()]
@@ -38,7 +40,27 @@ key_findings = (
     "2. Second finding..."
 )
 
-SUBMIT(direct_answer=direct_answer, key_findings=key_findings)"#;
+SUBMIT(direct_answer=direct_answer, key_findings=key_findings)
+
+## Common Mistakes
+# DON'T read everything then reason:
+for s in sessions:
+    print(s.render())  # you just burned your entire context
+
+# DON'T use regex when llm_query is better:
+matches = [s for s in sessions if re.search(r'auth.*fail', s.render())]
+# this misses "authentication broke" and "login stopped working"
+
+# DO delegate understanding:
+relevant = llm_query_batched([
+    f"does this session discuss auth failures? yes/no\n{s.render()[:3000]}"
+    for s in sessions
+])
+
+# DO accumulate understanding across turns:
+findings = []
+findings.append(f"session 3: {observation}")
+findings.append(f"session 7 contradicts: {counter}")"#;
 
 pub(super) fn render_action_instruction<S: Signature>(
     _config: &RlmConfig,
@@ -126,7 +148,7 @@ pub(super) fn render_action_instruction<S: Signature>(
     lines.push("## Available Tools".to_string());
     lines.push("Available in the REPL:".to_string());
     lines.push("- Input variables accessible directly by name".to_string());
-    lines.push("- `llm_query(prompt)` — query a sub-LLM (~500K char capacity)".to_string());
+    lines.push("- `llm_query(prompt)` — ask a sub-model to analyze text. processed outside your context window, so large inputs won't crowd your reasoning.".to_string());
     lines.push("- `llm_query_batched(prompts)` — batch query concurrently".to_string());
     lines.push("- `SUBMIT(field1=value1, ...)` — submit final answer".to_string());
     lines.push("- `print()` — ALWAYS print to see results".to_string());
@@ -145,11 +167,11 @@ pub(super) fn render_action_instruction<S: Signature>(
     lines.push("2. ITERATE - Write small code snippets, observe, decide next steps.".to_string());
     lines.push("3. VERIFY BEFORE SUBMITTING - If results seem wrong, reconsider.".to_string());
     lines.push(
-        "4. USE llm_query FOR SEMANTICS - String matching finds WHERE; llm_query understands WHAT."
+        "4. STRING OPS FOR SYNTAX, llm_query FOR MEANING — they interleave freely. The mistake is using one where the other belongs."
             .to_string(),
     );
     lines.push(
-        "5. MINIMIZE RETYPING — keep intermediate results in named variables for reuse."
+        "5. ACCUMULATE UNDERSTANDING — use named variables to build your evolving model of the problem, not just cache results."
             .to_string(),
     );
     lines.push(
@@ -308,7 +330,7 @@ mod tests {
         assert!(rendered.contains("## Available Tools"));
         assert!(rendered.contains("## Guidelines"));
         assert!(rendered.contains("## Constraints"));
-        assert!(rendered.contains("## Sub-LLM Patterns"));
+        assert!(rendered.contains("## Analysis Patterns"));
         assert!(rendered.contains("No markdown fences"));
         assert!(rendered.contains("SUBMIT safely for long answers"));
     }
@@ -334,7 +356,7 @@ mod tests {
             .find("## Constraints")
             .expect("constraints section");
         let idx_patterns = rendered
-            .find("## Sub-LLM Patterns")
+            .find("## Analysis Patterns")
             .expect("patterns section");
 
         assert!(idx_task < idx_inputs);
