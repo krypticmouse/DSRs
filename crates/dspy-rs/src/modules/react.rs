@@ -324,6 +324,14 @@ where
         self
     }
 
+    /// Sets a per-instance LM on both the action and extract predictors,
+    /// bypassing the global. See [`PredictBuilder::lm`].
+    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+        self.action = self.action.lm(lm.clone());
+        self.extract = self.extract.lm(lm);
+        self
+    }
+
     pub fn build(self) -> ReAct<S> {
         ReAct {
             action: self.action.build(),

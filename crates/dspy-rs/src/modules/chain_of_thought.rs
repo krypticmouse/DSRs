@@ -164,6 +164,12 @@ impl<S: Signature> ChainOfThoughtBuilder<S> {
         self
     }
 
+    /// Sets a per-instance LM, bypassing the global. See [`PredictBuilder::lm`].
+    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+        self.inner = self.inner.lm(lm);
+        self
+    }
+
     pub fn build(self) -> ChainOfThought<S> {
         ChainOfThought::with_predict(self.inner.build())
     }

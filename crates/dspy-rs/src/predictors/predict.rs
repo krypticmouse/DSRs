@@ -127,6 +127,8 @@ pub struct Predict<S: Signature> {
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
+    lm: Option<Arc<crate::core::LM>>,
+    #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
 
@@ -137,6 +139,7 @@ impl<S: Signature> Predict<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            lm: None,
             _marker: PhantomData,
         }
     }
@@ -275,10 +278,13 @@ impl<S: Signature> Predict<S> {
         S::Input: BamlType,
         S::Output: BamlType,
     {
-        let lm = {
-            let guard = GLOBAL_SETTINGS.read().unwrap();
-            let settings = guard.as_ref().unwrap();
-            Arc::clone(&settings.lm)
+        let lm = match &self.lm {
+            Some(lm) => Arc::clone(lm),
+            None => {
+                let guard = GLOBAL_SETTINGS.read().unwrap();
+                let settings = guard.as_ref().unwrap();
+                Arc::clone(&settings.lm)
+            }
         };
 
         let response = match lm.call(chat, self.tools.clone()).await {
@@ -406,6 +412,7 @@ pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
+    lm: Option<Arc<crate::core::LM>>,
     _marker: PhantomData<S>,
 }
 
@@ -415,6 +422,7 @@ impl<S: Signature> PredictBuilder<S> {
             tools: Vec::new(),
             demos: Vec::new(),
             instruction_override: None,
+            lm: None,
             _marker: PhantomData,
         }
     }
@@ -449,12 +457,30 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
+    /// Sets a per-instance LM for this predictor, bypassing the global.
+    ///
+    /// When set, this `Predict` will use the given LM instead of the one
+    /// configured via [`configure()`](crate::configure). This enables
+    /// concurrent calls with different models — each `Predict` leaf can
+    /// target a different provider without contention on the global setting.
+    ///
+    /// ```ignore
+    /// let predict = Predict::<QA>::builder()
+    ///     .lm(LM::builder().model("anthropic:claude-sonnet-4-20250514").build().await?)
+    ///     .build();
+    /// ```
+    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+        self.lm = Some(Arc::new(lm));
+        self
+    }
+
     /// Builds the [`Predict`].
     pub fn build(self) -> Predict<S> {
         Predict {
             tools: self.tools,
             demos: self.demos,
             instruction_override: self.instruction_override,
+            lm: self.lm,
             _marker: PhantomData,
         }
     }
