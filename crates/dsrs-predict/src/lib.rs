@@ -1,1 +1,10 @@
-//! Empty placeholder; code is migrated into this crate by a later task.
+//! Typed predictors and prompting modules.
+
+pub mod chain_of_thought;
+pub mod predict;
+pub mod react;
+
+pub use chain_of_thought::{ChainOfThought, ChainOfThoughtOutput, Reasoning, WithReasoning};
+pub use dsrs_core::Example;
+pub use predict::*;
+pub use react::ReAct;

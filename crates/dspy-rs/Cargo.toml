@@ -29,6 +29,7 @@ bamltype = { path = "../bamltype" }
 dsrs-core = { path = "../dsrs-core" }
 dsrs-cache = { path = "../dsrs-cache" }
 dsrs-lm = { path = "../dsrs-lm" }
+dsrs-predict = { path = "../dsrs-predict" }
 dsrs-evaluate = { path = "../dsrs-evaluate" }
 dsrs-trace = { path = "../dsrs-trace" }
 # Keep this direct pin in sync with workspace [patch.crates-io] for self-sufficient external path consumers.

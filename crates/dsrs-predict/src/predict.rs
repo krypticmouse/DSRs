@@ -8,12 +8,13 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use tracing::{debug, trace};
 
-use crate as dsrs;
+use dsrs_core as dsrs;
 use dsrs_core::{DynPredictor, Example, Module, PredictAccessorFns, PredictState, RawExample, Signature};
-use crate::{
-    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
-    PredictError, Predicted, Prediction, SignatureSchema,
+use dsrs_core::{
+    BamlType, BamlValue, CallMetadata, LmError, LmUsage, PredictError, Predicted, Prediction,
+    SignatureSchema,
 };
+use dsrs_lm::{Chat, ChatAdapter, GLOBAL_SETTINGS, LM, LMResponse};
 
 fn predict_dyn_visit<S>(
     value: *mut (),
@@ -66,9 +67,16 @@ where
 /// There is no runtime registration side effect in `new()` or `build()`.
 ///
 /// ```no_run
-/// # async fn example() -> Result<(), dspy_rs::PredictError> {
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
+/// # async fn example() -> Result<(), dsrs_core::PredictError> {
+/// use dsrs_core::Example;
+/// use dsrs_predict::Predict;
+/// #[derive(dsrs_macros::Signature, Clone, Debug)]
+/// struct QA {
+///     #[input]
+///     question: String,
+///     #[output]
+///     answer: String,
+/// }
 ///
 /// // Minimal
 /// let predict = Predict::<QA>::new();
@@ -98,7 +106,7 @@ pub struct Predict<S: Signature> {
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
-    lm: Option<Arc<crate::core::LM>>,
+    lm: Option<Arc<LM>>,
     #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
@@ -133,7 +141,7 @@ impl<S: Signature> Predict<S> {
             demo_count = self.demos.len(),
             tool_count = self.tools.len(),
             instruction_override = self.instruction_override.is_some(),
-            tracing_graph = crate::trace::is_tracing()
+            tracing_graph = dsrs_trace::is_tracing()
         )
     )]
     pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
@@ -278,7 +286,7 @@ impl<S: Signature> Predict<S> {
             "lm response received"
         );
 
-        let crate::core::lm::LMResponse {
+        let LMResponse {
             output,
             usage,
             chat,
@@ -286,9 +294,9 @@ impl<S: Signature> Predict<S> {
             tool_executions,
         } = response;
 
-        let node_id = if crate::trace::is_tracing() {
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
+        let node_id = if dsrs_trace::is_tracing() {
+            dsrs_trace::record_node(
+                dsrs_trace::NodeType::Predict {
                     signature_name: std::any::type_name::<S>().to_string(),
                 },
                 vec![],
@@ -341,7 +349,7 @@ impl<S: Signature> Predict<S> {
         if let Some(id) = node_id {
             match prediction_from_output::<S>(&typed_output, lm_usage.clone(), Some(id)) {
                 Ok(prediction) => {
-                    crate::trace::record_output(id, prediction);
+                    dsrs_trace::record_output(id, prediction);
                     trace!(node_id = id, "recorded typed predictor output");
                 }
                 Err(err) => {
@@ -383,7 +391,7 @@ pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
-    lm: Option<Arc<crate::core::LM>>,
+    lm: Option<Arc<LM>>,
     _marker: PhantomData<S>,
 }
 
@@ -440,7 +448,7 @@ impl<S: Signature> PredictBuilder<S> {
     ///     .lm(LM::builder().model("anthropic:claude-sonnet-4-20250514").build().await?)
     ///     .build();
     /// ```
-    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+    pub fn lm(mut self, lm: LM) -> Self {
         self.lm = Some(Arc::new(lm));
         self
     }
@@ -655,7 +663,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[derive(crate::Signature, Clone, Debug)]
+    #[derive(dsrs_macros::Signature, Clone, Debug)]
     struct PredictConversionSig {
         #[input]
         prompt: String,

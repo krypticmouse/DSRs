@@ -1,4 +1,1 @@
-pub mod predict;
-
-pub use dsrs_core::Example;
-pub use predict::*;
+pub use dsrs_predict::*;

@@ -11,7 +11,7 @@ use syn::{
 
 mod runtime_path;
 
-use runtime_path::resolve_dspy_rs_path;
+use runtime_path::resolve_dsrs_core_path;
 
 #[proc_macro_derive(
     Signature,
@@ -19,7 +19,7 @@ use runtime_path::resolve_dspy_rs_path;
 )]
 pub fn derive_signature(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let runtime = match resolve_dspy_rs_path() {
+    let runtime = match resolve_dsrs_core_path() {
         Ok(path) => path,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -33,7 +33,7 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
 pub fn derive_augmentation(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let runtime = match resolve_dspy_rs_path() {
+    let runtime = match resolve_dsrs_core_path() {
         Ok(path) => path,
         Err(err) => return err.to_compile_error().into(),
     };

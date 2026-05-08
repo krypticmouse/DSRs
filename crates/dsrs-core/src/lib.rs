@@ -4,7 +4,7 @@
 // extension-attr dispatch no longer triggers rust-lang/rust#52234 on in-crate usage.
 #![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 
-mod augmentation;
+pub mod augmentation;
 mod demo;
 pub mod dyn_predictor;
 mod errors;
@@ -41,6 +41,16 @@ pub use bamltype::baml_types::{
 pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use facet::Facet;
+
+#[doc(hidden)]
+pub mod __macro_support {
+    pub use anyhow;
+    pub use bamltype;
+    pub use indexmap;
+    pub use schemars;
+    pub use serde;
+    pub use serde_json;
+}
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TrackedValue {

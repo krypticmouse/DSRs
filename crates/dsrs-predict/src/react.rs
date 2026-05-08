@@ -7,9 +7,9 @@ use rig::message::{ToolCall, ToolFunction};
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 
-use crate::core::{Module, Signature};
-use crate::predictors::{Predict, PredictBuilder};
-use crate::{BamlType, PredictError, Predicted};
+use dsrs_core::{BamlType, Module, PredictError, Predicted, Signature};
+use dsrs_lm::LM;
+use crate::{Predict, PredictBuilder};
 
 /// ReAct action-step schema.
 #[derive(dsrs_macros::Signature, Clone, Debug)]
@@ -326,7 +326,7 @@ where
 
     /// Sets a per-instance LM on both the action and extract predictors,
     /// bypassing the global. See [`PredictBuilder::lm`].
-    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+    pub fn lm(mut self, lm: LM) -> Self {
         self.action = self.action.lm(lm.clone());
         self.extract = self.extract.lm(lm);
         self

@@ -22,5 +22,6 @@ serde_json = { version = "1.0.143", features = ["preserve_order"] }
 minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["serde"] }
 
 [dev-dependencies]
-dspy-rs = { path = "../dspy-rs" }
+bamltype = { path = "../bamltype" }
+dsrs-core = { path = "../dsrs-core" }
 trybuild = "1.0.110"

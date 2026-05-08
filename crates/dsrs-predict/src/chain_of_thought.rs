@@ -1,8 +1,7 @@
-use crate::Augmentation;
 use dsrs_core::Augmented;
-use crate::core::{Module, Signature};
-use crate::predictors::{Example, Predict, PredictBuilder};
-use crate::{BamlType, PredictError, Predicted};
+use dsrs_core::{BamlType, Example, Module, PredictError, Predicted, Signature};
+use crate::{Predict, PredictBuilder};
+use dsrs_lm::LM;
 
 /// Augmentation that prepends a `reasoning: String` field to a signature's output.
 ///
@@ -10,7 +9,7 @@ use crate::{BamlType, PredictError, Predicted};
 /// field and generates it before the actual answer — this matters because the reasoning
 /// text is in the context window when the LM produces subsequent fields, so it literally
 /// has its own chain of thought to draw on. Used by [`ChainOfThought`].
-#[derive(Augmentation, Clone, Debug)]
+#[derive(dsrs_macros::Augmentation, Clone, Debug)]
 #[augment(output, prepend)]
 pub struct Reasoning {
     #[output]
@@ -28,9 +27,15 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 /// real output field, not hidden metadata.
 ///
 /// ```no_run
-/// # async fn example() -> Result<(), dspy_rs::PredictError> {
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
+/// # async fn example() -> Result<(), dsrs_core::PredictError> {
+/// use dsrs_predict::ChainOfThought;
+/// #[derive(dsrs_macros::Signature, Clone, Debug)]
+/// struct QA {
+///     #[input]
+///     question: String,
+///     #[output]
+///     answer: String,
+/// }
 ///
 /// let cot = ChainOfThought::<QA>::new();
 /// let result = cot.call(QAInput { question: "What is 2+2?".into() }).await?;
@@ -165,7 +170,7 @@ impl<S: Signature> ChainOfThoughtBuilder<S> {
     }
 
     /// Sets a per-instance LM, bypassing the global. See [`PredictBuilder::lm`].
-    pub fn lm(mut self, lm: crate::core::LM) -> Self {
+    pub fn lm(mut self, lm: LM) -> Self {
         self.inner = self.inner.lm(lm);
         self
     }

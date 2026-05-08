@@ -8,3 +8,13 @@ repository = "https://github.com/krypticmouse/DSRs"
 description = "DSRs typed predictors and module implementations."
 
 [dependencies]
+anyhow = "1.0.99"
+bamltype = { path = "../bamltype" }
+dsrs-core = { path = "../dsrs-core" }
+dsrs-lm = { path = "../dsrs-lm" }
+dsrs_macros = { path = "../dsrs-macros" }
+dsrs-trace = { path = "../dsrs-trace" }
+facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std"] }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+tracing = "0.1.44"

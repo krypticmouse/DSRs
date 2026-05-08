@@ -1269,6 +1269,7 @@ dependencies = [
  "dsrs-core",
  "dsrs-evaluate",
  "dsrs-lm",
+ "dsrs-predict",
  "dsrs-trace",
  "dsrs_macros",
  "enum_dispatch",
@@ -1385,6 +1386,18 @@ dependencies = [
 [[package]]
 name = "dsrs-predict"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bamltype",
+ "dsrs-core",
+ "dsrs-lm",
+ "dsrs-trace",
+ "dsrs_macros",
+ "facet",
+ "rig-core",
+ "serde_json",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-trace"
@@ -1401,7 +1414,8 @@ dependencies = [
 name = "dsrs_macros"
 version = "0.7.2"
 dependencies = [
- "dspy-rs",
+ "bamltype",
+ "dsrs-core",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
