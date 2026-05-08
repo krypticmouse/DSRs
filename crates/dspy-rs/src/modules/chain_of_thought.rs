@@ -1,5 +1,5 @@
 use crate::Augmentation;
-use crate::augmentation::Augmented;
+use dsrs_core::Augmented;
 use crate::core::{Module, Signature};
 use crate::predictors::{Example, Predict, PredictBuilder};
 use crate::{BamlType, PredictError, Predicted};

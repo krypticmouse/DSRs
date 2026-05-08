@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use bon::Builder;
 
-use crate::core::DynPredictor;
+use dsrs_core::DynPredictor;
 use crate::evaluate::{TypedMetric, average_score};
 use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,

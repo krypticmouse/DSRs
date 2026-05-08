@@ -87,10 +87,9 @@ pub trait Module: Send + Sync {
 ///
 /// Shows a progress bar on stderr. Use [`forward_all_with_progress`] to disable it.
 ///
-/// ```no_run
+/// ```ignore
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
+/// use dsrs_core::*;
 ///
 /// let predict = Predict::<QA>::new();
 /// let inputs = vec![

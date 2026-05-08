@@ -13,8 +13,8 @@ use facet::Facet;
 ///
 /// Usually derived:
 ///
-/// ```
-/// use dspy_rs::*;
+/// ```ignore
+/// use dsrs_core::*;
 ///
 /// #[derive(Augmentation, Clone, Debug)]
 /// #[augment(output, prepend)]

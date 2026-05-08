@@ -39,9 +39,9 @@ impl Prediction {
             .clone()
     }
 
-    pub fn get_tracked(&self, key: &str) -> crate::trace::TrackedValue {
+    pub fn get_tracked(&self, key: &str) -> crate::TrackedValue {
         let val = self.get(key, None);
-        crate::trace::TrackedValue {
+        crate::TrackedValue {
             value: val,
             source: self.node_id.map(|id| (id, key.to_string())),
         }

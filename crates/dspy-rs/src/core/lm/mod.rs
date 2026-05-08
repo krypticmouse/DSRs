@@ -1,10 +1,9 @@
 pub mod chat;
 pub mod client_registry;
-pub mod usage;
 
 pub use chat::*;
 pub use client_registry::*;
-pub use usage::*;
+pub use dsrs_core::LmUsage;
 
 use anyhow::Result;
 use rig::{completion::AssistantContent, message::ToolCall, message::ToolChoice, tool::ToolDyn};

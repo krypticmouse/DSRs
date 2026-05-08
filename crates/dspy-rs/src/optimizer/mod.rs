@@ -44,7 +44,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use std::ops::ControlFlow;
 
-use crate::core::{DynPredictor, visit_named_predictors_mut};
+use dsrs_core::{DynPredictor, visit_named_predictors_mut};
 use crate::evaluate::{MetricOutcome, TypedMetric, evaluate_trainset};
 use crate::predictors::Example;
 use crate::{Facet, Module, Signature};

@@ -1265,6 +1265,7 @@ dependencies = [
  "bamltype",
  "bon",
  "csv",
+ "dsrs-core",
  "dsrs_macros",
  "enum_dispatch",
  "facet",
@@ -1299,6 +1300,22 @@ version = "0.0.0"
 [[package]]
 name = "dsrs-core"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bamltype",
+ "bon",
+ "facet",
+ "futures",
+ "indexmap",
+ "kdam",
+ "rig-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-data"

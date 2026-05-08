@@ -5,8 +5,7 @@ use anyhow::Result;
 use bamltype::facet_reflect::Peek;
 use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 
-use crate::SignatureSchema;
-use crate::data::example::Example as RawExample;
+use crate::{RawExample, SignatureSchema};
 
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
@@ -17,7 +16,7 @@ use crate::data::example::Example as RawExample;
 ///
 /// Normal users never touch this — you pass your module to `optimizer.compile()`
 /// and it uses `DynPredictor` internally.
-pub(crate) trait DynPredictor: Send + Sync {
+pub trait DynPredictor: Send + Sync {
     /// Returns the [`SignatureSchema`] for this predictor's signature.
     fn schema(&self) -> &SignatureSchema;
 
@@ -55,7 +54,7 @@ pub(crate) trait DynPredictor: Send + Sync {
 /// Used by [`DynPredictor::dump_state`]/[`DynPredictor::load_state`] for
 /// saving and restoring optimized parameters.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PredictState {
+pub struct PredictState {
     /// The demos as type-erased examples.
     pub demos: Vec<RawExample>,
     /// The instruction override, if any.
@@ -67,7 +66,7 @@ type VisitMutFn =
 
 #[derive(Clone, Copy, Debug, facet::Facet)]
 #[facet(opaque)]
-pub(crate) struct PredictAccessorFns {
+pub struct PredictAccessorFns {
     pub visit_mut: VisitMutFn,
 }
 
@@ -81,7 +80,7 @@ impl Eq for PredictAccessorFns {}
 
 facet::define_attr_grammar! {
     ns "dsrs";
-    crate_path $crate::core::dyn_predictor;
+    crate_path $crate::dyn_predictor;
 
     pub enum Attr {
         PredictAccessor(Option<&'static PredictAccessorFns>),
@@ -90,7 +89,7 @@ facet::define_attr_grammar! {
 
 /// Error from [`visit_named_predictors_mut`] when the Facet walker encounters an unsupported structure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub(crate) enum NamedParametersError {
+pub enum NamedParametersError {
     /// A `Predict` leaf was found inside an unsupported container (`Rc`, `Arc`, etc.).
     #[error("container `{ty}` at `{path}` contains a parameter leaf")]
     Container { path: String, ty: &'static str },
@@ -117,7 +116,7 @@ pub(crate) enum NamedParametersError {
     name = "dsrs.visit_named_predictors_mut",
     skip(module, visitor)
 )]
-pub(crate) fn visit_named_predictors_mut<M, F>(
+pub fn visit_named_predictors_mut<M, F>(
     module: &mut M,
     mut visitor: F,
 ) -> std::result::Result<(), NamedParametersError>
@@ -397,45 +396,7 @@ fn pointer_name(pointer: Option<KnownPointer>) -> &'static str {
 mod tests {
     use super::*;
     use crate as dsrs;
-    use crate::Signature;
-    use crate::predictors::Predict as RealPredict;
     use std::ops::ControlFlow;
-    use std::rc::Rc;
-    use std::sync::Arc;
-
-    #[derive(Signature, Clone, Debug)]
-    struct DummySig {
-        #[input]
-        value: String,
-
-        #[output]
-        done: bool,
-    }
-
-    #[derive(facet::Facet)]
-    #[facet(crate = facet)]
-    struct SharedPointerModule {
-        rc_predictor: Rc<RealPredict<DummySig>>,
-        arc_predictor: Arc<RealPredict<DummySig>>,
-    }
-
-    #[test]
-    fn named_parameters_rejects_shared_pointers() {
-        let mut module = SharedPointerModule {
-            rc_predictor: Rc::new(RealPredict::<DummySig>::new()),
-            arc_predictor: Arc::new(RealPredict::<DummySig>::new()),
-        };
-
-        match visit_named_predictors_mut(&mut module, |_path, _predictor| ControlFlow::Continue(()))
-        {
-            Err(NamedParametersError::Container { path, ty }) => {
-                assert_eq!(path, "rc_predictor");
-                assert_eq!(ty, "Rc");
-            }
-            Ok(_) => panic!("walk unexpectedly succeeded"),
-            Err(other) => panic!("unexpected error: {other:?}"),
-        }
-    }
 
     #[derive(facet::Facet)]
     #[facet(crate = facet, dsrs::predict_accessor)]
@@ -517,11 +478,6 @@ mod tests {
             Err(other) => panic!("unexpected error: {other:?}"),
             Ok(_) => panic!("walk unexpectedly succeeded"),
         }
-    }
-
-    #[test]
-    fn real_predict_shape_has_strict_identity_marker() {
-        assert!(is_predict_shape_identity(RealPredict::<DummySig>::SHAPE));
     }
 
     #[derive(facet::Facet)]

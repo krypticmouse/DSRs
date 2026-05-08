@@ -97,7 +97,9 @@
 extern crate self as dspy_rs;
 
 pub mod adapter;
-pub mod augmentation;
+pub mod augmentation {
+    pub use dsrs_core::*;
+}
 pub mod core;
 pub mod data;
 pub mod evaluate;
@@ -108,11 +110,9 @@ pub mod trace;
 pub mod utils;
 
 pub use adapter::chat::*;
-pub use augmentation::*;
+pub use dsrs_core::*;
 pub use core::*;
 pub use data::dataloader::*;
-pub(crate) use data::example::Example as RawExample;
-pub use data::prediction::*;
 pub use data::serialize::*;
 pub use data::utils::*;
 pub use evaluate::*;

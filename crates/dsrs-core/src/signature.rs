@@ -28,9 +28,8 @@ pub enum ConstraintKind {
 /// following this instruction." You define it, the system handles prompt formatting,
 /// response parsing, and type checking.
 ///
-/// ```
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
+/// ```ignore
+/// use dsrs_core::*;
 ///
 /// // The derive generates QAInput { question } and QAOutput { answer }
 /// let _input = QAInput { question: "What is 2+2?".into() };

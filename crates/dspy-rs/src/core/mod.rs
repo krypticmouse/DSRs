@@ -20,24 +20,17 @@
 //! who need fine-grained prompt control also use [`SignatureSchema`] and the adapter
 //! building blocks directly.
 
-pub(crate) mod dyn_predictor;
-mod errors;
 pub mod lm;
-pub mod module;
-mod module_ext;
-mod predicted;
-mod schema;
 pub mod settings;
-pub mod signature;
-pub mod specials;
 
-pub(crate) use dyn_predictor::*;
-pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use dsrs_core::{
+    Augmentation, Augmented, BamlConvertError, BamlType, BamlValue, CallMetadata, Constraint,
+    ConstraintKind, ConstraintLevel, ConstraintResult, ConstraintSpec, ConversionError,
+    DynPredictor, ErrorClass, Facet, FieldMeta, FieldMetadataSpec, FieldPath, FieldSchema, Flag,
+    InputRenderSpec, JsonishError, LmError, LmUsage, Module, ModuleExt, NamedParametersError,
+    OutputFormatContent, ParseError, PredictError, PredictState, Predicted, Prediction,
+    RawExample, RenderOptions, ResponseCheck, Shape, Signature, SignatureSchema, StreamingMode,
+    TrackedValue, TypeIR, visit_named_predictors_mut,
+};
 pub use lm::*;
-pub use module::*;
-pub use module_ext::*;
-pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
-pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
-pub use signature::*;
-pub use specials::*;

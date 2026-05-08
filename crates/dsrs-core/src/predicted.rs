@@ -37,7 +37,7 @@ pub struct ConstraintResult {
 /// all live here.
 ///
 /// ```
-/// use dspy_rs::CallMetadata;
+/// use dsrs_core::CallMetadata;
 ///
 /// let meta = CallMetadata::default();
 /// assert_eq!(meta.lm_usage.total_tokens, 0);
@@ -151,7 +151,7 @@ impl CallMetadata {
 /// limitation.
 ///
 /// ```
-/// use dspy_rs::{Predicted, CallMetadata};
+/// use dsrs_core::{Predicted, CallMetadata};
 ///
 /// #[derive(Debug)]
 /// struct QAOutput { answer: String }

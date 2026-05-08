@@ -9,8 +9,8 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate as dsrs;
-use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
-use crate::data::example::Example as RawExample;
+use dsrs_core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
+use dsrs_core::RawExample;
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
     PredictError, Predicted, Prediction, SignatureSchema,
