@@ -9,40 +9,11 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use crate as dsrs;
-use dsrs_core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
-use dsrs_core::RawExample;
+use dsrs_core::{DynPredictor, Example, Module, PredictAccessorFns, PredictState, RawExample, Signature};
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
     PredictError, Predicted, Prediction, SignatureSchema,
 };
-
-/// A typed input/output pair for few-shot prompting.
-///
-/// Demos are formatted as user/assistant exchanges in the prompt, showing the LM
-/// what good responses look like. The types enforce that demos match the signature —
-/// you can't accidentally pass a `QAOutput` demo to a `Predict<SummarizeSig>`.
-///
-/// ```
-/// use dspy_rs::*;
-/// use dspy_rs::doctest::*;
-///
-/// let example = Example::<QA>::new(
-///     QAInput { question: "What is 2+2?".into() },
-///     QAOutput { answer: "4".into() },
-/// );
-/// ```
-#[derive(Clone, Debug, facet::Facet)]
-#[facet(crate = facet)]
-pub struct Example<S: Signature> {
-    pub input: S::Input,
-    pub output: S::Output,
-}
-
-impl<S: Signature> Example<S> {
-    pub fn new(input: S::Input, output: S::Output) -> Self {
-        Self { input, output }
-    }
-}
 
 fn predict_dyn_visit<S>(
     value: *mut (),

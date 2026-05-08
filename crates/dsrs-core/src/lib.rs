@@ -5,6 +5,7 @@
 #![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 
 mod augmentation;
+mod demo;
 pub mod dyn_predictor;
 mod errors;
 mod example;
@@ -18,6 +19,7 @@ mod specials;
 mod usage;
 
 pub use augmentation::*;
+pub use demo::*;
 pub use dyn_predictor::*;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
 pub use example::Example as RawExample;

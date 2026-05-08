@@ -12,17 +12,17 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use tracing::{debug, trace};
 
-use super::Adapter;
-use crate::CallMetadata;
-use crate::{
-    BamlType, BamlValue, ConstraintLevel, ConstraintResult, FieldMeta, Flag, InputRenderSpec,
-    JsonishError, Message, OutputFormatContent, ParseError, PredictError, Predicted, RenderOptions,
-    Signature, TypeIR,
+use crate::Adapter;
+use crate::Message;
+use dsrs_core::{
+    BamlType, BamlValue, CallMetadata, ConstraintLevel, ConstraintResult, Example, FieldMeta,
+    FieldPath, FieldSchema, Flag, InputRenderSpec, JsonishError, LmUsage, OutputFormatContent,
+    ParseError, PredictError, Predicted, RenderOptions, Signature, SignatureSchema, TypeIR,
 };
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
 ///
-/// The adapter is stateless — all state comes from the [`SignatureSchema`](crate::SignatureSchema)
+/// The adapter is stateless — all state comes from the [`SignatureSchema`](SignatureSchema)
 /// passed to each method. Two usage patterns:
 ///
 /// - **High-level** (what [`Predict`](crate::Predict) uses): `format_system_message_typed`,
@@ -110,6 +110,18 @@ fn truncate_filter(
     }
 
     Ok(format!("{truncated}{end}"))
+}
+
+fn truncate_preview(value: &str, max_chars: usize) -> &str {
+    if value.chars().count() <= max_chars {
+        return value;
+    }
+    let byte_end = value
+        .char_indices()
+        .nth(max_chars)
+        .map(|(idx, _)| idx)
+        .unwrap_or(value.len());
+    &value[..byte_end]
 }
 
 fn build_input_render_environment() -> minijinja::Environment<'static> {
@@ -302,7 +314,7 @@ fn format_schema_for_prompt(schema: &str) -> String {
 impl ChatAdapter {
     fn format_task_description_schema(
         &self,
-        schema: &crate::SignatureSchema,
+        schema: &SignatureSchema,
         instruction_override: Option<&str>,
     ) -> String {
         let instruction = instruction_override.unwrap_or(schema.instruction());
@@ -334,7 +346,7 @@ impl ChatAdapter {
         format!("In adhering to this structure, your objective is: {indented}")
     }
 
-    fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
+    fn format_response_instructions_schema(&self, schema: &SignatureSchema) -> String {
         let mut output_fields = schema.output_fields().iter();
         let Some(first_field) = output_fields.next() else {
             return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
@@ -382,7 +394,7 @@ impl ChatAdapter {
         self.build_system(S::schema(), instruction_override)
     }
 
-    /// Builds a system message from a [`SignatureSchema`](crate::SignatureSchema) directly.
+    /// Builds a system message from a [`SignatureSchema`](SignatureSchema) directly.
     ///
     /// The schema-based equivalent of [`format_system_message_typed_with_instruction`](ChatAdapter::format_system_message_typed_with_instruction).
     /// Use this when you have a schema but not a concrete `S: Signature` type (e.g.
@@ -393,7 +405,7 @@ impl ChatAdapter {
     /// Returns an error if the output format rendering fails (malformed type IR).
     pub fn build_system(
         &self,
-        schema: &crate::SignatureSchema,
+        schema: &SignatureSchema,
         instruction_override: Option<&str>,
     ) -> Result<String> {
         let parts = [
@@ -408,7 +420,7 @@ impl ChatAdapter {
         Ok(system)
     }
 
-    fn format_field_descriptions_schema(&self, schema: &crate::SignatureSchema) -> String {
+    fn format_field_descriptions_schema(&self, schema: &SignatureSchema) -> String {
         let output_format = schema.output_format();
 
         let mut lines = Vec::new();
@@ -438,7 +450,7 @@ impl ChatAdapter {
         lines.join("\n")
     }
 
-    fn format_field_structure_schema(&self, schema: &crate::SignatureSchema) -> Result<String> {
+    fn format_field_structure_schema(&self, schema: &SignatureSchema) -> Result<String> {
         let mut lines = vec![
             "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
             String::new(),
@@ -485,12 +497,12 @@ impl ChatAdapter {
     /// Formats an input value using a schema — the building-block version of
     /// [`format_user_message_typed`](ChatAdapter::format_user_message_typed).
     ///
-    /// Navigates the `BamlValue` using each field's [`FieldPath`](crate::FieldPath) to
+    /// Navigates the `BamlValue` using each field's [`FieldPath`](FieldPath) to
     /// handle flattened structs correctly. A field with path `["inner", "question"]` is
     /// extracted from the nested structure but rendered as a flat `[[ ## question ## ]]`
     /// section in the prompt. Appends response instructions so the LM sees
     /// output-field ordering guidance in the latest user turn.
-    pub fn format_input<I>(&self, schema: &crate::SignatureSchema, input: &I) -> String
+    pub fn format_input<I>(&self, schema: &SignatureSchema, input: &I) -> String
     where
         I: BamlType + for<'a> facet::Facet<'a>,
     {
@@ -532,7 +544,7 @@ impl ChatAdapter {
 
     /// Formats an output value using a schema — the building-block version of
     /// [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
-    pub fn format_output<O>(&self, schema: &crate::SignatureSchema, output: &O) -> String
+    pub fn format_output<O>(&self, schema: &SignatureSchema, output: &O) -> String
     where
         O: BamlType + for<'a> facet::Facet<'a>,
     {
@@ -560,7 +572,7 @@ impl ChatAdapter {
     /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
     pub fn format_demo_typed<S: Signature>(
         &self,
-        demo: &crate::predictors::Example<S>,
+        demo: &Example<S>,
     ) -> (String, String)
     where
         S::Input: BamlType,
@@ -619,7 +631,7 @@ impl ChatAdapter {
     /// Same as [`parse_response_typed`](ChatAdapter::parse_response_typed).
     pub fn parse_output_with_meta<O>(
         &self,
-        schema: &crate::SignatureSchema,
+        schema: &SignatureSchema,
         response: &Message,
     ) -> std::result::Result<(O, IndexMap<String, FieldMeta>), ParseError>
     where
@@ -664,7 +676,7 @@ impl ChatAdapter {
                         );
                         trace!(
                             field = %rust_name,
-                            raw_preview = %crate::truncate(&raw_text, 160),
+                            raw_preview = %truncate_preview(&raw_text, 160),
                             "typed coercion failed preview"
                         );
                         errors.push(ParseError::CoercionFailed {
@@ -792,7 +804,7 @@ impl ChatAdapter {
     /// Convenience wrapper around [`parse_output_with_meta`](ChatAdapter::parse_output_with_meta).
     pub fn parse_output<O>(
         &self,
-        schema: &crate::SignatureSchema,
+        schema: &SignatureSchema,
         response: &Message,
     ) -> std::result::Result<O, ParseError>
     where
@@ -808,7 +820,7 @@ impl ChatAdapter {
     /// is included as a section (usually empty). Duplicate section names keep the first
     /// occurrence. Content before the first delimiter is discarded.
     pub fn parse_sections(content: &str) -> IndexMap<String, String> {
-        crate::adapter::chat::parse_sections(content)
+        parse_sections(content)
     }
 
     /// Parses a raw [`Message`] into a [`Predicted<S::Output>`](crate::Predicted).
@@ -834,11 +846,11 @@ impl ChatAdapter {
             .map_err(|source| PredictError::Parse {
                 source,
                 raw_response: raw_response.clone(),
-                lm_usage: crate::LmUsage::default(),
+                lm_usage: LmUsage::default(),
             })?;
         let metadata = CallMetadata::new(
             raw_response,
-            crate::LmUsage::default(),
+            LmUsage::default(),
             Vec::new(),
             Vec::new(),
             None,
@@ -886,7 +898,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
 
 fn value_for_path_relaxed<'a>(
     value: &'a BamlValue,
-    path: &crate::FieldPath,
+    path: &FieldPath,
 ) -> Option<&'a BamlValue> {
     let mut current = value;
     let parts: Vec<_> = path.iter().collect();
@@ -924,7 +936,7 @@ fn value_for_path_relaxed<'a>(
 
 fn insert_baml_at_path(
     root: &mut bamltype::baml_types::BamlMap<String, BamlValue>,
-    path: &crate::FieldPath,
+    path: &FieldPath,
     value: BamlValue,
 ) {
     let parts: Vec<_> = path.iter().collect();
@@ -970,7 +982,7 @@ fn format_baml_value_for_prompt(value: &BamlValue) -> String {
 }
 
 fn render_input_field(
-    field_spec: &crate::FieldSchema,
+    field_spec: &FieldSchema,
     value: &BamlValue,
     input: &Value,
     output_format: &OutputFormatContent,
@@ -992,7 +1004,7 @@ fn render_input_field(
     }
 }
 
-fn build_input_context_value(schema: &crate::SignatureSchema, root: &BamlValue) -> Value {
+fn build_input_context_value(schema: &SignatureSchema, root: &BamlValue) -> Value {
     let mut input_json = baml_value_to_render_json(root);
     let Some(root_map) = input_json.as_object_mut() else {
         return input_json;
@@ -1023,7 +1035,7 @@ fn baml_value_to_render_json(value: &BamlValue) -> Value {
 
 fn render_input_field_jinja(
     template: &'static str,
-    field_spec: &crate::FieldSchema,
+    field_spec: &FieldSchema,
     value: &BamlValue,
     input: &Value,
     _output_format: &OutputFormatContent,

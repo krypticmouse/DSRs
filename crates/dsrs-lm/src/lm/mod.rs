@@ -13,8 +13,8 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 use tracing::{Instrument, debug, trace, warn};
 
-use crate::utils::cache::CacheEntry;
-use crate::{Cache, Prediction, RawExample, ResponseCache};
+use dsrs_cache::{Cache, CacheEntry, ResponseCache};
+use dsrs_core::{Prediction, RawExample};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {

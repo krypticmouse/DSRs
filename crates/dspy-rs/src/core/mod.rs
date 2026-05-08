@@ -20,8 +20,12 @@
 //! who need fine-grained prompt control also use [`SignatureSchema`] and the adapter
 //! building blocks directly.
 
-pub mod lm;
-pub mod settings;
+pub mod lm {
+    pub use dsrs_lm::lm::*;
+}
+pub mod settings {
+    pub use dsrs_lm::settings::*;
+}
 
 pub use dsrs_core::{
     Augmentation, Augmented, BamlConvertError, BamlType, BamlValue, CallMetadata, Constraint,

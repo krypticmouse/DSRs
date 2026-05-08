@@ -109,7 +109,7 @@ pub mod predictors;
 pub mod trace;
 pub mod utils;
 
-pub use adapter::chat::*;
+pub use adapter::*;
 pub use dsrs_core::*;
 pub use core::*;
 pub use data::dataloader::*;

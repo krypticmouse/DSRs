@@ -1,7 +1,6 @@
 use std::sync::{Arc, LazyLock, RwLock};
 
-use super::LM;
-use crate::adapter::Adapter;
+use crate::{Adapter, LM};
 
 pub struct Settings {
     pub lm: Arc<LM>,

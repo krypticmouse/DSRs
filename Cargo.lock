@@ -1267,6 +1267,7 @@ dependencies = [
  "csv",
  "dsrs-cache",
  "dsrs-core",
+ "dsrs-lm",
  "dsrs-trace",
  "dsrs_macros",
  "enum_dispatch",
@@ -1355,6 +1356,24 @@ dependencies = [
 [[package]]
 name = "dsrs-lm"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bamltype",
+ "bon",
+ "dsrs-cache",
+ "dsrs-core",
+ "enum_dispatch",
+ "facet",
+ "indexmap",
+ "minijinja",
+ "regex",
+ "reqwest 0.13.2",
+ "rig-core",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-predict"
