@@ -1,4 +1,4 @@
-use crate::{Prediction, RawExample};
+use dsrs_core::{Prediction, RawExample};
 use std::fmt;
 
 /// The kind of operation a trace node represents.

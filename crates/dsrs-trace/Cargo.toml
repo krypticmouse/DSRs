@@ -8,3 +8,8 @@ repository = "https://github.com/krypticmouse/DSRs"
 description = "DSRs tracing and execution graph support."
 
 [dependencies]
+anyhow = "1.0.99"
+dsrs-core = { path = "../dsrs-core" }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+tokio = { version = "1.46.1", features = ["rt", "macros", "sync"] }
+tracing = "0.1.44"

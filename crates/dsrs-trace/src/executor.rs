@@ -1,5 +1,5 @@
-use crate::trace::dag::{Graph, NodeType};
-use crate::{Prediction, RawExample};
+use crate::dag::{Graph, NodeType};
+use dsrs_core::{Prediction, RawExample};
 use anyhow::Result;
 use std::collections::HashMap;
 

@@ -1,5 +1,5 @@
-use crate::Prediction;
-use crate::trace::dag::{Graph, NodeType};
+use crate::dag::{Graph, NodeType};
+use dsrs_core::{Prediction, RawExample};
 use std::sync::{Arc, Mutex};
 use tokio::task_local;
 use tracing::{debug, trace};
@@ -54,7 +54,7 @@ pub fn is_tracing() -> bool {
 pub fn record_node(
     node_type: NodeType,
     inputs: Vec<usize>,
-    input_data: Option<crate::RawExample>,
+    input_data: Option<RawExample>,
 ) -> Option<usize> {
     let input_count = inputs.len();
     let has_input_data = input_data.is_some();
