@@ -8,7 +8,13 @@ repository = "https://github.com/krypticmouse/DSRs"
 description = "Leaven integration for DSRs programs."
 
 [dependencies]
+dsrs-core = { path = "../dsrs-core" }
+dsrs-evaluate = { path = "../dsrs-evaluate" }
+dsrs-predict = { path = "../dsrs-predict" }
 leaven-core = { path = "../../../leaven/crates/leaven-core" }
 leaven-surface = { path = "../../../leaven/crates/leaven-surface" }
 leaven-engine = { path = "../../../leaven/crates/leaven-engine" }
 leaven-evidence = { path = "../../../leaven/crates/leaven-evidence" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+thiserror = "2.0.17"

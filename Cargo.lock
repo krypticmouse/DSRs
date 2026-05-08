@@ -1388,10 +1388,16 @@ dependencies = [
 name = "dsrs-leaven"
 version = "0.0.0"
 dependencies = [
+ "dsrs-core",
+ "dsrs-evaluate",
+ "dsrs-predict",
  "leaven-core",
  "leaven-engine",
  "leaven-evidence",
  "leaven-surface",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
