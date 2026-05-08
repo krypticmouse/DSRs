@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DSRs · Crate Topology</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js" crossorigin></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { color-scheme: dark; }
+    html, body { background: #09090b; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Inter", sans-serif; }
+    .mono { font-family: ui-monospace, "JetBrains Mono", "Fira Code", Menlo, monospace; }
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(63,63,70,.18) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(63,63,70,.18) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    .glow-rose   { box-shadow: 0 0 0 1px rgba(244,63,94,.35), 0 0 32px -10px rgba(244,63,94,.5); }
+    .glow-amber  { box-shadow: 0 0 0 1px rgba(245,158,11,.30), 0 0 28px -12px rgba(245,158,11,.5); }
+    .glow-emerald{ box-shadow: 0 0 0 1px rgba(16,185,129,.25), 0 0 24px -14px rgba(16,185,129,.4); }
+    .strike { position: relative; }
+    .strike::after {
+      content: "sunset";
+      position: absolute; top: 8px; right: 10px;
+      font-size: 9px; letter-spacing: .12em; text-transform: uppercase;
+      color: #fbbf24; background: rgba(251,191,36,.08);
+      padding: 2px 6px; border: 1px solid rgba(251,191,36,.35); border-radius: 4px;
+    }
+    .pulse {
+      animation: pulse 2.6s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: .65; }
+      50% { opacity: 1; }
+    }
+  </style>
+</head>
+<body class="text-zinc-200 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+  const { useState } = React;
+
+  const LAYERS = [
+    {
+      id: "L0",
+      label: "L0 · Foundation",
+      sub: "Type system + macros · existing, untouched",
+      accent: "sky",
+      crates: [
+        { name: "bamltype",         tag: "existing", desc: "Typed value system, jsonish coercion, BAML schema rendering",
+          deps: [], surface: ["BamlType","BamlValue","TypeIR","Constraint","OutputFormatContent"] },
+        { name: "bamltype-derive",  tag: "existing", desc: "#[derive(BamlType)] proc-macro",
+          deps: [], surface: ["BamlType derive"] },
+        { name: "dsrs-macros",      tag: "existing", desc: "Signature / Augmentation / Module derive macros",
+          deps: ["bamltype"], surface: ["#[derive(Signature)]","#[derive(Augmentation)]","#[derive(Module)]"] },
+      ],
+    },
+    {
+      id: "L1",
+      label: "L1 · Typed substrate",
+      sub: "The hot path · Places P1 (User Code) and P2 (Module Authoring)",
+      accent: "emerald",
+      crates: [
+        { name: "dsrs-core",   tag: "new", desc: "The shared backbone. No LM, no formats, no deps on rig/foyer/parquet.",
+          deps: ["bamltype"], surface: [
+            "Signature","Module","SignatureSchema","Augmentation",
+            "Predicted<O>","CallMetadata","Demo<S>","Example","Prediction",
+            "PredictError","ParseError","ConversionError","LmError",
+            "DynPredictor","TraceSink","CacheBackend","LmClient",
+            "visit_named_predictors_mut (Facet walker)"
+          ], primary: true },
+        { name: "dsrs-lm",      tag: "new", desc: "Concrete LM client + the one prompt format.",
+          deps: ["dsrs-core"], surface: ["LM (rig wrapper)","ChatAdapter","GLOBAL_SETTINGS","configure","with_lm"] },
+        { name: "dsrs-trace",   tag: "new", desc: "Execution graph recording. Implements TraceSink.",
+          deps: ["dsrs-core"], surface: ["ExecutionGraph","TraceContext","span/event types"] },
+        { name: "dsrs-cache",   tag: "new", desc: "Foyer-backed LM response cache. Implements CacheBackend.",
+          deps: ["dsrs-core"], surface: ["LmCache (foyer)"] },
+        { name: "dsrs-predict", tag: "new", desc: "The leaf — the only thing that actually calls the LM.",
+          deps: ["dsrs-core","dsrs-lm"], surface: [
+            "Predict<S>  (impl DynPredictor)","ChainOfThought<S>","ReAct<S>",
+            "forward_all","Map / AndThen combinators","library modules"
+          ], primary: true },
+      ],
+    },
+    {
+      id: "L2",
+      label: "L2 · Evaluation & optimization",
+      sub: "Place P3 · evaluation stays, optimization is shrinking",
+      accent: "amber",
+      crates: [
+        { name: "dsrs-evaluate", tag: "new", desc: "The metric surface leaven-dsrs adapts. Permanent.",
+          deps: ["dsrs-core"], surface: [
+            "TypedMetric<S, M>","MetricOutcome","FeedbackMetric",
+            "ExecutionTrace","evaluate_trainset",
+            "feedback helpers (retrieval / code-pipeline / multi-objective / string-sim / classification)"
+          ] },
+        { name: "dsrs-gepa", tag: "new", desc: "Just GEPA + pareto helper. COPRO and MIPROv2 deleted.",
+          deps: ["dsrs-core","dsrs-predict","dsrs-evaluate"], surface: [
+            "Optimizer (trait)","GEPA","GEPACandidate","GEPAResult","ParetoFrontier"
+          ], sunset: true },
+      ],
+    },
+    {
+      id: "ADJ",
+      label: "Adjacent",
+      sub: "Off the L1 hot path",
+      accent: "violet",
+      crates: [
+        { name: "dsrs-data", tag: "new", desc: "Format readers behind feature flags so light users don't pay.",
+          deps: ["dsrs-core"], surface: ["DataLoader","csv","json","parquet","hf-hub"] },
+      ],
+    },
+    {
+      id: "INT",
+      label: "Integration · the future",
+      sub: "DSRs implements leaven's thin capability traits directly",
+      accent: "rose",
+      crates: [
+        { name: "dsrs-leaven", tag: "new", desc: "DSRs's leaven-compatible impl. When real, dsrs-gepa goes away.",
+          deps: ["dsrs-core","dsrs-evaluate","dsrs-predict","leaven-core","leaven-surface","leaven-engine","leaven-evidence"],
+          surface: [
+            "DsrsProgramArtifact   impl leaven_core::Artifact",
+            "DsrsProgramChange",
+            "DsrsProgramSurface    impl leaven_surface::EditSurface",
+            "DsrsEvaluator         impl leaven_engine::Evaluator<P>",
+            "DsrsEvidence          impl leaven_core::Evidence (+ Casewise + Attributable)"
+          ], integration: true },
+      ],
+    },
+  ];
+
+  const accentRing = {
+    sky:     "ring-sky-500/30",
+    emerald: "ring-emerald-500/30",
+    amber:   "ring-amber-500/30",
+    violet:  "ring-violet-500/30",
+    rose:    "ring-rose-500/30",
+  };
+  const accentText = {
+    sky:     "text-sky-300",
+    emerald: "text-emerald-300",
+    amber:   "text-amber-300",
+    violet:  "text-violet-300",
+    rose:    "text-rose-300",
+  };
+  const accentDot = {
+    sky:     "bg-sky-400",
+    emerald: "bg-emerald-400",
+    amber:   "bg-amber-400",
+    violet:  "bg-violet-400",
+    rose:    "bg-rose-400",
+  };
+
+  function Tag({ kind }) {
+    const map = {
+      new:      { cls: "border-emerald-500/40 text-emerald-300 bg-emerald-500/5",  label: "new" },
+      existing: { cls: "border-zinc-600 text-zinc-400 bg-zinc-800/40",            label: "existing" },
+    };
+    const m = map[kind] ?? map.existing;
+    return <span className={`mono text-[10px] uppercase tracking-widest border ${m.cls} px-1.5 py-0.5 rounded`}>{m.label}</span>;
+  }
+
+  function Crate({ c, accent, expanded, onToggle }) {
+    const ring = accentRing[accent];
+    const dot  = accentDot[accent];
+    const cls = [
+      "relative rounded-lg border border-zinc-800/80 bg-zinc-900/60 backdrop-blur",
+      "p-4 transition cursor-pointer hover:bg-zinc-900/90",
+      `ring-1 ${ring}`,
+      c.primary     ? "glow-emerald" : "",
+      c.integration ? "glow-rose pulse" : "",
+      c.sunset      ? "glow-amber strike opacity-90" : "",
+    ].join(" ");
+    return (
+      <div className={cls} onClick={onToggle}>
+        <div className="flex items-center gap-2">
+          <span className={`w-1.5 h-1.5 rounded-full ${dot}`}></span>
+          <span className="mono text-sm text-zinc-100">{c.name}</span>
+          <Tag kind={c.tag} />
+        </div>
+        <div className="mt-1.5 text-[12.5px] text-zinc-400 leading-snug">{c.desc}</div>
+        {c.deps?.length ? (
+          <div className="mt-2 text-[10.5px] text-zinc-500 mono">
+            <span className="text-zinc-600">depends → </span>
+            {c.deps.join(" · ")}
+          </div>
+        ) : null}
+        {expanded && c.surface?.length ? (
+          <ul className="mt-3 pt-3 border-t border-zinc-800 space-y-1">
+            {c.surface.map((s, i) => (
+              <li key={i} className="mono text-[11px] text-zinc-300">
+                <span className="text-zinc-600">›</span> {s}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+    );
+  }
+
+  function Layer({ layer, expanded, toggle }) {
+    return (
+      <section className="mb-8">
+        <div className="flex items-baseline gap-3 mb-3">
+          <span className={`mono text-[11px] uppercase tracking-[0.18em] ${accentText[layer.accent]}`}>{layer.label}</span>
+          <span className="text-[12px] text-zinc-500">{layer.sub}</span>
+        </div>
+        <div className={`grid gap-3 ${
+          layer.crates.length === 1 ? "grid-cols-1"
+          : layer.crates.length === 2 ? "grid-cols-1 md:grid-cols-2"
+          : layer.crates.length === 3 ? "grid-cols-1 md:grid-cols-3"
+          : "grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+        }`}>
+          {layer.crates.map(c => (
+            <Crate
+              key={c.name}
+              c={c}
+              accent={layer.accent}
+              expanded={expanded === c.name}
+              onToggle={() => toggle(c.name)}
+            />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  function Legend() {
+    return (
+      <div className="mt-2 mb-8 flex flex-wrap gap-x-6 gap-y-2 text-[11px] text-zinc-400">
+        <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-400 glow-emerald"></span> primary L1 path</span>
+        <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-rose-400 glow-rose"></span> leaven integration</span>
+        <span className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-400 glow-amber"></span> sunset (delete after trigger)</span>
+        <span className="text-zinc-600 mono">click any crate to expand</span>
+      </div>
+    );
+  }
+
+  function SunsetTrigger() {
+    return (
+      <section className="mt-12 rounded-xl border border-amber-500/20 bg-amber-500/[0.03] p-5">
+        <div className="flex items-baseline gap-3">
+          <span className="mono text-[11px] uppercase tracking-[0.18em] text-amber-300">Sunset trigger</span>
+          <span className="text-[12px] text-zinc-500">When both are true, delete dsrs-gepa</span>
+        </div>
+        <ol className="mt-3 space-y-1.5 text-[13px] text-zinc-300">
+          <li><span className="mono text-amber-300">1.</span> <span className="mono text-zinc-200">leaven-gepa</span> ships a runnable optimizer (not just strategy slots) — reflection-based mutation, candidate selection, gate, parts-picker, all wired.</li>
+          <li><span className="mono text-amber-300">2.</span> <span className="mono text-zinc-200">dsrs-leaven</span> ships real <span className="mono text-zinc-200">DsrsProgramArtifact / Surface / Evaluator / Evidence</span> impls and a parity test confirms equal-or-better results vs <span className="mono text-zinc-200">dsrs-gepa</span> on a sample DSRs program.</li>
+        </ol>
+        <p className="mt-3 text-[12px] text-zinc-500">No COPRO, no MIPROv2. Both deleted from the workspace as part of this split — they were already <span className="text-zinc-400">outdated</span>.</p>
+      </section>
+    );
+  }
+
+  function App() {
+    const [expanded, setExpanded] = useState("dsrs-core");
+    const toggle = (name) => setExpanded(e => e === name ? null : name);
+    return (
+      <div className="min-h-screen grid-bg">
+        <div className="max-w-[1280px] mx-auto px-6 py-12">
+
+          <header className="mb-10">
+            <div className="flex items-baseline gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight text-zinc-100">DSRs · crate topology</h1>
+              <span className="mono text-[11px] tracking-widest text-zinc-500 uppercase">12 crates · GEPA-only</span>
+            </div>
+            <p className="mt-2 text-[13px] text-zinc-400 max-w-3xl leading-relaxed">
+              Layer-aligned split of <span className="mono text-zinc-300">dspy-rs</span>.
+              No facade. <span className="mono text-zinc-300">dsrs-core</span> owns the seams that
+              <span className="mono text-rose-300"> leaven</span> drives through
+              <span className="mono text-rose-300"> dsrs-leaven</span>. <span className="mono text-amber-300">dsrs-gepa</span> survives until that path is real.
+            </p>
+          </header>
+
+          <Legend />
+
+          {LAYERS.map(L => (
+            <Layer key={L.id} layer={L} expanded={expanded} toggle={toggle} />
+          ))}
+
+          <SunsetTrigger />
+
+          <footer className="mt-16 pt-6 border-t border-zinc-900 text-[11px] text-zinc-600 mono">
+            principles  ·  facet shapes are source of truth  ·  parse don't validate  ·  structure IS declaration  ·  modules are prompting strategies  ·  typed path is primary  ·  one adapter, one prompt format
+          </footer>
+
+        </div>
+      </div>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
