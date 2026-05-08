@@ -1,0 +1,14 @@
+[package]
+name = "dsrs-leaven"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/krypticmouse/DSRs"
+description = "Leaven integration for DSRs programs."
+
+[dependencies]
+leaven-core = { path = "../../../leaven/crates/leaven-core" }
+leaven-surface = { path = "../../../leaven/crates/leaven-surface" }
+leaven-engine = { path = "../../../leaven/crates/leaven-engine" }
+leaven-evidence = { path = "../../../leaven/crates/leaven-evidence" }

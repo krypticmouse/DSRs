@@ -1,0 +1,10 @@
+[package]
+name = "dsrs-cache"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/krypticmouse/DSRs"
+description = "DSRs response cache support."
+
+[dependencies]

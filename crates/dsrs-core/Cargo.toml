@@ -1,0 +1,10 @@
+[package]
+name = "dsrs-core"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/krypticmouse/DSRs"
+description = "DSRs core: signature, module, schema, and abstract bridge traits."
+
+[dependencies]
