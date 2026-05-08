@@ -21,4 +21,5 @@ tracing = "0.1.44"
 
 [dev-dependencies]
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
-tokio = { version = "1.46.1", features = ["macros", "rt"] }
+dsrs-trace = { path = "../dsrs-trace" }
+tokio = { version = "1.46.1", features = ["macros", "rt", "rt-multi-thread"] }

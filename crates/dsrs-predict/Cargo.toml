@@ -18,3 +18,10 @@ facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03
 rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
 serde_json = { version = "1.0.140", features = ["preserve_order"] }
 tracing = "0.1.44"
+
+[dev-dependencies]
+bon = "3.7.0"
+rstest = "0.25.0"
+serde = { version = "1.0.219", features = ["derive"] }
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tokio = { version = "1.46.1", features = ["macros", "rt", "sync", "time"] }

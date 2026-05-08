@@ -40,6 +40,7 @@ pub use bamltype::baml_types::{
 };
 pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
 pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
+pub use dsrs_macros::*;
 pub use facet::Facet;
 
 #[doc(hidden)]
@@ -50,6 +51,88 @@ pub mod __macro_support {
     pub use schemars;
     pub use serde;
     pub use serde_json;
+}
+
+#[macro_export]
+macro_rules! field {
+    { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
+        use $crate::__macro_support::serde_json::json;
+
+        let mut result = $crate::__macro_support::serde_json::Map::new();
+
+        $(
+            let type_str = stringify!($field_ty);
+            let schema = {
+                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
+                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
+                if let Some(obj) = schema_json.as_object() {
+                    if obj.contains_key("properties") {
+                        schema_json["properties"].clone()
+                    } else {
+                        "".to_string().into()
+                    }
+                } else {
+                    "".to_string().into()
+                }
+            };
+            result.insert(
+                stringify!($field_name).to_string(),
+                json!({
+                    "type": type_str,
+                    "desc": $desc,
+                    "schema": schema,
+                    "__dsrs_field_type": stringify!($field_type)
+                })
+            );
+        )*
+
+        $crate::__macro_support::serde_json::Value::Object(result)
+    }};
+
+    { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
+        use $crate::__macro_support::serde_json::json;
+
+        let mut result = $crate::__macro_support::serde_json::Map::new();
+
+        $(
+            let type_str = stringify!($field_ty);
+            let schema = {
+                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
+                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
+                if let Some(obj) = schema_json.as_object() {
+                    if obj.contains_key("properties") {
+                        schema_json["properties"].clone()
+                    } else {
+                        "".to_string().into()
+                    }
+                } else {
+                    "".to_string().into()
+                }
+            };
+            result.insert(
+                stringify!($field_name).to_string(),
+                json!({
+                    "type": type_str,
+                    "desc": "",
+                    "schema": schema,
+                    "__dsrs_field_type": stringify!($field_type)
+                })
+            );
+        )*
+
+        $crate::__macro_support::serde_json::Value::Object(result)
+    }};
+}
+
+#[macro_export]
+macro_rules! hashmap {
+    () => {
+        ::std::collections::HashMap::new()
+    };
+
+    ($($key:expr => $value:expr),+ $(,)?) => {
+        ::std::collections::HashMap::from([ $(($key, $value)),* ])
+    };
 }
 
 #[derive(Clone, Debug, serde::Serialize)]

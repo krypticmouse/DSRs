@@ -7,5 +7,7 @@ pub mod settings;
 
 pub use adapter::*;
 pub use chat::*;
+pub use dsrs_cache::*;
+pub use dsrs_core::*;
 pub use lm::*;
 pub use settings::*;

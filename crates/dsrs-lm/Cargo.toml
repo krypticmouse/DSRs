@@ -24,3 +24,12 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.140", features = ["preserve_order"] }
 tokio = { version = "1.46.1", features = ["sync"] }
 tracing = "0.1.44"
+
+[dev-dependencies]
+dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
+dsrs-predict = { path = "../dsrs-predict" }
+dsrs-trace = { path = "../dsrs-trace" }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+rstest = "0.25.0"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
+tokio = { version = "1.46.1", features = ["macros", "rt", "sync"] }

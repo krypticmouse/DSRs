@@ -5,6 +5,7 @@ pub mod predict;
 pub mod react;
 
 pub use chain_of_thought::{ChainOfThought, ChainOfThoughtOutput, Reasoning, WithReasoning};
-pub use dsrs_core::Example;
+pub use dsrs_core::*;
+pub use dsrs_lm::*;
 pub use predict::*;
 pub use react::ReAct;

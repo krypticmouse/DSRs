@@ -1256,51 +1256,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
-name = "dspy-rs"
-version = "0.7.3"
-dependencies = [
- "anyhow",
- "arrow",
- "async-trait",
- "bamltype",
- "bon",
- "csv",
- "dsrs-cache",
- "dsrs-core",
- "dsrs-data",
- "dsrs-evaluate",
- "dsrs-gepa",
- "dsrs-lm",
- "dsrs-predict",
- "dsrs-trace",
- "dsrs_macros",
- "enum_dispatch",
- "facet",
- "foyer",
- "futures",
- "hf-hub",
- "indexmap",
- "kdam",
- "minijinja",
- "parquet",
- "rand 0.8.5",
- "rayon",
- "regex",
- "reqwest 0.13.2",
- "rig-core",
- "rstest 0.25.0",
- "schemars",
- "serde",
- "serde_json",
- "temp-env",
- "tempfile",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "dsrs-cache"
 version = "0.0.0"
 dependencies = [
@@ -1323,15 +1278,18 @@ dependencies = [
  "async-trait",
  "bamltype",
  "bon",
+ "dsrs_macros",
  "facet",
  "futures",
  "indexmap",
  "kdam",
  "rig-core",
+ "rstest 0.25.0",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
 ]
 
@@ -1342,17 +1300,24 @@ dependencies = [
  "anyhow",
  "arrow",
  "bamltype",
+ "bon",
  "csv",
  "dsrs-core",
+ "dsrs-evaluate",
  "dsrs-predict",
+ "dsrs_macros",
+ "facet",
  "hf-hub",
  "parquet",
  "rayon",
  "regex",
  "reqwest 0.13.2",
+ "rstest 0.25.0",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
 ]
 
@@ -1361,9 +1326,16 @@ name = "dsrs-evaluate"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bamltype",
  "dsrs-core",
+ "dsrs-data",
+ "dsrs-lm",
+ "dsrs-predict",
+ "dsrs-trace",
+ "dsrs_macros",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1376,6 +1348,7 @@ dependencies = [
  "dsrs-evaluate",
  "dsrs-lm",
  "dsrs-predict",
+ "dsrs-trace",
  "dsrs_macros",
  "facet",
  "rand 0.8.5",
@@ -1409,6 +1382,9 @@ dependencies = [
  "bon",
  "dsrs-cache",
  "dsrs-core",
+ "dsrs-predict",
+ "dsrs-trace",
+ "dsrs_macros",
  "enum_dispatch",
  "facet",
  "indexmap",
@@ -1416,8 +1392,10 @@ dependencies = [
  "regex",
  "reqwest 0.13.2",
  "rig-core",
+ "rstest 0.25.0",
  "serde",
  "serde_json",
+ "temp-env",
  "tokio",
  "tracing",
 ]
@@ -1428,13 +1406,18 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "bamltype",
+ "bon",
  "dsrs-core",
  "dsrs-lm",
  "dsrs-trace",
  "dsrs_macros",
  "facet",
  "rig-core",
+ "rstest 0.25.0",
+ "serde",
  "serde_json",
+ "temp-env",
+ "tokio",
  "tracing",
 ]
 
@@ -1443,10 +1426,15 @@ name = "dsrs-trace"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "bon",
  "dsrs-core",
+ "dsrs-lm",
+ "dsrs-predict",
  "serde_json",
+ "thiserror 2.0.17",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1455,12 +1443,16 @@ version = "0.7.2"
 dependencies = [
  "bamltype",
  "dsrs-core",
+ "facet",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "rstest 0.25.0",
+ "schemars",
  "serde_json",
  "syn 2.0.106",
+ "tempfile",
  "trybuild",
 ]
 
@@ -4766,7 +4758,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",
