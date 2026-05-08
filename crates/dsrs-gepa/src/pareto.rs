@@ -2,7 +2,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::optimizer::gepa::GEPACandidate;
+use crate::gepa::GEPACandidate;
 
 /// Per-example dominance frontier for [`GEPA`](crate::GEPA)'s evolutionary search.
 ///

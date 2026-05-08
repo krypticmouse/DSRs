@@ -334,7 +334,7 @@ fn resolve_predict_leaf(shape: &'static Shape) -> PredictLeafResolution {
 }
 
 fn is_predict_shape_identity(shape: &'static Shape) -> bool {
-    shape.type_identifier == "Predict" && shape.module_path == Some("dspy_rs::predictors::predict")
+    shape.type_identifier == "Predict" && shape.module_path == Some("dsrs_predict::predict")
 }
 
 fn push_field(path: &str, field: &str) -> String {

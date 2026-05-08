@@ -87,7 +87,7 @@ fn optimizer_compile_rejects_wrong_signature_input_type() {
         "wrong_signature_case",
         r#"
 use anyhow::Result;
-use dspy_rs::{COPRO, ChainOfThought, Example, MetricOutcome, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
+use dspy_rs::{ChainOfThought, Example, GEPA, MetricOutcome, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct RightSig {
@@ -120,7 +120,7 @@ impl TypedMetric<RightSig, ChainOfThought<RightSig>> for Metric {
 fn main() {
     let mut module = ChainOfThought::<RightSig>::new();
     let trainset: Vec<Example<WrongSig>> = Vec::new();
-    let optimizer = COPRO::builder().breadth(1).depth(1).build();
+    let optimizer = GEPA::builder().num_iterations(1).minibatch_size(1).build();
     let _future = optimizer.compile::<WrongSig, _, _>(&mut module, trainset, &Metric);
 }
 "#,

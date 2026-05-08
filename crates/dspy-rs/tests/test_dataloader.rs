@@ -4,9 +4,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Example, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
-    average_score, evaluate_trainset,
+    CallMetadata, DataLoader, Example, MetricOutcome, Module, Predict, PredictError, Predicted,
+    Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score, evaluate_trainset,
 };
 use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
@@ -505,16 +504,11 @@ async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()>
     )?;
 
     let metric = ExactMatch;
-    let mut module = EchoModule::builder().build();
+    let module = EchoModule::builder().build();
 
     let outcomes = evaluate_trainset(&module, &trainset, &metric).await?;
     assert_eq!(outcomes.len(), 2);
     assert_eq!(average_score(&outcomes), 1.0);
-
-    let optimizer = COPRO::builder().breadth(2).depth(1).build();
-    optimizer
-        .compile::<LoaderSig, _, _>(&mut module, trainset, &metric)
-        .await?;
 
     Ok(())
 }

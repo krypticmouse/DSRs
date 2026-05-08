@@ -1268,6 +1268,7 @@ dependencies = [
  "dsrs-cache",
  "dsrs-core",
  "dsrs-evaluate",
+ "dsrs-gepa",
  "dsrs-lm",
  "dsrs-predict",
  "dsrs-trace",
@@ -1350,6 +1351,20 @@ dependencies = [
 [[package]]
 name = "dsrs-gepa"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bon",
+ "dsrs-core",
+ "dsrs-evaluate",
+ "dsrs-lm",
+ "dsrs-predict",
+ "dsrs_macros",
+ "facet",
+ "rand 0.8.5",
+ "serde",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-leaven"

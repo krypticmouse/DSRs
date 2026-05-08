@@ -2,14 +2,11 @@ use anyhow::{Context, Result, anyhow};
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 
-use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
-use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
-};
-use crate::predictors::Example;
-use crate::{BamlType, BamlValue, Facet, Module, Signature};
+use dsrs_core::{BamlType, BamlValue, Example, Facet, Module, Signature};
+use dsrs_evaluate::{MetricOutcome, TypedMetric, average_score};
 
-use super::pareto::ParetoFrontier;
+use crate::{Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor};
+use crate::pareto::ParetoFrontier;
 
 /// A single instruction candidate tracked through GEPA's evolutionary search.
 ///
@@ -75,7 +72,7 @@ pub use super::pareto::ParetoStatistics;
 /// Genetic-Pareto instruction optimizer with feedback-driven evolution.
 ///
 /// GEPA uses an evolutionary search guided by per-example feedback from your metric.
-/// Unlike [`COPRO`](crate::COPRO) which only uses numerical scores, GEPA requires your
+/// GEPA requires your
 /// [`TypedMetric`] to return [`MetricOutcome::with_feedback`] — textual feedback
 /// explaining *why* each example scored the way it did. This feedback gets appended
 /// to the instruction as a mutation prompt for the next generation, so the quality
@@ -155,7 +152,7 @@ pub struct GEPA {
     /// Hard cap on total LM calls (rollouts + generation).
     pub max_lm_calls: Option<usize>,
     /// Optional separate LM for candidate generation.
-    pub prompt_model: Option<crate::LM>,
+    pub prompt_model: Option<dsrs_lm::LM>,
 }
 
 impl GEPA {
@@ -505,8 +502,10 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
-    use crate::evaluate::{MetricOutcome, TypedMetric};
-    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+    use dsrs_core::{CallMetadata, PredictError, Predicted};
+    use dsrs_evaluate::{MetricOutcome, TypedMetric};
+    use dsrs_macros::Signature;
+    use dsrs_predict::Predict;
 
     #[derive(Signature, Clone, Debug)]
     struct GepaStateSig {
@@ -571,11 +570,15 @@ mod tests {
                 .instruction("seed-instruction")
                 .build(),
         };
+        let predictor_name = predictor_names(&mut module)
+            .expect("predictor discovery should succeed")
+            .pop()
+            .expect("test module should expose one predictor");
 
         let err = optimizer
             .evaluate_candidate::<GepaStateSig, _, _>(
                 &mut module,
-                "predictor",
+                &predictor_name,
                 "candidate instruction",
                 &eval_set(),
                 &AlwaysFailMetric,
@@ -584,7 +587,7 @@ mod tests {
             .expect_err("candidate evaluation should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));
 
-        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
+        let instruction = with_named_predictor(&mut module, &predictor_name, |predictor| {
             Ok(predictor.instruction())
         })
         .expect("predictor lookup should succeed");
