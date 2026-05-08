@@ -1,4 +1,4 @@
-use crate::{BamlValue, RawExample};
+use dsrs_core::{BamlValue, RawExample};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 /// // and the Pareto frontier can operate on the full vector instead of a scalar collapse.
 ///
 /// ```
-/// use dspy_rs::FeedbackMetric;
+/// use dsrs_evaluate::FeedbackMetric;
 ///
 /// let fb = FeedbackMetric::new(0.7, "Correct answer but verbose explanation");
 /// assert_eq!(fb.score, 0.7);

@@ -8,3 +8,7 @@ repository = "https://github.com/krypticmouse/DSRs"
 description = "DSRs typed evaluation and metric support."
 
 [dependencies]
+anyhow = "1.0.99"
+dsrs-core = { path = "../dsrs-core" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }

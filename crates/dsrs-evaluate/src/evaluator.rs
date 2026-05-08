@@ -1,10 +1,8 @@
 use anyhow::{Result, anyhow};
 
-use crate::core::Module;
-use crate::predictors::Example;
-use crate::{Predicted, Signature};
+use dsrs_core::{Example, Module, Predicted, Signature};
 
-use super::FeedbackMetric;
+use crate::FeedbackMetric;
 
 /// Result of evaluating a single example: a score and optional textual feedback.
 ///
