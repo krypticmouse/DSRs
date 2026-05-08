@@ -32,6 +32,7 @@ dsrs-lm = { path = "../dsrs-lm" }
 dsrs-predict = { path = "../dsrs-predict" }
 dsrs-evaluate = { path = "../dsrs-evaluate" }
 dsrs-gepa = { path = "../dsrs-gepa" }
+dsrs-data = { path = "../dsrs-data", features = ["all"] }
 dsrs-trace = { path = "../dsrs-trace" }
 # Keep this direct pin in sync with workspace [patch.crates-io] for self-sufficient external path consumers.
 facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std"] }

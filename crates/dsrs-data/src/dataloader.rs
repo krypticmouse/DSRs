@@ -15,9 +15,8 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
-use crate::data::utils::is_url;
-use crate::predictors::Example as TypedExample;
-use crate::{BamlType, BamlValue, Signature};
+use crate::utils::is_url;
+use dsrs_core::{BamlType, BamlValue, Example as TypedExample, Signature};
 
 /// Controls how typed loaders handle source fields that are not part of the target signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

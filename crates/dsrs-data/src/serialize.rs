@@ -2,7 +2,7 @@ use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 
-use crate::data::example::Example;
+use crate::example::Example;
 
 #[allow(clippy::lines_filter_map_ok)]
 pub fn load_jsonl(path: &str, input_keys: Vec<String>, output_key: Vec<String>) -> Vec<Example> {

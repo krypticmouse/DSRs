@@ -1267,6 +1267,7 @@ dependencies = [
  "csv",
  "dsrs-cache",
  "dsrs-core",
+ "dsrs-data",
  "dsrs-evaluate",
  "dsrs-gepa",
  "dsrs-lm",
@@ -1337,6 +1338,23 @@ dependencies = [
 [[package]]
 name = "dsrs-data"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "bamltype",
+ "csv",
+ "dsrs-core",
+ "dsrs-predict",
+ "hf-hub",
+ "parquet",
+ "rayon",
+ "regex",
+ "reqwest 0.13.2",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-evaluate"
