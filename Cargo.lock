@@ -1265,6 +1265,7 @@ dependencies = [
  "bamltype",
  "bon",
  "csv",
+ "dsrs-cache",
  "dsrs-core",
  "dsrs-trace",
  "dsrs_macros",
@@ -1297,6 +1298,17 @@ dependencies = [
 [[package]]
 name = "dsrs-cache"
 version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dsrs-core",
+ "foyer",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "dsrs-core"

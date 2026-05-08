@@ -1,1 +1,5 @@
-//! Empty placeholder; code is migrated into this crate by a later task.
+//! LM response caching.
+
+pub mod cache;
+
+pub use cache::{Cache, CacheEntry, ResponseCache};

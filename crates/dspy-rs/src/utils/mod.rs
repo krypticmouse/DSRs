@@ -7,7 +7,9 @@
 //! Caching is per-LM-instance and keyed on the full prompt content. Cache entries
 //! are not shared across LM instances.
 
-pub mod cache;
+pub mod cache {
+    pub use dsrs_cache::*;
+}
 pub mod serde_utils;
 pub mod telemetry;
 

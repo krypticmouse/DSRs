@@ -7,7 +7,7 @@ use tempfile;
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use crate::{Prediction, RawExample};
+use dsrs_core::{Prediction, RawExample};
 
 type CacheKey = Vec<(String, Value)>;
 

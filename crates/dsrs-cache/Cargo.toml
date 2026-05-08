@@ -8,3 +8,12 @@ repository = "https://github.com/krypticmouse/DSRs"
 description = "DSRs response cache support."
 
 [dependencies]
+anyhow = "1.0.99"
+async-trait = "0.1.83"
+dsrs-core = { path = "../dsrs-core" }
+foyer = { version = "0.20.0", features = ["serde"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+tempfile = "3.23.0"
+tokio = { version = "1.46.1", features = ["sync"] }
+tracing = "0.1.44"
