@@ -119,3 +119,71 @@ impl Graph {
         self.nodes.get(id)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsrs_core::{LmUsage, hashmap};
+
+    #[test]
+    fn graph_assigns_ids_and_ignores_missing_outputs() {
+        let mut graph = Graph::new();
+        let input = RawExample::new(
+            hashmap! {
+                "question".to_string() => "2+2?".into(),
+            },
+            vec!["question".to_string()],
+            vec![],
+        );
+        let root = graph.add_node(NodeType::Root, vec![], Some(input));
+        let predict = graph.add_node(
+            NodeType::Predict {
+                signature_name: "QA".to_string(),
+            },
+            vec![root],
+            None,
+        );
+        let output = Prediction::new(
+            hashmap! {
+                "answer".to_string() => "4".into(),
+            },
+            LmUsage::default(),
+        );
+
+        graph.set_output(predict, output.clone());
+        graph.set_output(99, output);
+
+        assert_eq!(root, 0);
+        assert_eq!(predict, 1);
+        assert_eq!(graph.get_node(root).unwrap().inputs, Vec::<usize>::new());
+        assert_eq!(graph.get_node(predict).unwrap().inputs, vec![root]);
+        assert_eq!(
+            graph.get_node(predict).unwrap().output.as_ref().unwrap()["answer"],
+            "4"
+        );
+        assert!(graph.get_node(99).is_none());
+    }
+
+    #[test]
+    fn node_type_debug_includes_variant_payloads() {
+        assert_eq!(format!("{:?}", NodeType::Root), "Root");
+        assert!(
+            format!(
+                "{:?}",
+                NodeType::Operator {
+                    name: "step".into()
+                }
+            )
+            .contains("step")
+        );
+        assert!(
+            format!(
+                "{:?}",
+                NodeType::Map {
+                    mapping: vec![("x".into(), (0, "y".into()))],
+                }
+            )
+            .contains("mapping")
+        );
+    }
+}

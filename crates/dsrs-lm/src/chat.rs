@@ -570,10 +570,7 @@ impl ChatAdapter {
     ///
     /// Convenience method that calls [`format_user_message_typed`](ChatAdapter::format_user_message_typed)
     /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
-    pub fn format_demo_typed<S: Signature>(
-        &self,
-        demo: &Example<S>,
-    ) -> (String, String)
+    pub fn format_demo_typed<S: Signature>(&self, demo: &Example<S>) -> (String, String)
     where
         S::Input: BamlType,
         S::Output: BamlType,
@@ -896,10 +893,7 @@ fn parse_sections(content: &str) -> IndexMap<String, String> {
     parsed
 }
 
-fn value_for_path_relaxed<'a>(
-    value: &'a BamlValue,
-    path: &FieldPath,
-) -> Option<&'a BamlValue> {
+fn value_for_path_relaxed<'a>(value: &'a BamlValue, path: &FieldPath) -> Option<&'a BamlValue> {
     let mut current = value;
     let parts: Vec<_> = path.iter().collect();
     let mut idx = 0usize;

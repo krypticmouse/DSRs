@@ -52,11 +52,7 @@ An optimizer takes your module, a training set (input/output examples), and a me
 
 The analogy is a compiler: you write the program (your module), define what "correct" means (your metric), provide training data, and the optimizer produces a better version. This is why the entry point is called `compile`.
 
-Three optimizers exist, each with different tradeoffs:
-
-- **COPRO** iterates: generate candidate instructions, evaluate, refine, repeat. Fast, simple, good enough for straightforward tasks.
-- **MIPROv2** uses an LM to understand your program and generate candidates informed by prompting best practices. Slower, higher quality.
-- **GEPA** uses rich textual feedback (not just scores) to guide evolutionary search over a Pareto frontier of candidates. Best for complex tasks with subtle failure modes.
+GEPA uses rich textual feedback, not just scores, to guide evolutionary search over a Pareto frontier of candidates. Leaven integration scaffolding lives in `dsrs-leaven` as the next optimizer runtime. COPRO and MIPROv2 were removed with the crate split.
 
 The optimizer does not see your Rust code. It sees the predictor leaves inside your module -- their schemas, demos, and instructions -- and mutates only those. After optimization, you call your module exactly as before. The optimized state is invisible to your calling code.
 

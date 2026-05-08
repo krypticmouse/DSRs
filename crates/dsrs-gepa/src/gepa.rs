@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use dsrs_core::{BamlType, BamlValue, Example, Facet, Module, Signature};
 use dsrs_evaluate::{MetricOutcome, TypedMetric, average_score};
 
-use crate::{Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor};
 use crate::pareto::ParetoFrontier;
+use crate::{Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor};
 
 /// A single instruction candidate tracked through GEPA's evolutionary search.
 ///

@@ -46,27 +46,6 @@ fn assert_not_masked_by_e0401(stderr: &str) {
 }
 
 #[test]
-fn dyn_predictor_is_not_publicly_importable() {
-    let stderr = run_compile_fail_case(
-        "private_dyn_predictor_case",
-        r#"
-use dsrs_core::DynPredictor;
-
-fn main() {
-    let _ = std::any::type_name::<Option<&'static dyn DynPredictor>>();
-}
-"#,
-    );
-
-    assert_not_masked_by_e0401(&stderr);
-    assert!(
-        stderr.contains("DynPredictor")
-            && (stderr.contains("private") || stderr.contains("no `DynPredictor` in the root")),
-        "expected DynPredictor import failure, got:\n{stderr}"
-    );
-}
-
-#[test]
 fn named_parameters_is_not_publicly_importable() {
     let stderr = run_compile_fail_case(
         "private_named_parameters_case",

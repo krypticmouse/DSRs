@@ -1361,9 +1361,11 @@ dependencies = [
 name = "dsrs-leaven"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "dsrs-core",
  "dsrs-evaluate",
  "dsrs-predict",
+ "dsrs_macros",
  "leaven-core",
  "leaven-engine",
  "leaven-evidence",

@@ -11,7 +11,7 @@ You write a struct with `#[derive(Signature)]`, mark fields as `#[input]` or `#[
 ## Basic syntax
 
 ```rust
-use dspy_rs::Signature;
+use dsrs_macros::Signature;
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -96,7 +96,8 @@ struct SpamAnalysis {
 When you have a non-standard type in a field, add `#[BamlType]` on it:
 
 ```rust
-use dspy_rs::{Signature, BamlType};
+use bamltype::BamlType;
+use dsrs_macros::Signature;
 
 #[BamlType]
 #[derive(Clone, Debug)]

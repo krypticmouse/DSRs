@@ -1,6 +1,6 @@
 use crate::dag::{Graph, NodeType};
-use dsrs_core::{Prediction, RawExample};
 use anyhow::Result;
+use dsrs_core::{Prediction, RawExample};
 use std::collections::HashMap;
 
 /// Replays a traced execution graph with new input data.

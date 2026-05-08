@@ -132,3 +132,62 @@ impl Cache for ResponseCache {
         Ok(self.history_window[..actual_n].to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsrs_core::{LmUsage, hashmap};
+
+    fn raw_key(question: &str) -> RawExample {
+        RawExample::new(
+            hashmap! {
+                "question".to_string() => question.into(),
+            },
+            vec!["question".to_string()],
+            vec![],
+        )
+    }
+
+    fn prediction(answer: &str) -> Prediction {
+        Prediction::new(
+            hashmap! {
+                "answer".to_string() => answer.into(),
+            },
+            LmUsage::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn insert_get_and_history_round_trip_cached_prediction() {
+        let mut cache = ResponseCache::new().await;
+        let key = raw_key("capital?");
+        assert!(cache.get(key.clone()).await.unwrap().is_none());
+
+        let (tx, rx) = mpsc::channel(1);
+        let entry = CacheEntry {
+            prompt: "prompt".to_string(),
+            prediction: prediction("Paris"),
+        };
+        tx.send(entry.clone()).await.unwrap();
+        drop(tx);
+
+        cache.insert(key.clone(), rx).await.unwrap();
+
+        let cached = cache.get(key).await.unwrap().unwrap();
+        assert_eq!(cached.get("answer", None), "Paris");
+        let history = cache.get_history(10).await.unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].prompt, entry.prompt);
+    }
+
+    #[tokio::test]
+    async fn insert_with_closed_channel_is_noop() {
+        let mut cache = ResponseCache::new().await;
+        let (_tx, rx) = mpsc::channel(1);
+        drop(_tx);
+
+        cache.insert(raw_key("missing"), rx).await.unwrap();
+
+        assert!(cache.get_history(1).await.unwrap().is_empty());
+    }
+}

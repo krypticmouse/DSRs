@@ -43,8 +43,6 @@
           {
             "group": "Optimizers",
             "pages": [
-              "docs/optimizers/copro",
-              "docs/optimizers/miprov2",
               "docs/optimizers/gepa",
               "docs/optimizers/gepa-llm-judge"
             ]

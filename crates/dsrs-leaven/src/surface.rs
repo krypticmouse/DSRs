@@ -45,8 +45,10 @@ where
     fn parts<'a>(
         &self,
         _artifact: &'a DsrsProgramArtifact<S, M>,
-    ) -> Result<Vec<leaven_surface::Part<Self::PartId, Self::Address, Self::View<'a>>>, leaven_surface::SurfaceError>
-    {
+    ) -> Result<
+        Vec<leaven_surface::Part<Self::PartId, Self::Address, Self::View<'a>>>,
+        leaven_surface::SurfaceError,
+    > {
         unimplemented!("dsrs-leaven: surface parts")
     }
 

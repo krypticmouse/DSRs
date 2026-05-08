@@ -9,10 +9,12 @@ use std::sync::Arc;
 use tracing::{debug, trace};
 
 use dsrs_core as dsrs;
-use dsrs_core::{DynPredictor, Example, Module, PredictAccessorFns, PredictState, RawExample, Signature};
 use dsrs_core::{
     BamlType, BamlValue, CallMetadata, LmError, LmUsage, PredictError, Predicted, Prediction,
     SignatureSchema,
+};
+use dsrs_core::{
+    DynPredictor, Example, Module, PredictAccessorFns, PredictState, RawExample, Signature,
 };
 use dsrs_lm::{Chat, ChatAdapter, GLOBAL_SETTINGS, LM, LMResponse};
 

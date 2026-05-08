@@ -1,6 +1,6 @@
+use crate::{Predict, PredictBuilder};
 use dsrs_core::Augmented;
 use dsrs_core::{BamlType, Example, Module, PredictError, Predicted, Signature};
-use crate::{Predict, PredictBuilder};
 use dsrs_lm::LM;
 
 /// Augmentation that prepends a `reasoning: String` field to a signature's output.

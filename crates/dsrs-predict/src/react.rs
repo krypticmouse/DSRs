@@ -7,9 +7,9 @@ use rig::message::{ToolCall, ToolFunction};
 use rig::tool::{ToolDyn, ToolError};
 use rig::wasm_compat::WasmBoxedFuture;
 
+use crate::{Predict, PredictBuilder};
 use dsrs_core::{BamlType, Module, PredictError, Predicted, Signature};
 use dsrs_lm::LM;
-use crate::{Predict, PredictBuilder};
 
 /// ReAct action-step schema.
 #[derive(dsrs_macros::Signature, Clone, Debug)]

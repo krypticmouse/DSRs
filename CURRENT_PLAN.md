@@ -1,3 +1,5 @@
+> **Superseded** by [`docs/plans/2026-05-08-dsrs-crate-split-design.md`](docs/plans/2026-05-08-dsrs-crate-split-design.md) and its implementation plan. Retained for historical context.
+
 > Status Update (2026-02-08): **Superseded historical plan**.
 >
 > Phase 1 (Bridge Root Excision) is now the active baseline: legacy bridge crates are removed from the workspace.

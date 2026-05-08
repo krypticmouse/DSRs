@@ -85,3 +85,48 @@ pub fn record_output(node_id: usize, output: Prediction) {
         trace!(node_id, "trace output recorded");
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dsrs_core::{LmUsage, hashmap};
+
+    #[tokio::test]
+    async fn trace_scope_records_nodes_and_outputs() {
+        assert!(!is_tracing());
+
+        let (result, graph) = trace(|| async {
+            assert!(is_tracing());
+            let id = record_node(
+                NodeType::Operator {
+                    name: "normalize".to_string(),
+                },
+                vec![],
+                None,
+            )
+            .unwrap();
+            record_output(
+                id,
+                Prediction::new(
+                    hashmap! {
+                        "normalized".to_string() => true.into(),
+                    },
+                    LmUsage::default(),
+                ),
+            );
+            7
+        })
+        .await;
+
+        assert_eq!(result, 7);
+        assert!(!is_tracing());
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].output.as_ref().unwrap()["normalized"], true);
+    }
+
+    #[test]
+    fn record_outside_trace_is_noop() {
+        assert!(record_node(NodeType::Root, vec![], None).is_none());
+        record_output(0, Prediction::new(hashmap! {}, LmUsage::default()));
+    }
+}

@@ -1,6 +1,6 @@
+use dsrs_core::hashmap;
 use dsrs_data::example::Example;
 use dsrs_data::serialize::{load_jsonl, save_examples_as_jsonl};
-use dsrs_core::hashmap;
 use rstest::*;
 
 #[rstest]

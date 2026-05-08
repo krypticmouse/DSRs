@@ -8,7 +8,12 @@
 //!
 //! The untyped row type (`RawExample`) remains for internal runtime/tracing/cache bridges.
 
-#[cfg(any(feature = "csv", feature = "json", feature = "parquet", feature = "hf-hub"))]
+#[cfg(any(
+    feature = "csv",
+    feature = "json",
+    feature = "parquet",
+    feature = "hf-hub"
+))]
 pub mod dataloader;
 pub mod example {
     pub use dsrs_core::RawExample as Example;
@@ -19,7 +24,12 @@ pub mod prediction {
 pub mod serialize;
 pub mod utils;
 
-#[cfg(any(feature = "csv", feature = "json", feature = "parquet", feature = "hf-hub"))]
+#[cfg(any(
+    feature = "csv",
+    feature = "json",
+    feature = "parquet",
+    feature = "hf-hub"
+))]
 pub use dataloader::*;
 pub use example::*;
 pub use prediction::*;

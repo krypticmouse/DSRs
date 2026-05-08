@@ -1,5 +1,7 @@
 use anyhow::{Result, bail};
-use dsrs_predict::{ChatAdapter, LM, Module, Predict, PredictError, Predicted, Signature, configure};
+use dsrs_predict::{
+    ChatAdapter, LM, Module, Predict, PredictError, Predicted, Signature, configure,
+};
 
 #[derive(Signature, Clone, Debug)]
 struct SmokeSig {
