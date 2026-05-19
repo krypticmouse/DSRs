@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use anyhow::{Result, anyhow};
 
 use dsrs_core::{Example, Module, Predicted, Signature};
@@ -67,17 +69,16 @@ impl MetricOutcome {
 ///     }
 /// }
 /// ```
-#[allow(async_fn_in_trait)]
 pub trait TypedMetric<S, M>: Send + Sync
 where
     S: Signature,
     M: Module<Input = S::Input>,
 {
-    async fn evaluate(
+    fn evaluate(
         &self,
         example: &Example<S>,
         prediction: &Predicted<M::Output>,
-    ) -> Result<MetricOutcome>;
+    ) -> impl Future<Output = Result<MetricOutcome>> + Send;
 }
 
 /// Runs a module on every example in a trainset and scores each with a metric.

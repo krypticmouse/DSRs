@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use futures::stream::{self, StreamExt};
 use kdam::{BarExt, tqdm};
 use tracing::debug;
@@ -53,7 +55,6 @@ type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
 /// ```
 ///
 /// Does not handle batching (use [`forward_all`]), retries, or rate limiting.
-#[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
     /// What the module receives. Usually a `Signature`'s generated input struct.
     type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
@@ -69,14 +70,20 @@ pub trait Module: Send + Sync {
     /// The implementation hook. Module authors put their execution logic here.
     ///
     /// Callers should use [`call`](Module::call) instead.
-    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
+    fn forward(
+        &self,
+        input: Self::Input,
+    ) -> impl Future<Output = Result<Predicted<Self::Output>, PredictError>> + Send;
 
     /// Runs the module. This is what you call.
     ///
     /// Delegates to [`forward`](Module::forward). The split exists for future
     /// hooks/tracing/middleware.
-    async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
-        self.forward(input).await
+    fn call(
+        &self,
+        input: Self::Input,
+    ) -> impl Future<Output = Result<Predicted<Self::Output>, PredictError>> + Send {
+        self.forward(input)
     }
 }
 

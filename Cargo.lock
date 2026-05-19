@@ -1366,13 +1366,17 @@ dependencies = [
  "dsrs-evaluate",
  "dsrs-predict",
  "dsrs_macros",
+ "facet",
  "leaven-core",
  "leaven-engine",
  "leaven-evidence",
+ "leaven-gepa",
+ "leaven-kernel",
  "leaven-surface",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
+ "tokio",
 ]
 
 [[package]]
@@ -1661,6 +1665,18 @@ dependencies = [
  "hashbrown 0.16.1",
  "smallvec 2.0.0-alpha.12",
 ]
+
+[[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
 
 [[package]]
 name = "fastant"
@@ -2070,6 +2086,15 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ea0b22561a9c04a7cb1a302c013e0259cd3b4bb619f145b32f72b8b4bcbed230"
+dependencies = [
+ "hashbrown 0.16.1",
 ]
 
 [[package]]
@@ -2608,6 +2633,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
+name = "leaven-agent"
+version = "0.0.0"
+dependencies = [
+ "leaven-kernel",
+ "leaven-workspace",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "leaven-artifacts"
+version = "0.0.0"
+dependencies = [
+ "leaven-core",
+ "leaven-kernel",
+ "leaven-surface",
+]
+
+[[package]]
 name = "leaven-core"
 version = "0.0.0"
 dependencies = [
@@ -2621,6 +2666,7 @@ dependencies = [
 name = "leaven-engine"
 version = "0.0.0"
 dependencies = [
+ "bytes",
  "futures",
  "indexmap",
  "leaven-core",
@@ -2628,6 +2674,10 @@ dependencies = [
  "leaven-store",
  "leaven-surface",
  "leaven-workspace",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
  "thiserror 2.0.17",
 ]
 
@@ -2638,6 +2688,27 @@ dependencies = [
  "leaven-core",
  "leaven-kernel",
  "ordered-float 4.6.0",
+ "serde",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "leaven-gepa"
+version = "0.0.0"
+dependencies = [
+ "leaven-core",
+ "leaven-engine",
+ "leaven-evidence",
+ "leaven-kernel",
+ "leaven-lm",
+ "leaven-population",
+ "leaven-preference",
+ "leaven-render",
+ "leaven-stage",
+ "leaven-surface",
+ "leaven-workspace",
+ "serde",
+ "serde_json",
  "thiserror 2.0.17",
 ]
 
@@ -2648,6 +2719,69 @@ dependencies = [
  "blake3",
  "chrono",
  "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "uuid",
+]
+
+[[package]]
+name = "leaven-lm"
+version = "0.0.0"
+dependencies = [
+ "leaven-kernel",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+]
+
+[[package]]
+name = "leaven-population"
+version = "0.0.0"
+dependencies = [
+ "leaven-core",
+ "leaven-engine",
+ "leaven-evidence",
+ "leaven-kernel",
+ "leaven-preference",
+ "serde",
+]
+
+[[package]]
+name = "leaven-preference"
+version = "0.0.0"
+dependencies = [
+ "leaven-core",
+ "leaven-engine",
+ "leaven-evidence",
+ "leaven-kernel",
+]
+
+[[package]]
+name = "leaven-render"
+version = "0.0.0"
+dependencies = [
+ "leaven-artifacts",
+ "leaven-core",
+ "leaven-engine",
+ "leaven-evidence",
+ "leaven-kernel",
+ "leaven-store",
+ "leaven-surface",
+ "leaven-workspace",
+]
+
+[[package]]
+name = "leaven-stage"
+version = "0.0.0"
+dependencies = [
+ "futures",
+ "leaven-agent",
+ "leaven-core",
+ "leaven-engine",
+ "leaven-kernel",
+ "leaven-store",
+ "leaven-workspace",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -2768,6 +2902,17 @@ checksum = "391290121bad3d37fbddad76d8f5d1c1c314cfc646d143d7e07a3086ddff0ce3"
 dependencies = [
  "bitflags",
  "libc",
+]
+
+[[package]]
+name = "libsqlite3-sys"
+version = "0.37.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1f111c8c41e7c61a49cd34e44c7619462967221a6443b0ec299e0ac30cfb9b1"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -3931,6 +4076,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8a1f2315036ef6b1fbacd1972e8ee7688030b0a2121edfc2a6550febd41574d"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.17",
+]
+
+[[package]]
 name = "rstest"
 version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3988,6 +4143,21 @@ dependencies = [
  "rustc_version",
  "syn 2.0.106",
  "unicode-ident",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.39.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0d2b0146dd9661bf67bb107c0bb2a55064d556eeb3fc314151b957f313bcd4e"
+dependencies = [
+ "bitflags",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec 1.15.1",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -4423,6 +4593,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 dependencies = [
  "lock_api",
+]
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1b2c760607300407ddeaee518acf28c795661b7108c75421303dbefb237d3a36"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
 ]
 
 [[package]]

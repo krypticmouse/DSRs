@@ -12,13 +12,17 @@ dsrs-core = { path = "../dsrs-core" }
 dsrs-evaluate = { path = "../dsrs-evaluate" }
 dsrs-predict = { path = "../dsrs-predict" }
 leaven-core = { path = "../../../leaven/crates/leaven-core" }
+leaven-kernel = { path = "../../../leaven/crates/leaven-kernel" }
 leaven-surface = { path = "../../../leaven/crates/leaven-surface" }
 leaven-engine = { path = "../../../leaven/crates/leaven-engine" }
 leaven-evidence = { path = "../../../leaven/crates/leaven-evidence" }
+leaven-gepa = { path = "../../../leaven/crates/leaven-gepa" }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 thiserror = "2.0.17"
+anyhow = "1.0.99"
 
 [dev-dependencies]
-anyhow = "1.0.99"
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
+facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5", default-features = false, features = ["std"] }
+tokio = { version = "1.46.1", features = ["macros", "rt"] }
