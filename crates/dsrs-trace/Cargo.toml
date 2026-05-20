@@ -1,0 +1,22 @@
+[package]
+name = "dsrs-trace"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/krypticmouse/DSRs"
+description = "DSRs tracing and execution graph support."
+
+[dependencies]
+anyhow = "1.0.99"
+dsrs-core = { path = "../dsrs-core" }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+thiserror = "2.0.17"
+tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+bon = "3.7.0"
+dsrs-lm = { path = "../dsrs-lm" }
+dsrs-predict = { path = "../dsrs-predict" }

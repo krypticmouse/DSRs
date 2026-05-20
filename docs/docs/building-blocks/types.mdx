@@ -34,7 +34,8 @@ Custom types need `#[BamlType]`:
 Example:
 
 ```rust
-use dspy_rs::{BamlType, Signature};
+use bamltype::BamlType;
+use dsrs_macros::Signature;
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -214,7 +215,7 @@ Visible effect:
 
 The user-visible claims on this page are locked by tests:
 
-- Prompt/render effects: `crates/dspy-rs/tests/test_bamltype_docs_contract.rs`
-- Basic `#[BamlType]` end-user contract: `crates/dspy-rs/tests/test_bamltype_attr_contract.rs`
+- Prompt/render effects: `crates/dsrs-macros/tests/test_bamltype_docs_contract.rs`
+- Basic `#[BamlType]` end-user contract: `crates/dsrs-macros/tests/test_bamltype_attr_contract.rs`
 - Unsupported/compile-fail type shapes: `crates/bamltype/tests/ui.rs`
 - Signature macro compile-fail coverage: `crates/dsrs-macros/tests/ui.rs`

@@ -9,7 +9,8 @@ A `Predict` takes a [signature](/docs/building-blocks/signature) and actually ca
 ## Basic usage
 
 ```rust
-use dspy_rs::{Predict, Signature};
+use dsrs_macros::Signature;
+use dsrs_predict::Predict;
 
 #[derive(Signature, Clone, Debug)]
 /// Answer questions accurately.
@@ -55,7 +56,7 @@ This overrides the docstring instruction on the signature.
 ### With demos (few-shot)
 
 ```rust
-use dspy_rs::Example;
+use dsrs_core::Example;
 
 let predict = Predict::<QA>::builder()
     .demo(Example::<QA>::new(
@@ -131,7 +132,7 @@ if let Some(field) = result.metadata().field_meta.get("answer") {
 ## Error handling
 
 ```rust
-use dspy_rs::PredictError;
+use dsrs_core::PredictError;
 
 match predict.call(input).await {
     Ok(output) => println!("{}", output.answer),

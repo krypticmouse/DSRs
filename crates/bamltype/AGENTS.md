@@ -3,7 +3,7 @@
 ## Baseline Commands
 
 1. `cargo test -p bamltype --tests`
-2. `cargo test -p dspy-rs --test typed_integration --test test_typed_alias --test test_typed_prompt_format`
+2. `cargo test -p bamltype && cargo test -p dsrs_macros --test test_bamltype_attr_contract --test test_field_macro`
 
 ## Test Layers
 

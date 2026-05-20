@@ -53,7 +53,8 @@ async fn answer_with_reasoning(q: &str) -> Result<Predicted<WithReasoning<QAOutp
 Prepends a `reasoning` field to the output. The LM thinks step-by-step before producing your output fields.
 
 ```rust
-use dspy_rs::{ChainOfThought, Signature};
+use dsrs_macros::Signature;
+use dsrs_predict::ChainOfThought;
 
 #[derive(Signature, Clone, Debug)]
 /// Solve math problems step by step.
@@ -84,7 +85,7 @@ let cot = ChainOfThought::<Math>::builder()
 Demos for ChainOfThought include reasoning — they're `Example<Augmented<S, Reasoning>>`. The reasoning field shows the LM what good chain-of-thought looks like.
 
 ```rust
-use dspy_rs::{Example, Augmented, Reasoning, WithReasoning};
+use dsrs_core::{Augmented, Example, Reasoning, WithReasoning};
 
 let cot = ChainOfThought::<Math>::builder()
     .demo(Example::<Augmented<Math, Reasoning>>::new(
@@ -106,7 +107,9 @@ In practice you rarely write demos by hand. Optimizers generate them automatical
 Define a struct, derive Facet, implement Module.
 
 ```rust
-use dspy_rs::{Module, Predict, ChainOfThought, Predicted, PredictError, Signature};
+use dsrs_core::{Module, PredictError, Predicted};
+use dsrs_macros::Signature;
+use dsrs_predict::{ChainOfThought, Predict};
 
 #[derive(Signature, Clone, Debug)]
 /// Retrieve relevant passages for a question.
@@ -191,7 +194,7 @@ async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, P
 For simple post-processing, use `.map()` instead of writing a full module:
 
 ```rust
-use dspy_rs::ModuleExt;
+use dsrs_core::ModuleExt;
 
 let cot = ChainOfThought::<QA>::new();
 
@@ -219,7 +222,7 @@ let inputs: Vec<QAInput> = questions.iter()
     .map(|q| QAInput { question: q.clone() })
     .collect();
 
-let results = dspy_rs::forward_all(&cot, inputs, 10).await;
+let results = dsrs_core::forward_all(&cot, inputs, 10).await;
 // Vec<Result<Predicted<WithReasoning<QAOutput>>, PredictError>>
 ```
 

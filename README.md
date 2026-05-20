@@ -2,54 +2,52 @@
 <img width="768" alt="logo" src="https://github.com/user-attachments/assets/bdb80520-216e-4742-b016-b71ca6eaac03" />
 
 # DSRs
-<em>A high-performance DSPy rewrite in Rust for building LM-powered applications</em>
+<em>A high-performance Rust runtime for building typed LM-powered applications</em>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
-[![Crates.io](https://img.shields.io/crates/v/dspy-rs)](https://crates.io/crates/dspy-rs)
-[![Documentation](https://docs.rs/dspy-rs/badge.svg)](https://docs.rs/dspy-rs)
+[![Crates.io](https://img.shields.io/badge/crates-dsrs--core%20%7C%20dsrs--predict-orange)](#crates)
+[![Documentation](https://img.shields.io/badge/docs-DSRs-blue)](https://dsrs.herumbshandilya.com)
 [![Build Status](https://img.shields.io/badge/build-passing-green.svg)](#)
 
-[Documentation](https://dsrs.herumbshandilya.com) • [API Reference](https://docs.rs/dspy-rs) • [Examples](crates/dspy-rs/examples/) • [Issues](https://github.com/krypticmouse/dsrs/issues) • [Discord](https://discord.com/invite/ZAEGgxjPUe)
+[Documentation](https://dsrs.herumbshandilya.com) • [Crates](#crates) • [Examples](crates/dsrs-predict/examples/) • [Issues](https://github.com/krypticmouse/dsrs/issues) • [Discord](https://discord.com/invite/ZAEGgxjPUe)
 
 </div>
 
 ---
 
-## 🚀 Overview
+## Overview
 
-**DSRs** (DSPy Rust) is a ground-up rewrite of the [DSPy framework](https://github.com/stanfordnlp/dspy) in Rust, designed for building robust, high-performance applications powered by Language Models. Unlike a simple port, DSRs leverages Rust's type system, memory safety, and concurrency features to provide a more efficient and reliable foundation for LM applications.
+**DSRs** is a ground-up Rust runtime for building robust, high-performance applications powered by language models. It uses Rust's type system, memory safety, and concurrency features to provide a reliable foundation for typed LM pipelines.
 
-## 📦 Installation
+## Installation
 
-Add DSRs to your `Cargo.toml`:
+Depend on the crates you use:
 
 ```toml
 [dependencies]
-# Option 1: Use the shorter alias (recommended)
-dsrs = { package = "dspy-rs", version = "0.7.3" }
-
-# Option 2: Use the full name
-dspy-rs = "0.7.3"
+dsrs-core = "0.7"
+dsrs-lm = "0.7"
+dsrs-predict = "0.7"
+dsrs-trace = "0.7"
 ```
 
 Or use cargo:
 
 ```bash
-# Option 1: Add with alias (recommended)
-cargo add dsrs --package dspy-rs
-
-# Option 2: Add with full name
-cargo add dspy-rs
+cargo add dsrs-core dsrs-lm dsrs-predict dsrs-trace
 ```
 
-## 🔧 Quick Start
+## Quick Start
 
 Here's a simple example to get you started:
 
 ```rust
 use anyhow::Result;
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
+use dsrs_lm::{configure, ChatAdapter, LM};
+use dsrs_macros::Signature;
+use dsrs_predict::Predict;
+use dsrs_trace::init_tracing;
 
 #[derive(Signature, Clone)]
 struct SentimentAnalyzer {
@@ -98,19 +96,22 @@ Result:
 Answer: "Positive"
 ```
 
-## 🏗️ Architecture
+## Crates
 
-DSRs follows a modular architecture with clear separation of concerns:
+DSRs is split into layer-aligned crates. There is no facade crate; depend on the leaf crates directly.
 
-```
-dsrs/
-├── core/           # Core abstractions (LM, Module, Signature)
-├── adapter/        # LM provider adapters (OpenAI, etc.)
-├── data/           # Data structures (Example, Prediction)
-├── predictors/     # Built-in predictors (Predict, Chain, etc.)
-├── evaluate/       # Evaluation framework and metrics
-└── macros/         # Derive macros for signatures
-```
+| Crate | Purpose |
+|-------|---------|
+| `dsrs-core` | Signatures, modules, schema, errors, typed data, and abstract bridge traits. |
+| `dsrs-lm` | LM client, client registry, usage accounting, and `ChatAdapter`. |
+| `dsrs-predict` | `Predict`, `ChainOfThought`, and ReAct predictors. |
+| `dsrs-evaluate` | Evaluation framework, typed metrics, and feedback helpers. |
+| `dsrs-gepa` | GEPA optimizer. |
+| `dsrs-data` | DataLoader with feature-gated CSV, Parquet, and Hugging Face support. |
+| `dsrs-trace` | Execution graph recording and tracing helpers. |
+| `dsrs-cache` | Foyer-backed LM cache. |
+| `dsrs-leaven` | Leaven integration scaffold. |
+| `dsrs-macros` | Derive macros for signatures and field metadata. |
 
 ### Core Components
 
@@ -203,45 +204,12 @@ println!("Average score: {}", score);
 
 #### 6. **Optimization** - Optimize your Modules
 
-DSRs provides two powerful optimizers:
+DSRs keeps GEPA as the active optimizer crate while the Leaven integration is being built out. COPRO and MIPROv2 were deleted with the crate split.
 
-**COPRO (Collaborative Prompt Optimization)**
 ```rust
-#[derive(Builder, facet::Facet)]
-#[facet(crate = facet)]
-pub struct MyModule {
-    predictor: Predict<MySignature>,
-}
+use dsrs_gepa::GEPAOptimizer;
 
-// Create and configure the optimizer
-let optimizer = COPRO::builder()
-    .breadth(10)  // Number of candidates per iteration
-    .depth(3)     // Number of refinement iterations
-    .build();
-
-// Prepare training data
-let train_examples = load_training_data();
-let metric = ExactMatchMetric;
-
-// Compile optimizes the module in-place
-let mut module = MyModule::new();
-optimizer.compile(&mut module, train_examples, &metric).await?;
-```
-
-**MIPROv2 (Multi-prompt Instruction Proposal Optimizer v2)** - Advanced optimizer using LLMs
-```rust
-// MIPROv2 uses a 3-stage process:
-// 1. Generate execution traces
-// 2. LLM generates candidate prompts with best practices
-// 3. Evaluate and select the best prompt
-
-let optimizer = MIPROv2::builder()
-    .num_candidates(10)    // Number of candidate prompts to generate
-    .num_trials(20)        // Number of evaluation trials
-    .minibatch_size(25)    // Examples per evaluation
-    .temperature(1.0)      // Temperature for prompt generation
-    .build();
-
+let optimizer = GEPAOptimizer::builder().build();
 optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
@@ -253,7 +221,8 @@ Default behavior is:
 - Missing signature-required fields return an error with row + field context.
 
 ```rust
-use dspy_rs::{DataLoader, Signature, TypedLoadOptions};
+use dsrs_data::{DataLoader, TypedLoadOptions};
+use dsrs_macros::Signature;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -280,7 +249,7 @@ let trainset = DataLoader::load_csv_with::<QA, _>(
     true,
     TypedLoadOptions::default(),
     |row| {
-        Ok(dspy_rs::Example::new(
+        Ok(dsrs_core::Example::new(
             QAInput {
                 question: row.get::<String>("prompt")?,
             },
@@ -297,7 +266,7 @@ Migration note:
 - `save_json` / `save_csv` were removed from `DataLoader`.
 - Use typed `load_*` / `load_*_with` APIs.
 
-See `examples/08-optimize-mipro.rs` for a complete example (requires `parquet` feature).
+See the `dsrs-data` crate tests and examples for complete loader coverage.
 
 **Component Discovery:**
 ```rust
@@ -375,7 +344,7 @@ cargo run --example 01-simple
 
 ### Chain of Thought (CoT) Reasoning
 ```rust
-use dspy_rs::ChainOfThought;
+use dsrs_predict::ChainOfThought;
 
 // ChainOfThought wraps any signature, adding a `reasoning` field
 let cot = ChainOfThought::<QA>::new();
@@ -393,27 +362,7 @@ DSRs includes a tracing system that captures the dataflow through modules as a D
 
 See `examples/12-tracing.rs` for a complete example.
 
-### Optimizer Comparison
-
-| Feature | COPRO | MIPROv2 | GEPA |
-|---------|-------|---------|------|
-| **Approach** | Iterative refinement | LLM-guided generation | Evolutionary search with textual feedback |
-| **Complexity** | Simple | Advanced | Advanced |
-| **Best For** | Quick optimization | Best results | Complex tasks with subtle failure modes |
-| **Training Data** | Uses scores | Uses traces & descriptions | Uses rich textual feedback |
-| **Prompting Tips** | No | Yes (15+ best practices) | No |
-| **Program Understanding** | Basic | LLM-generated descriptions | LLM-judge feedback |
-| **Few-shot Examples** | No | Yes (auto-selected) | No |
-
-**When to use COPRO:**
-- Fast iteration needed
-- Simple tasks
-- Limited compute budget
-
-**When to use MIPROv2:**
-- Best possible results needed
-- Complex reasoning tasks
-- Have good training data (15+ examples recommended)
+### GEPA
 
 **When to use GEPA:**
 - Tasks where score alone doesn't explain what went wrong
@@ -462,13 +411,12 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 - Inspired by the original [DSPy](https://github.com/stanfordnlp/dspy) framework
 - Built with the amazing Rust ecosystem
 - Special thanks to the DSPy community for the discussion and ideas
-- MIPROv2 implementation
 
 ## 🔗 Resources
 
 - [Documentation](https://dsrs.herumbshandilya.com)
-- [API Reference](https://docs.rs/dspy-rs)
-- [Examples](crates/dspy-rs/examples/)
+- [Crates](#crates)
+- [Examples](crates/dsrs-predict/examples/)
 - [GitHub Issues](https://github.com/krypticmouse/dsrs/issues)
 - [Discord Community](https://discord.com/invite/ZAEGgxjPUe)
 - [Original DSPy Paper](https://arxiv.org/abs/2310.03714)

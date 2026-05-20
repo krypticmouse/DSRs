@@ -1,0 +1,23 @@
+[package]
+name = "dsrs-evaluate"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/krypticmouse/DSRs"
+description = "DSRs typed evaluation and metric support."
+
+[dependencies]
+anyhow = "1.0.99"
+dsrs-core = { path = "../dsrs-core" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+
+[dev-dependencies]
+bamltype = { path = "../bamltype" }
+dsrs-data = { path = "../dsrs-data", features = ["all"] }
+dsrs-lm = { path = "../dsrs-lm" }
+dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
+dsrs-predict = { path = "../dsrs-predict" }
+dsrs-trace = { path = "../dsrs-trace" }
+tokio = { version = "1.46.1", features = ["macros", "rt", "rt-multi-thread"] }

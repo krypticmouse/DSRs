@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, Facet, InputRenderSpec, Signature as SignatureTrait, SignatureSchema};
+use dsrs_core::{BamlType, Facet, InputRenderSpec, Signature as SignatureTrait, SignatureSchema};
 
 /// Test instruction
 #[derive(dsrs_macros::Signature, Clone, Debug)]

@@ -15,7 +15,9 @@ No manual `RawExample -> Example<S>` conversion is required.
 ## Core API
 
 ```rust
-use dspy_rs::{DataLoader, Example, Signature, TypedLoadOptions};
+use dsrs_core::Example;
+use dsrs_data::{DataLoader, TypedLoadOptions};
+use dsrs_macros::Signature;
 ```
 
 Typed loaders:
@@ -39,7 +41,8 @@ Mapper overloads:
 - Uses signature field names directly unless remapped.
 
 ```rust
-use dspy_rs::{DataLoader, Signature, TypedLoadOptions};
+use dsrs_data::{DataLoader, TypedLoadOptions};
+use dsrs_macros::Signature;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -63,7 +66,7 @@ Use `TypedLoadOptions.field_map` when source column names differ from signature 
 
 ```rust
 use std::collections::HashMap;
-use dspy_rs::{DataLoader, TypedLoadOptions, UnknownFieldPolicy};
+use dsrs_data::{DataLoader, TypedLoadOptions, UnknownFieldPolicy};
 
 let mut field_map = HashMap::new();
 field_map.insert("question".to_string(), "prompt".to_string());
@@ -85,7 +88,8 @@ let trainset = DataLoader::load_csv::<QA>(
 Use mapper overloads for fully custom row conversion logic.
 
 ```rust
-use dspy_rs::{DataLoader, Example, TypedLoadOptions};
+use dsrs_core::Example;
+use dsrs_data::{DataLoader, TypedLoadOptions};
 
 let trainset = DataLoader::load_json_with::<QA, _>(
     "data/train.jsonl",

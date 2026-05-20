@@ -16,7 +16,11 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dspy-rs = "0.7"
+dsrs-core = "0.7"
+dsrs-lm = "0.7"
+dsrs-predict = "0.7"
+dsrs-trace = "0.7"
+dsrs-macros = "0.7"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 ```
@@ -24,7 +28,7 @@ anyhow = "1"
 Or via cargo:
 
 ```bash
-cargo add dspy-rs tokio anyhow
+cargo add dsrs-core dsrs-lm dsrs-predict dsrs-trace dsrs-macros tokio anyhow
 ```
 
 </Step>
@@ -34,7 +38,8 @@ cargo add dspy-rs tokio anyhow
 Tell DSRs which model to use. This sets a global default that all predictors will use:
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM};
+use dsrs_lm::{configure, ChatAdapter, LM};
+use dsrs_trace::init_tracing;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -63,7 +68,7 @@ Set `OPENAI_API_KEY` in your environment. For other providers, use the appropria
 A [signature](/docs/building-blocks/signature) declares your task's inputs and outputs:
 
 ```rust
-use dspy_rs::Signature;
+use dsrs_macros::Signature;
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -89,7 +94,7 @@ The doc comments become:
 Create a [predictor](/docs/building-blocks/predictors) and call it:
 
 ```rust
-use dspy_rs::Predict;
+use dsrs_predict::Predict;
 
 let predict = Predict::<QA>::new();
 
@@ -109,7 +114,10 @@ The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields
 ## Complete example
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
+use dsrs_lm::{configure, ChatAdapter, LM};
+use dsrs_macros::Signature;
+use dsrs_predict::Predict;
+use dsrs_trace::init_tracing;
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -174,7 +182,8 @@ See the full attribute reference in [Signatures](/docs/building-blocks/signature
 When you need more than primitives, add [`#[BamlType]`](/docs/building-blocks/types):
 
 ```rust
-use dspy_rs::{Signature, BamlType};
+use bamltype::BamlType;
+use dsrs_macros::Signature;
 
 #[BamlType]
 #[derive(Clone, Debug)]
@@ -203,7 +212,7 @@ struct SentimentAnalysis {
 Add examples to guide the LM:
 
 ```rust
-use dspy_rs::Example;
+use dsrs_core::Example;
 
 let predict = Predict::<QA>::builder()
     .demo(Example::<QA>::new(

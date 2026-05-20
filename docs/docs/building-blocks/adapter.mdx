@@ -132,7 +132,7 @@ ParseError::Multiple {
 Usually you don't touch the adapter - `Predict` handles it. But for debugging:
 
 ```rust
-use dspy_rs::ChatAdapter;
+use dsrs_lm::ChatAdapter;
 
 let adapter = ChatAdapter;
 
@@ -190,7 +190,7 @@ Compiled templates are cached process-wide by template string.
 
 ## Real example: Insurance claim extraction
 
-Here's what a prompt looks like for a complex nested type (from [`examples/16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)):
+Here's what a prompt looks like for a complex nested type (from [`16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dsrs-lm/examples/16-insurance-claim-prompt.rs)):
 
 ```rust
 #[derive(Signature, Clone, Debug)]

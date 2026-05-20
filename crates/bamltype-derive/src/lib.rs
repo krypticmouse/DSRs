@@ -168,13 +168,9 @@ fn resolve_runtime_crate() -> syn::Result<Path> {
         return Ok(path);
     }
 
-    if let Some(dspy_path) = find_crate_path("dspy-rs") {
-        return Ok(syn::parse_quote!(#dspy_path::__macro_support::bamltype));
-    }
-
     Err(syn::Error::new(
         Span::call_site(),
-        "could not resolve bamltype runtime crate; expected dependency on `bamltype` or `dspy-rs`",
+        "could not resolve bamltype runtime crate; expected dependency on `bamltype`",
     ))
 }
 

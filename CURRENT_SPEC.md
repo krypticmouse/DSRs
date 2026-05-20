@@ -4,6 +4,8 @@
 **Status:** Draft  
 **Last Updated:** 2026-01-08
 
+> **Superseded** by [`docs/plans/2026-05-08-dsrs-crate-split-design.md`](docs/plans/2026-05-08-dsrs-crate-split-design.md) and its implementation plan for runtime crate topology. Retained for historical context.
+
 > Status Update (2026-02-08):
 > Legacy bridge crates are removed from the workspace.
 > Current typed and optimizer contracts remain unchanged in Phase 1.
