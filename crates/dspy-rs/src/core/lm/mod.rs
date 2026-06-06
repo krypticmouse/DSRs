@@ -553,7 +553,7 @@ impl LM {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
-                assistant_text,
+                assistant_text: _,
             } if tool_loop_mode == ToolLoopMode::Auto && !tools.is_empty() => {
                 debug!(count = calls.len(), "entering tool loop");
                 let result = self

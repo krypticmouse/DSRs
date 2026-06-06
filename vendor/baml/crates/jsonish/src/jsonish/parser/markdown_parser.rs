@@ -4,8 +4,8 @@ use anyhow::Result;
 
 use super::ParseOptions;
 use crate::jsonish::{
-    parser::{entry, ParsingMode},
     Value,
+    parser::{ParsingMode, entry},
 };
 
 #[derive(Debug)]
@@ -58,11 +58,12 @@ pub fn parse(str: &str, options: &ParseOptions) -> Result<Vec<MarkdownResult>> {
 
             for end in ends.iter() {
                 let candidate = after_start[..end.start()].trim();
-                if let Ok(v) = super::entry::parse_func(
+                let parsed = super::entry::parse_func(
                     candidate,
                     options.next_from_mode(ParsingMode::JsonMarkdown),
                     false,
-                ) {
+                );
+                if let Ok(v) = parsed {
                     parsed_value = Some(v);
                     chosen_end = *end;
                     md_content = candidate;
@@ -163,15 +164,17 @@ print("Hello, world!")
             let Value::AnyOf(value, _) = value else {
                 panic!("Expected AnyOf, got {value:#?}");
             };
-            assert!(value.contains(&Value::Object(
-                [(
-                    "a".to_string(),
-                    Value::Number((1).into(), CompletionState::Complete)
-                )]
-                .into_iter()
-                .collect(),
-                CompletionState::Complete
-            )));
+            assert!(
+                value.contains(&Value::Object(
+                    [(
+                        "a".to_string(),
+                        Value::Number((1).into(), CompletionState::Complete)
+                    )]
+                    .into_iter()
+                    .collect(),
+                    CompletionState::Complete
+                ))
+            );
         }
         {
             let (tag, value) = if let MarkdownResult::CodeBlock(tag, value) = &res[1] {
@@ -257,8 +260,8 @@ dolor sit amet
     }
 
     #[test]
-    fn fence_like_sequence_inside_triple_backtick_string_does_not_split_markdown_blocks(
-    ) -> Result<()> {
+    fn fence_like_sequence_inside_triple_backtick_string_does_not_split_markdown_blocks()
+    -> Result<()> {
         let res = parse(
             r#"
 ```json

@@ -3,6 +3,7 @@ name = "dspy-rs"
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 version = "0.7.3"
 edition = "2024"
+rust-version = "1.96.0"
 description = "A DSPy rewrite(not port) to Rust."
 readme = "../../README.md"
 documentation = "https://dsrs.herumbshandilya.com"

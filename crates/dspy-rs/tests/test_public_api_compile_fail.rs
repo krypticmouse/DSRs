@@ -7,10 +7,12 @@ fn run_compile_fail_case(name: &str, source: &str) -> String {
     let case_dir = temp.path().join(name);
     fs::create_dir_all(case_dir.join("src")).expect("case src dir should be creatable");
 
-    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .to_string_lossy()
+        .replace('\\', "/");
     let cargo_toml = format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\ndspy-rs = {{ path = \"{}\" }}\nanyhow = \"1\"\n",
-        manifest_path.display()
+        manifest_path
     );
 
     fs::write(case_dir.join("Cargo.toml"), cargo_toml).expect("cargo manifest should be writable");

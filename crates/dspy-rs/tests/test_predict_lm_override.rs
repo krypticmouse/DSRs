@@ -61,9 +61,7 @@ async fn predict_uses_per_instance_lm_over_global() {
     let (override_lm, _override_client) = make_test_lm(vec![override_response]).await;
 
     // Predict with per-instance LM override
-    let predict = Predict::<QA>::builder()
-        .lm(override_lm)
-        .build();
+    let predict = Predict::<QA>::builder().lm(override_lm).build();
 
     let result = predict
         .call(QAInput {

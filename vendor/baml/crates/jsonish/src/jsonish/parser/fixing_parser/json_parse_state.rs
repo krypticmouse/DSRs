@@ -4,7 +4,7 @@ use anyhow::Result;
 use baml_types::CompletionState;
 
 use super::json_collection::JsonCollection;
-use crate::jsonish::{value::Fixes, Value};
+use crate::jsonish::{Value, value::Fixes};
 
 /// Tracks quote and backslash state incrementally for quoted strings
 /// to avoid O(n²) rescanning when determining if a quote closes a string.
@@ -215,7 +215,7 @@ impl JsonParseState {
                     match c {
                         // If at some point we find a valid json character, we'll close the string
                         '{' | '[' => {
-                            return CloseStringResult::Close(idx, CompletionState::Complete)
+                            return CloseStringResult::Close(idx, CompletionState::Complete);
                         }
                         x => {
                             let _ = self.consume(x);
@@ -294,7 +294,9 @@ impl JsonParseState {
                                                     } else {
                                                         // Likely end of the key as the LLM generated a ", " token by mistake instead of a ","
                                                         // so drop the comma
-                                                        log::debug!("Closing due to: newline after comma + space");
+                                                        log::debug!(
+                                                            "Closing due to: newline after comma + space"
+                                                        );
                                                         return CloseStringResult::Close(
                                                             idx,
                                                             CompletionState::Complete,
@@ -322,7 +324,9 @@ impl JsonParseState {
                                                 },
                                                 '"' => {
                                                     // This is likely a new key
-                                                    log::debug!("Closing due to: new key after space + comma");
+                                                    log::debug!(
+                                                        "Closing due to: new key after space + comma"
+                                                    );
                                                     return CloseStringResult::Close(
                                                         idx,
                                                         CompletionState::Complete,

@@ -88,6 +88,93 @@ facet::define_attr_grammar! {
     }
 }
 
+pub(crate) mod dsrs {
+    macro_rules! __attr {
+        (@ns { $ns:path } predict_accessor { $field:tt : $ty:ty }) => {{
+            static __ATTR_DATA: $crate::core::dyn_predictor::Attr =
+                $crate::core::dyn_predictor::Attr::PredictAccessor(None);
+            ::facet::Attr::new(Some("dsrs"), "predict_accessor", &__ATTR_DATA)
+        }};
+        (@ns { $ns:path } predict_accessor { $field:tt : $ty:ty | = $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@ns { $ns:path } predict_accessor { $field:tt : $ty:ty | $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@ns { $ns:path } predict_accessor { }) => {{
+            static __ATTR_DATA: $crate::core::dyn_predictor::Attr =
+                $crate::core::dyn_predictor::Attr::PredictAccessor(None);
+            ::facet::Attr::new(Some("dsrs"), "predict_accessor", &__ATTR_DATA)
+        }};
+        (@ns { $ns:path } predict_accessor { | = $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@ns { $ns:path } predict_accessor { | $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { $field:tt : $ty:ty }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(None) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { $field:tt : $ty:ty | = $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { $field:tt : $ty:ty | $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(None) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { | = $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+        (@const @ns { $ns:path } predict_accessor { | $value:expr }) => {{
+            ::facet::Attr::new(
+                Some("dsrs"),
+                "predict_accessor",
+                &const { $crate::core::dyn_predictor::Attr::PredictAccessor(Some($value)) },
+            )
+        }};
+    }
+
+    pub(crate) use __attr;
+}
+
 /// Error from [`visit_named_predictors_mut`] when the Facet walker encounters an unsupported structure.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub(crate) enum NamedParametersError {
@@ -396,7 +483,6 @@ fn pointer_name(pointer: Option<KnownPointer>) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate as dsrs;
     use crate::Signature;
     use crate::predictors::Predict as RealPredict;
     use std::ops::ControlFlow;

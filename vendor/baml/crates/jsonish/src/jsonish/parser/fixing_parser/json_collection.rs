@@ -69,7 +69,7 @@ impl From<JsonCollection> for Option<Value> {
     fn from(collection: JsonCollection) -> Option<Value> {
         Some(match collection {
             JsonCollection::TrailingComment(_, _) | JsonCollection::BlockComment(_, _) => {
-                return None
+                return None;
             }
             JsonCollection::Object(keys, values, object_completion) => {
                 // log::debug!("keys: {:?}", keys);

@@ -1,8 +1,9 @@
 use itertools::Itertools;
 
 use crate::{
+    ConstraintLevel,
     ir_type::{TypeGeneric, UnionTypeGeneric},
-    type_meta, ConstraintLevel,
+    type_meta,
 };
 
 impl TypeGeneric<type_meta::NonStreaming> {

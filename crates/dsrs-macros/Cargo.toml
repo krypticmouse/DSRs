@@ -2,6 +2,7 @@
 name = "dsrs_macros"
 version = "0.7.2"
 edition = "2024"
+rust-version = "1.96.0"
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 description = "Derive macros for DSRs (DSPy Rust)"
 readme = "../../README.md"

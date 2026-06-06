@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use super::DatamodelError;
-use crate::{warning::DatamodelWarning, SourceFile, Span};
+use crate::{SourceFile, Span, warning::DatamodelWarning};
 
 /// Represents a list of validation or parser errors and warnings.
 ///

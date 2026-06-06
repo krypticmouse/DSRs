@@ -133,11 +133,11 @@ pub(super) fn pick_best(
                             match (unparseables_a, unparseables_b) {
                                 // If A has no unparseables and B has unparseables and B is empty, prefer A
                                 (0, b) if b > 0 && items_b.is_empty() => {
-                                    return std::cmp::Ordering::Less
+                                    return std::cmp::Ordering::Less;
                                 }
                                 // If A has unparseables and B has no unparseables and A is empty, prefer B
                                 (a, 0) if a > 0 && items_a.is_empty() => {
-                                    return std::cmp::Ordering::Greater
+                                    return std::cmp::Ordering::Greater;
                                 }
                                 _ => {}
                             }

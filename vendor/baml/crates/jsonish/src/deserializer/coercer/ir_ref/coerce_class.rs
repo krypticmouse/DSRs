@@ -5,10 +5,10 @@ use internal_baml_jinja::types::{Class, Name};
 use super::ParsingContext;
 use crate::deserializer::{
     coercer::{
-        array_helper,
+        DefaultValue, ParsingError, TypeCoercer, array_helper,
         field_type::validate_asserts,
         match_string::{match_string, matches_string_to_string},
-        run_user_checks, DefaultValue, ParsingError, TypeCoercer,
+        run_user_checks,
     },
     deserialize_flags::{DeserializerConditions, Flag},
     types::BamlValueWithFlags,
@@ -84,7 +84,7 @@ impl TypeCoercer for Class {
         let flags = DeserializerConditions::new();
         for (k, v) in obj.iter() {
             if let Some(&idx) = key_to_idx.get(k.as_str()) {
-                let (_, field_type, ref mut val) = &mut field_states[idx];
+                let (_, field_type, val) = &mut field_states[idx];
                 if matches!(val, Triple::Present(_)) {
                     continue;
                 }

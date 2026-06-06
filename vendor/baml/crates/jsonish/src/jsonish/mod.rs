@@ -1,5 +1,5 @@
 mod parser;
 mod value;
 
-pub use parser::{parse, ParseOptions};
+pub use parser::{ParseOptions, parse};
 pub use value::{Fixes, Value};

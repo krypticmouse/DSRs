@@ -1,6 +1,6 @@
 use anyhow::Result;
 
-use super::{entry, ParseOptions};
+use super::{ParseOptions, entry};
 use crate::jsonish::Value;
 
 pub fn parse(str: &str, options: &ParseOptions) -> Result<Vec<Value>> {
@@ -34,11 +34,12 @@ pub fn parse(str: &str, options: &ParseOptions) -> Result<Vec<Value>> {
                     } else {
                         &str[..end_index]
                     };
-                    match entry::parse_func(
+                    let parsed = entry::parse_func(
                         json_str,
                         options.next_from_mode(super::ParsingMode::AllJsonObjects),
                         false,
-                    ) {
+                    );
+                    match parsed {
                         Ok(json) => json_objects.push(json),
                         Err(e) => {
                             // Ignore errors
@@ -124,15 +125,17 @@ print("Hello, world!")
             let Value::AnyOf(value, _) = value else {
                 panic!("Expected AnyOf, got {value:#?}");
             };
-            assert!(value.contains(&Value::Object(
-                [(
-                    "a".to_string(),
-                    Value::Number((1).into(), CompletionState::Complete)
-                )]
-                .into_iter()
-                .collect(),
-                CompletionState::Complete
-            )));
+            assert!(
+                value.contains(&Value::Object(
+                    [(
+                        "a".to_string(),
+                        Value::Number((1).into(), CompletionState::Complete)
+                    )]
+                    .into_iter()
+                    .collect(),
+                    CompletionState::Complete
+                ))
+            );
         }
         {
             let value = &res[1];

@@ -1,6 +1,6 @@
 use std::fmt::{self, Formatter};
 
-use super::{type_meta, ConstraintLevel, TypeGeneric};
+use super::{ConstraintLevel, TypeGeneric, type_meta};
 use crate::ir_type::UnionTypeViewGeneric;
 
 /// ---------- 1. The helper that prints the *core* type string ----------

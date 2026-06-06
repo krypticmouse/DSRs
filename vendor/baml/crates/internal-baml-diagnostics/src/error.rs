@@ -3,8 +3,8 @@ use std::{borrow::Cow, iter::Iterator, ops::Index};
 use colored::{ColoredString, Colorize};
 
 use crate::{
-    pretty_print::{pretty_print, DiagnosticColorer},
     Span,
+    pretty_print::{DiagnosticColorer, pretty_print},
 };
 
 #[derive(Debug, Clone)]
@@ -116,7 +116,9 @@ impl DatamodelError {
         given_count: usize,
         span: Span,
     ) -> DatamodelError {
-        let msg = format!("Function \"{function_name}\" takes {required_count} arguments, but received {given_count}.");
+        let msg = format!(
+            "Function \"{function_name}\" takes {required_count} arguments, but received {given_count}."
+        );
         Self::new(msg, span)
     }
 
@@ -193,7 +195,9 @@ impl DatamodelError {
         suggestion: &str,
         span: Span,
     ) -> DatamodelError {
-        let msg =  format!("The prefix {given_prefix} is invalid. It must be equal to the name of an existing datasource e.g. {expected_prefix}. Did you mean to use {suggestion}?");
+        let msg = format!(
+            "The prefix {given_prefix} is invalid. It must be equal to the name of an existing datasource e.g. {expected_prefix}. Did you mean to use {suggestion}?"
+        );
         DatamodelError::new(msg, span)
     }
 
@@ -217,7 +221,9 @@ impl DatamodelError {
         existing_model_name: &str,
         span: Span,
     ) -> DatamodelError {
-        let msg = format!("The model with database name \"{model_database_name}\" could not be defined because another model or view with this name exists: \"{existing_model_name}\"");
+        let msg = format!(
+            "The model with database name \"{model_database_name}\" could not be defined because another model or view with this name exists: \"{existing_model_name}\""
+        );
         Self::new(msg, span)
     }
 
@@ -226,7 +232,9 @@ impl DatamodelError {
         existing_model_name: &str,
         span: Span,
     ) -> DatamodelError {
-        let msg = format!("The view with database name \"{model_database_name}\" could not be defined because another model or view with this name exists: \"{existing_model_name}\"");
+        let msg = format!(
+            "The view with database name \"{model_database_name}\" could not be defined because another model or view with this name exists: \"{existing_model_name}\""
+        );
         Self::new(msg, span)
     }
 
@@ -333,7 +341,9 @@ impl DatamodelError {
 
     pub fn new_invalid_function_syntax_error(func_name: &str, span: Span) -> DatamodelError {
         Self::new(
-            format!("Invalid syntax for function \"{func_name}\". Use:\nfunction {func_name}(params...) -> ReturnType {{ ... }}"),
+            format!(
+                "Invalid syntax for function \"{func_name}\". Use:\nfunction {func_name}(params...) -> ReturnType {{ ... }}"
+            ),
             span,
         )
     }
@@ -376,7 +386,9 @@ impl DatamodelError {
         field_name: &str,
         span: Span,
     ) -> DatamodelError {
-        let msg = format!("Field \"{field_name}\" in {container} \"{container_name}\" can't be a list. The current connector does not support lists of primitive types.");
+        let msg = format!(
+            "Field \"{field_name}\" in {container} \"{container_name}\" can't be a list. The current connector does not support lists of primitive types."
+        );
         Self::new(msg, span)
     }
 
@@ -645,19 +657,20 @@ impl DatamodelError {
     {
         let close_names = sort_by_match(property_name, &alternatives, None);
 
-        Self::new(match close_names.len() {
-            0 => format!("Property not known: \"{property_name}\".",),
-            1 =>
-                format!(
+        Self::new(
+            match close_names.len() {
+                0 => format!("Property not known: \"{property_name}\".",),
+                1 => format!(
                     "Property not known: \"{property_name}\". Did you mean this: \"{close_name}\"?",
                     close_name = close_names[0]
                 ),
-            _ =>
-                format!(
+                _ => format!(
                     "Property not known: \"{property_name}\". Did you mean one of these: \"{close_names}\"?",
                     close_names = close_names.join("\", \"")
                 ),
-        }, span)
+            },
+            span,
+        )
     }
 
     pub fn new_argument_not_known_error(property_name: &str, span: Span) -> DatamodelError {

@@ -6,15 +6,16 @@ use std::{
 use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use pretty::RcDoc;
-use serde::{de::Visitor, ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Visitor, ser::SerializeMap};
 
 use crate::{
+    BamlMap, BamlMedia, HasType, LiteralValue, ResponseCheck, TypeValue,
     ir_type::{
         TypeGeneric, TypeIR, TypeNonStreaming, TypeStreaming, UnionConstructor,
         UnionTypeViewGeneric,
     },
     media::BamlMediaType,
-    type_meta, BamlMap, BamlMedia, HasType, LiteralValue, ResponseCheck, TypeValue,
+    type_meta,
 };
 
 #[derive(Clone, Debug, PartialEq)]

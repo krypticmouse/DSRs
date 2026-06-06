@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
 pub use super::errors::BamlError;
-use crate::{type_meta, BamlMap, BamlMedia, BamlValueWithMeta, HasType};
+use crate::{BamlMap, BamlMedia, BamlValueWithMeta, HasType, type_meta};
 
 pub type TraceTags = serde_json::Map<String, serde_json::Value>;
 

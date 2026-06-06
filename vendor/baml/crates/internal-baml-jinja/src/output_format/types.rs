@@ -1,7 +1,7 @@
 use std::{ops::Deref, sync::Arc};
 
 use anyhow::Result;
-use baml_types::{ir_type::UnionTypeViewGeneric, type_meta, Constraint, TypeIR, TypeValue};
+use baml_types::{Constraint, TypeIR, TypeValue, ir_type::UnionTypeViewGeneric, type_meta};
 use indexmap::{IndexMap, IndexSet};
 
 #[derive(Debug, PartialEq, Eq)]
@@ -754,7 +754,7 @@ impl OutputFormatContent {
                     return Err(minijinja::Error::new(
                         minijinja::ErrorKind::BadSerialization,
                         format!("type '{media_type}' is not supported in outputs"),
-                    ))
+                    ));
                 }
             },
             TypeIR::Literal(v, _) => v.to_string(),
@@ -847,7 +847,7 @@ impl OutputFormatContent {
                 return Err(minijinja::Error::new(
                     minijinja::ErrorKind::BadSerialization,
                     "Tuple type is not supported in outputs",
-                ))
+                ));
             }
             TypeIR::Map(key_type, value_type, _) => MapRender {
                 style: &options.map_style,
@@ -859,7 +859,7 @@ impl OutputFormatContent {
                 return Err(minijinja::Error::new(
                     minijinja::ErrorKind::BadSerialization,
                     "Arrow type is not supported in LLM function outputs",
-                ))
+                ));
             }
             TypeIR::Top(_) => panic!(
                 "TypeIR::Top should have been resolved by the compiler before code generation. \

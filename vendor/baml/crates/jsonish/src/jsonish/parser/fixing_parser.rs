@@ -6,7 +6,7 @@ use baml_types::CompletionState;
 
 use self::json_parse_state::JsonParseState;
 use super::ParseOptions;
-use crate::jsonish::{value::Fixes, Value};
+use crate::jsonish::{Value, value::Fixes};
 
 pub fn parse(str: &str, _options: &ParseOptions) -> Result<Vec<(Value, Vec<Fixes>)>> {
     // Try to fix some common JSON issues

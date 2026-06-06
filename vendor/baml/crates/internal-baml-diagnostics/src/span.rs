@@ -69,7 +69,7 @@ impl Span {
     }
 
     pub fn line_number(&self) -> usize {
-        self.line_and_column().0 .0
+        self.line_and_column().0.0
     }
 
     /// Create a fake span. Useful when generating test data that requires

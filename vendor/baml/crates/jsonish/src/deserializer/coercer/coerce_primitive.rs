@@ -2,7 +2,7 @@ use anyhow::Result;
 use baml_types::{BamlMediaType, CompletionState, TypeIR, TypeValue};
 use regex::Regex;
 
-use super::{array_helper::coerce_array_to_singular, ParsingContext, ParsingError};
+use super::{ParsingContext, ParsingError, array_helper::coerce_array_to_singular};
 use crate::deserializer::{
     coercer::TypeCoercer,
     deserialize_flags::{DeserializerConditions, Flag},

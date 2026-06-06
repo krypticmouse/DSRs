@@ -23,8 +23,8 @@ pub use baml_value::{BamlValue, BamlValueWithMeta, Completion, CompletionState};
 pub use constraint::*;
 pub use generator::{GeneratorDefaultClientMode, GeneratorOutputType};
 pub use ir_type::{
-    type_meta, Arrow, HasType, LiteralValue, StreamingMode, ToUnionName, TypeIR, TypeValue,
-    UnionType, UnionTypeView,
+    Arrow, HasType, LiteralValue, StreamingMode, ToUnionName, TypeIR, TypeValue, UnionType,
+    UnionTypeView, type_meta,
 };
 pub use map::Map as BamlMap;
 pub use media::{BamlMedia, BamlMediaContent, BamlMediaType, MediaBase64, MediaFile, MediaUrl};

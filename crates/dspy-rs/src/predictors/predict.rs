@@ -8,8 +8,9 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use tracing::{debug, trace};
 
-use crate as dsrs;
-use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
+use crate::core::{
+    DynPredictor, Module, PredictAccessorFns, PredictState, Signature, dyn_predictor::dsrs,
+};
 use crate::data::example::Example as RawExample;
 use crate::{
     BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,

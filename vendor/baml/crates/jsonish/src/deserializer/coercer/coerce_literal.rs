@@ -3,10 +3,10 @@ use std::vec;
 use anyhow::Result;
 use baml_types::{LiteralValue, TypeIR};
 
-use super::{coerce_primitive::coerce_int, ParsingContext, ParsingError};
+use super::{ParsingContext, ParsingError, coerce_primitive::coerce_int};
 use crate::{
     deserializer::{
-        coercer::{coerce_primitive::coerce_bool, match_string::match_string, TypeCoercer},
+        coercer::{TypeCoercer, coerce_primitive::coerce_bool, match_string::match_string},
         deserialize_flags::{DeserializerConditions, Flag},
         types::BamlValueWithFlags,
     },

@@ -1,7 +1,8 @@
 [package]
-edition = "2021"
+edition = "2024"
 name = "jsonish"
 version = "0.1.0"
+rust-version = "1.96.0"
 license = "Apache-2.0"
 publish = false
 description = "Jsonish parser and coercer for BAML"

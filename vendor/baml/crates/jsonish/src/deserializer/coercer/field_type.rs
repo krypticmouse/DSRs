@@ -4,17 +4,16 @@ use baml_types::{
 };
 
 use super::{
-    array_helper,
+    ParsingContext, ParsingError, array_helper,
     coerce_array::coerce_array,
     coerce_map::coerce_map,
     coerce_union::coerce_union,
-    ir_ref::{coerce_alias::coerce_alias, IrRef},
-    ParsingContext, ParsingError,
+    ir_ref::{IrRef, coerce_alias::coerce_alias},
 };
 use crate::deserializer::{
     coercer::{
-        coerce_array::try_cast_array, coerce_map::try_cast_map, coerce_union::try_cast_union,
-        ir_ref::coerce_alias::try_cast_alias, run_user_checks, DefaultValue, TypeCoercer,
+        DefaultValue, TypeCoercer, coerce_array::try_cast_array, coerce_map::try_cast_map,
+        coerce_union::try_cast_union, ir_ref::coerce_alias::try_cast_alias, run_user_checks,
     },
     deserialize_flags::{DeserializerConditions, Flag},
     types::BamlValueWithFlags,
@@ -292,7 +291,7 @@ impl DefaultValue for TypeIR {
                 .iter()
                 .find_map(|i| i.default_value(error)),
             TypeIR::Primitive(TypeValue::Null, _) => {
-                return Some(BamlValueWithFlags::Null(self.clone(), get_flags()))
+                return Some(BamlValueWithFlags::Null(self.clone(), get_flags()));
             }
             TypeIR::Map(..) => Some(BamlValueWithFlags::Map(
                 get_flags(),

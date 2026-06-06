@@ -7,8 +7,8 @@ pub mod jsonish;
 
 use baml_types::TypeValue;
 use baml_types::{
-    type_meta, BamlValue, BamlValueWithMeta, Completion, CompletionState, HasType, JinjaExpression,
-    ResponseCheck, TypeIR,
+    BamlValue, BamlValueWithMeta, Completion, CompletionState, HasType, JinjaExpression,
+    ResponseCheck, TypeIR, type_meta,
 };
 pub use deserializer::types::BamlValueWithFlags;
 use deserializer::{
@@ -19,8 +19,8 @@ use deserializer::{
 use internal_baml_jinja::types::OutputFormatContent;
 use jsonish::Value;
 use serde::{
-    ser::{SerializeMap, SerializeStruct},
     Serialize, Serializer,
+    ser::{SerializeMap, SerializeStruct},
 };
 
 use crate::deserializer::score::WithScore;
@@ -88,31 +88,31 @@ impl serde::Serialize for SerializeResponseBamlValue<'_> {
         let serialize_mode = &self.serialize_mode;
 
         match &self.value {
-            String(s, ref meta) => {
+            String(s, meta) => {
                 log::debug!("Serializing string");
                 serialize_with_meta(&s, meta, serialize_mode, serializer)
             }
-            Int(i, ref meta) => {
+            Int(i, meta) => {
                 log::debug!("Serializing int");
                 serialize_with_meta(&i, meta, serialize_mode, serializer)
             }
-            Float(f, ref meta) => {
+            Float(f, meta) => {
                 log::debug!("Serializing float");
                 serialize_with_meta(&f, meta, serialize_mode, serializer)
             }
-            Bool(b, ref meta) => {
+            Bool(b, meta) => {
                 log::debug!("Serializing bool");
                 serialize_with_meta(&b, meta, serialize_mode, serializer)
             }
-            Media(v, ref meta) => {
+            Media(v, meta) => {
                 log::debug!("Serializing media");
                 serialize_with_meta(&v, meta, serialize_mode, serializer)
             }
-            Enum(ref name, v, ref meta) => {
+            Enum(name, v, meta) => {
                 log::debug!("Serializing enum {name}");
                 serialize_with_meta(&v, meta, serialize_mode, serializer)
             }
-            Map(items, ref meta) => {
+            Map(items, meta) => {
                 log::debug!("Serializing map");
                 let new_items = items
                     .into_iter()
@@ -128,7 +128,7 @@ impl serde::Serialize for SerializeResponseBamlValue<'_> {
                     .collect::<IndexMap<std::string::String, SerializeResponseBamlValue<'_>>>();
                 serialize_with_meta(&new_items, meta, serialize_mode, serializer)
             }
-            List(items, ref meta) => {
+            List(items, meta) => {
                 log::debug!("Serializing list");
                 let new_items = items
                     .iter()
@@ -139,7 +139,7 @@ impl serde::Serialize for SerializeResponseBamlValue<'_> {
                     .collect::<Vec<_>>();
                 serialize_with_meta(&new_items, meta, serialize_mode, serializer)
             }
-            Class(name, fields, ref meta) => {
+            Class(name, fields, meta) => {
                 log::debug!("Serializing class {name}");
                 let new_fields = fields
                     .into_iter()
@@ -166,7 +166,7 @@ impl serde::Serialize for SerializeResponseBamlValue<'_> {
                     .collect::<IndexMap<_, _>>();
                 serialize_with_meta(&new_fields, meta, serialize_mode, serializer)
             }
-            Null(ref meta) => {
+            Null(meta) => {
                 log::debug!("Serializing null");
                 serialize_with_meta(&(), meta, serialize_mode, serializer)
             }
@@ -182,12 +182,12 @@ impl<'a, T: Serialize> serde::Serialize for ResponseChecksMetadata<'a, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let checks_map: HashMap<_, _> = self
             .0
-             .1
+            .1
             .iter()
             .map(|check| (check.name.clone(), check))
             .collect();
         let mut state = serializer.serialize_struct("Checked", 2)?;
-        state.serialize_field("value", &self.0 .0)?;
+        state.serialize_field("value", &self.0.0)?;
         state.serialize_field("checks", &checks_map)?;
         state.end()
     }

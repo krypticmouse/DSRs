@@ -1,9 +1,9 @@
 use colored::{ColoredString, Colorize};
 
 use crate::{
-    error::sort_by_match,
-    pretty_print::{pretty_print, DiagnosticColorer},
     Span,
+    error::sort_by_match,
+    pretty_print::{DiagnosticColorer, pretty_print},
 };
 // use indoc::indoc;
 

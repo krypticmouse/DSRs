@@ -5,8 +5,8 @@ use internal_baml_jinja::types::Enum;
 use super::ParsingContext;
 use crate::deserializer::{
     coercer::{
-        ir_ref::coerce_class::apply_constraints, match_string::match_string, ParsingError,
-        TypeCoercer,
+        ParsingError, TypeCoercer, ir_ref::coerce_class::apply_constraints,
+        match_string::match_string,
     },
     types::BamlValueWithFlags,
 };

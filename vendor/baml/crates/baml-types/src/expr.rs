@@ -7,7 +7,7 @@ use std::{
 use internal_baml_diagnostics::Span;
 use itertools::join;
 
-use crate::{ir_type::TypeIR, BamlMap, BamlValueWithMeta};
+use crate::{BamlMap, BamlValueWithMeta, ir_type::TypeIR};
 
 /// A BAML expression term.
 /// T is the type of the metadata.

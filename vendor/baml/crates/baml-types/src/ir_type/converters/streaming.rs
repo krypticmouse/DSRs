@@ -1,7 +1,8 @@
 use crate::{
+    BamlMediaType, StreamingMode, TypeIR, TypeValue,
     baml_value::TypeLookups,
     ir_type::{ArrowGeneric, TypeStreaming, UnionTypeGeneric},
-    type_meta, BamlMediaType, StreamingMode, TypeIR, TypeValue,
+    type_meta,
 };
 
 pub fn from_type_ir(r#type: &TypeIR, lookup: &impl TypeLookups) -> TypeStreaming {

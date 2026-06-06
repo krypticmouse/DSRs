@@ -5,6 +5,10 @@ members = [
     "vendor/baml/crates/*",
 ]
 
+[workspace.package]
+edition = "2024"
+rust-version = "1.96.0"
+
 [patch.crates-io]
 # TODO(dsrs-facet-pin): switch back to upstream main/release once #2040/#2041 are merged and released.
 facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }

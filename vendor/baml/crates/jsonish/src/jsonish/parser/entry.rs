@@ -3,13 +3,13 @@ use baml_types::CompletionState;
 
 use super::ParseOptions;
 use crate::jsonish::{
+    Value,
     parser::{
         fixing_parser,
         markdown_parser::{self, MarkdownResult},
         multi_json_parser,
     },
     value::Fixes,
-    Value,
 };
 
 pub(super) fn parse_func(str: &str, mut options: ParseOptions, is_done: bool) -> Result<Value> {
