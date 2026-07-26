@@ -1,0 +1,20 @@
+[package]
+name = "dspy-py"
+version = "0.1.2"
+edition = "2024"
+description = "PyO3 bridge to expose BAML rendering and JSONish parsing to DSPy"
+license = "Apache-2.0"
+
+[lib]
+name = "_dsrs_dspy"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bamltype = { path = "../bamltype" }
+pyo3 = { version = "0.28.0", features = ["macros", "abi3-py39"] }
+regex = "1.11.2"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
+
+[dev-dependencies]
+proptest = "1.7.0"
