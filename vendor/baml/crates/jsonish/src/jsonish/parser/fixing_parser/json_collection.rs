@@ -102,11 +102,11 @@ impl From<JsonCollection> for Option<Value> {
             }
             JsonCollection::UnquotedString(s, completion_state) => {
                 let s = s.trim();
-                if s == "true" {
+                if matches!(s, "true" | "True") {
                     Value::Boolean(true)
-                } else if s == "false" {
+                } else if matches!(s, "false" | "False") {
                     Value::Boolean(false)
-                } else if s == "null" {
+                } else if matches!(s, "null" | "None") {
                     Value::Null
                 } else if let Ok(n) = s.parse::<i64>() {
                     Value::Number(n.into(), completion_state)

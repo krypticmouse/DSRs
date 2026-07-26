@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "dsrs-dspy"
+version = "0.1.2"
+description = "DSRS-backed DSPy adapter using BAML rendering and JSONish parsing"
+requires-python = ">=3.9"
+dependencies = ["dspy>=3.0", "pydantic>=2"]
+
+[project.urls]
+Repository = "https://github.com/krypticmouse/DSRs"
+
+[tool.maturin]
+# Nest the compiled extension inside the python package so ONE wheel ships both
+# `dsrs_dspy` (pure python) and its `_dsrs_dspy` native module — no PYTHONPATH,
+# no separate install step.
+module-name = "dsrs_dspy._dsrs_dspy"
+python-source = "python"
+# extension-module: don't hard-link libpython, so the abi3 wheel loads under any
+# CPython >= 3.9 (without this the .so segfaults across python versions).
+features = ["pyo3/extension-module"]

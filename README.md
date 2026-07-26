@@ -353,6 +353,26 @@ println!("Sentiment: {}", analysis.sentiment);
 println!("Summary: {}", summary.summary);
 ```
 
+## 🐍 Using DSRs from Python (DSPy)
+
+DSRs's BAML-style schema rendering and JSONish parsing are available to
+[DSPy](https://github.com/stanfordnlp/dspy) as a drop-in adapter, via the
+`dsrs-dspy` PyO3 package in [`crates/dspy-py`](crates/dspy-py):
+
+```bash
+uv add "dsrs-dspy @ git+https://github.com/krypticmouse/DSRs@main#subdirectory=crates/dspy-py"
+```
+
+```python
+import dspy
+from dsrs_dspy import DSRSBAMLAdapter
+
+dspy.configure(lm=dspy.LM("openai/gpt-5.2"), adapter=DSRSBAMLAdapter())
+```
+
+Building from git requires a Rust toolchain. See
+[`crates/dspy-py/README.md`](crates/dspy-py/README.md) for details.
+
 ## 🧪 Testing
 
 Run the test suite:
