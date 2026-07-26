@@ -70,13 +70,30 @@ fn leaf_type_strategy() -> BoxedStrategy<FuzzType> {
         Just(FuzzType::Int),
         Just(FuzzType::Float),
         Just(FuzzType::Bool),
-        string_regex("[a-zA-Z0-9_-]{1,20}")
+        // Literal strings must not look like other JSONish scalars: a literal
+        // "0" next to an int in the same union is genuinely ambiguous (JSONish
+        // deliberately coerces quoted numbers), so either parse would be
+        // defensible and the round-trip oracle can't call a winner.
+        string_regex("[a-zA-Z][a-zA-Z0-9_-]{0,19}")
             .expect("valid literal string regex")
+            .prop_filter("literal must not collide with JSONish keywords", |s| {
+                !matches!(
+                    s.to_ascii_lowercase().as_str(),
+                    "true" | "false" | "null" | "none" | "nan" | "inf" | "infinity"
+                )
+            })
             .prop_map(FuzzType::LiteralStr),
         any::<i16>().prop_map(|n| FuzzType::LiteralInt(n as i64)),
         any::<bool>().prop_map(FuzzType::LiteralBool),
         prop::collection::vec(
-            string_regex("[a-z]{1,10}").expect("valid enum value regex"),
+            string_regex("[a-z]{1,10}")
+                .expect("valid enum value regex")
+                .prop_filter("enum value must not collide with JSONish keywords", |s| {
+                    !matches!(
+                        s.as_str(),
+                        "true" | "false" | "null" | "none" | "nan" | "inf" | "infinity"
+                    )
+                }),
             2..6,
         )
         .prop_map(|values| FuzzType::Enum(dedupe_non_empty_strings(values))),
