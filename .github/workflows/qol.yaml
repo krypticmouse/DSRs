@@ -35,7 +35,23 @@ jobs:
           toolchain: nightly-2026-01-25
           components: miri
       - run: cargo miri setup
-      - run: cargo miri test --all-features
+      # dspy-py is a PyO3 extension; its tests embed CPython, which miri cannot interpret.
+      - run: cargo miri test --all-features --workspace --exclude dspy-py
+
+  python-adapter:
+    name: Python Adapter (dsrs-dspy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.90.0
+      - uses: astral-sh/setup-uv@v5
+      - name: Build wheel and run adapter tests against DSPy
+        run: |
+          uv venv .venv
+          VIRTUAL_ENV=$PWD/.venv uv pip install ./crates/dspy-py dspy pytest
+          .venv/bin/pytest crates/dspy-py/tests/python/ -q
 
   clippy:
     name: Clippy Lint
