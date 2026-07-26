@@ -63,6 +63,7 @@ pub use runtime::{
 
 pub mod adapters;
 mod schema_registry;
+pub use schema_registry::SchemaRegistry;
 
 pub mod facet_ext;
 
