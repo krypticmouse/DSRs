@@ -173,7 +173,7 @@ impl JsonParseState {
 
         // Check if the token is a valid json character
         match v.as_str() {
-            "true" | "false" | "null" => true,
+            "true" | "false" | "null" | "True" | "False" | "None" => true,
             _ => {
                 // Check if the token parses as a number
                 if v.parse::<f64>().is_ok() {

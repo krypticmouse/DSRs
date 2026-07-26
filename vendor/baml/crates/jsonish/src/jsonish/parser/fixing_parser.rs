@@ -148,6 +148,21 @@ mod tests {
     }
 
     #[test]
+    fn test_python_literal_null_and_boole() {
+        let opts = ParseOptions::default();
+        let vals = parse(r#"{"missing": None, "yes": True, "no": False}"#, &opts).unwrap();
+
+        match &vals[0].0 {
+            Value::Object(fields, _) => {
+                assert!(matches!(&fields[0], (key, Value::Null) if key == "missing"));
+                assert!(matches!(&fields[1], (key, Value::Boolean(true)) if key == "yes"));
+                assert!(matches!(&fields[2], (key, Value::Boolean(false)) if key == "no"));
+            }
+            _ => panic!("Expected object"),
+        }
+    }
+
+    #[test]
     fn test_partial_object_newlines() {
         let opts = ParseOptions::default();
         let vals = parse("{\n \"a\": 11, \n \"b\": 22", &opts).unwrap();
