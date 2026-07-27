@@ -1,5 +1,0 @@
-error: serde(skip) is not supported on enum variants; hint: remove the variant or use a separate enum
- --> tests/ui/serde_skip_variant.rs:5:13
-  |
-5 |     #[serde(skip)]
-  |             ^^^^

@@ -9,7 +9,7 @@ use rig::wasm_compat::WasmBoxedFuture;
 
 use crate::core::{Module, Signature};
 use crate::predictors::{Predict, PredictBuilder};
-use crate::{BamlType, PredictError, Predicted};
+use crate::{PredictError, Predicted, Schema};
 
 /// ReAct action-step schema.
 #[derive(dsrs_macros::Signature, Clone, Debug)]
@@ -34,7 +34,7 @@ struct ReActActionStep {
 #[derive(dsrs_macros::Signature, Clone, Debug)]
 struct ReActExtractStep<O>
 where
-    O: BamlType + for<'a> Facet<'a> + Send + Sync + 'static,
+    O: Schema + for<'a> Facet<'a> + Send + Sync + 'static,
 {
     #[input]
     input: String,
@@ -51,8 +51,8 @@ where
 pub struct ReAct<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     action: Predict<ReActActionStep>,
     extract: Predict<ReActExtractStep<S::Output>>,
@@ -65,8 +65,8 @@ where
 impl<S> ReAct<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     pub fn new() -> Self {
         Self::builder().build()
@@ -142,7 +142,7 @@ where
     }
 
     async fn run(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        let serialized_input = serde_json::to_string(&input.to_baml_value())
+        let serialized_input = serde_json::to_string(&input)
             .unwrap_or_else(|_| "<input serialization failed>".to_string());
 
         let tool_manifest = self.render_tool_manifest().await;
@@ -232,8 +232,8 @@ where
 impl<S> Default for ReAct<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     fn default() -> Self {
         Self::new()
@@ -243,8 +243,8 @@ where
 impl<S> Module for ReAct<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     type Input = S::Input;
     type Output = S::Output;
@@ -257,8 +257,8 @@ where
 pub struct ReActBuilder<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     action: PredictBuilder<ReActActionStep>,
     extract: PredictBuilder<ReActExtractStep<S::Output>>,
@@ -269,8 +269,8 @@ where
 impl<S> ReActBuilder<S>
 where
     S: Signature,
-    S::Input: BamlType + Clone,
-    S::Output: BamlType,
+    S::Input: Schema + Clone,
+    S::Output: Schema,
 {
     fn new() -> Self {
         Self {

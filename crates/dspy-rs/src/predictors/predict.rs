@@ -1,19 +1,19 @@
 use anyhow::Result;
-use bamltype::baml_types::BamlMap;
 use rig::tool::ToolDyn;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tracing::{debug, trace};
 
 use crate as dsrs;
+use crate::core::lm::ToolSet;
 use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
 use crate::data::example::Example as RawExample;
 use crate::{
-    BamlType, BamlValue, CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage,
-    PredictError, Predicted, Prediction, SignatureSchema,
+    CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage, Message, PredictError,
+    Predicted, Prediction, Schema, SignatureSchema,
 };
 
 /// A typed input/output pair for few-shot prompting.
@@ -128,6 +128,15 @@ pub struct Predict<S: Signature> {
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
     lm: Option<Arc<crate::core::LM>>,
+    /// Formatted system + demo messages, built once per (instruction, demos)
+    /// configuration. Reset by every mutator (`set_instruction`,
+    /// `set_demos_from_examples`, `load_state`).
+    #[facet(skip, opaque)]
+    prompt_prefix: OnceLock<Vec<Message>>,
+    /// Pre-fetched tool definitions + name-indexed executors. Tools are only
+    /// settable at build time, so this never needs invalidation.
+    #[facet(skip, opaque)]
+    toolset: tokio::sync::OnceCell<Arc<ToolSet>>,
     #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
@@ -140,6 +149,8 @@ impl<S: Signature> Predict<S> {
             demos: Vec::new(),
             instruction_override: None,
             lm: None,
+            prompt_prefix: OnceLock::new(),
+            toolset: tokio::sync::OnceCell::new(),
             _marker: PhantomData,
         }
     }
@@ -167,8 +178,8 @@ impl<S: Signature> Predict<S> {
     )]
     pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
         self.forward(input).await
     }
@@ -189,11 +200,17 @@ impl<S: Signature> Predict<S> {
     /// - [`PredictError::Parse`] if the response can't be parsed into the output fields
     pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
+        // Serialize the input for the trace node only when a trace scope is active.
+        let input_data = if crate::trace::is_tracing() {
+            raw_example_from_input::<S>(&input).ok()
+        } else {
+            None
+        };
         let chat = self.build_chat(&input)?;
-        let (predicted, _) = self.call_and_parse(chat).await?;
+        let (predicted, _) = self.call_and_parse_with_input(chat, input_data).await?;
         Ok(predicted)
     }
 
@@ -212,8 +229,8 @@ impl<S: Signature> Predict<S> {
         chat: Chat,
     ) -> Result<(Predicted<S::Output>, Chat), PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
         trace!(message_count = chat.len(), "continuing prior chat");
         self.call_and_parse(chat).await
@@ -224,10 +241,48 @@ impl<S: Signature> Predict<S> {
     /// Returns a [`Chat`] ready to pass to [`call_and_parse`](Predict::call_and_parse)
     /// or [`forward_continue`](Predict::forward_continue). Useful when you need to
     /// inspect or modify the prompt before sending it to the LM.
+    ///
+    /// The system message and demo turns are formatted once per (instruction,
+    /// demos) configuration and cached on the instance — only the live user
+    /// message is formatted per call.
     #[allow(clippy::result_large_err)]
     pub fn build_chat(&self, input: &S::Input) -> Result<Chat, PredictError>
     where
-        S::Input: BamlType,
+        S::Input: Schema,
+    {
+        let prefix = self.prompt_prefix()?;
+        let user = ChatAdapter.format_user_message_typed::<S>(input);
+
+        let mut messages = Vec::with_capacity(prefix.len() + 1);
+        messages.extend(prefix.iter().cloned());
+        messages.push(Message::user(user));
+        let chat = Chat::new(messages);
+        trace!(message_count = chat.len(), "chat constructed");
+        Ok(chat)
+    }
+
+    /// Returns the cached system + demo message prefix, building it on first use.
+    #[allow(clippy::result_large_err)]
+    fn prompt_prefix(&self) -> Result<&[Message], PredictError>
+    where
+        S::Input: Schema,
+    {
+        if self.prompt_prefix.get().is_none() {
+            let built = self.build_prompt_prefix()?;
+            // A concurrent forward may have won the race — that's fine, both
+            // builds produce identical messages.
+            let _ = self.prompt_prefix.set(built);
+        }
+        Ok(self
+            .prompt_prefix
+            .get()
+            .expect("prompt prefix initialized above"))
+    }
+
+    #[allow(clippy::result_large_err)]
+    fn build_prompt_prefix(&self) -> Result<Vec<Message>, PredictError>
+    where
+        S::Input: Schema,
     {
         let chat_adapter = ChatAdapter;
         let system = match chat_adapter
@@ -244,25 +299,31 @@ impl<S: Signature> Predict<S> {
                 });
             }
         };
+        trace!(system_len = system.len(), "typed system prompt formatted");
 
-        let user = chat_adapter.format_user_message_typed::<S>(input);
-        trace!(
-            system_len = system.len(),
-            user_len = user.len(),
-            "typed prompt formatted"
-        );
-
-        let mut chat = Chat::new(vec![]);
-        chat.push("system", &system);
+        let mut messages = Vec::with_capacity(1 + self.demos.len() * 2);
+        messages.push(Message::system(system));
         for demo in &self.demos {
-            let demo_user = chat_adapter.format_user_message_typed::<S>(&demo.input);
-            let demo_assistant = chat_adapter.format_assistant_message_typed::<S>(&demo.output);
-            chat.push("user", &demo_user);
-            chat.push("assistant", &demo_assistant);
+            messages.push(Message::user(
+                chat_adapter.format_user_message_typed::<S>(&demo.input),
+            ));
+            messages.push(Message::assistant(
+                chat_adapter.format_assistant_message_typed::<S>(&demo.output),
+            ));
         }
-        chat.push("user", &user);
-        trace!(message_count = chat.len(), "chat constructed");
-        Ok(chat)
+        Ok(messages)
+    }
+
+    /// Returns the cached [`ToolSet`], fetching tool definitions on first use.
+    async fn cached_toolset(&self) -> Option<Arc<ToolSet>> {
+        if self.tools.is_empty() {
+            return None;
+        }
+        Some(Arc::clone(
+            self.toolset
+                .get_or_init(|| async { Arc::new(ToolSet::build(&self.tools).await) })
+                .await,
+        ))
     }
 
     /// Calls the LM with the given chat and parses the response.
@@ -275,9 +336,42 @@ impl<S: Signature> Predict<S> {
         chat: Chat,
     ) -> Result<(Predicted<S::Output>, Chat), PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
+        self.call_and_parse_with_input(chat, None).await
+    }
+
+    /// [`call_and_parse`](Predict::call_and_parse) with the typed input captured for
+    /// trace recording. `input_data` is only recorded when a [`trace()`](crate::trace::trace)
+    /// scope is active; pass `None` when the input is unavailable (e.g. multi-turn
+    /// continuations).
+    async fn call_and_parse_with_input(
+        &self,
+        chat: Chat,
+        input_data: Option<RawExample>,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    where
+        S::Input: Schema,
+        S::Output: Schema,
+    {
+        // Record the node before the LM call so failed calls still appear in the
+        // trace (input recorded, output absent) — that visibility is what lets
+        // optimizers assign blame for pipeline failures.
+        let node_id = if crate::trace::is_tracing() {
+            let inputs = crate::trace::last_node_id().into_iter().collect();
+            crate::trace::record_node(
+                crate::trace::NodeType::Predict {
+                    signature_name: std::any::type_name::<S>().to_string(),
+                    instance_key: self as *const Self as *const () as usize,
+                },
+                inputs,
+                input_data,
+            )
+        } else {
+            None
+        };
+
         let lm = match &self.lm {
             Some(lm) => Arc::clone(lm),
             None => {
@@ -287,7 +381,13 @@ impl<S: Signature> Predict<S> {
             }
         };
 
-        let response = match lm.call(chat, self.tools.clone()).await {
+        let toolset = self.cached_toolset().await;
+        let empty_toolset = ToolSet::default();
+        let toolset_ref = toolset.as_deref().unwrap_or(&empty_toolset);
+        let response = match lm
+            .call_with_toolset(chat, toolset_ref, crate::ToolLoopMode::Auto)
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 return Err(PredictError::Lm {
@@ -315,21 +415,9 @@ impl<S: Signature> Predict<S> {
             tool_executions,
         } = response;
 
-        let node_id = if crate::trace::is_tracing() {
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
-                    signature_name: std::any::type_name::<S>().to_string(),
-                },
-                vec![],
-                None,
-            )
-        } else {
-            None
-        };
-
         let chat_adapter = ChatAdapter;
-        let raw_response = output.content().to_string();
-        let lm_usage = usage.clone();
+        let raw_response = output.content();
+        let lm_usage = usage;
 
         let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&output) {
             Ok(parsed) => parsed,
@@ -368,7 +456,7 @@ impl<S: Signature> Predict<S> {
         );
 
         if let Some(id) = node_id {
-            match prediction_from_output::<S>(&typed_output, lm_usage.clone(), Some(id)) {
+            match prediction_from_output::<S>(&typed_output, lm_usage, Some(id)) {
                 Ok(prediction) => {
                     crate::trace::record_output(id, prediction);
                     trace!(node_id = id, "recorded typed predictor output");
@@ -481,24 +569,21 @@ impl<S: Signature> PredictBuilder<S> {
             demos: self.demos,
             instruction_override: self.instruction_override,
             lm: self.lm,
+            prompt_prefix: OnceLock::new(),
+            toolset: tokio::sync::OnceCell::new(),
             _marker: PhantomData,
         }
     }
 }
 
-fn baml_map_from_example_keys(
-    data: &HashMap<String, Value>,
-    keys: &[String],
-) -> Result<BamlMap<String, BamlValue>> {
-    let mut map = BamlMap::new();
+fn json_map_from_example_keys(data: &HashMap<String, Value>, keys: &[String]) -> Map<String, Value> {
+    let mut map = Map::new();
     for key in keys {
         if let Some(value) = data.get(key) {
-            let baml_value =
-                BamlValue::try_from(value.clone()).map_err(|err| anyhow::anyhow!(err))?;
-            map.insert(key.clone(), baml_value);
+            map.insert(key.clone(), value.clone());
         }
     }
-    Ok(map)
+    map
 }
 
 fn input_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> {
@@ -527,28 +612,26 @@ fn output_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> 
 
 fn input_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Input>
 where
-    S::Input: BamlType,
+    S::Input: Schema,
 {
     let keys = input_keys_for_signature::<S>(example);
-    let map = baml_map_from_example_keys(&example.data, &keys)?;
-    let baml_value = BamlValue::Map(map);
-    S::Input::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
+    let map = json_map_from_example_keys(&example.data, &keys);
+    serde_json::from_value::<S::Input>(Value::Object(map)).map_err(|err| anyhow::anyhow!(err))
 }
 
 fn output_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Output>
 where
-    S::Output: BamlType,
+    S::Output: Schema,
 {
     let keys = output_keys_for_signature::<S>(example);
-    let map = baml_map_from_example_keys(&example.data, &keys)?;
-    let baml_value = BamlValue::Map(map);
-    S::Output::try_from_baml_value(baml_value).map_err(|err| anyhow::anyhow!(err))
+    let map = json_map_from_example_keys(&example.data, &keys);
+    serde_json::from_value::<S::Output>(Value::Object(map)).map_err(|err| anyhow::anyhow!(err))
 }
 
 fn typed_example_from_raw<S: Signature>(example: RawExample) -> Result<Example<S>>
 where
-    S::Input: BamlType,
-    S::Output: BamlType,
+    S::Input: Schema,
+    S::Output: Schema,
 {
     let input = input_from_raw_example::<S>(&example)?;
     let output = output_from_raw_example::<S>(&example)?;
@@ -557,11 +640,11 @@ where
 
 fn raw_example_from_typed<S: Signature>(example: &Example<S>) -> Result<RawExample>
 where
-    S::Input: BamlType,
-    S::Output: BamlType,
+    S::Input: Schema,
+    S::Output: Schema,
 {
-    let input_value = serde_json::to_value(example.input.to_baml_value())?;
-    let output_value = serde_json::to_value(example.output.to_baml_value())?;
+    let input_value = serde_json::to_value(&example.input)?;
+    let output_value = serde_json::to_value(&example.output)?;
 
     let input_map = input_value
         .as_object()
@@ -582,15 +665,32 @@ where
     Ok(RawExample::new(data, input_keys, output_keys))
 }
 
+fn raw_example_from_input<S: Signature>(input: &S::Input) -> Result<RawExample>
+where
+    S::Input: Schema,
+{
+    let input_value = serde_json::to_value(input)?;
+    let input_map = input_value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("expected object for signature input"))?;
+
+    let data = input_map
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<HashMap<String, Value>>();
+    let input_keys = input_map.keys().cloned().collect();
+    Ok(RawExample::new(data, input_keys, Vec::new()))
+}
+
 fn prediction_from_output<S: Signature>(
     output: &S::Output,
     lm_usage: LmUsage,
     node_id: Option<usize>,
 ) -> Result<Prediction>
 where
-    S::Output: BamlType,
+    S::Output: Schema,
 {
-    let output_value = serde_json::to_value(output.to_baml_value())?;
+    let output_value = serde_json::to_value(output)?;
     let output_map = output_value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("expected object for signature output"))?;
@@ -607,8 +707,8 @@ where
 impl<S> Module for Predict<S>
 where
     S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
+    S::Input: Schema,
+    S::Output: Schema,
 {
     type Input = S::Input;
     type Output = S::Output;
@@ -630,8 +730,8 @@ where
 impl<S> DynPredictor for Predict<S>
 where
     S: Signature,
-    S::Input: BamlType,
-    S::Output: BamlType,
+    S::Input: Schema,
+    S::Output: Schema,
 {
     fn schema(&self) -> &SignatureSchema {
         S::schema()
@@ -645,6 +745,16 @@ where
 
     fn set_instruction(&mut self, instruction: String) {
         self.instruction_override = Some(instruction);
+        self.prompt_prefix = OnceLock::new();
+    }
+
+    fn instruction_override(&self) -> Option<String> {
+        self.instruction_override.clone()
+    }
+
+    fn restore_instruction(&mut self, instruction: Option<String>) {
+        self.instruction_override = instruction;
+        self.prompt_prefix = OnceLock::new();
     }
 
     fn demos_as_examples(&self) -> Vec<RawExample> {
@@ -662,6 +772,7 @@ where
             .into_iter()
             .map(typed_example_from_raw::<S>)
             .collect::<Result<Vec<_>>>()?;
+        self.prompt_prefix = OnceLock::new();
         Ok(())
     }
 
@@ -675,6 +786,7 @@ where
     fn load_state(&mut self, state: PredictState) -> Result<()> {
         self.set_demos_from_examples(state.demos)?;
         self.instruction_override = state.instruction_override;
+        self.prompt_prefix = OnceLock::new();
         Ok(())
     }
 }

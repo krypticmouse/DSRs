@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, Signature, SignatureSchema};
+use dspy_rs::{BamlType, Schema, Signature, SignatureSchema};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -73,11 +73,8 @@ fn schema_contains_flattened_paths_and_aliases() {
         .collect();
     assert_eq!(output_names, vec!["answer", "score"]);
 
-    let expected = <<NestedSig as Signature>::Output as BamlType>::baml_output_format();
-    assert_eq!(
-        schema.output_format().target.diagnostic_repr().to_string(),
-        expected.target.diagnostic_repr().to_string()
-    );
+    let expected = <<NestedSig as Signature>::Output as Schema>::output_schema();
+    assert_eq!(schema.output_schema().target, expected.target);
 }
 
 #[test]

@@ -5,15 +5,14 @@ use crate::adapter::Adapter;
 
 pub struct Settings {
     pub lm: Arc<LM>,
-    pub adapter: Arc<dyn Adapter>,
 }
 
 impl Settings {
-    pub fn new(lm: LM, adapter: impl Adapter + 'static) -> Self {
-        Self {
-            lm: Arc::new(lm),
-            adapter: Arc::new(adapter),
-        }
+    /// The `adapter` parameter is accepted for API compatibility but unused —
+    /// the typed path always formats with `ChatAdapter`, and no code path ever
+    /// dispatched through the stored adapter.
+    pub fn new(lm: LM, _adapter: impl Adapter + 'static) -> Self {
+        Self { lm: Arc::new(lm) }
     }
 }
 

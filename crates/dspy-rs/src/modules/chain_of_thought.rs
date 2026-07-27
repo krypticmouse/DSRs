@@ -2,7 +2,7 @@ use crate::Augmentation;
 use crate::augmentation::Augmented;
 use crate::core::{Module, Signature};
 use crate::predictors::{Example, Predict, PredictBuilder};
-use crate::{BamlType, PredictError, Predicted};
+use crate::{PredictError, Predicted, Schema};
 
 /// Augmentation that prepends a `reasoning: String` field to a signature's output.
 ///
@@ -83,8 +83,8 @@ impl<S: Signature> ChainOfThought<S> {
         input: S::Input,
     ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
         self.forward(input).await
     }
@@ -94,8 +94,8 @@ impl<S: Signature> ChainOfThought<S> {
         input: S::Input,
     ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
     where
-        S::Input: BamlType,
-        S::Output: BamlType,
+        S::Input: Schema,
+        S::Output: Schema,
     {
         self.predictor.call(input).await
     }
@@ -104,8 +104,8 @@ impl<S: Signature> ChainOfThought<S> {
 impl<S> Module for ChainOfThought<S>
 where
     S: Signature + Clone,
-    S::Input: BamlType,
-    S::Output: BamlType,
+    S::Input: Schema,
+    S::Output: Schema,
 {
     type Input = S::Input;
     type Output = WithReasoning<S::Output>;

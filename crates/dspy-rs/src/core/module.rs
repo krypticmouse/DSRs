@@ -2,7 +2,7 @@ use futures::stream::{self, StreamExt};
 use kdam::{BarExt, tqdm};
 use tracing::debug;
 
-use crate::{BamlType, Facet, PredictError, Predicted};
+use crate::{Facet, PredictError, Predicted, Schema};
 
 type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
 
@@ -56,7 +56,7 @@ type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
 #[allow(async_fn_in_trait)]
 pub trait Module: Send + Sync {
     /// What the module receives. Usually a `Signature`'s generated input struct.
-    type Input: BamlType + for<'a> Facet<'a> + Send + Sync;
+    type Input: Schema + for<'a> Facet<'a> + Send + Sync;
 
     /// What the LM is asked to produce.
     ///
@@ -64,11 +64,20 @@ pub trait Module: Send + Sync {
     /// `WithReasoning<_>` because the LM now generates a reasoning field). Wrapper modules
     /// that don't modify the prompt keep the inner module's output — their bookkeeping
     /// lives on [`crate::CallMetadata`], not here.
-    type Output: BamlType + for<'a> Facet<'a> + Send + Sync;
+    type Output: Schema + for<'a> Facet<'a> + Send + Sync;
 
     /// The implementation hook. Module authors put their execution logic here.
     ///
     /// Callers should use [`call`](Module::call) instead.
+    ///
+    /// # Why `input` is taken by value
+    ///
+    /// A deliberate API decision: by-value input lets pipeline authors *move*
+    /// fields into sub-module inputs with no clones (`AnswerInput { context:
+    /// ctx.passages }`), which is the common composition pattern. The cost is
+    /// one input clone per example in evaluation loops that reuse a trainset —
+    /// noise next to the LM calls those loops make. Taking `&Input` would invert
+    /// the trade: every intermediate hand-off inside `forward` would clone instead.
     async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError>;
 
     /// Runs the module. This is what you call.

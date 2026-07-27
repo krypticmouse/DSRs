@@ -30,9 +30,12 @@ mod schema;
 pub mod settings;
 pub mod signature;
 pub mod specials;
+mod state;
 
 pub(crate) use dyn_predictor::*;
+pub use dyn_predictor::PredictState;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use state::ModuleState;
 pub use lm::*;
 pub use module::*;
 pub use module_ext::*;

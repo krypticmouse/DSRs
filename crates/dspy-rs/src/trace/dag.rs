@@ -10,6 +10,11 @@ pub enum NodeType {
     Predict {
         /// The `type_name::<S>()` of the signature.
         signature_name: String,
+        /// Address of the `Predict` instance that ran, stable for the lifetime
+        /// of the module value. Lets optimizers map trace nodes back to named
+        /// predictor paths discovered via Facet reflection (see
+        /// [`predictor_instance_keys`](crate::predictor_instance_keys)).
+        instance_key: usize,
     },
     /// A user-defined operation (custom module logic between Predict calls).
     Operator {
@@ -28,9 +33,13 @@ impl fmt::Debug for NodeType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Root => write!(f, "Root"),
-            Self::Predict { signature_name } => f
+            Self::Predict {
+                signature_name,
+                instance_key,
+            } => f
                 .debug_struct("Predict")
                 .field("signature_name", signature_name)
+                .field("instance_key", instance_key)
                 .finish(),
             Self::Operator { name } => f.debug_struct("Operator").field("name", name).finish(),
             Self::Map { mapping } => f.debug_struct("Map").field("mapping", mapping).finish(),
@@ -50,10 +59,17 @@ pub struct Node {
     /// What kind of operation this node represents.
     pub node_type: NodeType,
     /// IDs of parent nodes whose outputs feed into this node.
+    ///
+    /// For `Predict` nodes this is the previously recorded node in the same trace
+    /// scope — a sequential approximation of dataflow, exact for hand-written
+    /// sequential pipelines (the common case today).
     pub inputs: Vec<usize>,
     /// The output produced by this node (set after execution completes).
+    ///
+    /// `None` for a `Predict` node means the call was recorded but never
+    /// completed — the LM call or response parse failed.
     pub output: Option<Prediction>,
-    /// The input data passed to this node (for Root nodes).
+    /// The input data passed to this node (Root nodes and Predict nodes).
     pub input_data: Option<RawExample>,
 }
 

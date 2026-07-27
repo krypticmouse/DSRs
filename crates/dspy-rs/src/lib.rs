@@ -64,8 +64,6 @@
 //! - **No dynamic graph / structural optimization.** The type-erased `ProgramGraph`,
 //!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
 //!   Everything here is statically typed, which is both the strength and the constraint.
-//! - **MIPRO is instruction-only.** It should also mutate demos per-predictor based on
-//!   trace data — Python DSPy does this — but it doesn't yet (`TODO(trace-demos)`).
 //! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
 //!   The module trait and augmentation system are designed for them, but nobody's built
 //!   them yet.
@@ -121,16 +119,18 @@ pub use optimizer::*;
 pub use predictors::*;
 pub use utils::*;
 
-pub use bamltype::BamlConvertError;
-pub use bamltype::BamlType; // attribute macro
-pub use bamltype::Shape;
-pub use bamltype::baml_types::{
-    BamlValue, Constraint, ConstraintLevel, ResponseCheck, StreamingMode, TypeIR,
+pub mod typesys;
+pub use typesys::{
+    Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
+    Schema, evaluate_constraints,
 };
-pub use bamltype::internal_baml_jinja::types::{OutputFormatContent, RenderOptions};
-pub use bamltype::jsonish::deserializer::deserialize_flags::Flag;
 pub use dsrs_macros::*;
-pub use facet::Facet;
+pub use facet::{Facet, Shape};
+
+/// The runtime value model is now `serde_json::Value`. This alias keeps the historical
+/// `BamlValue` name available to downstream code and tests during the migration away from
+/// the vendored BAML value type.
+pub type BamlValue = serde_json::Value;
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -148,7 +148,7 @@ pub mod doctest {
 #[doc(hidden)]
 pub mod __macro_support {
     pub use anyhow;
-    pub use bamltype;
+    pub use facet;
     pub use indexmap;
     pub use schemars;
     pub use serde;

@@ -2,7 +2,6 @@
 resolver = "3"
 members = [
     "crates/*",
-    "vendor/baml/crates/*",
 ]
 
 [patch.crates-io]

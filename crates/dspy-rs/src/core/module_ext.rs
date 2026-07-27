@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{BamlType, Facet, PredictError, Predicted};
+use crate::{Facet, PredictError, Predicted, Schema};
 
 use super::Module;
 
@@ -26,7 +26,7 @@ pub trait ModuleExt: Module + Sized {
     fn map<F, T>(self, map: F) -> Map<Self, T>
     where
         F: Fn(Self::Output) -> T + Send + Sync + 'static,
-        T: BamlType + for<'a> Facet<'a> + Send + Sync,
+        T: Schema + for<'a> Facet<'a> + Send + Sync,
     {
         Map {
             inner: self,
@@ -38,7 +38,7 @@ pub trait ModuleExt: Module + Sized {
     fn and_then<F, T>(self, and_then: F) -> AndThen<Self, T>
     where
         F: Fn(Self::Output) -> Result<T, PredictError> + Send + Sync + 'static,
-        T: BamlType + for<'a> Facet<'a> + Send + Sync,
+        T: Schema + for<'a> Facet<'a> + Send + Sync,
     {
         AndThen {
             inner: self,
@@ -70,7 +70,7 @@ where
 impl<M, T> Module for Map<M, T>
 where
     M: Module,
-    T: BamlType + for<'a> Facet<'a> + Send + Sync,
+    T: Schema + for<'a> Facet<'a> + Send + Sync,
 {
     type Input = M::Input;
     type Output = T;
@@ -100,7 +100,7 @@ where
 impl<M, T> Module for AndThen<M, T>
 where
     M: Module,
-    T: BamlType + for<'a> Facet<'a> + Send + Sync,
+    T: Schema + for<'a> Facet<'a> + Send + Sync,
 {
     type Input = M::Input;
     type Output = T;

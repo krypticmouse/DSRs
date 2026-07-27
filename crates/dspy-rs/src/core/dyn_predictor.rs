@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use anyhow::Result;
-use bamltype::facet_reflect::Peek;
 use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
+use facet_reflect::Peek;
 
 use crate::SignatureSchema;
 use crate::data::example::Example as RawExample;
@@ -26,6 +26,17 @@ pub(crate) trait DynPredictor: Send + Sync {
 
     /// Overrides the instruction for this predictor.
     fn set_instruction(&mut self, instruction: String);
+
+    /// Returns the raw instruction override (`None` when the signature default is active).
+    ///
+    /// Together with [`restore_instruction`](DynPredictor::restore_instruction) this
+    /// gives optimizers a cheap save/restore for instruction-only candidate
+    /// evaluation — no demo serialization round-trip like
+    /// [`dump_state`](DynPredictor::dump_state)/[`load_state`](DynPredictor::load_state).
+    fn instruction_override(&self) -> Option<String>;
+
+    /// Restores a previously saved instruction override (including `None`).
+    fn restore_instruction(&mut self, instruction: Option<String>);
 
     /// Returns current demos as type-erased [`Example`]s.
     fn demos_as_examples(&self) -> Vec<RawExample>;
@@ -52,13 +63,15 @@ pub(crate) trait DynPredictor: Send + Sync {
 /// Serializable snapshot of a [`crate::Predict`]'s mutable state.
 ///
 /// Contains demos (as type-erased [`Example`]s) and the instruction override.
-/// Used by [`DynPredictor::dump_state`]/[`DynPredictor::load_state`] for
-/// saving and restoring optimized parameters.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct PredictState {
+/// Produced by optimizers when they tune a predictor; persist a whole module's
+/// worth of these with [`ModuleState`](crate::ModuleState).
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct PredictState {
     /// The demos as type-erased examples.
+    #[serde(default)]
     pub demos: Vec<RawExample>,
     /// The instruction override, if any.
+    #[serde(default)]
     pub instruction_override: Option<String>,
 }
 

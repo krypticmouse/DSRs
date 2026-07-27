@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, Facet, InputRenderSpec, Signature as SignatureTrait, SignatureSchema};
+use dspy_rs::{Facet, InputRenderSpec, Schema, Signature as SignatureTrait, SignatureSchema};
 
 /// Test instruction
 #[derive(dsrs_macros::Signature, Clone, Debug)]
@@ -51,13 +51,13 @@ struct RenderSpecSig {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct GenericCtx {
     question: String,
 }
 
 #[derive(dsrs_macros::Signature, Clone, Debug)]
-struct GenericFlattenSig<T: BamlType + for<'a> Facet<'a> + Clone + Send + Sync> {
+struct GenericFlattenSig<T: Schema + for<'a> Facet<'a> + Clone + Send + Sync> {
     #[input]
     #[flatten]
     context: T,

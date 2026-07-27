@@ -2,7 +2,7 @@ use rig::completion::Usage;
 use serde::{Deserialize, Serialize};
 use std::ops::Add;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct LmUsage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,

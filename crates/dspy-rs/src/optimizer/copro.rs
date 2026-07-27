@@ -56,6 +56,9 @@ pub struct COPRO {
     pub track_stats: bool,
     /// Optional separate LM for generating candidate instructions.
     pub prompt_model: Option<crate::LM>,
+    /// Concurrent LM calls in flight during candidate evaluation.
+    #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
+    pub eval_concurrency: usize,
 }
 
 impl COPRO {
@@ -92,24 +95,28 @@ impl COPRO {
         M: Module<Input = S::Input> + for<'a> Facet<'a>,
         MT: TypedMetric<S, M>,
     {
-        let original_state = with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.dump_state())
+        // Instruction-only save/restore — no demo serialization round-trip.
+        let original_instruction = with_named_predictor(module, predictor_name, |predictor| {
+            Ok(predictor.instruction_override())
         })?;
 
         Self::set_instruction(module, predictor_name, candidate_instruction.to_string())?;
-        let evaluation = evaluate_module_with_metric(&*module, trainset, metric).await;
+        let evaluation =
+            evaluate_module_with_metric(&*module, trainset, metric, self.eval_concurrency).await;
 
         match evaluation {
             Ok(outcomes) => {
                 with_named_predictor(module, predictor_name, |predictor| {
-                    predictor.load_state(original_state.clone())
+                    predictor.restore_instruction(original_instruction);
+                    Ok(())
                 })?;
                 Ok(average_score(&outcomes))
             }
             Err(eval_err) => {
                 if let Err(restore_err) =
                     with_named_predictor(module, predictor_name, |predictor| {
-                        predictor.load_state(original_state)
+                        predictor.restore_instruction(original_instruction.clone());
+                        Ok(())
                     })
                 {
                     return Err(anyhow!(

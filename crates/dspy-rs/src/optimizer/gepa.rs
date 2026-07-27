@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use bon::Builder;
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
@@ -7,9 +8,59 @@ use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
 use crate::predictors::Example;
-use crate::{BamlType, BamlValue, Facet, Module, Signature};
+use crate::{BamlValue, Facet, Module, Predict, Schema, Signature, SignatureSchema};
 
 use super::pareto::ParetoFrontier;
+
+/// Improve an LLM-pipeline module's instruction using execution feedback.
+///
+/// You are optimizing the system instruction of one module inside an LLM pipeline.
+/// Study the module's input/output contract, its current instruction, and the
+/// per-example feedback from the last evaluation. Then write an improved
+/// instruction: fix the failure modes the feedback names, keep what already works,
+/// and be specific without becoming verbose. Return only the improved instruction
+/// text, with no preamble or commentary.
+#[derive(Signature, Clone, Debug)]
+struct ReflectOnInstruction {
+    /// The module's input and output fields with their descriptions.
+    #[input]
+    task_description: String,
+
+    /// The instruction currently used by the module.
+    #[input]
+    current_instruction: String,
+
+    /// Per-example scores and textual feedback from the last evaluation.
+    #[input]
+    execution_feedback: String,
+
+    /// The rewritten instruction.
+    #[output]
+    improved_instruction: String,
+}
+
+fn format_schema_for_reflection(schema: &SignatureSchema) -> String {
+    let mut result = String::new();
+    result.push_str("Input fields:\n");
+    for field in schema.input_fields() {
+        let docs = if field.docs.is_empty() {
+            "No description"
+        } else {
+            field.docs.as_str()
+        };
+        result.push_str(&format!("  - {}: {}\n", field.lm_name, docs));
+    }
+    result.push_str("Output fields:\n");
+    for field in schema.output_fields() {
+        let docs = if field.docs.is_empty() {
+            "No description"
+        } else {
+            field.docs.as_str()
+        };
+        result.push_str(&format!("  - {}: {}\n", field.lm_name, docs));
+    }
+    result
+}
 
 /// A single instruction candidate tracked through GEPA's evolutionary search.
 ///
@@ -77,8 +128,10 @@ pub use super::pareto::ParetoStatistics;
 /// GEPA uses an evolutionary search guided by per-example feedback from your metric.
 /// Unlike [`COPRO`](crate::COPRO) which only uses numerical scores, GEPA requires your
 /// [`TypedMetric`] to return [`MetricOutcome::with_feedback`] — textual feedback
-/// explaining *why* each example scored the way it did. This feedback gets appended
-/// to the instruction as a mutation prompt for the next generation, so the quality
+/// explaining *why* each example scored the way it did. When a `prompt_model` is
+/// configured, a reflection LM reads the current instruction plus that feedback and
+/// writes an improved instruction each generation; without one, the feedback is
+/// appended to the instruction as a deterministic mutation. Either way the quality
 /// of your feedback directly determines the quality of GEPA's search.
 ///
 /// The Pareto frontier tracks candidates that aren't dominated on any individual
@@ -102,7 +155,10 @@ pub use super::pareto::ParetoStatistics;
 /// - **`track_stats`** (default: true) — record all candidates and frontier history.
 /// - **`track_best_outputs`** (default: false) — re-run the best instruction on the
 ///   eval set and record outputs.
-/// - **`prompt_model`** — optional separate LM for candidate generation.
+/// - **`prompt_model`** — reflection LM that rewrites instructions from feedback.
+///   Strongly recommended; without it mutation degrades to feedback concatenation.
+/// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
+/// - **`seed`** — fixes minibatch sampling for reproducible runs.
 ///
 /// # Requires feedback
 ///
@@ -154,8 +210,15 @@ pub struct GEPA {
     pub max_rollouts: Option<usize>,
     /// Hard cap on total LM calls (rollouts + generation).
     pub max_lm_calls: Option<usize>,
-    /// Optional separate LM for candidate generation.
+    /// Optional separate LM used to reflect on feedback and propose improved
+    /// instructions. When unset, GEPA falls back to deterministic feedback
+    /// concatenation (no reflection LM call).
     pub prompt_model: Option<crate::LM>,
+    /// Concurrent LM calls in flight during candidate evaluation.
+    #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
+    pub eval_concurrency: usize,
+    /// Seed for minibatch sampling. `None` uses a nondeterministic seed.
+    pub seed: Option<u64>,
 }
 
 impl GEPA {
@@ -173,36 +236,44 @@ impl GEPA {
         })
     }
 
-    async fn evaluate_candidate<S, M, MT>(
+    async fn evaluate_candidate<'a, S, M, MT, I>(
         &self,
         module: &mut M,
         module_name: &str,
         instruction: &str,
-        examples: &[Example<S>],
+        examples: I,
         metric: &MT,
     ) -> Result<Vec<MetricOutcome>>
     where
         S: Signature,
         S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
+        M: Module<Input = S::Input> + for<'b> Facet<'b>,
         MT: TypedMetric<S, M>,
+        I: IntoIterator<Item = &'a Example<S>>,
     {
-        let original_state =
-            with_named_predictor(module, module_name, |predictor| Ok(predictor.dump_state()))?;
+        // Instruction-only save/restore: GEPA never mutates demos during
+        // candidate evaluation, so the full dump_state/load_state demo
+        // serialization round-trip is skipped.
+        let original_instruction = with_named_predictor(module, module_name, |predictor| {
+            Ok(predictor.instruction_override())
+        })?;
 
         Self::set_instruction(module, module_name, instruction.to_string())?;
-        let evaluation = evaluate_module_with_metric(&*module, examples, metric).await;
+        let evaluation =
+            evaluate_module_with_metric(&*module, examples, metric, self.eval_concurrency).await;
 
         match evaluation {
             Ok(outcomes) => {
                 with_named_predictor(module, module_name, |predictor| {
-                    predictor.load_state(original_state.clone())
+                    predictor.restore_instruction(original_instruction);
+                    Ok(())
                 })?;
                 Ok(outcomes)
             }
             Err(eval_err) => {
                 if let Err(restore_err) = with_named_predictor(module, module_name, |predictor| {
-                    predictor.load_state(original_state)
+                    predictor.restore_instruction(original_instruction.clone());
+                    Ok(())
                 }) {
                     return Err(anyhow!(
                         "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
@@ -241,6 +312,103 @@ impl GEPA {
         lines.join("\n")
     }
 
+    /// Deterministic fallback mutation: append the feedback to the parent
+    /// instruction. Used when no `prompt_model` is configured or the reflection
+    /// call fails.
+    fn concat_child_instruction(
+        parent_instruction: &str,
+        feedback_summary: &str,
+        parent_score: f32,
+        generation: usize,
+    ) -> String {
+        format!(
+            "{}\n\n[GEPA gen {}] Improve based on feedback:\n{}\n(Parent score {:.3})",
+            parent_instruction,
+            generation + 1,
+            feedback_summary,
+            parent_score,
+        )
+    }
+
+    /// Proposes a child instruction, preferring LM reflection when a
+    /// `prompt_model` is configured.
+    ///
+    /// Returns the proposed instruction and the number of reflection LM calls
+    /// consumed (0 or 1). Reflection failures degrade to the deterministic
+    /// concatenation mutation with a warning rather than aborting the run.
+    #[allow(clippy::too_many_arguments)]
+    async fn propose_child_instruction<M>(
+        &self,
+        module: &mut M,
+        module_name: &str,
+        parent_instruction: &str,
+        feedback_summary: &str,
+        parent_score: f32,
+        generation: usize,
+        reflector: Option<&Predict<ReflectOnInstruction>>,
+    ) -> (String, usize)
+    where
+        M: for<'a> Facet<'a>,
+    {
+        let Some(reflector) = reflector else {
+            return (
+                Self::concat_child_instruction(
+                    parent_instruction,
+                    feedback_summary,
+                    parent_score,
+                    generation,
+                ),
+                0,
+            );
+        };
+
+        let task_description = with_named_predictor(module, module_name, |predictor| {
+            Ok(format_schema_for_reflection(predictor.schema()))
+        })
+        .unwrap_or_default();
+
+        let input = ReflectOnInstructionInput {
+            task_description,
+            current_instruction: parent_instruction.to_string(),
+            execution_feedback: format!(
+                "Parent average score: {parent_score:.3}\n{feedback_summary}"
+            ),
+        };
+
+        match reflector.call(input).await {
+            Ok(predicted) => {
+                let improved = predicted.improved_instruction.trim().to_string();
+                if improved.is_empty() {
+                    tracing::warn!(
+                        module_name,
+                        generation,
+                        "reflection LM returned an empty instruction; using feedback concatenation"
+                    );
+                } else {
+                    return (improved, 1);
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    module_name,
+                    generation,
+                    error = %err,
+                    "reflection LM call failed; using feedback concatenation"
+                );
+            }
+        }
+
+        (
+            Self::concat_child_instruction(
+                parent_instruction,
+                feedback_summary,
+                parent_score,
+                generation,
+            ),
+            1,
+        )
+    }
+
     async fn collect_best_outputs<S, M>(
         module: &M,
         eval_set: &[Example<S>],
@@ -249,13 +417,13 @@ impl GEPA {
         S: Signature,
         S::Input: Clone,
         M: Module<Input = S::Input>,
-        M::Output: BamlType,
+        M::Output: Schema,
     {
         let mut outputs = Vec::with_capacity(eval_set.len());
         for example in eval_set {
             let input = example.input.clone();
             let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
-            outputs.push(predicted.into_inner().to_baml_value());
+            outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(BamlValue::Null));
         }
         Ok(outputs)
     }
@@ -292,6 +460,15 @@ impl GEPA {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
+        let reflector = self
+            .prompt_model
+            .as_ref()
+            .map(|lm| Predict::<ReflectOnInstruction>::builder().lm(lm.clone()).build());
+        let mut rng = match self.seed {
+            Some(seed) => StdRng::seed_from_u64(seed),
+            None => StdRng::from_entropy(),
+        };
+
         let mut frontier = ParetoFrontier::new();
         let mut total_lm_calls = 0usize;
         let mut total_rollouts = 0usize;
@@ -308,7 +485,13 @@ impl GEPA {
             };
 
             let outcomes = self
-                .evaluate_candidate::<S, _, _>(module, module_name, &instruction, eval_set, metric)
+                .evaluate_candidate::<S, _, _, _>(
+                    module,
+                    module_name,
+                    &instruction,
+                    eval_set,
+                    metric,
+                )
                 .await?;
             total_lm_calls = total_lm_calls.saturating_add(outcomes.len());
             total_rollouts = total_rollouts.saturating_add(outcomes.len());
@@ -348,8 +531,10 @@ impl GEPA {
                 .context("failed to sample from frontier")?
                 .clone();
 
-            let minibatch_end = trainset.len().min(self.minibatch_size.max(1));
-            let minibatch = &trainset[..minibatch_end];
+            let minibatch_size = trainset.len().min(self.minibatch_size.max(1));
+            let minibatch: Vec<&Example<S>> = trainset
+                .choose_multiple(&mut rng, minibatch_size)
+                .collect();
 
             if Self::would_exceed_budget(total_lm_calls, minibatch.len(), self.max_lm_calls)
                 || Self::would_exceed_budget(total_rollouts, minibatch.len(), self.max_rollouts)
@@ -358,11 +543,11 @@ impl GEPA {
             }
 
             let parent_outcomes = self
-                .evaluate_candidate::<S, _, _>(
+                .evaluate_candidate::<S, _, _, _>(
                     module,
                     &parent.module_name,
                     &parent.instruction,
-                    minibatch,
+                    minibatch.iter().copied(),
                     metric,
                 )
                 .await?;
@@ -379,18 +564,23 @@ impl GEPA {
                 break;
             }
 
-            let child_instruction = format!(
-                "{}\n\n[GEPA gen {}] Improve based on feedback:\n{}\n(Parent score {:.3})",
-                parent.instruction,
-                generation + 1,
-                feedback_summary,
-                parent_score,
-            );
+            let (child_instruction, reflection_calls) = self
+                .propose_child_instruction(
+                    module,
+                    &parent.module_name,
+                    &parent.instruction,
+                    &feedback_summary,
+                    parent_score,
+                    generation,
+                    reflector.as_ref(),
+                )
+                .await;
+            total_lm_calls = total_lm_calls.saturating_add(reflection_calls);
 
             let child = parent.mutate(child_instruction, generation + 1);
 
             let child_outcomes = self
-                .evaluate_candidate::<S, _, _>(
+                .evaluate_candidate::<S, _, _, _>(
                     module,
                     &child.module_name,
                     &child.instruction,
@@ -573,7 +763,7 @@ mod tests {
         };
 
         let err = optimizer
-            .evaluate_candidate::<GepaStateSig, _, _>(
+            .evaluate_candidate::<GepaStateSig, _, _, _>(
                 &mut module,
                 "predictor",
                 "candidate instruction",

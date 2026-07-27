@@ -191,14 +191,31 @@ impl Message {
     /// Returns only the text content, ignoring tool calls, tool results,
     /// and reasoning blocks. Used by the parser to extract structured output.
     pub fn text_content(&self) -> String {
-        self.content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        self.text_content_cow().into_owned()
+    }
+
+    /// Borrowing variant of [`text_content`](Message::text_content): messages with a
+    /// single text block (the common case) return a slice with no allocation.
+    pub(crate) fn text_content_cow(&self) -> std::borrow::Cow<'_, str> {
+        let mut texts = self.content.iter().filter_map(|block| match block {
+            ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        });
+        match (texts.next(), texts.next()) {
+            (Some(only), None) => std::borrow::Cow::Borrowed(only),
+            (None, _) => std::borrow::Cow::Borrowed(""),
+            (Some(first), Some(second)) => {
+                let mut joined = String::with_capacity(first.len() + second.len() + 2);
+                joined.push_str(first);
+                joined.push('\n');
+                joined.push_str(second);
+                for text in texts {
+                    joined.push('\n');
+                    joined.push_str(text);
+                }
+                std::borrow::Cow::Owned(joined)
+            }
+        }
     }
 
     // -- Content query helpers -----------------------------------------------

@@ -1,14 +1,13 @@
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{OnceLock, RwLock};
 
-use bamltype::baml_types::BamlValue;
-use bamltype::baml_types::TypeIR;
-use bamltype::build_type_ir_from_shape;
-use bamltype::facet::{Def, Field, Shape, Type, UserType};
-use bamltype::internal_baml_jinja::types::OutputFormatContent;
+use facet::{Def, Field, Shape, Type, UserType};
+use serde_json::Value;
 
-use crate::{Constraint, ConstraintKind, ConstraintSpec, Signature};
+use crate::typesys::schema::field_type_from_shape;
+use crate::typesys::{FieldType, OutputSchema};
+use crate::{ConstraintSpec, Signature};
 
 /// Dotted path to a field within a signature, accounting for `#[flatten]` nesting.
 ///
@@ -83,9 +82,9 @@ pub struct FieldSchema {
     pub rust_name: String,
     /// Documentation extracted from the field's doc comment.
     pub docs: String,
-    /// Type representation used for edge validation and output format generation.
-    pub type_ir: TypeIR,
-    /// The Facet shape of this field's type.
+    /// In-house type representation used for prompt rendering and response coercion.
+    pub type_ir: FieldType,
+    /// The Facet shape of this field's type (kept for reflection-based callers).
     pub shape: &'static Shape,
     /// Path through the flatten tree to reach this field.
     pub path: FieldPath,
@@ -123,7 +122,10 @@ pub struct SignatureSchema {
     instruction: &'static str,
     input_fields: Box<[FieldSchema]>,
     output_fields: Box<[FieldSchema]>,
-    output_format: Arc<OutputFormatContent>,
+    output_schema: OutputSchema,
+    /// Memoized response-instructions prompt fragment. Schema-constant, but the
+    /// text is owned by the chat adapter — it hands us a builder on first use.
+    response_instructions: OnceLock<String>,
 }
 
 impl SignatureSchema {
@@ -133,11 +135,11 @@ impl SignatureSchema {
     ///
     /// Panics if the schema can't be built (e.g. the input/output shapes aren't structs).
     pub fn of<S: Signature>() -> &'static Self {
-        static CACHE: OnceLock<Mutex<HashMap<TypeId, &'static SignatureSchema>>> = OnceLock::new();
+        static CACHE: OnceLock<RwLock<HashMap<TypeId, &'static SignatureSchema>>> = OnceLock::new();
 
-        let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+        let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
         {
-            let guard = cache.lock().expect("schema cache lock poisoned");
+            let guard = cache.read().expect("schema cache lock poisoned");
             if let Some(schema) = guard.get(&TypeId::of::<S>()) {
                 return schema;
             }
@@ -151,7 +153,7 @@ impl SignatureSchema {
         });
         let leaked = Box::leak(Box::new(built));
 
-        let mut guard = cache.lock().expect("schema cache lock poisoned");
+        let mut guard = cache.write().expect("schema cache lock poisoned");
         guard.entry(TypeId::of::<S>()).or_insert(leaked)
     }
 
@@ -180,8 +182,17 @@ impl SignatureSchema {
             instruction: S::instruction(),
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
-            output_format: Arc::new(<S::Output as crate::BamlType>::baml_output_format().clone()),
+            output_schema: <S::Output as crate::typesys::Schema>::output_schema().clone(),
+            response_instructions: OnceLock::new(),
         })
+    }
+
+    /// Returns the memoized response-instructions fragment, building it on first use.
+    ///
+    /// The fragment is a pure function of the schema, but its wording belongs to
+    /// the chat adapter — hence the builder closure instead of building here.
+    pub(crate) fn response_instructions_cached(&self, build: impl FnOnce() -> String) -> &str {
+        self.response_instructions.get_or_init(build)
     }
 
     pub fn instruction(&self) -> &'static str {
@@ -196,19 +207,15 @@ impl SignatureSchema {
         &self.output_fields
     }
 
-    pub fn output_format(&self) -> &OutputFormatContent {
-        &self.output_format
+    pub fn output_schema(&self) -> &OutputSchema {
+        &self.output_schema
     }
 
-    pub fn navigate_field<'a>(
-        &self,
-        path: &FieldPath,
-        root: &'a BamlValue,
-    ) -> Option<&'a BamlValue> {
+    pub fn navigate_field<'a>(&self, path: &FieldPath, root: &'a Value) -> Option<&'a Value> {
         let mut current = root;
         for part in path.iter() {
             current = match current {
-                BamlValue::Class(_, map) | BamlValue::Map(map) => map.get(part)?,
+                Value::Object(map) => map.get(part)?,
                 _ => return None,
             };
         }
@@ -243,7 +250,10 @@ impl SignatureSchema {
             instruction: self.instruction,
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
-            output_format: Arc::clone(&self.output_format),
+            output_schema: self.output_schema.clone(),
+            // Fresh memo — the derived schema has different fields, so the
+            // parent's cached response instructions would be wrong.
+            response_instructions: OnceLock::new(),
         }
     }
 
@@ -326,14 +336,8 @@ fn emit_field(
         return Ok(());
     }
 
-    let mut type_ir = build_type_ir_from_shape(field.shape());
+    let type_ir = field_type_from_shape(field.shape());
     let constraints = inherited.map(|meta| meta.constraints).unwrap_or(&[]);
-    if !constraints.is_empty() {
-        type_ir
-            .meta_mut()
-            .constraints
-            .extend(constraints.iter().map(to_baml_constraint));
-    }
 
     let docs = doc_lines(field.doc);
     let lm_name = inherited
@@ -380,13 +384,6 @@ fn doc_lines(lines: &'static [&'static str]) -> String {
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn to_baml_constraint(constraint: &ConstraintSpec) -> Constraint {
-    match constraint.kind {
-        ConstraintKind::Check => Constraint::new_check(constraint.label, constraint.expression),
-        ConstraintKind::Assert => Constraint::new_assert(constraint.label, constraint.expression),
-    }
 }
 
 fn ensure_unique_lm_names(side: &'static str, fields: &[FieldSchema]) -> Result<(), String> {

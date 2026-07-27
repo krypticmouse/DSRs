@@ -9,7 +9,12 @@ use tracing::{debug, trace, warn};
 
 use crate::{Prediction, RawExample};
 
-type CacheKey = Vec<(String, Value)>;
+/// Response-cache key: a 64-bit hash over the prompt + generation parameters.
+///
+/// Hashed keys keep foyer lookups and disk serialization O(1) in prompt size.
+/// The hash is process-stable, which matches the cache's lifetime (the disk
+/// tier lives in a per-process temp directory).
+pub type CacheKey = u64;
 
 /// A cached prompt-response pair.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -18,6 +23,38 @@ pub struct CacheEntry {
     pub prompt: String,
     /// The parsed prediction from the LM response.
     pub prediction: Prediction,
+    /// The raw assistant text of the response, so [`LM::call`](crate::LM) can
+    /// replay a cached completion through the normal parse path.
+    #[serde(default)]
+    pub raw_output: Option<String>,
+}
+
+/// Builds a deterministic cache key from a [`RawExample`].
+///
+/// `RawExample` is backed by a `HashMap`, whose iteration order is unstable —
+/// pairs are sorted by field name before hashing so equal examples produce
+/// equal keys.
+fn normalized_key(key: RawExample) -> CacheKey {
+    use std::hash::Hasher;
+
+    let mut pairs: Vec<(String, Value)> = key.into_iter().collect();
+    pairs.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+    struct FmtHasher<'a>(&'a mut std::hash::DefaultHasher);
+    impl std::fmt::Write for FmtHasher<'_> {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+
+    let mut hasher = std::hash::DefaultHasher::new();
+    for (name, value) in &pairs {
+        hasher.write(name.as_bytes());
+        use std::fmt::Write as _;
+        let _ = write!(FmtHasher(&mut hasher), "{value:?}");
+    }
+    hasher.finish()
 }
 
 /// Interface for LM response caching.
@@ -85,12 +122,10 @@ impl Cache for ResponseCache {
         fields(key_fields = key.data.len())
     )]
     async fn get(&self, key: RawExample) -> Result<Option<Prediction>> {
-        let key = key.into_iter().collect::<CacheKey>();
-
-        let value = self.handler.get(&key).await?.map(|v| v.value().clone());
-        trace!(hit = value.is_some(), "cache lookup complete");
-
-        Ok(value.map(|entry| entry.prediction))
+        Ok(self
+            .get_entry(normalized_key(key))
+            .await?
+            .map(|entry| entry.prediction))
     }
 
     #[tracing::instrument(
@@ -100,23 +135,12 @@ impl Cache for ResponseCache {
         fields(key_fields = key.data.len(), window_size = self.window_size)
     )]
     async fn insert(&mut self, key: RawExample, mut rx: mpsc::Receiver<CacheEntry>) -> Result<()> {
-        let key = key.into_iter().collect::<CacheKey>();
         let Some(value) = rx.recv().await else {
             warn!("cache insert channel closed before receiving entry");
             return Ok(());
         };
 
-        self.history_window.insert(0, value.clone());
-        if self.history_window.len() > self.window_size {
-            self.history_window.pop();
-        }
-        self.handler.insert(key, value.clone());
-        trace!(
-            history_len = self.history_window.len(),
-            prompt_len = value.prompt.len(),
-            "cache entry inserted"
-        );
-
+        self.insert_entry(normalized_key(key), value);
         Ok(())
     }
 
@@ -130,5 +154,35 @@ impl Cache for ResponseCache {
         let actual_n = n.min(self.history_window.len());
         trace!(actual_n, "cache history fetched");
         Ok(self.history_window[..actual_n].to_vec())
+    }
+}
+
+impl ResponseCache {
+    /// Fetches the full cached entry (including raw output) for a key.
+    #[tracing::instrument(name = "dsrs.cache.get_entry", level = "trace", skip(self))]
+    pub async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>> {
+        let value = self.handler.get(&key).await?.map(|v| v.value().clone());
+        trace!(hit = value.is_some(), "cache lookup complete");
+        Ok(value)
+    }
+
+    /// Inserts an entry synchronously — the direct path used by [`LM::call`](crate::LM).
+    #[tracing::instrument(
+        name = "dsrs.cache.insert_entry",
+        level = "trace",
+        skip(self, entry),
+        fields(window_size = self.window_size)
+    )]
+    pub fn insert_entry(&mut self, key: CacheKey, entry: CacheEntry) {
+        self.history_window.insert(0, entry.clone());
+        if self.history_window.len() > self.window_size {
+            self.history_window.pop();
+        }
+        self.handler.insert(key, entry.clone());
+        trace!(
+            history_len = self.history_window.len(),
+            prompt_len = entry.prompt.len(),
+            "cache entry inserted"
+        );
     }
 }

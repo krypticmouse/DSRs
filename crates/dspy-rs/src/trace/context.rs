@@ -46,6 +46,21 @@ pub fn is_tracing() -> bool {
     CURRENT_TRACE.try_with(|_| ()).is_ok()
 }
 
+/// Returns the ID of the most recently recorded node in the current trace scope,
+/// or `None` outside a scope or before any node is recorded.
+///
+/// [`Predict`](crate::Predict) uses this to chain each new node to its predecessor —
+/// a sequential approximation of dataflow that is exact for sequential pipelines.
+pub fn last_node_id() -> Option<usize> {
+    CURRENT_TRACE
+        .try_with(|trace| {
+            let graph = trace.lock().unwrap();
+            graph.nodes.last().map(|node| node.id)
+        })
+        .ok()
+        .flatten()
+}
+
 /// Records a node in the current trace graph. Returns the node ID, or `None` if
 /// not inside a [`trace()`] scope.
 ///

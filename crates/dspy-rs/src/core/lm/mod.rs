@@ -7,10 +7,15 @@ pub use client_registry::*;
 pub use usage::*;
 
 use anyhow::Result;
-use rig::{completion::AssistantContent, message::ToolCall, message::ToolChoice, tool::ToolDyn};
+use rig::{
+    completion::{AssistantContent, CompletionError, CompletionRequest, CompletionResponse},
+    message::ToolCall,
+    message::ToolChoice,
+    tool::ToolDyn,
+};
 
 use bon::Builder;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tracing::{Instrument, debug, trace, warn};
 
@@ -37,6 +42,47 @@ pub enum ToolLoopMode {
     CallerManaged,
 }
 
+/// Pre-fetched tool definitions plus name-indexed executors.
+///
+/// Fetching a rig `ToolDyn` definition costs a boxed-future allocation and a
+/// fresh `ToolDefinition` build — doing that per tool on every LM call is pure
+/// waste when the tool set is fixed. Build a `ToolSet` once (e.g.
+/// [`Predict`](crate::Predict) caches one per instance) and reuse it across calls
+/// via [`LM::call_with_toolset`].
+#[derive(Clone, Default)]
+pub struct ToolSet {
+    definitions: Vec<rig::completion::ToolDefinition>,
+    by_name: HashMap<String, Arc<dyn ToolDyn>>,
+}
+
+impl ToolSet {
+    /// Fetches every tool's definition once and indexes the executors by
+    /// definition name. Duplicate names keep the first tool.
+    pub async fn build(tools: &[Arc<dyn ToolDyn>]) -> Self {
+        let mut definitions = Vec::with_capacity(tools.len());
+        let mut by_name: HashMap<String, Arc<dyn ToolDyn>> = HashMap::with_capacity(tools.len());
+        for tool in tools {
+            let definition = tool.definition(String::new()).await;
+            by_name
+                .entry(definition.name.clone())
+                .or_insert_with(|| Arc::clone(tool));
+            definitions.push(definition);
+        }
+        Self {
+            definitions,
+            by_name,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.definitions.is_empty()
+    }
+
+    pub fn definitions(&self) -> &[rig::completion::ToolDefinition] {
+        &self.definitions
+    }
+}
+
 #[derive(Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LM {
@@ -50,6 +96,14 @@ pub struct LM {
     pub max_tokens: u32,
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
+    /// Additional attempts after a transient failure (429/5xx/network/timeout).
+    /// `0` disables retries entirely.
+    #[builder(default = 2)]
+    pub max_retries: u32,
+    /// Base delay for exponential backoff between retries. Attempt `n` waits
+    /// `base * 2^n` plus up to 50% random jitter.
+    #[builder(default = 250)]
+    pub retry_base_delay_ms: u64,
     #[builder(default = false)]
     pub cache: bool,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
@@ -72,6 +126,8 @@ impl Clone for LM {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             max_tool_iterations: self.max_tool_iterations,
+            max_retries: self.max_retries,
+            retry_base_delay_ms: self.retry_base_delay_ms,
             cache: self.cache,
             cache_handler: self.cache_handler.clone(),
             client: self.client.clone(),
@@ -250,24 +306,64 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
     ChoiceAction::Text(display)
 }
 
-/// Look up a tool by name in the tool list and execute it.
-/// Returns `(result_string, was_found)`.
-async fn find_and_execute_tool(
-    tools: &mut [Arc<dyn ToolDyn>],
-    tool_name: &str,
-    args: &str,
-) -> Result<(String, bool)> {
-    for tool in tools.iter_mut() {
-        let def = tool.definition("".to_string()).await;
-        if def.name == tool_name {
-            let result = tool.call(args.to_string()).await?;
-            return Ok((result, true));
+/// Whether a rig completion error is worth retrying.
+///
+/// HTTP-layer failures (connect, timeout) always are. Provider errors are string-typed
+/// in rig, so transient markers (429/5xx/overload) are matched textually.
+fn is_retryable_completion_error(err: &CompletionError) -> bool {
+    match err {
+        CompletionError::HttpError(_) => true,
+        CompletionError::ProviderError(message) => {
+            let message = message.to_ascii_lowercase();
+            [
+                "429",
+                "rate limit",
+                "rate_limit",
+                "too many requests",
+                "overloaded",
+                "timeout",
+                "timed out",
+                "500",
+                "502",
+                "503",
+                "529",
+                "server error",
+                "internal error",
+                "unavailable",
+            ]
+            .iter()
+            .any(|marker| message.contains(marker))
         }
+        _ => false,
     }
-    Ok((format!("Tool '{}' not found", tool_name), false))
 }
 
 impl LM {
+    /// Builds the response-cache key: a streaming hash over the full message
+    /// history plus every generation parameter that changes the completion.
+    /// Demos and instructions live inside the messages, so they are covered
+    /// automatically. Hashing streams through the `Debug` representation — no
+    /// intermediate JSON tree or string is materialized.
+    fn cache_key_for(&self, messages: &Chat) -> u64 {
+        use std::hash::Hasher;
+
+        struct FmtHasher<'a>(&'a mut std::hash::DefaultHasher);
+        impl std::fmt::Write for FmtHasher<'_> {
+            fn write_str(&mut self, s: &str) -> std::fmt::Result {
+                self.0.write(s.as_bytes());
+                Ok(())
+            }
+        }
+
+        let mut hasher = std::hash::DefaultHasher::new();
+        hasher.write(self.model.as_bytes());
+        hasher.write(&self.temperature.to_bits().to_le_bytes());
+        hasher.write(&self.max_tokens.to_le_bytes());
+        use std::fmt::Write as _;
+        let _ = write!(FmtHasher(&mut hasher), "{messages:?}");
+        hasher.finish()
+    }
+
     fn chat_from_rig_history(system_prompt: &str, history: &[rig::message::Message]) -> Chat {
         let mut chat = Chat::new(Vec::new());
         if !system_prompt.is_empty() {
@@ -279,32 +375,112 @@ impl LM {
         chat
     }
 
-    /// Execute all tool calls in a batch, returning results paired with their calls.
+    /// Builds a rig completion request from borrowed parts.
+    ///
+    /// Kept as a separate builder (rather than constructing once) so the retry
+    /// loop can rebuild the request per attempt — the success-first-try path
+    /// then pays exactly one build, with no defensive clone.
+    fn build_completion_request(
+        &self,
+        system_prompt: &str,
+        chat_history: &[rig::message::Message],
+        tool_definitions: &[rig::completion::ToolDefinition],
+        tool_choice: Option<ToolChoice>,
+    ) -> CompletionRequest {
+        use rig::OneOrMany;
+        CompletionRequest {
+            model: None,
+            preamble: Some(system_prompt.to_string()),
+            chat_history: if chat_history.len() == 1 {
+                OneOrMany::one(chat_history[0].clone())
+            } else {
+                OneOrMany::many(chat_history.to_vec()).expect("chat_history should not be empty")
+            },
+            documents: Vec::new(),
+            tools: tool_definitions.to_vec(),
+            temperature: Some(self.temperature as f64),
+            max_tokens: Some(self.max_tokens as u64),
+            tool_choice,
+            additional_params: None,
+            output_schema: None,
+        }
+    }
+
+    /// Calls the provider, retrying transient failures with jittered exponential backoff.
+    ///
+    /// Takes a request *builder* so each attempt constructs its own request from
+    /// borrowed parts — no whole-request clone on the common no-retry path.
+    async fn completion_with_retry<F>(&self, build_request: F) -> Result<CompletionResponse<()>>
+    where
+        F: Fn() -> CompletionRequest,
+    {
+        let client = self
+            .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+
+        let mut attempt = 0u32;
+        loop {
+            match client.completion(build_request()).await {
+                Ok(response) => return Ok(response),
+                Err(err) if attempt < self.max_retries && is_retryable_completion_error(&err) => {
+                    let backoff = self
+                        .retry_base_delay_ms
+                        .saturating_mul(1u64 << attempt.min(16));
+                    // Scope the RNG so it drops before the await (thread_rng is !Send).
+                    let jitter = {
+                        use rand::Rng;
+                        rand::thread_rng().gen_range(0..=backoff / 2)
+                    };
+                    let delay = Duration::from_millis(backoff.saturating_add(jitter));
+                    warn!(
+                        attempt = attempt + 1,
+                        max_retries = self.max_retries,
+                        delay_ms = delay.as_millis() as u64,
+                        error = %err,
+                        "retrying transient lm completion failure"
+                    );
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                }
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+
+    /// Execute all tool calls in a batch concurrently, returning results paired with
+    /// their calls in request order.
     async fn execute_tool_batch(
-        tools: &mut [Arc<dyn ToolDyn>],
+        tools_by_name: &HashMap<String, Arc<dyn ToolDyn>>,
         calls: &[ToolCall],
         context: &str,
     ) -> Result<Vec<(ToolCall, String)>> {
-        let mut results = Vec::with_capacity(calls.len());
-        for tc in calls {
-            let (result, found) =
-                find_and_execute_tool(tools, &tc.function.name, &tc.function.arguments.to_string())
-                    .await
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "tool `{}` execution failed ({}): {:?}",
-                            tc.function.name,
-                            context,
-                            err
-                        )
-                    })?;
-            if !found {
-                warn!(tool = %tc.function.name, context, "tool not found");
+        let executions = calls.iter().map(|tc| {
+            let tool = tools_by_name.get(&tc.function.name).cloned();
+            async move {
+                let result = match tool {
+                    Some(tool) => tool
+                        .call(tc.function.arguments.to_string())
+                        .await
+                        .map_err(|err| {
+                            anyhow::anyhow!(
+                                "tool `{}` execution failed ({}): {:?}",
+                                tc.function.name,
+                                context,
+                                err
+                            )
+                        })?,
+                    None => {
+                        warn!(tool = %tc.function.name, context, "tool not found");
+                        format!("Tool '{}' not found", tc.function.name)
+                    }
+                };
+                trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
+                Ok::<_, anyhow::Error>((tc.clone(), result))
             }
-            trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
-            results.push((tc.clone(), result));
-        }
-        Ok(results)
+        });
+
+        futures::future::try_join_all(executions).await
     }
 
     /// Push tool results into chat history as a single User message.
@@ -343,7 +519,6 @@ impl LM {
             initial_calls,
             initial_assistant_content,
             tools,
-            tool_definitions,
             chat_history,
             system_prompt,
             accumulated_usage
@@ -353,27 +528,22 @@ impl LM {
             max_iterations = self.max_tool_iterations as usize
         )
     )]
-    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_loop(
         &self,
         initial_calls: &[ToolCall],
         initial_assistant_content: rig::OneOrMany<AssistantContent>,
-        mut tools: Vec<Arc<dyn ToolDyn>>,
-        tool_definitions: Vec<rig::completion::ToolDefinition>,
+        tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
-        use rig::OneOrMany;
-        use rig::completion::CompletionRequest;
-
         let max_iterations = self.max_tool_iterations as usize;
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
 
         // Execute the initial tool call batch
         debug!(count = initial_calls.len(), "executing initial tool calls");
-        let results = Self::execute_tool_batch(&mut tools, initial_calls, "initial").await?;
+        let results = Self::execute_tool_batch(&tools.by_name, initial_calls, "initial").await?;
         for (tc, result) in &results {
             all_tool_calls.push(tc.clone());
             all_tool_executions.push(result.clone());
@@ -390,28 +560,15 @@ impl LM {
 
         // Now loop until we get a text response
         for iteration in 1..max_iterations {
-            let request = CompletionRequest {
-                model: None,
-                preamble: Some(system_prompt.clone()),
-                chat_history: if chat_history.len() == 1 {
-                    OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
-                } else {
-                    OneOrMany::many(chat_history.clone()).expect("chat_history should not be empty")
-                },
-                documents: Vec::new(),
-                tools: tool_definitions.clone(),
-                temperature: Some(self.temperature as f64),
-                max_tokens: Some(self.max_tokens as u64),
-                tool_choice: Some(ToolChoice::Auto),
-                additional_params: None,
-                output_schema: None,
-            };
-
             let response = self
-                .client
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("LM client not initialized"))?
-                .completion(request)
+                .completion_with_retry(|| {
+                    self.build_completion_request(
+                        &system_prompt,
+                        &chat_history,
+                        tools.definitions(),
+                        Some(ToolChoice::Auto),
+                    )
+                })
                 .await?;
 
             accumulated_usage.prompt_tokens += response.usage.input_tokens;
@@ -444,7 +601,7 @@ impl LM {
                 } => {
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&mut tools, &calls, &context).await?;
+                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for (tc, result) in &results {
                         all_tool_calls.push(tc.clone());
                         all_tool_executions.push(result.clone());
@@ -469,68 +626,93 @@ impl LM {
             .await
     }
 
-    #[tracing::instrument(
-        name = "dsrs.lm.call_with_tool_loop_mode",
-        level = "debug",
-        skip(self, messages, tools),
-        fields(
-            model = %self.model,
-            message_count = messages.len(),
-            tool_count = tools.len(),
-            cache_enabled = self.cache,
-            tool_loop_mode = ?tool_loop_mode
-        )
-    )]
+    /// [`call`](LM::call) with an explicit tool-loop mode. Builds an ad-hoc
+    /// [`ToolSet`] per call — reuse [`call_with_toolset`](LM::call_with_toolset)
+    /// with a cached set when calling repeatedly with the same tools.
     pub async fn call_with_tool_loop_mode(
         &self,
         messages: Chat,
         tools: Vec<Arc<dyn ToolDyn>>,
         tool_loop_mode: ToolLoopMode,
     ) -> Result<LMResponse> {
-        use rig::OneOrMany;
-        use rig::completion::CompletionRequest;
+        let toolset = if tools.is_empty() {
+            ToolSet::default()
+        } else {
+            ToolSet::build(&tools).await
+        };
+        self.call_with_toolset(messages, &toolset, tool_loop_mode)
+            .await
+    }
+
+    #[tracing::instrument(
+        name = "dsrs.lm.call_with_toolset",
+        level = "debug",
+        skip(self, messages, tools),
+        fields(
+            model = %self.model,
+            message_count = messages.len(),
+            tool_count = tools.definitions.len(),
+            cache_enabled = self.cache,
+            tool_loop_mode = ?tool_loop_mode
+        )
+    )]
+    pub async fn call_with_toolset(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+    ) -> Result<LMResponse> {
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
 
-        let mut tool_definitions = Vec::new();
-        for tool in &tools {
-            tool_definitions.push(tool.definition("".to_string()).await);
+        // Response cache: only tool-free calls are cached — tool loops execute
+        // side-effectful user code and must not be replayed from cache.
+        let cache_key = if self.cache && self.cache_handler.is_some() && tools.is_empty() {
+            Some(self.cache_key_for(&messages))
+        } else {
+            None
+        };
+        if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
+            && let Some(entry) = cache.lock().await.get_entry(key).await?
+            && let Some(raw_output) = entry.raw_output
+        {
+            debug!("lm response served from cache");
+            let output = Message::assistant(&raw_output);
+            let mut chat = messages;
+            chat.push_message(output.clone());
+            return Ok(LMResponse {
+                output,
+                usage: entry.prediction.lm_usage,
+                chat,
+                tool_calls: Vec::new(),
+                tool_executions: Vec::new(),
+            });
         }
+
+        let tool_definitions = tools.definitions();
         trace!(
             conversation_messages = chat_history.len(),
             tool_definitions = tool_definitions.len(),
             "prepared completion request inputs"
         );
 
-        let request = CompletionRequest {
-            model: None,
-            preamble: Some(system_prompt.clone()),
-            chat_history: if chat_history.len() == 1 {
-                OneOrMany::one(chat_history.clone().into_iter().next().unwrap())
-            } else {
-                OneOrMany::many(chat_history.clone()).expect("chat_history should not be empty")
-            },
-            documents: Vec::new(),
-            tools: tool_definitions.clone(),
-            temperature: Some(self.temperature as f64),
-            max_tokens: Some(self.max_tokens as u64),
-            tool_choice: if !tool_definitions.is_empty() {
-                Some(ToolChoice::Auto)
-            } else {
-                None
-            },
-            additional_params: None,
-            output_schema: None,
+        let tool_choice = if !tool_definitions.is_empty() {
+            Some(ToolChoice::Auto)
+        } else {
+            None
         };
 
-        // Execute the completion using enum dispatch (zero-cost abstraction)
+        // Execute the completion using enum dispatch (zero-cost abstraction),
+        // retrying transient failures with backoff.
         let response = self
-            .client
-            .as_ref()
-            .ok_or_else(|| {
-                anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
-            })?
-            .completion(request)
+            .completion_with_retry(|| {
+                self.build_completion_request(
+                    &system_prompt,
+                    &chat_history,
+                    tool_definitions,
+                    tool_choice.clone(),
+                )
+            })
             .await?;
         debug!(
             prompt_tokens = response.usage.input_tokens,
@@ -547,13 +729,13 @@ impl LM {
         let mut returned_tool_calls = Vec::new();
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
-        let classified = classify_choice(response.choice.clone());
+        let classified = classify_choice(response.choice);
         let first_choice = match classified {
             ChoiceAction::Text(text) => Message::assistant(&text),
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
-                assistant_text,
+                assistant_text: _,
             } if tool_loop_mode == ToolLoopMode::Auto && !tools.is_empty() => {
                 debug!(count = calls.len(), "entering tool loop");
                 let result = self
@@ -561,7 +743,6 @@ impl LM {
                         &calls,
                         *full_content,
                         tools,
-                        tool_definitions,
                         chat_history,
                         system_prompt.clone(),
                         &mut accumulated_usage,
@@ -598,10 +779,27 @@ impl LM {
             }
         };
 
+        // Populate the cache on the plain-text path only: `append_output_after_history`
+        // covers the tool-loop and "no tools available" fallbacks, and
+        // `returned_tool_calls` covers caller-managed tool responses. This runs
+        // before `messages` is moved into the returned chat below.
+        if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
+            && returned_tool_calls.is_empty()
+            && !append_output_after_history
+        {
+            let entry = CacheEntry {
+                prompt: messages.to_json().to_string(),
+                prediction: Prediction::new(HashMap::new(), accumulated_usage),
+                raw_output: Some(first_choice.content()),
+            };
+            cache.lock().await.insert_entry(key, entry);
+            trace!("lm response cached");
+        }
+
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
             Self::chat_from_rig_history(&system_prompt, &result.chat_history)
         } else {
-            let mut chat = messages.clone();
+            let mut chat = messages;
             if let Some(content) = assistant_content_for_history {
                 // Convert grouped rig content into a single grouped Message.
                 let rig_msg = rig::message::Message::Assistant { id: None, content };
@@ -615,6 +813,7 @@ impl LM {
         if append_output_after_history {
             full_chat.push_message(first_choice.clone());
         }
+
         debug!(
             tool_calls = tool_loop_result
                 .as_ref()
@@ -739,6 +938,7 @@ impl DummyLM {
                     HashMap::from([("prediction".to_string(), prediction.clone().into())]),
                     LmUsage::default(),
                 ),
+                raw_output: Some(prediction.clone()),
             })
             .await
             .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
@@ -797,6 +997,25 @@ mod tests {
 
     fn make_text(text: &str) -> AssistantContent {
         AssistantContent::text(text)
+    }
+
+    #[test]
+    fn retry_classifier_matches_transient_errors_only() {
+        assert!(is_retryable_completion_error(
+            &CompletionError::ProviderError("429 Too Many Requests".to_string())
+        ));
+        assert!(is_retryable_completion_error(
+            &CompletionError::ProviderError("Anthropic: Overloaded".to_string())
+        ));
+        assert!(is_retryable_completion_error(
+            &CompletionError::ProviderError("HTTP 503 service unavailable".to_string())
+        ));
+        assert!(!is_retryable_completion_error(
+            &CompletionError::ProviderError("invalid api key".to_string())
+        ));
+        assert!(!is_retryable_completion_error(
+            &CompletionError::ResponseError("test response queue is empty".to_string())
+        ));
     }
 
     #[test]
@@ -975,6 +1194,8 @@ mod tests {
             temperature: 0.0,
             max_tokens: 128,
             max_tool_iterations: 4,
+            max_retries: 0,
+            retry_base_delay_ms: 1,
             cache: false,
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),

@@ -177,7 +177,7 @@ async fn typed_prediction_assert_failure_raises_error() {
                 assert!(errors.iter().any(|error| {
                     matches!(
                         error,
-                        ParseError::CoercionFailed { field, .. } if field == "confidence"
+                        ParseError::AssertFailed { field, .. } if field == "confidence"
                     )
                 }));
             }

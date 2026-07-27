@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, time::Duration};
 
-use crate::{BamlConvertError, BamlValue, LmUsage};
+use crate::{BamlValue, LmUsage};
 
 /// Error from the jsonish coercion layer when LM output can't be parsed as a typed value.
 #[derive(Debug)]
@@ -201,15 +201,6 @@ pub enum ConversionError {
         got: String,
         valid_variants: Vec<String>,
     },
-}
-
-impl From<BamlConvertError> for ConversionError {
-    fn from(error: BamlConvertError) -> Self {
-        ConversionError::TypeMismatch {
-            expected: error.expected,
-            actual: error.got,
-        }
-    }
 }
 
 /// The LM provider failed before returning a usable response.

@@ -48,7 +48,7 @@ impl Executor {
                         node_outputs.insert(node.id, pred);
                     }
                 }
-                NodeType::Predict { signature_name } => {
+                NodeType::Predict { signature_name, .. } => {
                     return Err(anyhow::anyhow!(
                         "Cannot execute traced Predict node for {signature_name}: signature data is not stored"
                     ));

@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 use std::ops::Deref;
 
-use crate::{BamlType, Signature};
+use crate::{Schema, Signature};
 use facet::Facet;
 
 /// Adds fields to a signature's output that the LM actually produces.
@@ -33,7 +33,7 @@ use facet::Facet;
 /// matching requires explicit destructuring through each layer — acceptable tradeoff.
 pub trait Augmentation: Send + Sync + 'static {
     /// The wrapper type that adds this augmentation's fields around an inner output `T`.
-    type Wrap<T: BamlType + for<'a> Facet<'a> + Send + Sync>: BamlType
+    type Wrap<T: Schema + for<'a> Facet<'a> + Send + Sync>: Schema
         + for<'a> Facet<'a>
         + Deref
         + Send
@@ -61,11 +61,11 @@ impl<S: Signature, A: Augmentation> Signature for Augmented<S, A> {
         S::instruction()
     }
 
-    fn input_shape() -> &'static bamltype::Shape {
+    fn input_shape() -> &'static facet::Shape {
         S::input_shape()
     }
 
-    fn output_shape() -> &'static bamltype::Shape {
+    fn output_shape() -> &'static facet::Shape {
         <A::Wrap<S::Output> as Facet<'static>>::SHAPE
     }
 
@@ -79,7 +79,7 @@ impl<S: Signature, A: Augmentation> Signature for Augmented<S, A> {
 }
 
 impl<A: Augmentation, B: Augmentation> Augmentation for (A, B) {
-    type Wrap<T: BamlType + for<'a> Facet<'a> + Send + Sync> = A::Wrap<B::Wrap<T>>;
+    type Wrap<T: Schema + for<'a> Facet<'a> + Send + Sync> = A::Wrap<B::Wrap<T>>;
 }
 
 /// Convenience alias: the output type of `Augmented<S, A>`.

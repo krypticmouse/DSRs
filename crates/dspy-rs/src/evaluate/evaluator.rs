@@ -1,10 +1,14 @@
 use anyhow::{Result, anyhow};
+use futures::stream::{self, StreamExt, TryStreamExt};
 
 use crate::core::Module;
 use crate::predictors::Example;
 use crate::{Predicted, Signature};
 
 use super::FeedbackMetric;
+
+/// Default number of examples evaluated concurrently by [`evaluate_trainset`].
+pub const DEFAULT_EVAL_CONCURRENCY: usize = 16;
 
 /// Result of evaluating a single example: a score and optional textual feedback.
 ///
@@ -88,8 +92,9 @@ where
 /// failures are propagated (not swallowed) — if any call fails, the whole evaluation
 /// fails. For fault-tolerant batching, use [`forward_all`](crate::forward_all) instead.
 ///
-/// This runs sequentially (one example at a time). Optimizers call this internally;
-/// you can also use it directly to benchmark your module:
+/// Examples are evaluated concurrently ([`DEFAULT_EVAL_CONCURRENCY`] at a time); use
+/// [`evaluate_trainset_with_concurrency`] to tune the level. Optimizers call this
+/// internally; you can also use it directly to benchmark your module:
 ///
 /// ```ignore
 /// let outcomes = evaluate_trainset(&module, &trainset, &metric).await?;
@@ -111,15 +116,51 @@ where
     M: Module<Input = S::Input>,
     MT: TypedMetric<S, M>,
 {
-    let mut outcomes = Vec::with_capacity(trainset.len());
+    evaluate_trainset_with_concurrency(module, trainset, metric, DEFAULT_EVAL_CONCURRENCY).await
+}
 
-    for example in trainset {
+/// [`evaluate_trainset`] with an explicit concurrency level.
+///
+/// `max_concurrency` LM calls run in flight at once; results come back in trainset
+/// order. Use `1` for strictly sequential evaluation (e.g. rate-limited providers).
+pub async fn evaluate_trainset_with_concurrency<S, M, MT>(
+    module: &M,
+    trainset: &[Example<S>],
+    metric: &MT,
+    max_concurrency: usize,
+) -> Result<Vec<MetricOutcome>>
+where
+    S: Signature,
+    S::Input: Clone,
+    M: Module<Input = S::Input>,
+    MT: TypedMetric<S, M>,
+{
+    evaluate_examples(module, trainset, metric, max_concurrency).await
+}
+
+/// Concurrency core shared by the public entry points and optimizers, generic over
+/// borrowed examples so callers can evaluate sampled subsets without cloning rows.
+pub(crate) async fn evaluate_examples<'a, S, M, MT, I>(
+    module: &M,
+    examples: I,
+    metric: &MT,
+    max_concurrency: usize,
+) -> Result<Vec<MetricOutcome>>
+where
+    S: Signature,
+    S::Input: Clone,
+    M: Module<Input = S::Input>,
+    MT: TypedMetric<S, M>,
+    I: IntoIterator<Item = &'a Example<S>>,
+{
+    stream::iter(examples.into_iter().map(|example| async move {
         let input = example.input.clone();
         let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
-        outcomes.push(metric.evaluate(example, &predicted).await?);
-    }
-
-    Ok(outcomes)
+        metric.evaluate(example, &predicted).await
+    }))
+    .buffered(max_concurrency.max(1))
+    .try_collect()
+    .await
 }
 
 /// Arithmetic mean of scores from a slice of [`MetricOutcome`]s.

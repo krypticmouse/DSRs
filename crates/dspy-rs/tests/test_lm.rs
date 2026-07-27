@@ -179,6 +179,7 @@ async fn test_lm_cache_direct_operations() {
     tx.send(CacheEntry {
         prompt: "test prompt".to_string(),
         prediction: value.clone(),
+        raw_output: None,
     })
     .await
     .unwrap();
@@ -296,6 +297,7 @@ async fn test_cache_with_complex_inputs() {
     tx.send(CacheEntry {
         prompt: "complex test prompt".to_string(),
         prediction: value.clone(),
+        raw_output: None,
     })
     .await
     .unwrap();

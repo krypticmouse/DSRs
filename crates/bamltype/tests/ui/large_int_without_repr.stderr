@@ -1,5 +1,0 @@
-error: unsupported integer width for BAML outputs; hint: use #[baml(int_repr = "string"|"i64")] or a smaller integer type
- --> tests/ui/large_int_without_repr.rs:5:12
-  |
-5 |     value: u64,
-  |            ^^^

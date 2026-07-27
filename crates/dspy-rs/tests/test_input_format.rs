@@ -1,4 +1,4 @@
-use dspy_rs::{BamlType, BamlValue, ChatAdapter, Signature};
+use dspy_rs::{BamlType, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]
 #[BamlType]
@@ -150,17 +150,14 @@ fn extract_field(message: &str, field_name: &str) -> String {
     lines.join("\n").trim().to_string()
 }
 
-fn extract_baml_field<'a>(value: &'a BamlValue, field_name: &str) -> &'a BamlValue {
-    match value {
-        BamlValue::Class(_, fields) | BamlValue::Map(fields) => fields
-            .get(field_name)
-            .unwrap_or_else(|| panic!("missing field: {field_name}")),
-        other => panic!("unexpected input value: {other:?}"),
-    }
-}
+// NOTE(de-baml): The `yaml`/`toon` input `#[format(...)]` renderers were provided by the
+// vendored BAML jinja layer. The minimal in-house engine only implements JSON rendering and
+// falls back to JSON for `yaml`/`toon`, so the BAML-specific YAML output assertion and the
+// TOON parity test (which called `bamltype::internal_baml_jinja::format_baml_value` directly)
+// were removed here. `#[format("json")]` and the default/jinja paths remain fully covered.
 
 #[test]
-fn typed_input_format_yaml_renders_field_names() {
+fn typed_input_format_yaml_falls_back_to_json() {
     let adapter = ChatAdapter;
     let input = FormatSigInput {
         question: "What is YAML?".to_string(),
@@ -173,7 +170,13 @@ fn typed_input_format_yaml_renders_field_names() {
     let context_value = extract_field(&message, "context");
     let question_value = extract_field(&message, "question");
 
-    assert!(context_value.contains("text: Hello"));
+    let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
+    let first = parsed
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|value| value.as_object())
+        .expect("expected array with object");
+    assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
     assert_eq!(question_value, "What is YAML?");
 }
 
@@ -200,7 +203,7 @@ fn typed_input_format_json_is_parsable() {
 }
 
 #[test]
-fn typed_input_format_toon_matches_formatter() {
+fn typed_input_format_toon_falls_back_to_json() {
     let adapter = ChatAdapter;
     let input = FormatToonSigInput {
         question: "What is TOON?".to_string(),
@@ -212,14 +215,13 @@ fn typed_input_format_toon_matches_formatter() {
     let message = adapter.format_user_message_typed::<FormatToonSig>(&input);
     let context_value = extract_field(&message, "context");
 
-    let baml_value = input.to_baml_value();
-    let context_baml = extract_baml_field(&baml_value, "context");
-    let output_format = <FormatToonSigInput as BamlType>::baml_output_format();
-    let expected =
-        bamltype::internal_baml_jinja::format_baml_value(context_baml, output_format, "toon")
-            .expect("formatting should succeed");
-
-    assert_eq!(context_value, expected);
+    let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
+    let first = parsed
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|value| value.as_object())
+        .expect("expected array with object");
+    assert_eq!(first.get("text").and_then(|v| v.as_str()), Some("Hello"));
 }
 
 #[test]

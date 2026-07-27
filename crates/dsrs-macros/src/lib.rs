@@ -30,6 +30,65 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Marks a nested struct/enum as usable inside `#[derive(Signature)]` fields.
+///
+/// Expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` (plus the
+/// crate-path attrs), which is all a type needs to satisfy the blanket `Schema` impl.
+/// Replaces the old BAML `#[BamlType]` attribute.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn Schema(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_schema_attr(item)
+}
+
+/// Backwards-compatible alias for [`macro@Schema`].
+///
+/// The old vendored BAML integration exposed a `#[BamlType]` attribute that derived the
+/// type-system plumbing. BAML is gone, but this alias keeps existing signatures/tests that
+/// still spell it `#[BamlType]` compiling — it expands to exactly the same facet + serde
+/// derives as `#[Schema]`.
+#[proc_macro_attribute]
+#[allow(non_snake_case)]
+pub fn BamlType(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_schema_attr(item)
+}
+
+fn expand_schema_attr(item: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(item as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    let facet = quote! { #runtime::__macro_support::facet };
+    let serde = quote! { #runtime::__macro_support::serde };
+    let serde_crate = format!(
+        "{}::__macro_support::serde",
+        quote!(#runtime).to_string().replace(' ', "")
+    );
+    let serde_crate = LitStr::new(&serde_crate, proc_macro2::Span::call_site());
+
+    // `facet::Facet` requires an explicit representation on enums. Signature enums are
+    // unit-only value enums, so inject `#[repr(u8)]` when the author didn't specify one
+    // (the previous BAML derive did not require this).
+    let repr = if matches!(input.data, Data::Enum(_))
+        && !input.attrs.iter().any(|attr| attr.path().is_ident("repr"))
+    {
+        quote! { #[repr(u8)] }
+    } else {
+        quote! {}
+    };
+
+    quote! {
+        #[derive(#facet::Facet, #serde::Serialize, #serde::Deserialize)]
+        #[facet(crate = #facet)]
+        #[serde(crate = #serde_crate)]
+        #repr
+        #input
+    }
+    .into()
+}
+
 #[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
 pub fn derive_augmentation(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -710,14 +769,12 @@ fn generate_signature_code(
     let helper_structs = generate_helper_structs(name, generics, parsed, vis, runtime)?;
     let input_metadata = generate_field_metadata(name, &parsed.input_fields, "INPUT", runtime)?;
     let output_metadata = generate_field_metadata(name, &parsed.output_fields, "OUTPUT", runtime)?;
-    let baml_delegation = generate_baml_delegation(name, generics, parsed, runtime);
     let signature_impl = generate_signature_impl(name, generics, parsed, runtime);
 
     Ok(quote! {
         #helper_structs
         #input_metadata
         #output_metadata
-        #baml_delegation
         #signature_impl
     })
 }
@@ -794,12 +851,18 @@ fn generate_helper_structs(
         all_new_fields.push(marker.init.clone());
     }
 
-    let facet = quote! { #runtime::__macro_support::bamltype::facet };
-    let schema_bundle = quote! { #runtime::__macro_support::bamltype::SchemaBundle };
+    let facet = quote! { #runtime::__macro_support::facet };
+    let serde = quote! { #runtime::__macro_support::serde };
+    let serde_crate = format!(
+        "{}::__macro_support::serde",
+        quote!(#runtime).to_string().replace(' ', "")
+    );
+    let serde_crate = LitStr::new(&serde_crate, proc_macro2::Span::call_site());
 
     Ok(quote! {
-        #[derive(Debug, Clone, #facet::Facet)]
+        #[derive(Debug, Clone, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
         #[facet(crate = #facet)]
+        #[serde(crate = #serde_crate)]
         #vis struct #input_name #helper_generics {
             #(#input_fields),*
         }
@@ -812,20 +875,9 @@ fn generate_helper_structs(
             }
         }
 
-        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #input_name #helper_ty_generics
-        where
-            #input_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
-        {
-            fn baml_schema() -> &'static #schema_bundle {
-                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
-                SCHEMA.get_or_init(|| {
-                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
-                })
-            }
-        }
-
-        #[derive(Debug, Clone, #facet::Facet)]
+        #[derive(Debug, Clone, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
         #[facet(crate = #facet)]
+        #[serde(crate = #serde_crate)]
         pub struct #output_name #helper_generics {
             #(#output_fields),*
         }
@@ -838,20 +890,9 @@ fn generate_helper_structs(
             }
         }
 
-        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #output_name #helper_ty_generics
-        where
-            #output_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
-        {
-            fn baml_schema() -> &'static #schema_bundle {
-                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
-                SCHEMA.get_or_init(|| {
-                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
-                })
-            }
-        }
-
-        #[derive(Debug, Clone, #facet::Facet)]
+        #[derive(Debug, Clone, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
         #[facet(crate = #facet)]
+        #[serde(crate = #serde_crate)]
         pub struct #all_name #helper_generics {
             #(#all_fields),*
         }
@@ -861,18 +902,6 @@ fn generate_helper_structs(
                 Self {
                     #(#all_new_fields),*
                 }
-            }
-        }
-
-        impl #helper_impl_generics #runtime::__macro_support::bamltype::BamlSchema for #all_name #helper_ty_generics
-        where
-            #all_name #helper_ty_generics: for<'a> #facet::Facet<'a>,
-        {
-            fn baml_schema() -> &'static #schema_bundle {
-                static SCHEMA: ::std::sync::OnceLock<#schema_bundle> = ::std::sync::OnceLock::new();
-                SCHEMA.get_or_init(|| {
-                    #schema_bundle::from_shape(<Self as #facet::Facet<'_>>::SHAPE)
-                })
             }
         }
     })
@@ -910,6 +939,7 @@ fn generic_marker_field(
         field: quote! {
             #[doc(hidden)]
             #[facet(skip)]
+            #[serde(skip)]
             _phantom: ::std::marker::PhantomData<(#(#missing),*)>
         },
         init: quote! {
@@ -976,10 +1006,12 @@ fn field_tokens(field: &ParsedField) -> proc_macro2::TokenStream {
 
     if field.is_flatten {
         attrs.push(quote! { #[facet(flatten)] });
+        attrs.push(quote! { #[serde(flatten)] });
     }
 
     // Note: aliases, input render hints, and constraints are emitted in
-    // generate_field_metadata(), not as struct attributes.
+    // generate_field_metadata(), not as struct attributes. serde uses Rust field
+    // names on purpose — the LM-facing alias is applied at the schema/render layer.
 
     quote! {
         #(#attrs)*
@@ -1092,71 +1124,6 @@ fn generate_field_metadata(
     })
 }
 
-fn generate_baml_delegation(
-    name: &Ident,
-    generics: &syn::Generics,
-    parsed: &ParsedSignature,
-    runtime: &syn::Path,
-) -> proc_macro2::TokenStream {
-    let all_name = format_ident!("{}All", name);
-    let field_names: Vec<_> = parsed.all_fields.iter().map(|field| &field.ident).collect();
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-
-    let mut to_value_inserts = Vec::new();
-    for field in &parsed.all_fields {
-        let field_name = field.ident.to_string();
-        let ident = &field.ident;
-        let ty = &field.ty;
-        to_value_inserts.push(quote! {
-            fields.insert(
-                #field_name.to_string(),
-                #runtime::__macro_support::bamltype::to_baml_value(&self.#ident).unwrap_or_else(|err| {
-                    panic!(
-                        "Signature derive failed to convert field `{}` on `{}` (type `{}`) to BamlValue: {:?}",
-                        #field_name,
-                        stringify!(#name),
-                        ::std::any::type_name::<#ty>(),
-                        err,
-                    )
-                }),
-            );
-        });
-    }
-
-    quote! {
-        impl #impl_generics #runtime::BamlType for #name #ty_generics #where_clause {
-            fn baml_output_format() -> &'static #runtime::OutputFormatContent {
-                <#all_name #ty_generics as #runtime::BamlType>::baml_output_format()
-            }
-
-            fn baml_internal_name() -> &'static str {
-                <#all_name #ty_generics as #runtime::BamlType>::baml_internal_name()
-            }
-
-            fn baml_type_ir() -> #runtime::TypeIR {
-                <#all_name #ty_generics as #runtime::BamlType>::baml_type_ir()
-            }
-
-            fn try_from_baml_value(value: #runtime::BamlValue) -> Result<Self, #runtime::BamlConvertError> {
-                let all = <#all_name #ty_generics as #runtime::BamlType>::try_from_baml_value(value)?;
-                Ok(Self {
-                    #(#field_names: all.#field_names),*
-                })
-            }
-
-            fn to_baml_value(&self) -> #runtime::BamlValue {
-                let mut fields = #runtime::__macro_support::bamltype::baml_types::BamlMap::new();
-                #(#to_value_inserts)*
-                #runtime::__macro_support::bamltype::baml_types::BamlValue::Class(
-                    <Self as #runtime::BamlType>::baml_internal_name()
-                        .to_string(),
-                    fields,
-                )
-            }
-        }
-    }
-}
-
 fn generate_signature_impl(
     name: &Ident,
     generics: &syn::Generics,
@@ -1174,6 +1141,22 @@ fn generate_signature_impl(
     let output_metadata_static =
         format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
+    // Per-type schema fast path: a monomorphized static skips the global
+    // TypeId-keyed cache lock on every `S::schema()` call. Only emitted for
+    // non-generic signatures — a static inside a generic impl would be shared
+    // across monomorphizations and return the wrong schema.
+    let schema_fast_path = if generics.params.is_empty() {
+        quote! {
+            fn schema() -> &'static #runtime::SignatureSchema {
+                static SCHEMA: ::std::sync::OnceLock<&'static #runtime::SignatureSchema> =
+                    ::std::sync::OnceLock::new();
+                *SCHEMA.get_or_init(|| #runtime::SignatureSchema::of::<Self>())
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     quote! {
         impl #impl_generics #runtime::Signature for #name #ty_generics #where_clause {
             type Input = #input_name #ty_generics;
@@ -1183,12 +1166,14 @@ fn generate_signature_impl(
                 #instruction
             }
 
+            #schema_fast_path
+
             fn input_shape() -> &'static #runtime::Shape {
-                <#input_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+                <#input_name #ty_generics as #runtime::__macro_support::facet::Facet<'static>>::SHAPE
             }
 
             fn output_shape() -> &'static #runtime::Shape {
-                <#output_name #ty_generics as #runtime::__macro_support::bamltype::facet::Facet<'static>>::SHAPE
+                <#output_name #ty_generics as #runtime::__macro_support::facet::Facet<'static>>::SHAPE
             }
 
             fn input_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
@@ -1197,10 +1182,6 @@ fn generate_signature_impl(
 
             fn output_field_metadata() -> &'static [#runtime::FieldMetadataSpec] {
                 &#output_metadata_static
-            }
-
-            fn output_format_content() -> &'static #runtime::OutputFormatContent {
-                <#output_name #ty_generics as #runtime::BamlType>::baml_output_format()
             }
         }
     }
@@ -1279,6 +1260,7 @@ fn expand_augmentation(
 
     let output_field = quote! {
         #[facet(flatten)]
+        #[serde(flatten)]
         pub inner: O
     };
 
@@ -1288,9 +1270,18 @@ fn expand_augmentation(
         (vec![output_field], reasoning_fields)
     };
 
+    let facet = quote! { #runtime::__macro_support::facet };
+    let serde = quote! { #runtime::__macro_support::serde };
+    let serde_crate = format!(
+        "{}::__macro_support::serde",
+        quote!(#runtime).to_string().replace(' ', "")
+    );
+    let serde_crate = LitStr::new(&serde_crate, proc_macro2::Span::call_site());
+
     Ok(quote! {
-        #[derive(Clone, Debug, #runtime::__macro_support::bamltype::facet::Facet)]
-        #[facet(crate = #runtime::__macro_support::bamltype::facet)]
+        #[derive(Clone, Debug, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
+        #[facet(crate = #facet)]
+        #[serde(crate = #serde_crate)]
         pub struct #wrapper_name<O> {
             #(#first_fields),*,
             #(#last_fields),*
@@ -1303,25 +1294,8 @@ fn expand_augmentation(
             }
         }
 
-        impl<O> #runtime::__macro_support::bamltype::BamlSchema for #wrapper_name<O>
-        where
-            O: for<'a> #runtime::__macro_support::bamltype::facet::Facet<'a>,
-        {
-            fn baml_schema(
-            ) -> &'static #runtime::__macro_support::bamltype::SchemaBundle {
-                static SCHEMA: ::std::sync::OnceLock<
-                    #runtime::__macro_support::bamltype::SchemaBundle,
-                > = ::std::sync::OnceLock::new();
-                SCHEMA.get_or_init(|| {
-                    #runtime::__macro_support::bamltype::SchemaBundle::from_shape(
-                        <Self as #runtime::__macro_support::bamltype::facet::Facet<'_>>::SHAPE,
-                    )
-                })
-            }
-        }
-
         impl #runtime::augmentation::Augmentation for #struct_name {
-            type Wrap<T: #runtime::BamlType + for<'a> #runtime::Facet<'a> + Send + Sync> =
+            type Wrap<T: #runtime::Schema + for<'a> #runtime::Facet<'a> + Send + Sync> =
                 #wrapper_name<T>;
         }
     })

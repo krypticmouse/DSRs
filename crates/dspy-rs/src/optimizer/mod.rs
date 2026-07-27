@@ -42,10 +42,11 @@ pub use pareto::*;
 
 use anyhow::Result;
 use anyhow::anyhow;
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 use crate::core::{DynPredictor, visit_named_predictors_mut};
-use crate::evaluate::{MetricOutcome, TypedMetric, evaluate_trainset};
+use crate::evaluate::{MetricOutcome, TypedMetric, evaluate_examples};
 use crate::predictors::Example;
 use crate::{Facet, Module, Signature};
 
@@ -85,22 +86,25 @@ pub trait Optimizer {
         MT: TypedMetric<S, M>;
 }
 
-/// Evaluates a module on a trainset using a typed metric.
+/// Evaluates a module on a set of examples using a typed metric.
 ///
-/// Thin wrapper around [`evaluate_trainset`](crate::evaluate::evaluate_trainset) for
-/// internal optimizer use. Returns one [`MetricOutcome`] per training example.
-pub(crate) async fn evaluate_module_with_metric<S, M, MT>(
+/// Thin wrapper around the concurrent evaluation core for internal optimizer use.
+/// Accepts borrowed examples so optimizers can pass sampled minibatches without
+/// cloning rows. Returns one [`MetricOutcome`] per example, in input order.
+pub(crate) async fn evaluate_module_with_metric<'a, S, M, MT, I>(
     module: &M,
-    trainset: &[Example<S>],
+    examples: I,
     metric: &MT,
+    max_concurrency: usize,
 ) -> Result<Vec<MetricOutcome>>
 where
     S: Signature,
     S::Input: Clone,
     M: Module<Input = S::Input>,
     MT: TypedMetric<S, M>,
+    I: IntoIterator<Item = &'a Example<S>>,
 {
-    evaluate_trainset(module, trainset, metric).await
+    evaluate_examples(module, examples, metric, max_concurrency).await
 }
 
 /// Returns the dotted-path names of all [`Predict`](crate::Predict) leaves in a module.
@@ -118,6 +122,27 @@ where
         ControlFlow::Continue(())
     })?;
     Ok(names)
+}
+
+/// Maps each [`Predict`](crate::Predict) leaf's instance address to its dotted path.
+///
+/// Trace nodes record the same address as
+/// [`NodeType::Predict::instance_key`](crate::trace::NodeType), so this map joins
+/// per-node trace data (inputs/outputs per LM call) back to named predictors for
+/// demo bootstrapping and credit assignment. Addresses are only stable while the
+/// module value is not moved — build the map and consume traces under the same
+/// `&mut` borrow.
+pub fn predictor_instance_keys<M>(module: &mut M) -> Result<HashMap<usize, String>>
+where
+    M: for<'a> Facet<'a>,
+{
+    let mut keys = HashMap::new();
+    visit_named_predictors_mut(module, |name, predictor| {
+        let address = std::ptr::from_mut(predictor).cast::<()>() as usize;
+        keys.insert(address, name.to_string());
+        ControlFlow::Continue(())
+    })?;
+    Ok(keys)
 }
 
 /// Looks up a single named predictor and applies a closure to it.
