@@ -10,9 +10,9 @@ cargo run --example 08-optimize-mipro --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
-    evaluate_trainset, init_tracing,
+    ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
+    configure, evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -100,12 +100,31 @@ async fn main() -> Result<()> {
         .num_candidates(8)
         .num_trials(15)
         .minibatch_size(10)
+        // Demo bootstrapping: trainset runs are traced per-predictor, and
+        // input/output pairs from runs scoring >= min_demo_score are installed
+        // as few-shot demos (top N by score, deduplicated on inputs).
+        .max_bootstrapped_demos(3)
+        .min_demo_score(1.0)
+        .seed(42) // reproducible minibatch sampling
+        .eval_concurrency(8) // LM calls in flight during candidate evaluation
         .build();
 
     println!("Starting MIPROv2 optimization...");
     optimizer
         .compile(&mut qa_module, train_subset.clone(), &metric)
         .await?;
+
+    // Inspect what the optimizer installed: instructions + bootstrapped demos.
+    let state = ModuleState::from_module(&mut qa_module)?;
+    for (predictor, predictor_state) in &state.predictors {
+        println!(
+            "Predictor `{predictor}`: {} bootstrapped demos, instruction override: {}",
+            predictor_state.demos.len(),
+            predictor_state.instruction_override.as_deref().unwrap_or("<none>"),
+        );
+    }
+    state.save("optimized-qa.json")?;
+    println!("Saved optimized module state to optimized-qa.json\n");
 
     println!("Evaluating optimized performance...");
     let optimized_score =

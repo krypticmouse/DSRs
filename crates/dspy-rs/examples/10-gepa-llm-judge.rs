@@ -177,10 +177,16 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
     println!("Baseline score: {baseline:.3}");
 
+    // The judge grades outputs; a separate reflection LM rewrites the module's
+    // instruction from the judge's feedback each generation.
+    let reflection_lm = LM::builder().temperature(1.0).build().await?;
+
     let gepa = GEPA::builder()
         .num_iterations(3)
         .minibatch_size(2)
-        .temperature(0.9)
+        .prompt_model(reflection_lm)
+        .seed(42)
+        .eval_concurrency(4)
         .track_stats(true)
         .build();
 

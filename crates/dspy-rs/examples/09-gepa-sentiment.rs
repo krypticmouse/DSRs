@@ -10,9 +10,9 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing,
+    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -111,11 +111,18 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
     println!("Baseline score: {baseline:.3}");
 
+    // A reflection LM turns GEPA's mutation step into a real rewrite: it reads
+    // the current instruction plus per-example feedback and proposes an improved
+    // instruction each generation. Without `prompt_model`, GEPA falls back to
+    // deterministic feedback concatenation.
+    let reflection_lm = LM::builder().temperature(1.0).build().await?;
+
     let gepa = GEPA::builder()
         .num_iterations(5)
         .minibatch_size(4)
-        .num_trials(3)
-        .temperature(0.9)
+        .prompt_model(reflection_lm)
+        .seed(42) // reproducible minibatch sampling
+        .eval_concurrency(8) // LM calls in flight during candidate evaluation
         .track_stats(true)
         .build();
 
@@ -145,6 +152,11 @@ async fn main() -> Result<()> {
     if let Some(feedback) = test_feedback.feedback {
         println!("Feedback: {}", feedback.feedback);
     }
+
+    // Persist the optimized instructions/demos so production can reload them
+    // with `ModuleState::load(...)?.apply(&mut module)?` — no re-optimization.
+    ModuleState::from_module(&mut module)?.save("optimized-sentiment.json")?;
+    println!("Saved optimized module state to optimized-sentiment.json");
 
     Ok(())
 }

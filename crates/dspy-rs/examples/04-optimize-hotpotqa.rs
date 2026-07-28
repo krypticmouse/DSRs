@@ -10,9 +10,9 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
-    evaluate_trainset, init_tracing,
+    COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
+    configure, evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -83,13 +83,21 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("baseline score: {baseline:.3}");
 
-    let optimizer = COPRO::builder().breadth(10).depth(1).build();
+    let optimizer = COPRO::builder()
+        .breadth(10)
+        .depth(1)
+        .eval_concurrency(16) // candidate evaluations fan out 16 LM calls at a time
+        .build();
     optimizer
         .compile(&mut module, examples.clone(), &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
+
+    // Persist the tuned instructions for later `ModuleState::load(...).apply(...)`.
+    ModuleState::from_module(&mut module)?.save("optimized-hotpotqa.json")?;
+    println!("saved optimized module state to optimized-hotpotqa.json");
 
     Ok(())
 }

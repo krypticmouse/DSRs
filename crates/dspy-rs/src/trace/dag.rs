@@ -15,6 +15,10 @@ pub enum NodeType {
         /// predictor paths discovered via Facet reflection (see
         /// [`predictor_instance_keys`](crate::predictor_instance_keys)).
         instance_key: usize,
+        /// Human-assigned name for this predictor, when one was given —
+        /// [`fx::predict`](crate::fx::predict) always sets it; struct-based
+        /// predictors set it via [`PredictBuilder::named`](crate::PredictBuilder::named).
+        param_name: Option<String>,
     },
     /// A user-defined operation (custom module logic between Predict calls).
     Operator {
@@ -36,10 +40,12 @@ impl fmt::Debug for NodeType {
             Self::Predict {
                 signature_name,
                 instance_key,
+                param_name,
             } => f
                 .debug_struct("Predict")
                 .field("signature_name", signature_name)
                 .field("instance_key", instance_key)
+                .field("param_name", param_name)
                 .finish(),
             Self::Operator { name } => f.debug_struct("Operator").field("name", name).finish(),
             Self::Map { mapping } => f.debug_struct("Map").field("mapping", mapping).finish(),

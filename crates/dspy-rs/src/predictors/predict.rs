@@ -137,6 +137,10 @@ pub struct Predict<S: Signature> {
     /// settable at build time, so this never needs invalidation.
     #[facet(skip, opaque)]
     toolset: tokio::sync::OnceCell<Arc<ToolSet>>,
+    /// Human-assigned name recorded on trace nodes; set by
+    /// [`PredictBuilder::named`] or [`fx::predict`](crate::fx::predict).
+    #[facet(skip, opaque)]
+    trace_name: Option<String>,
     #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
@@ -151,6 +155,7 @@ impl<S: Signature> Predict<S> {
             lm: None,
             prompt_prefix: OnceLock::new(),
             toolset: tokio::sync::OnceCell::new(),
+            trace_name: None,
             _marker: PhantomData,
         }
     }
@@ -364,6 +369,7 @@ impl<S: Signature> Predict<S> {
                 crate::trace::NodeType::Predict {
                     signature_name: std::any::type_name::<S>().to_string(),
                     instance_key: self as *const Self as *const () as usize,
+                    param_name: self.trace_name.clone(),
                 },
                 inputs,
                 input_data,
@@ -501,6 +507,7 @@ pub struct PredictBuilder<S: Signature> {
     demos: Vec<Example<S>>,
     instruction_override: Option<String>,
     lm: Option<Arc<crate::core::LM>>,
+    trace_name: Option<String>,
     _marker: PhantomData<S>,
 }
 
@@ -511,8 +518,15 @@ impl<S: Signature> PredictBuilder<S> {
             demos: Vec::new(),
             instruction_override: None,
             lm: None,
+            trace_name: None,
             _marker: PhantomData,
         }
+    }
+
+    /// Assigns a human-readable name recorded on this predictor's trace nodes.
+    pub fn named(mut self, name: impl Into<String>) -> Self {
+        self.trace_name = Some(name.into());
+        self
     }
 
     /// Adds a single demo (few-shot example) to the predictor.
@@ -571,6 +585,7 @@ impl<S: Signature> PredictBuilder<S> {
             lm: self.lm,
             prompt_prefix: OnceLock::new(),
             toolset: tokio::sync::OnceCell::new(),
+            trace_name: self.trace_name,
             _marker: PhantomData,
         }
     }

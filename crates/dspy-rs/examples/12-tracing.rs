@@ -116,12 +116,21 @@ async fn main() -> Result<()> {
         Err(err) => println!("Error (expected without credentials/network): {err}"),
     }
 
+    // Each Predict call records its typed inputs, its parsed output, an edge to
+    // the previously recorded node, and an `instance_key` that optimizers can
+    // join back to named predictor paths (see `predictor_instance_keys`).
     println!("Graph nodes: {}", graph.nodes.len());
     for node in &graph.nodes {
         println!(
             "Node {}: type={:?}, inputs={:?}",
             node.id, node.node_type, node.inputs
         );
+        if let Some(input_data) = &node.input_data {
+            println!("  recorded input: {:?}", input_data.data);
+        }
+        if let Some(output) = &node.output {
+            println!("  recorded output: {:?}", output.data);
+        }
     }
 
     println!("\nExecuting graph replay...");

@@ -102,6 +102,9 @@ async fn main() -> Result<()> {
         .await?;
     configure(lm, ChatAdapter);
 
+    // Tool definitions are fetched once and cached on the Predict instance as a
+    // `ToolSet` (definitions + name-indexed executors); repeat calls reuse it.
+    // Parallel tool calls from the model execute concurrently.
     let predictor = Predict::<MathQuestionSignature>::builder()
         .instruction("You must call the calculator tool for arithmetic.")
         .add_tool(CalculatorTool)

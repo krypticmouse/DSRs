@@ -10,7 +10,8 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 use anyhow::Result;
 use dspy_rs::{
     ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
-    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
+    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset_with_concurrency,
+    init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -65,7 +66,9 @@ async fn main() -> Result<()> {
         .build();
     let metric = ExactMatchMetric;
 
-    let outcomes = evaluate_trainset(&module, &examples, &metric).await?;
+    // Evaluation runs concurrently — 32 LM calls in flight, results in trainset
+    // order. `evaluate_trainset` uses a default of 16; tune per provider limits.
+    let outcomes = evaluate_trainset_with_concurrency(&module, &examples, &metric, 32).await?;
     let score = average_score(&outcomes);
 
     println!("evaluated {} examples", outcomes.len());
