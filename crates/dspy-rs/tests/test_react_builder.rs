@@ -1,7 +1,7 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use dspy_rs::{LM, LMClient, ReAct, Signature, TestCompletionModel, configure};
+use dspy_rs::{LM, LMClient, Module, ReAct, Signature, TestCompletionModel, configure};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use serde_json::Value;

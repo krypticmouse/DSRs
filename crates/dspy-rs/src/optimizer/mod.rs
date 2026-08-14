@@ -45,7 +45,7 @@ use anyhow::anyhow;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
-use crate::core::{DynPredictor, visit_named_predictors_mut};
+use crate::core::{DynPredictor, StateUpdate, visit_named_predictors_mut};
 use crate::evaluate::{MetricOutcome, TypedMetric, evaluate_examples};
 use crate::predictors::Example;
 use crate::{Facet, Module, Signature};
@@ -105,6 +105,52 @@ where
     I: IntoIterator<Item = &'a Example<S>>,
 {
     evaluate_examples(module, examples, metric, max_concurrency).await
+}
+
+/// Evaluates a candidate instruction for one predictor: save the current
+/// override, install the candidate, run the metric over `examples`, restore.
+///
+/// The one save/set/eval/restore block shared by every optimizer — candidate
+/// state goes through the [`DynPredictor::apply_update`] mutation seam, and the
+/// original override is restored whether evaluation succeeds or fails.
+/// Instruction-only on purpose: demos are never serialized per candidate.
+pub(crate) async fn evaluate_with_instruction<'a, S, M, MT, I>(
+    module: &mut M,
+    predictor_name: &str,
+    instruction: &str,
+    examples: I,
+    metric: &MT,
+    max_concurrency: usize,
+) -> Result<Vec<MetricOutcome>>
+where
+    S: Signature,
+    S::Input: Clone,
+    M: Module<Input = S::Input> + for<'b> Facet<'b>,
+    MT: TypedMetric<S, M>,
+    I: IntoIterator<Item = &'a Example<S>>,
+{
+    let original = with_named_predictor(module, predictor_name, |predictor| {
+        Ok(predictor.instruction_override())
+    })?;
+
+    with_named_predictor(module, predictor_name, |predictor| {
+        predictor.apply_update(StateUpdate::instruction(Some(instruction.to_string())))
+    })?;
+    let evaluation =
+        evaluate_module_with_metric(&*module, examples, metric, max_concurrency).await;
+
+    let restore = with_named_predictor(module, predictor_name, |predictor| {
+        predictor.apply_update(StateUpdate::instruction(original))
+    });
+
+    match (evaluation, restore) {
+        (Ok(outcomes), Ok(())) => Ok(outcomes),
+        (Ok(_), Err(restore_err)) => Err(restore_err),
+        (Err(eval_err), Ok(())) => Err(eval_err),
+        (Err(eval_err), Err(restore_err)) => Err(anyhow!(
+            "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
+        )),
+    }
 }
 
 /// Returns the dotted-path names of all [`Predict`](crate::Predict) leaves in a module.

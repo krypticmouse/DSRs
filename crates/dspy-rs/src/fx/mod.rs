@@ -229,7 +229,7 @@ where
     S::Output: Schema,
 {
     let predictor = resolve_predictor::<S>(name)?;
-    predictor.forward(input).await
+    predictor.call(input).await
 }
 
 /// Adapts a plain async function into a [`Module`], so functional harnesses

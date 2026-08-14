@@ -251,7 +251,7 @@ async fn main() {
     let plain = Predict::<BenchQA>::builder().lm(lm).build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(plain.forward(bench_input()).await.unwrap());
+        std::hint::black_box(plain.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (0 demos, test LM)", iters, s);
 
@@ -265,7 +265,7 @@ async fn main() {
         .build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(demoed.forward(bench_input()).await.unwrap());
+        std::hint::black_box(demoed.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (2 demos, test LM)", iters, s);
 
@@ -312,7 +312,7 @@ async fn main() {
     let tooled = Predict::<BenchQA>::builder().lm(lm).add_tool(NoopTool).build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(tooled.forward(bench_input()).await.unwrap());
+        std::hint::black_box(tooled.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (1 tool, unused)", iters, s);
 
@@ -349,7 +349,7 @@ async fn main() {
     let global_predict = Predict::<BenchQA>::new();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(global_predict.forward(bench_input()).await.unwrap());
+        std::hint::black_box(global_predict.call(bench_input()).await.unwrap());
     }
     report("struct Predict (0 demos, global LM)", iters, s);
 }

@@ -3,9 +3,10 @@ use bon::Builder;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
+use crate::core::StateUpdate;
 use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
 use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
+    Optimizer, evaluate_with_instruction, predictor_names, with_named_predictor,
 };
 use crate::predictors::Example;
 use crate::{Facet, Module, Predict, Schema, Signature, SignatureSchema};
@@ -231,8 +232,7 @@ impl GEPA {
         M: for<'a> Facet<'a>,
     {
         with_named_predictor(module, module_name, |predictor| {
-            predictor.set_instruction(instruction);
-            Ok(())
+            predictor.apply_update(StateUpdate::instruction(Some(instruction)))
         })
     }
 
@@ -251,37 +251,15 @@ impl GEPA {
         MT: TypedMetric<S, M>,
         I: IntoIterator<Item = &'a Example<S>>,
     {
-        // Instruction-only save/restore: GEPA never mutates demos during
-        // candidate evaluation, so the full dump_state/load_state demo
-        // serialization round-trip is skipped.
-        let original_instruction = with_named_predictor(module, module_name, |predictor| {
-            Ok(predictor.instruction_override())
-        })?;
-
-        Self::set_instruction(module, module_name, instruction.to_string())?;
-        let evaluation =
-            evaluate_module_with_metric(&*module, examples, metric, self.eval_concurrency).await;
-
-        match evaluation {
-            Ok(outcomes) => {
-                with_named_predictor(module, module_name, |predictor| {
-                    predictor.restore_instruction(original_instruction);
-                    Ok(())
-                })?;
-                Ok(outcomes)
-            }
-            Err(eval_err) => {
-                if let Err(restore_err) = with_named_predictor(module, module_name, |predictor| {
-                    predictor.restore_instruction(original_instruction.clone());
-                    Ok(())
-                }) {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
-                    ));
-                }
-                Err(eval_err)
-            }
-        }
+        evaluate_with_instruction(
+            module,
+            module_name,
+            instruction,
+            examples,
+            metric,
+            self.eval_concurrency,
+        )
+        .await
     }
 
     fn require_feedback(
