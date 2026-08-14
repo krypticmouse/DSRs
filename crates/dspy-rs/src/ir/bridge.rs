@@ -8,6 +8,10 @@
 //!   [`Program`] into an [`Overlay`];
 //!   [`Params::from_overlay`](crate::fx::Params::from_overlay) unbinds an
 //!   overlay back to named params.
+//! - [`ModuleState`] (dotted-path persistence) is a **serde projection** of an
+//!   overlay: [`ModuleState::to_overlay`] / [`Overlay::to_module_state`]
+//!   round-trip through a program whose leaf names match the dotted paths.
+//!   The existing `ModuleState` JSON format is unchanged.
 //! - [`with_overlay`] is the fx-lane scope symmetric to
 //!   [`fx::with_params`](crate::fx::with_params): it unbinds the overlay
 //!   against the program and injects the resulting params ambiently, so a
@@ -32,7 +36,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::core::PredictState;
+use crate::core::{ModuleState, PredictState};
 use crate::ir::graph::{Node, Program};
 use crate::ir::params::{DemoRow, Overlay, OverlayError, ParamOwner, ParamValue};
 use crate::ir::sig::SignatureDef;
@@ -64,6 +68,36 @@ impl crate::fx::Params {
             params.set(name, state);
         }
         Ok(params)
+    }
+}
+
+impl ModuleState {
+    /// Projects this saved state into an [`Overlay`] against a program whose
+    /// leaf names match the dotted predictor paths.
+    ///
+    /// The serde format of `ModuleState` is unchanged — this is a view, not a
+    /// migration. Unknown paths are [`OverlayError::UnknownPath`].
+    pub fn to_overlay(&self, program: &Program) -> Result<Overlay, OverlayError> {
+        states_to_overlay(
+            program,
+            self.predictors
+                .iter()
+                .map(|(name, state)| (name.as_str(), state)),
+        )
+    }
+}
+
+impl Overlay {
+    /// Projects this overlay to the [`ModuleState`] persistence form,
+    /// restricted to `Instruction`/`Demos` kinds (RFC 0002 §2.4) — entries of
+    /// other kinds are skipped.
+    ///
+    /// Fails with [`OverlayError::BaseMismatch`] when the overlay was minted
+    /// against a different program.
+    pub fn to_module_state(&self, program: &Program) -> Result<ModuleState, OverlayError> {
+        Ok(ModuleState {
+            predictors: overlay_to_states(program, self)?,
+        })
     }
 }
 

@@ -6,7 +6,9 @@
 use dspy_rs::ir::{
     self, FieldType as T, Overlay, OverlayError, ParamValue, Program, ProgramBuilder, SignatureDef,
 };
-use dspy_rs::{LM, LMClient, LMConfig, Signature, TestCompletionModel, configure, fx};
+use dspy_rs::{
+    LM, LMClient, LMConfig, ModuleState, Signature, TestCompletionModel, configure, fx,
+};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use serde_json::json;
@@ -337,6 +339,70 @@ async fn with_overlay_refuses_a_stale_base_before_running() {
     let err = fx::with_overlay(&program, &stale, async { unreachable!() as () })
         .await
         .unwrap_err();
+    assert!(matches!(err, OverlayError::BaseMismatch { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// ModuleState ↔ Overlay projection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn module_state_round_trips_through_overlay() {
+    let program = pipeline_program();
+    let mut state = ModuleState::default();
+    state.predictors.insert(
+        "drafter".to_string(),
+        dspy_rs::PredictState {
+            demos: vec![obj(&[
+                ("question", json!("demo q")),
+                ("answer", json!("demo a")),
+            ])],
+            instruction_override: Some("STATE: draft tersely.".to_string()),
+        },
+    );
+    state.predictors.insert(
+        "checker".to_string(),
+        dspy_rs::PredictState {
+            demos: vec![],
+            instruction_override: Some("STATE: check hard.".to_string()),
+        },
+    );
+
+    let overlay = state.to_overlay(&program).unwrap();
+    let drafter_demos = program.param_id("drafter.demos").unwrap();
+    match overlay.get(drafter_demos).unwrap() {
+        ParamValue::Demos { rows } => {
+            assert_eq!(rows[0].input, obj(&[("question", json!("demo q"))]));
+            assert_eq!(rows[0].output, obj(&[("answer", json!("demo a"))]));
+        }
+        other => panic!("expected demos, got {other:?}"),
+    }
+
+    let restored = overlay.to_module_state(&program).unwrap();
+    assert_eq!(restored.predictors, state.predictors);
+
+    // The serde format is untouched: the round-tripped state serializes to
+    // exactly the same JSON the original did.
+    assert_eq!(restored.to_json().unwrap(), state.to_json().unwrap());
+}
+
+#[test]
+fn module_state_unknown_path_is_an_error() {
+    let program = pipeline_program();
+    let mut state = ModuleState::default();
+    state
+        .predictors
+        .insert("ghost".to_string(), dspy_rs::PredictState::default());
+    let err = state.to_overlay(&program).unwrap_err();
+    assert!(matches!(err, OverlayError::UnknownPath { ref path } if path == "ghost.instruction"));
+}
+
+#[test]
+fn overlay_to_module_state_refuses_a_stale_base() {
+    let program = pipeline_program();
+    let mut stale = Overlay::default();
+    stale.base = 7;
+    let err = stale.to_module_state(&program).unwrap_err();
     assert!(matches!(err, OverlayError::BaseMismatch { .. }));
 }
 
