@@ -7,7 +7,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 
-use super::schema::{FieldType, OutputSchema};
+use super::schema::{FieldType, TypeTable};
 
 /// A non-fatal observation made while coercing a value (e.g. a code fence was stripped).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub struct Coerced {
 }
 
 /// Coerces `raw` into a `serde_json::Value` matching `field_type`.
-pub fn coerce(raw: &str, field_type: &FieldType, schema: &OutputSchema) -> Result<Coerced> {
+pub fn coerce(raw: &str, field_type: &FieldType, schema: &TypeTable) -> Result<Coerced> {
     let mut flags = Vec::new();
     let value = coerce_inner(raw, field_type, schema, &mut flags)?;
     Ok(Coerced { value, flags })
@@ -51,7 +51,7 @@ pub fn coerce(raw: &str, field_type: &FieldType, schema: &OutputSchema) -> Resul
 fn coerce_inner(
     raw: &str,
     field_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     match field_type {
@@ -169,7 +169,7 @@ fn coerce_bool(raw: &str, flags: &mut Vec<Flag>) -> Result<Value> {
 fn coerce_list(
     raw: &str,
     inner: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
@@ -204,7 +204,7 @@ fn coerce_list(
 fn coerce_map(
     raw: &str,
     value_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
@@ -223,7 +223,7 @@ fn coerce_map(
 fn coerce_class(
     raw: &str,
     class_name: &str,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let class = schema
@@ -262,7 +262,7 @@ fn coerce_class(
     Ok(Value::Object(out))
 }
 
-fn coerce_enum(raw: &str, enum_name: &str, schema: &OutputSchema) -> Result<Value> {
+fn coerce_enum(raw: &str, enum_name: &str, schema: &TypeTable) -> Result<Value> {
     let enm = schema
         .enums
         .get(enum_name)
@@ -290,7 +290,7 @@ fn coerce_enum(raw: &str, enum_name: &str, schema: &OutputSchema) -> Result<Valu
 fn coerce_json_value(
     value: Value,
     field_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     match field_type {

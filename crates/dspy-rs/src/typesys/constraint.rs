@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
 use minijinja::{Environment, Expression};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Shared environment for constraint expressions — building an `Environment` per
@@ -22,7 +23,8 @@ static COMPILED_EXPRESSIONS: LazyLock<
 > = LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Whether a constraint is a soft `check` (reported) or a hard `assert` (fails the call).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     Check,
     Assert,
@@ -32,7 +34,7 @@ pub enum ConstraintKind {
 pub type ConstraintLevel = ConstraintKind;
 
 /// A single `#[check]`/`#[assert]` constraint attached to a field.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Constraint {
     pub level: ConstraintKind,
     pub label: Option<String>,

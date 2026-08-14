@@ -251,7 +251,7 @@ impl ChatAdapter {
         lines.push(String::new());
         lines.push("Your output fields are:".to_string());
         for (i, field) in schema.output_fields().iter().enumerate() {
-            let type_name = type_name(&field.type_ir, Some(output_schema));
+            let type_name = type_name(&field.type_ir, Some(&output_schema.types));
             let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
             if !field.docs.is_empty() {
                 line.push_str(": ");
@@ -277,8 +277,8 @@ impl ChatAdapter {
 
         let output_schema = schema.output_schema();
         for field in schema.output_fields() {
-            let type_name = type_name(&field.type_ir, Some(output_schema));
-            let rendered_schema = schema_block(&field.type_ir, output_schema);
+            let type_name = type_name(&field.type_ir, Some(&output_schema.types));
+            let rendered_schema = schema_block(&field.type_ir, &output_schema.types);
             lines.push(format!("[[ ## {} ## ]]", field.lm_name));
             lines.push(format!(
                 "Output field `{}` should be of type: {type_name}",
@@ -472,10 +472,10 @@ impl ChatAdapter {
                 }
             };
 
-            let coerced = match coerce(raw_text, field_type, output_schema) {
+            let coerced = match coerce(raw_text, field_type, &output_schema.types) {
                 Ok(value) => value,
                 Err(err) => {
-                    let expected_type = type_name(field_type, Some(output_schema));
+                    let expected_type = type_name(field_type, Some(&output_schema.types));
                     debug!(
                         field = %rust_name,
                         expected_type = %expected_type,

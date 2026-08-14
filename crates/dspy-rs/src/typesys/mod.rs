@@ -19,7 +19,7 @@ pub use constraint::{
 };
 pub use render::{schema_block, type_name};
 pub use schema::{
-    ClassDef, EnumDef, EnumValueDef, FieldDef, FieldType, OutputSchema, Schema,
+    ClassDef, EnumDef, EnumValueDef, FieldDef, FieldType, OutputSchema, Schema, TypeTable,
     field_type_from_shape, internal_name_for_shape,
 };
 

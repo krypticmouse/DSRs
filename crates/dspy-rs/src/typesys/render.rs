@@ -7,13 +7,13 @@
 //! - [`schema_block`] — the expanded block for structured types (class field layouts, enum
 //!   value lists). Primitive types return their [`type_name`] so the adapter can skip the block.
 
-use super::schema::{ClassDef, FieldType, OutputSchema};
+use super::schema::{ClassDef, FieldType, TypeTable};
 
 /// Renders the short, inline type label for a field.
 ///
 /// `schema` resolves class/enum internal names to their rendered names; pass `None` when
 /// no registry is available (input fields), in which case the last `::` path segment is used.
-pub fn type_name(field_type: &FieldType, schema: Option<&OutputSchema>) -> String {
+pub fn type_name(field_type: &FieldType, schema: Option<&TypeTable>) -> String {
     match field_type {
         FieldType::String => "string".to_string(),
         FieldType::Int => "int".to_string(),
@@ -34,7 +34,7 @@ pub fn type_name(field_type: &FieldType, schema: Option<&OutputSchema>) -> Strin
     }
 }
 
-fn resolve_name(token: &str, schema: Option<&OutputSchema>) -> String {
+fn resolve_name(token: &str, schema: Option<&TypeTable>) -> String {
     match schema {
         Some(schema) => schema.rendered_name(token),
         None => token.rsplit("::").next().unwrap_or(token).to_string(),
@@ -46,7 +46,7 @@ fn resolve_name(token: &str, schema: Option<&OutputSchema>) -> String {
 /// For primitive/optional-primitive/map types this returns [`type_name`] (the adapter then
 /// skips emitting a redundant block). For classes, enums, and lists thereof it renders a
 /// structured, indented block that names each field/value with doc comments.
-pub fn schema_block(field_type: &FieldType, schema: &OutputSchema) -> String {
+pub fn schema_block(field_type: &FieldType, schema: &TypeTable) -> String {
     match field_type {
         FieldType::Class(name) => schema
             .classes
@@ -75,7 +75,7 @@ pub fn schema_block(field_type: &FieldType, schema: &OutputSchema) -> String {
     }
 }
 
-fn render_class(class: &ClassDef, schema: &OutputSchema) -> String {
+fn render_class(class: &ClassDef, schema: &TypeTable) -> String {
     let mut lines = vec!["{".to_string()];
     for field in &class.fields {
         if let Some(docs) = &field.docs {

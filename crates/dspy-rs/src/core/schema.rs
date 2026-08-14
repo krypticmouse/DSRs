@@ -182,7 +182,7 @@ impl SignatureSchema {
             instruction: S::instruction(),
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
-            output_schema: <S::Output as crate::typesys::Schema>::output_schema().clone(),
+            output_schema: <S::Output as crate::typesys::Schema>::output_schema(),
             response_instructions: OnceLock::new(),
         })
     }
