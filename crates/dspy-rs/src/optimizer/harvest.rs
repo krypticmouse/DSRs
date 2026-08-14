@@ -12,31 +12,42 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::data::RawExample;
 use crate::trace::{JsonMap, Trace};
 
-/// Builds a demo row from a span's recorded input/output field maps.
-pub(crate) fn demo_from_json(input: &JsonMap, output: &JsonMap) -> RawExample {
-    let mut data: HashMap<String, Value> = HashMap::with_capacity(input.len() + output.len());
-    data.extend(input.iter().map(|(k, v)| (k.clone(), v.clone())));
-    data.extend(output.iter().map(|(k, v)| (k.clone(), v.clone())));
-    RawExample::new(
-        data,
-        input.keys().cloned().collect(),
-        output.keys().cloned().collect(),
-    )
+/// A scored demo candidate: the flat demo row plus the input-only fingerprint
+/// used for deduplication.
+pub(crate) struct DemoCandidate {
+    /// Whole-rollout metric score of the trace this row came from.
+    pub score: f64,
+    /// Canonical fingerprint of the input fields, for input-level dedup.
+    pub input_fingerprint: String,
+    /// The demo row: input and output fields merged into one flat object.
+    pub row: JsonMap,
+}
+
+/// Builds a flat demo row from a span's recorded input/output field maps.
+pub(crate) fn demo_from_json(input: &JsonMap, output: &JsonMap) -> JsonMap {
+    let mut row = input.clone();
+    row.extend(output.iter().map(|(k, v)| (k.clone(), v.clone())));
+    row
+}
+
+fn input_fingerprint(input: &JsonMap) -> String {
+    let mut pairs: Vec<(&String, &Value)> = input.iter().collect();
+    pairs.sort_by_key(|(name, _)| *name);
+    serde_json::to_string(&pairs).unwrap_or_default()
 }
 
 /// Collects scored demo candidates per predictor name from rollout traces.
 ///
 /// Every successful span (parsed output present) inside a rollout whose score
-/// reaches `min_score` contributes one `(score, demo)` pair to its component's
-/// bucket, where the score is the *whole-rollout* metric score.
+/// reaches `min_score` contributes one candidate to its component's bucket,
+/// where the score is the *whole-rollout* metric score.
 pub(crate) fn collect_demo_candidates<'a>(
     rollouts: impl IntoIterator<Item = (f64, &'a Trace)>,
     min_score: f64,
-) -> HashMap<String, Vec<(f64, RawExample)>> {
-    let mut candidates: HashMap<String, Vec<(f64, RawExample)>> = HashMap::new();
+) -> HashMap<String, Vec<DemoCandidate>> {
+    let mut candidates: HashMap<String, Vec<DemoCandidate>> = HashMap::new();
     for (score, trace) in rollouts {
         if score < min_score {
             continue;
@@ -44,10 +55,13 @@ pub(crate) fn collect_demo_candidates<'a>(
         for span in trace.successes() {
             let name = trace.component_name(span.component);
             if let (Some(input), Some(output)) = (&span.input, &span.output) {
-                candidates
-                    .entry(name.to_string())
-                    .or_default()
-                    .push((score, demo_from_json(input, output)));
+                candidates.entry(name.to_string()).or_default().push(
+                    DemoCandidate {
+                        score,
+                        input_fingerprint: input_fingerprint(input),
+                        row: demo_from_json(input, output),
+                    },
+                );
             }
         }
     }
@@ -57,27 +71,23 @@ pub(crate) fn collect_demo_candidates<'a>(
 /// Keeps the top `max_per_predictor` demos per predictor by rollout score,
 /// deduplicated on input fields so repeated inputs don't crowd the demo set.
 pub(crate) fn select_demos(
-    candidates: HashMap<String, Vec<(f64, RawExample)>>,
+    candidates: HashMap<String, Vec<DemoCandidate>>,
     max_per_predictor: usize,
-) -> HashMap<String, Vec<RawExample>> {
+) -> HashMap<String, Vec<JsonMap>> {
     let mut selected = HashMap::with_capacity(candidates.len());
     for (path, mut scored) in candidates {
-        scored.sort_by(|(left, _), (right, _)| {
-            right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
+        scored.sort_by(|left, right| {
+            right
+                .score
+                .partial_cmp(&left.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         let mut seen_inputs = HashSet::new();
         let mut demos = Vec::new();
-        for (_, demo) in scored {
-            let mut input_pairs: Vec<(&String, &Value)> = demo
-                .input_keys
-                .iter()
-                .filter_map(|key| demo.data.get(key).map(|value| (key, value)))
-                .collect();
-            input_pairs.sort_by_key(|(name, _)| *name);
-            let fingerprint = serde_json::to_string(&input_pairs).unwrap_or_default();
-            if seen_inputs.insert(fingerprint) {
-                demos.push(demo);
+        for candidate in scored {
+            if seen_inputs.insert(candidate.input_fingerprint) {
+                demos.push(candidate.row);
                 if demos.len() >= max_per_predictor {
                     break;
                 }

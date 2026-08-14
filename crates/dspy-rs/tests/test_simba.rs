@@ -150,8 +150,8 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
     let state = ModuleState::from_module(&mut module).unwrap();
     let predictor = &state.predictors["predictor"];
     assert_eq!(predictor.demos.len(), 1);
-    assert_eq!(predictor.demos[0].data["prompt"].as_str(), Some("0"));
-    assert_eq!(predictor.demos[0].data["answer"].as_str(), Some("0"));
+    assert_eq!(predictor.demos[0]["prompt"].as_str(), Some("0"));
+    assert_eq!(predictor.demos[0]["answer"].as_str(), Some("0"));
     assert_eq!(predictor.instruction_override, None, "demo moves leave instructions alone");
 }
 

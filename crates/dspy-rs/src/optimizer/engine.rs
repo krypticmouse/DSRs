@@ -62,7 +62,6 @@ use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
 use crate::core::{ModuleState, PredictState, StateUpdate};
-use crate::data::RawExample;
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval, TypedMetric};
 use crate::optimizer::pareto::ParetoStatistics;
 use crate::optimizer::with_named_predictor;
@@ -159,9 +158,11 @@ pub struct Overlay {
     /// `Some` installs this instruction override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
-    /// `Some` replaces the demo set.
+    /// `Some` replaces the demo set. Rows are flat JSON objects (field name →
+    /// value, input and output fields merged), the same shape as
+    /// [`PredictState::demos`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub demos: Option<Vec<RawExample>>,
+    pub demos: Option<Vec<JsonMap>>,
 }
 
 impl Overlay {
@@ -209,8 +210,9 @@ impl Candidate {
         self
     }
 
-    /// Sets the demo overlay for a named predictor.
-    pub fn set_demos(&mut self, name: impl Into<String>, demos: Vec<RawExample>) -> &mut Self {
+    /// Sets the demo overlay for a named predictor. Each row is a flat JSON
+    /// object with the signature's input and output fields merged.
+    pub fn set_demos(&mut self, name: impl Into<String>, demos: Vec<JsonMap>) -> &mut Self {
         self.overlays.entry(name.into()).or_default().demos = Some(demos);
         self
     }
@@ -1040,18 +1042,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap as StdHashMap;
 
-    fn demo(pairs: &[(&str, &str)]) -> RawExample {
-        let data: StdHashMap<String, serde_json::Value> = pairs
+    fn demo(pairs: &[(&str, &str)]) -> JsonMap {
+        pairs
             .iter()
             .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_string())))
-            .collect();
-        RawExample::new(
-            data,
-            vec![pairs[0].0.to_string()],
-            pairs[1..].iter().map(|(k, _)| k.to_string()).collect(),
-        )
+            .collect()
     }
 
     #[test]

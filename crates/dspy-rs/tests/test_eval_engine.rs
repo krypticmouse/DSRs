@@ -8,7 +8,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
-use dspy_rs::data::RawExample;
 use dspy_rs::{
     Budget, CallMetadata, Candidate, EngineConfig, Eval, EvalEngine, EvalOutcome, Example,
     GateOutcome, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, Signature,
@@ -803,14 +802,12 @@ async fn apply_and_restore_are_the_single_candidate_seam() {
     candidate.set_instruction("predictor", "overlaid");
     candidate.set_demos(
         "predictor",
-        vec![RawExample::new(
-            HashMap::from([
-                ("prompt".to_string(), serde_json::json!("demo-q")),
-                ("answer".to_string(), serde_json::json!("demo-a")),
-            ]),
-            vec!["prompt".to_string()],
-            vec!["answer".to_string()],
-        )],
+        vec![
+            serde_json::json!({"prompt": "demo-q", "answer": "demo-a"})
+                .as_object()
+                .cloned()
+                .unwrap(),
+        ],
     );
 
     let undo = apply_candidate(&mut module, &candidate).unwrap();

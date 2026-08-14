@@ -274,7 +274,7 @@ impl SIMBA {
             let mut demos = match current.overlays.get(&name).and_then(|o| o.demos.clone()) {
                 Some(demos) => demos,
                 None => with_named_predictor(module, &name, |predictor| {
-                    Ok(predictor.demos_as_examples())
+                    Ok(predictor.demos_as_json())
                 })?,
             };
             let seen: HashSet<u64> = demos.iter().map(canonical_hash).collect();

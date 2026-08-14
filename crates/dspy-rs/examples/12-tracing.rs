@@ -17,11 +17,9 @@ cargo run --example 12-tracing
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction, Signature,
-    configure, init_tracing, trace,
+    CallMetadata, LM, Module, Predict, PredictError, Predicted, Signature, configure,
+    init_tracing, trace,
 };
-use serde_json::json;
-use std::collections::HashMap;
 
 #[derive(Signature, Clone, Debug)]
 struct QASignature {
@@ -53,14 +51,23 @@ struct QARater {
     rater: Predict<RateSignature>,
 }
 
+/// Typed output of the composed pipeline. `Module::Output` types are typed
+/// structs: `Facet` + serde derives satisfy the `Schema` bound.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, facet::Facet)]
+struct RatedAnswer {
+    question: String,
+    answer: String,
+    rating: i8,
+}
+
 impl Module for QARater {
     type Input = QASignatureInput;
-    type Output = Prediction;
+    type Output = RatedAnswer;
 
     async fn forward(
         &self,
         input: QASignatureInput,
-    ) -> Result<Predicted<Prediction>, PredictError> {
+    ) -> Result<Predicted<RatedAnswer>, PredictError> {
         let answer_predicted = self.answerer.call(input.clone()).await?;
         let answer_usage = answer_predicted.metadata().lm_usage;
         let answer_output = answer_predicted.into_inner();
@@ -75,20 +82,17 @@ impl Module for QARater {
         let rating_usage = rating_predicted.metadata().lm_usage;
         let rating_output = rating_predicted.into_inner();
 
-        let prediction = Prediction::new(
-            HashMap::from([
-                ("question".to_string(), json!(input.question)),
-                ("answer".to_string(), json!(answer_output.answer)),
-                ("rating".to_string(), json!(rating_output.rating)),
-            ]),
-            LmUsage {
-                prompt_tokens: answer_usage.prompt_tokens + rating_usage.prompt_tokens,
-                completion_tokens: answer_usage.completion_tokens + rating_usage.completion_tokens,
-                total_tokens: answer_usage.total_tokens + rating_usage.total_tokens,
-            },
-        );
+        let output = RatedAnswer {
+            question: input.question,
+            answer: answer_output.answer,
+            rating: rating_output.rating,
+        };
+        let metadata = CallMetadata {
+            lm_usage: answer_usage + rating_usage,
+            ..CallMetadata::default()
+        };
 
-        Ok(Predicted::new(prediction, CallMetadata::default()))
+        Ok(Predicted::new(output, metadata))
     }
 }
 
@@ -114,7 +118,13 @@ async fn main() -> Result<()> {
     .await;
 
     match result {
-        Ok(predicted) => println!("Prediction keys: {:?}", predicted.into_inner().keys()),
+        Ok(predicted) => {
+            let rated = predicted.into_inner();
+            println!(
+                "Result: question={:?} answer={:?} rating={}",
+                rated.question, rated.answer, rated.rating
+            );
+        }
         Err(err) => println!("Error (expected without credentials/network): {err}"),
     }
 
