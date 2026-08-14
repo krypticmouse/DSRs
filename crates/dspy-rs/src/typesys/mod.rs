@@ -15,7 +15,7 @@ pub mod schema;
 pub use coerce::{Coerced, Flag, coerce};
 pub use constraint::{
     Constraint, ConstraintKind, ConstraintLevel, ConstraintOutcome, ResponseCheck,
-    evaluate_constraints,
+    evaluate_constraints, evaluate_expression,
 };
 pub use render::{schema_block, type_name};
 pub use schema::{

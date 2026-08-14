@@ -99,6 +99,15 @@ pub fn evaluate_constraints(value: &Value, constraints: &[Constraint]) -> Vec<Co
         .collect()
 }
 
+/// Evaluates a runtime (non-`'static`) constraint expression against `value`,
+/// binding it as `this`. Compiles per call — dynamic-lane constraints are owned
+/// strings, and caching them process-wide would reintroduce the leak-per-load
+/// that RFC 0002 IR-1 removed. Failed evaluations return `false`, matching
+/// [`evaluate_constraints`].
+pub fn evaluate_expression(expression: &str, value: &Value) -> bool {
+    eval_expression(expression, value).unwrap_or(false)
+}
+
 fn eval_expression(expression: &str, value: &Value) -> Result<bool, minijinja::Error> {
     let ctx = minijinja::context! { this => value };
     let expr = CONSTRAINT_ENV.compile_expression(expression)?;
