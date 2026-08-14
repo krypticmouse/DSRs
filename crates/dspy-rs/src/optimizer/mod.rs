@@ -26,7 +26,9 @@
 //!
 //! | Optimizer | Strategy | Needs feedback? | Cost |
 //! |-----------|----------|-----------------|------|
+//! | [`BootstrapFewShot`] | One-shot demo harvesting from a teacher pass | No | Low (2 × trainset) |
 //! | [`COPRO`] | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
+//! | [`SIMBA`] | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 //! | [`GEPA`] | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 
@@ -37,6 +39,7 @@ pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
 pub mod pareto;
+pub mod simba;
 
 pub use bootstrap::*;
 pub use copro::*;
@@ -44,6 +47,7 @@ pub use engine::*;
 pub use gepa::*;
 pub use mipro::*;
 pub use pareto::*;
+pub use simba::*;
 
 use anyhow::Result;
 use anyhow::anyhow;

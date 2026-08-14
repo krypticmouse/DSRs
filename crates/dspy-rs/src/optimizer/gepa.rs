@@ -40,7 +40,9 @@ struct ReflectOnInstruction {
     improved_instruction: String,
 }
 
-fn format_schema_for_reflection(schema: &SignatureSchema) -> String {
+/// Renders a predictor's input/output contract for reflection prompts.
+/// Shared with [`SIMBA`](crate::SIMBA)'s introspection call.
+pub(crate) fn format_schema_for_reflection(schema: &SignatureSchema) -> String {
     let mut result = String::new();
     result.push_str("Input fields:\n");
     for field in schema.input_fields() {
