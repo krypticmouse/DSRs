@@ -892,6 +892,10 @@ where
         self.apply_state(update.instruction, demos);
         Ok(())
     }
+
+    fn set_trace_name(&mut self, name: &str) {
+        self.trace_name = Some(name.to_string());
+    }
 }
 
 #[cfg(test)]

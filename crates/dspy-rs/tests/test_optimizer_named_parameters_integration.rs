@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    COPRO, CallMetadata, Example, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    COPRO, CallMetadata, Example, Eval, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric,
 };
 
@@ -44,8 +44,9 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for InstructionLengthMetri
         &self,
         _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(prediction.answer.len() as f32))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(prediction.answer.len() as f64))
     }
 }
 

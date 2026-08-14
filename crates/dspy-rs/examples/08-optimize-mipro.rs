@@ -10,7 +10,7 @@ cargo run --example 08-optimize-mipro --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, ModuleState, Optimizer,
+    DataLoader, Example, LM, MIPROv2, Eval, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
     configure, evaluate_trainset, init_tracing,
 };
@@ -52,7 +52,8 @@ impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
         &self,
         example: &Example<QuestionAnswering>,
         prediction: &Predicted<QuestionAnsweringOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
@@ -64,7 +65,7 @@ impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
             0.0
         };
 
-        Ok(MetricOutcome::score(score))
+        Ok(Eval::score(score))
     }
 }
 

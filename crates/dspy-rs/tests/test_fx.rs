@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Example, LM, LMClient, MetricOutcome, Module, Predicted, Signature,
+    Example, LM, LMClient, Eval, Module, Predicted, Signature,
     TestCompletionModel, TypedMetric, configure, fx,
 };
 use rig::completion::AssistantContent;
@@ -177,9 +177,10 @@ where
         &self,
         example: &Example<FxQA>,
         prediction: &Predicted<FxQAOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(
-            (prediction.answer == example.output.answer) as u8 as f32,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(
+            (prediction.answer == example.output.answer) as u8 as f64,
         ))
     }
 }

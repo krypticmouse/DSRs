@@ -390,6 +390,76 @@ async fn dropped_guard_marks_span_cancelled() {
     assert!(span.output.is_none());
 }
 
+// --- Metric-with-trace feedback path ----------------------------------------
+
+#[derive(facet::Facet)]
+#[facet(crate = facet)]
+struct OneStep {
+    predictor: Predict<CapQA>,
+}
+
+impl dspy_rs::Module for OneStep {
+    type Input = CapQAInput;
+    type Output = CapQAOutput;
+
+    async fn forward(
+        &self,
+        input: CapQAInput,
+    ) -> Result<dspy_rs::Predicted<CapQAOutput>, dspy_rs::PredictError> {
+        self.predictor.call(input).await
+    }
+}
+
+/// A metric that inspects the rollout's intermediate steps via the trace.
+struct TraceInspectingMetric;
+
+impl dspy_rs::TypedMetric<CapQA, OneStep> for TraceInspectingMetric {
+    async fn evaluate(
+        &self,
+        _example: &dspy_rs::Example<CapQA>,
+        prediction: &dspy_rs::Predicted<CapQAOutput>,
+        trace: Option<&Trace>,
+    ) -> anyhow::Result<dspy_rs::Eval> {
+        let trace = trace.expect("evaluation loop always captures");
+        let spans: Vec<_> = trace.for_component("step").collect();
+        anyhow::ensure!(spans.len() == 1, "expected one step invocation");
+        let feedback = format!(
+            "step saw question={} and answered={}",
+            spans[0].input.as_ref().unwrap()["question"], prediction.answer
+        );
+        Ok(dspy_rs::Eval::with_feedback(1.0, feedback))
+    }
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn metric_reads_component_subtrace_during_evaluation() {
+    let module = OneStep {
+        predictor: Predict::<CapQA>::builder()
+            .named("step")
+            .lm(make_test_lm(vec![answer("42")]).await)
+            .build(),
+    };
+    let trainset = vec![dspy_rs::Example::<CapQA>::new(
+        CapQAInput {
+            question: "meaning of life".to_string(),
+        },
+        CapQAOutput {
+            answer: "42".to_string(),
+        },
+    )];
+
+    let evals = dspy_rs::evaluate_trainset(&module, &trainset, &TraceInspectingMetric)
+        .await
+        .expect("evaluation should succeed");
+
+    assert_eq!(evals.len(), 1);
+    assert_eq!(evals[0].score, 1.0);
+    let feedback = evals[0].feedback.as_deref().expect("feedback recorded");
+    assert!(feedback.contains("meaning of life"));
+    assert!(feedback.contains("answered=42"));
+}
+
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn capture_with_meta_records_rollout_metadata() {

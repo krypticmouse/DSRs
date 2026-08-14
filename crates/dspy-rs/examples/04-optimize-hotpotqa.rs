@@ -10,7 +10,7 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, DataLoader, Example, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    COPRO, DataLoader, Example, LM, Eval, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
     configure, evaluate_trainset, init_tracing,
 };
@@ -49,10 +49,11 @@ impl TypedMetric<QA, QAModule> for ExactMatchMetric {
         &self,
         example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        Ok(Eval::score((expected == actual) as u8 as f64))
     }
 }
 

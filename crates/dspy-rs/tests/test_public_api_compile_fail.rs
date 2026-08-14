@@ -87,7 +87,7 @@ fn optimizer_compile_rejects_wrong_signature_input_type() {
         "wrong_signature_case",
         r#"
 use anyhow::Result;
-use dspy_rs::{COPRO, ChainOfThought, Example, MetricOutcome, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
+use dspy_rs::{COPRO, ChainOfThought, Example, Eval, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct RightSig {
@@ -112,8 +112,9 @@ impl TypedMetric<RightSig, ChainOfThought<RightSig>> for Metric {
         &self,
         _example: &Example<RightSig>,
         _prediction: &Predicted<WithReasoning<RightSigOutput>>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(1.0))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(1.0))
     }
 }
 

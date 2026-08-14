@@ -46,7 +46,7 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 use crate::core::{DynPredictor, StateUpdate, visit_named_predictors_mut};
-use crate::evaluate::{MetricOutcome, TypedMetric, evaluate_examples};
+use crate::evaluate::{Eval, Rollout, TypedMetric, evaluate_examples, evaluate_examples_traced};
 use crate::predictors::Example;
 use crate::{Facet, Module, Signature};
 
@@ -90,13 +90,13 @@ pub trait Optimizer {
 ///
 /// Thin wrapper around the concurrent evaluation core for internal optimizer use.
 /// Accepts borrowed examples so optimizers can pass sampled minibatches without
-/// cloning rows. Returns one [`MetricOutcome`] per example, in input order.
+/// cloning rows. Returns one [`Eval`] per example, in input order.
 pub(crate) async fn evaluate_module_with_metric<'a, S, M, MT, I>(
     module: &M,
     examples: I,
     metric: &MT,
     max_concurrency: usize,
-) -> Result<Vec<MetricOutcome>>
+) -> Result<Vec<Eval>>
 where
     S: Signature,
     S::Input: Clone,
@@ -121,7 +121,40 @@ pub(crate) async fn evaluate_with_instruction<'a, S, M, MT, I>(
     examples: I,
     metric: &MT,
     max_concurrency: usize,
-) -> Result<Vec<MetricOutcome>>
+) -> Result<Vec<Eval>>
+where
+    S: Signature,
+    S::Input: Clone,
+    M: Module<Input = S::Input> + for<'b> Facet<'b>,
+    MT: TypedMetric<S, M>,
+    I: IntoIterator<Item = &'a Example<S>>,
+{
+    Ok(
+        evaluate_with_instruction_traced(
+            module,
+            predictor_name,
+            instruction,
+            examples,
+            metric,
+            max_concurrency,
+        )
+        .await?
+        .into_iter()
+        .map(|(eval, _)| eval)
+        .collect(),
+    )
+}
+
+/// [`evaluate_with_instruction`] keeping each rollout's execution [`Trace`] —
+/// GEPA reads per-component sub-traces out of these for reflection.
+pub(crate) async fn evaluate_with_instruction_traced<'a, S, M, MT, I>(
+    module: &mut M,
+    predictor_name: &str,
+    instruction: &str,
+    examples: I,
+    metric: &MT,
+    max_concurrency: usize,
+) -> Result<Vec<Rollout>>
 where
     S: Signature,
     S::Input: Clone,
@@ -136,15 +169,14 @@ where
     with_named_predictor(module, predictor_name, |predictor| {
         predictor.apply_update(StateUpdate::instruction(Some(instruction.to_string())))
     })?;
-    let evaluation =
-        evaluate_module_with_metric(&*module, examples, metric, max_concurrency).await;
+    let evaluation = evaluate_examples_traced(&*module, examples, metric, max_concurrency).await;
 
     let restore = with_named_predictor(module, predictor_name, |predictor| {
         predictor.apply_update(StateUpdate::instruction(original))
     });
 
     match (evaluation, restore) {
-        (Ok(outcomes), Ok(())) => Ok(outcomes),
+        (Ok(rollouts), Ok(())) => Ok(rollouts),
         (Ok(_), Err(restore_err)) => Err(restore_err),
         (Err(eval_err), Ok(())) => Err(eval_err),
         (Err(eval_err), Err(restore_err)) => Err(anyhow!(
@@ -153,17 +185,19 @@ where
     }
 }
 
-/// Returns the dotted-path names of all [`Predict`](crate::Predict) leaves in a module.
+/// Returns the dotted-path names of all [`Predict`](crate::Predict) leaves in a
+/// module, and assigns each leaf its path as trace-span component name.
 ///
-/// Convenience wrapper around
-/// [`visit_named_predictors_mut`](crate::core::dyn_predictor::visit_named_predictors_mut)
-/// that collects discovered paths.
+/// The naming pass is what joins traces back to predictors: spans record the
+/// same string [`with_named_predictor`] addresses, so demo harvesting and
+/// per-component reflection need no pointer-identity bookkeeping.
 pub(crate) fn predictor_names<M>(module: &mut M) -> Result<Vec<String>>
 where
     M: for<'a> Facet<'a>,
 {
     let mut names = Vec::new();
-    visit_named_predictors_mut(module, |name, _predictor| {
+    visit_named_predictors_mut(module, |name, predictor| {
+        predictor.set_trace_name(name);
         names.push(name.to_string());
         ControlFlow::Continue(())
     })?;

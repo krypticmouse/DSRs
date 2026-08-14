@@ -87,7 +87,7 @@ impl COPRO {
         candidate_instruction: &str,
         trainset: &[Example<S>],
         metric: &MT,
-    ) -> Result<f32>
+    ) -> Result<f64>
     where
         S: Signature,
         S::Input: Clone,
@@ -169,7 +169,7 @@ impl Optimizer for COPRO {
                 })?;
 
                 let mut best_instruction = base_instruction.clone();
-                let mut best_score = f32::MIN;
+                let mut best_score = f64::MIN;
 
                 for candidate in candidates {
                     let score = self
@@ -200,7 +200,8 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
-    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::evaluate::{Eval, TypedMetric};
+    use crate::trace::Trace;
     use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
@@ -242,7 +243,8 @@ mod tests {
             &self,
             _example: &Example<CoproStateSig>,
             _prediction: &Predicted<CoproStateSigOutput>,
-        ) -> Result<MetricOutcome> {
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
         }
     }

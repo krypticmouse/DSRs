@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Chat, Example, GEPA, LM, LMClient, MIPROv2, Message, MetricOutcome, Module,
+    CallMetadata, Chat, Example, GEPA, LM, LMClient, MIPROv2, Message, Eval, Module,
     ModuleState, Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel,
     TypedMetric, evaluate_trainset,
 };
@@ -214,8 +214,9 @@ impl TypedMetric<QA, Echo> for IndexScore {
         &self,
         _example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(prediction.answer.parse::<f32>()?))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(prediction.answer.parse::<f64>()?))
     }
 }
 
@@ -239,8 +240,8 @@ async fn concurrent_evaluation_preserves_trainset_order() {
         .await
         .expect("evaluation should succeed");
 
-    let scores: Vec<f32> = outcomes.iter().map(|outcome| outcome.score).collect();
-    assert_eq!(scores, (0..8).map(|idx| idx as f32).collect::<Vec<_>>());
+    let scores: Vec<f64> = outcomes.iter().map(|outcome| outcome.score).collect();
+    assert_eq!(scores, (0..8).map(|idx| idx as f64).collect::<Vec<_>>());
 }
 
 // --- GEPA: reflection through prompt_model ---------------------------------
@@ -252,16 +253,14 @@ impl TypedMetric<QA, OneStepEcho> for FeedbackEcho {
         &self,
         example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let score = if prediction.answer == example.output.answer {
             1.0
         } else {
             0.0
         };
-        Ok(MetricOutcome::with_feedback(
-            score,
-            dspy_rs::FeedbackMetric::new(score, "answer should match exactly"),
-        ))
+        Ok(Eval::with_feedback(score, "answer should match exactly"))
     }
 }
 
@@ -328,6 +327,92 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
     assert_eq!(report.total_lm_calls, 4);
 }
 
+struct FeedbackForPredict;
+
+impl TypedMetric<QA, OneStepPredict> for FeedbackForPredict {
+    async fn evaluate(
+        &self,
+        example: &Example<QA>,
+        prediction: &Predicted<QAOutput>,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = if prediction.answer == example.output.answer {
+            1.0
+        } else {
+            0.0
+        };
+        Ok(Eval::with_feedback(score, "match the expected answer"))
+    }
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn gepa_reflection_receives_component_subtrace() {
+    // A module with a real Predict leaf, so evaluation rollouts carry spans.
+    // 3 module calls: initial eval + parent minibatch + child eval.
+    let responses = vec![response_with_fields(&[("answer", "4")]); 3];
+    let mut module = OneStepPredict {
+        predictor: Predict::<QA>::builder()
+            .instruction("seed")
+            .lm(make_test_lm(responses).await)
+            .build(),
+    };
+
+    let reflection_client = TestCompletionModel::new([text_response(response_with_fields(&[(
+        "improved_instruction",
+        "Improved.",
+    )]))]);
+    let reflection_lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+    )
+    .await
+    .unwrap()
+    .with_client(LMClient::Test(reflection_client.clone()))
+    .await
+    .unwrap();
+
+    let optimizer = GEPA::builder()
+        .num_iterations(1)
+        .minibatch_size(1)
+        .prompt_model(reflection_lm)
+        .seed(7)
+        .build();
+
+    let trainset = vec![Example::new(
+        QAInput {
+            question: "What is 2+2?".to_string(),
+        },
+        QAOutput {
+            answer: "4".to_string(),
+        },
+    )];
+
+    optimizer
+        .compile(&mut module, trainset, &FeedbackForPredict)
+        .await
+        .expect("gepa compile should succeed");
+
+    // The reflection prompt's execution_feedback carries the mutated
+    // component's per-invocation sub-trace, not just the metric string.
+    let request = reflection_client
+        .last_request()
+        .expect("reflection LM should have been called");
+    let rendered = format!("{:?}", request.chat_history);
+    assert!(
+        rendered.contains("call 0:"),
+        "reflection input should include the component's invocation record: {rendered}"
+    );
+    assert!(
+        rendered.contains("What is 2+2?"),
+        "reflection input should include the span's recorded input"
+    );
+    assert!(
+        rendered.contains("match the expected answer"),
+        "reflection input should keep the metric feedback"
+    );
+}
+
 // --- MIPRO: demo bootstrapping from traces ---------------------------------
 
 struct ExactMatch;
@@ -337,13 +422,14 @@ impl TypedMetric<QA, OneStepPredict> for ExactMatch {
         &self,
         example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let score = if prediction.answer == example.output.answer {
             1.0
         } else {
             0.0
         };
-        Ok(MetricOutcome::score(score))
+        Ok(Eval::score(score))
     }
 }
 

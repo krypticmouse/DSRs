@@ -4,11 +4,12 @@ use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use crate::core::StateUpdate;
-use crate::evaluate::{MetricOutcome, TypedMetric, average_score};
+use crate::evaluate::{Rollout, TypedMetric};
 use crate::optimizer::{
-    Optimizer, evaluate_with_instruction, predictor_names, with_named_predictor,
+    Optimizer, evaluate_with_instruction_traced, predictor_names, with_named_predictor,
 };
 use crate::predictors::Example;
+use crate::utils::truncate;
 use crate::{Facet, Module, Predict, Schema, Signature, SignatureSchema};
 
 use super::pareto::ParetoFrontier;
@@ -128,12 +129,14 @@ pub use super::pareto::ParetoStatistics;
 ///
 /// GEPA uses an evolutionary search guided by per-example feedback from your metric.
 /// Unlike [`COPRO`](crate::COPRO) which only uses numerical scores, GEPA requires your
-/// [`TypedMetric`] to return [`MetricOutcome::with_feedback`] — textual feedback
-/// explaining *why* each example scored the way it did. When a `prompt_model` is
-/// configured, a reflection LM reads the current instruction plus that feedback and
-/// writes an improved instruction each generation; without one, the feedback is
-/// appended to the instruction as a deterministic mutation. Either way the quality
-/// of your feedback directly determines the quality of GEPA's search.
+/// [`TypedMetric`] to return [`Eval::with_feedback`](crate::Eval::with_feedback) —
+/// textual feedback explaining *why* each example scored the way it did. When a
+/// `prompt_model` is configured, a reflection LM reads the current instruction, that
+/// feedback, and the mutated component's per-invocation execution trace
+/// ([`Trace::for_component`](crate::Trace::for_component)), then writes an improved
+/// instruction each generation; without one, the feedback is appended to the
+/// instruction as a deterministic mutation. Either way the quality of your feedback
+/// directly determines the quality of GEPA's search.
 ///
 /// The Pareto frontier tracks candidates that aren't dominated on any individual
 /// training example, not just by average score. This means GEPA finds instructions
@@ -163,8 +166,8 @@ pub use super::pareto::ParetoStatistics;
 ///
 /// # Requires feedback
 ///
-/// GEPA will error if any [`MetricOutcome`] from your metric has `feedback: None`.
-/// Use [`MetricOutcome::with_feedback`] or provide a [`FeedbackMetric`](crate::FeedbackMetric).
+/// GEPA will error if any [`Eval`](crate::Eval) from your metric has `feedback: None`.
+/// Use [`Eval::with_feedback`](crate::Eval::with_feedback).
 ///
 /// # Cost
 ///
@@ -243,7 +246,7 @@ impl GEPA {
         instruction: &str,
         examples: I,
         metric: &MT,
-    ) -> Result<Vec<MetricOutcome>>
+    ) -> Result<Vec<Rollout>>
     where
         S: Signature,
         S::Input: Clone,
@@ -251,7 +254,7 @@ impl GEPA {
         MT: TypedMetric<S, M>,
         I: IntoIterator<Item = &'a Example<S>>,
     {
-        evaluate_with_instruction(
+        evaluate_with_instruction_traced(
             module,
             module_name,
             instruction,
@@ -262,12 +265,8 @@ impl GEPA {
         .await
     }
 
-    fn require_feedback(
-        outcomes: &[MetricOutcome],
-        module_name: &str,
-        generation: usize,
-    ) -> Result<()> {
-        if outcomes.iter().any(|o| o.feedback.is_none()) {
+    fn require_feedback(rollouts: &[Rollout], module_name: &str, generation: usize) -> Result<()> {
+        if rollouts.iter().any(|(eval, _)| eval.feedback.is_none()) {
             return Err(anyhow!(
                 "GEPA requires feedback for every evaluated example (module=`{module_name}`, generation={generation})"
             ));
@@ -275,19 +274,70 @@ impl GEPA {
         Ok(())
     }
 
-    fn summarize_feedback(outcomes: &[MetricOutcome]) -> String {
-        let mut lines = Vec::new();
-        for (idx, outcome) in outcomes.iter().enumerate() {
-            if let Some(feedback) = &outcome.feedback {
-                lines.push(format!(
-                    "{}: score={:.3}; {}",
-                    idx + 1,
-                    outcome.score,
-                    feedback.feedback
-                ));
+    fn mean_score(rollouts: &[Rollout]) -> f64 {
+        if rollouts.is_empty() {
+            return 0.0;
+        }
+        rollouts.iter().map(|(eval, _)| eval.score).sum::<f64>() / rollouts.len() as f64
+    }
+
+    /// Formats per-example scores/feedback plus, for the component under
+    /// mutation, every invocation's input/output (or error + raw output) and
+    /// tool behavior from the execution trace — the `pred_trace` contract.
+    fn summarize_feedback(module_name: &str, rollouts: &[Rollout]) -> String {
+        use std::fmt::Write as _;
+
+        let mut text = String::new();
+        for (idx, (eval, trace)) in rollouts.iter().enumerate() {
+            let _ = writeln!(
+                text,
+                "{}: score={:.3}; {}",
+                idx + 1,
+                eval.score,
+                eval.feedback.as_deref().unwrap_or("-")
+            );
+            for span in trace.for_component(module_name) {
+                let input = span
+                    .input
+                    .as_ref()
+                    .map(|map| serde_json::Value::Object(map.clone()).to_string())
+                    .unwrap_or_else(|| "-".to_string());
+                let output = match (&span.output, &span.error) {
+                    (Some(map), _) => serde_json::Value::Object(map.clone()).to_string(),
+                    (None, Some(error)) => format!(
+                        "<{}: {}>",
+                        error.kind.as_str(),
+                        truncate(span.raw_output.as_deref().unwrap_or(&error.message), 500)
+                    ),
+                    (None, None) => "-".to_string(),
+                };
+                let _ = writeln!(
+                    text,
+                    "  call {}: input={input}; output={output}",
+                    span.seq
+                );
+                for event in &span.events {
+                    if let crate::trace::SpanEvent::ToolRun {
+                        name,
+                        result,
+                        error,
+                        ..
+                    } = event
+                    {
+                        let _ = writeln!(
+                            text,
+                            "    tool {name}: {}{}",
+                            truncate(result, 200),
+                            error
+                                .as_ref()
+                                .map(|e| format!(" (error: {e})"))
+                                .unwrap_or_default()
+                        );
+                    }
+                }
             }
         }
-        lines.join("\n")
+        text.trim_end().to_string()
     }
 
     /// Deterministic fallback mutation: append the feedback to the parent
@@ -296,7 +346,7 @@ impl GEPA {
     fn concat_child_instruction(
         parent_instruction: &str,
         feedback_summary: &str,
-        parent_score: f32,
+        parent_score: f64,
         generation: usize,
     ) -> String {
         format!(
@@ -321,7 +371,7 @@ impl GEPA {
         module_name: &str,
         parent_instruction: &str,
         feedback_summary: &str,
-        parent_score: f32,
+        parent_score: f64,
         generation: usize,
         reflector: Option<&Predict<ReflectOnInstruction>>,
     ) -> (String, usize)
@@ -462,7 +512,7 @@ impl GEPA {
                 with_named_predictor(module, module_name, |predictor| Ok(predictor.instruction()))?
             };
 
-            let outcomes = self
+            let rollouts = self
                 .evaluate_candidate::<S, _, _, _>(
                     module,
                     module_name,
@@ -471,11 +521,11 @@ impl GEPA {
                     metric,
                 )
                 .await?;
-            total_lm_calls = total_lm_calls.saturating_add(outcomes.len());
-            total_rollouts = total_rollouts.saturating_add(outcomes.len());
-            Self::require_feedback(&outcomes, module_name, 0)?;
+            total_lm_calls = total_lm_calls.saturating_add(rollouts.len());
+            total_rollouts = total_rollouts.saturating_add(rollouts.len());
+            Self::require_feedback(&rollouts, module_name, 0)?;
 
-            let scores: Vec<f32> = outcomes.iter().map(|o| o.score).collect();
+            let scores: Vec<f32> = rollouts.iter().map(|(eval, _)| eval.score as f32).collect();
             let candidate = GEPACandidate {
                 id: 0,
                 instruction,
@@ -520,7 +570,7 @@ impl GEPA {
                 break;
             }
 
-            let parent_outcomes = self
+            let parent_rollouts = self
                 .evaluate_candidate::<S, _, _, _>(
                     module,
                     &parent.module_name,
@@ -529,12 +579,12 @@ impl GEPA {
                     metric,
                 )
                 .await?;
-            total_lm_calls = total_lm_calls.saturating_add(parent_outcomes.len());
-            Self::require_feedback(&parent_outcomes, &parent.module_name, generation)?;
+            total_lm_calls = total_lm_calls.saturating_add(parent_rollouts.len());
+            Self::require_feedback(&parent_rollouts, &parent.module_name, generation)?;
 
-            let feedback_summary = Self::summarize_feedback(&parent_outcomes);
-            let parent_score = average_score(&parent_outcomes);
-            total_rollouts += parent_outcomes.len();
+            let feedback_summary = Self::summarize_feedback(&parent.module_name, &parent_rollouts);
+            let parent_score = Self::mean_score(&parent_rollouts);
+            total_rollouts += parent_rollouts.len();
 
             if Self::would_exceed_budget(total_lm_calls, eval_set.len(), self.max_lm_calls)
                 || Self::would_exceed_budget(total_rollouts, eval_set.len(), self.max_rollouts)
@@ -557,7 +607,7 @@ impl GEPA {
 
             let child = parent.mutate(child_instruction, generation + 1);
 
-            let child_outcomes = self
+            let child_rollouts = self
                 .evaluate_candidate::<S, _, _, _>(
                     module,
                     &child.module_name,
@@ -566,10 +616,13 @@ impl GEPA {
                     metric,
                 )
                 .await?;
-            total_lm_calls = total_lm_calls.saturating_add(child_outcomes.len());
-            Self::require_feedback(&child_outcomes, &child.module_name, generation + 1)?;
+            total_lm_calls = total_lm_calls.saturating_add(child_rollouts.len());
+            Self::require_feedback(&child_rollouts, &child.module_name, generation + 1)?;
 
-            let child_scores: Vec<f32> = child_outcomes.iter().map(|o| o.score).collect();
+            let child_scores: Vec<f32> = child_rollouts
+                .iter()
+                .map(|(eval, _)| eval.score as f32)
+                .collect();
             total_rollouts += child_scores.len();
 
             let mut child = child;
@@ -673,7 +726,8 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
-    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::evaluate::{Eval, TypedMetric};
+    use crate::trace::Trace;
     use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
@@ -715,7 +769,8 @@ mod tests {
             &self,
             _example: &Example<GepaStateSig>,
             _prediction: &Predicted<GepaStateSigOutput>,
-        ) -> Result<MetricOutcome> {
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
         }
     }

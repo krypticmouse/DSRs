@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Example, MetricOutcome, Module, Predicted, PredictError, Signature, TypedMetric,
+    CallMetadata, Example, Eval, Module, Predicted, PredictError, Signature, TypedMetric,
     evaluate_trainset_with_concurrency,
 };
 
@@ -47,9 +47,10 @@ impl TypedMetric<EchoQA, SleepEcho> for Exact {
         &self,
         example: &Example<EchoQA>,
         prediction: &Predicted<EchoQAOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(
-            (prediction.answer == example.output.answer) as u8 as f32,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(
+            (prediction.answer == example.output.answer) as u8 as f64,
         ))
     }
 }
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
         .await?;
     let wall = start.elapsed();
 
-    let score: f32 = outcomes.iter().map(|o| o.score).sum::<f32>() / outcomes.len() as f32;
+    let score: f64 = outcomes.iter().map(|o| o.score).sum::<f64>() / outcomes.len() as f64;
     let ideal_ms = (N as f64 / CONCURRENCY as f64) * LATENCY_MS;
     println!(
         "eval {N} x {LATENCY_MS}ms @ {CONCURRENCY} concurrency   {:10.1} ms wall (ideal {ideal_ms:.0} ms, overhead {:.1} ms, score {score})",

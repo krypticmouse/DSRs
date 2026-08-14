@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    CallMetadata, Example, MetricOutcome, Module, PredictError, Predicted, Signature, TypedMetric,
+    CallMetadata, Example, Eval, Module, PredictError, Predicted, Signature, TypedMetric,
     average_score, evaluate_trainset,
 };
 use std::sync::{Arc, Mutex};
@@ -39,14 +39,15 @@ impl TypedMetric<EvalSig, EchoModule> for RecordingMetric {
         &self,
         example: &Example<EvalSig>,
         prediction: &Predicted<<EchoModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         self.seen_answers
             .lock()
             .expect("metric lock should not be poisoned")
             .push(prediction.answer.clone());
 
-        let score = (prediction.answer == example.output.answer) as u8 as f32;
-        Ok(MetricOutcome::score(score))
+        let score = (prediction.answer == example.output.answer) as u8 as f64;
+        Ok(Eval::score(score))
     }
 }
 
@@ -57,7 +58,8 @@ impl TypedMetric<EvalSig, EchoModule> for FailingMetric {
         &self,
         _example: &Example<EvalSig>,
         _prediction: &Predicted<<EchoModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         Err(anyhow!("typed metric failure"))
     }
 }

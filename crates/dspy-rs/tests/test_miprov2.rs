@@ -1,5 +1,4 @@
-use dspy_rs::optimizer::mipro::Trace;
-use dspy_rs::{MIPROv2, PromptCandidate, PromptingTips, Signature};
+use dspy_rs::{Eval, MIPROv2, PromptCandidate, PromptingTips, Signature, Trace, TraceOutcome};
 use rstest::*;
 
 #[derive(Signature, Clone, Debug)]
@@ -11,39 +10,26 @@ struct TestSignature {
     answer: String,
 }
 
-fn input(question: &str) -> TestSignatureInput {
-    TestSignatureInput {
-        question: question.to_string(),
+/// A rollout trace carrying only a whole-program score, the projection MIPRO's
+/// candidate generation reads.
+fn scored_trace(score: Option<f64>) -> Trace {
+    Trace {
+        outcome: score.map(|score| TraceOutcome {
+            output: None,
+            error: None,
+            eval: Some(Eval::score(score)),
+            duration_us: 0,
+        }),
+        ..Trace::default()
     }
 }
 
-#[rstest]
-fn test_trace_formatting() {
-    let trace = Trace::<TestSignature>::new(
-        input("What is 2+2?"),
-        serde_json::Value::String("4".to_string()),
-        Some(1.0),
-    );
-    let formatted = trace.format_for_prompt();
-
-    assert!(formatted.contains("question"));
-    assert!(formatted.contains("What is 2+2?"));
-    assert!(formatted.contains("4"));
-    assert!(formatted.contains("Score: 1.000"));
-}
-
-#[rstest]
-fn test_trace_formatting_without_score() {
-    let trace = Trace::<TestSignature>::new(
-        input("input"),
-        serde_json::Value::String("result".to_string()),
-        None,
-    );
-    let formatted = trace.format_for_prompt();
-
-    assert!(formatted.contains("Input:"));
-    assert!(formatted.contains("Output:"));
-    assert!(!formatted.contains("Score:"));
+fn trace_score(trace: &Trace) -> Option<f64> {
+    trace
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.eval.as_ref())
+        .map(|eval| eval.score)
 }
 
 #[rstest]
@@ -91,29 +77,26 @@ fn test_select_best_traces_descending_order() {
     let optimizer = MIPROv2::builder().build();
 
     let traces = vec![
-        Trace::<TestSignature>::new(input("a"), serde_json::Value::String("a".to_string()), Some(0.1)),
-        Trace::<TestSignature>::new(input("b"), serde_json::Value::String("b".to_string()), Some(0.5)),
-        Trace::<TestSignature>::new(input("c"), serde_json::Value::String("c".to_string()), Some(0.3)),
+        scored_trace(Some(0.1)),
+        scored_trace(Some(0.5)),
+        scored_trace(Some(0.3)),
     ];
 
     let best = optimizer.select_best_traces(&traces, 2);
     assert_eq!(best.len(), 2);
-    assert_eq!(best[0].score, Some(0.5));
-    assert_eq!(best[1].score, Some(0.3));
+    assert_eq!(trace_score(best[0]), Some(0.5));
+    assert_eq!(trace_score(best[1]), Some(0.3));
 }
 
 #[rstest]
-fn test_select_best_traces_ignores_none_scores() {
+fn test_select_best_traces_ignores_unscored() {
     let optimizer = MIPROv2::builder().build();
 
-    let traces = vec![
-        Trace::<TestSignature>::new(input("a"), serde_json::Value::String("a".to_string()), None),
-        Trace::<TestSignature>::new(input("b"), serde_json::Value::String("b".to_string()), Some(0.8)),
-    ];
+    let traces = vec![scored_trace(None), scored_trace(Some(0.8))];
 
     let best = optimizer.select_best_traces(&traces, 2);
     assert_eq!(best.len(), 1);
-    assert_eq!(best[0].score, Some(0.8));
+    assert_eq!(trace_score(best[0]), Some(0.8));
 }
 
 #[rstest]
