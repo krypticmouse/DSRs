@@ -1,0 +1,22 @@
+[package]
+name = "dsrs-tools"
+authors = ["Herumb Shandilya <herumb@stanford.edu>"]
+version = "0.1.0"
+edition = "2024"
+description = "Sandboxed tool-execution runtime for DSRs: Tier-1 in-process QuickJS ephemeral tools."
+repository = "https://github.com/krypticmouse/DSRs"
+license = "Apache-2.0"
+
+[dependencies]
+rquickjs = { version = "0.12.2", features = ["parallel"] }
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+tokio = { version = "1.46.1", features = ["rt", "rt-multi-thread", "sync", "macros", "time"] }
+async-trait = "0.1.83"
+thiserror = "2.0.17"
+blake3 = "1.8.6"
+futures = "0.3.31"
+
+[dev-dependencies]
+tokio = { version = "1.46.1", features = ["full"] }
