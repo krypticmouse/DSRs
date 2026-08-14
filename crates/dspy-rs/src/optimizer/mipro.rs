@@ -6,9 +6,10 @@ use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 use serde_json::Value;
 use tracing::{debug, warn};
 
+use crate::core::StateUpdate;
 use crate::evaluate::{TypedMetric, average_score};
 use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_instance_keys, predictor_names,
+    Optimizer, evaluate_with_instruction, predictor_instance_keys, predictor_names,
     with_named_predictor,
 };
 use crate::predictors::Example;
@@ -381,43 +382,16 @@ impl MIPROv2 {
         MT: TypedMetric<S, M>,
         I: IntoIterator<Item = &'a Example<S>>,
     {
-        // Instruction-only save/restore — bootstrapped demos stay installed and
-        // are never round-tripped through serialization per candidate.
-        let original_instruction = with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.instruction_override())
-        })?;
-
-        with_named_predictor(module, predictor_name, |predictor| {
-            predictor.set_instruction(candidate.instruction.clone());
-            Ok(())
-        })?;
-
-        let evaluation =
-            evaluate_module_with_metric(&*module, eval_examples, metric, self.eval_concurrency)
-                .await;
-
-        match evaluation {
-            Ok(outcomes) => {
-                with_named_predictor(module, predictor_name, |predictor| {
-                    predictor.restore_instruction(original_instruction);
-                    Ok(())
-                })?;
-                Ok(average_score(&outcomes))
-            }
-            Err(eval_err) => {
-                if let Err(restore_err) =
-                    with_named_predictor(module, predictor_name, |predictor| {
-                        predictor.restore_instruction(original_instruction.clone());
-                        Ok(())
-                    })
-                {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
-                    ));
-                }
-                Err(eval_err)
-            }
-        }
+        let outcomes = evaluate_with_instruction(
+            module,
+            predictor_name,
+            &candidate.instruction,
+            eval_examples,
+            metric,
+            self.eval_concurrency,
+        )
+        .await?;
+        Ok(average_score(&outcomes))
     }
 
     async fn evaluate_and_select_best<S, M, MT>(
@@ -530,7 +504,7 @@ impl Optimizer for MIPROv2 {
                 "installing bootstrapped demos"
             );
             with_named_predictor(module, predictor_name, |predictor| {
-                predictor.set_demos_from_examples(demos.clone())
+                predictor.apply_update(StateUpdate::demos(demos.clone()))
             })?;
         }
 
@@ -563,8 +537,9 @@ impl Optimizer for MIPROv2 {
                 .await?;
 
             with_named_predictor(module, &predictor_name, |predictor| {
-                predictor.set_instruction(best_candidate.instruction.clone());
-                Ok(())
+                predictor.apply_update(StateUpdate::instruction(Some(
+                    best_candidate.instruction.clone(),
+                )))
             })?;
         }
 

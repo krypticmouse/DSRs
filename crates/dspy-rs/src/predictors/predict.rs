@@ -9,7 +9,7 @@ use tracing::{debug, trace};
 
 use crate as dsrs;
 use crate::core::lm::ToolSet;
-use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature};
+use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature, StateUpdate};
 use crate::data::example::Example as RawExample;
 use crate::{
     CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage, Message, PredictError,
@@ -163,6 +163,26 @@ impl<S: Signature> Predict<S> {
     /// Returns a builder for configuring demos, instruction, and tools.
     pub fn builder() -> PredictBuilder<S> {
         PredictBuilder::new()
+    }
+
+    /// The typed write path for optimizable state (instruction override + demos).
+    ///
+    /// This is the only place that assigns those fields and invalidates the
+    /// cached prompt prefix; the builder and the type-erased
+    /// `DynPredictor::apply_update` seam both funnel here. `None` leaves a
+    /// field untouched.
+    fn apply_state(
+        &mut self,
+        instruction: Option<Option<String>>,
+        demos: Option<Vec<Example<S>>>,
+    ) {
+        if let Some(instruction) = instruction {
+            self.instruction_override = instruction;
+        }
+        if let Some(demos) = demos {
+            self.demos = demos;
+        }
+        self.prompt_prefix = OnceLock::new();
     }
 
     /// Calls the LM with this predictor's signature, demos, and tools.
@@ -576,18 +596,21 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
-    /// Builds the [`Predict`].
+    /// Builds the [`Predict`], routing state through the same applicator the
+    /// mutation seam uses.
     pub fn build(self) -> Predict<S> {
-        Predict {
+        let mut predict = Predict {
             tools: self.tools,
-            demos: self.demos,
-            instruction_override: self.instruction_override,
+            demos: Vec::new(),
+            instruction_override: None,
             lm: self.lm,
             prompt_prefix: OnceLock::new(),
             toolset: tokio::sync::OnceCell::new(),
             trace_name: self.trace_name,
             _marker: PhantomData,
-        }
+        };
+        predict.apply_state(Some(self.instruction_override), Some(self.demos));
+        predict
     }
 }
 
@@ -758,18 +781,8 @@ where
             .unwrap_or_else(|| S::instruction().to_string())
     }
 
-    fn set_instruction(&mut self, instruction: String) {
-        self.instruction_override = Some(instruction);
-        self.prompt_prefix = OnceLock::new();
-    }
-
     fn instruction_override(&self) -> Option<String> {
         self.instruction_override.clone()
-    }
-
-    fn restore_instruction(&mut self, instruction: Option<String>) {
-        self.instruction_override = instruction;
-        self.prompt_prefix = OnceLock::new();
     }
 
     fn demos_as_examples(&self) -> Vec<RawExample> {
@@ -782,15 +795,6 @@ where
             .collect()
     }
 
-    fn set_demos_from_examples(&mut self, demos: Vec<RawExample>) -> Result<()> {
-        self.demos = demos
-            .into_iter()
-            .map(typed_example_from_raw::<S>)
-            .collect::<Result<Vec<_>>>()?;
-        self.prompt_prefix = OnceLock::new();
-        Ok(())
-    }
-
     fn dump_state(&self) -> PredictState {
         PredictState {
             demos: self.demos_as_examples(),
@@ -798,10 +802,19 @@ where
         }
     }
 
-    fn load_state(&mut self, state: PredictState) -> Result<()> {
-        self.set_demos_from_examples(state.demos)?;
-        self.instruction_override = state.instruction_override;
-        self.prompt_prefix = OnceLock::new();
+    fn apply_update(&mut self, update: StateUpdate) -> Result<()> {
+        // Convert demos before touching any state so a schema mismatch leaves
+        // the predictor unchanged.
+        let demos = update
+            .demos
+            .map(|demos| {
+                demos
+                    .into_iter()
+                    .map(typed_example_from_raw::<S>)
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?;
+        self.apply_state(update.instruction, demos);
         Ok(())
     }
 }
@@ -866,13 +879,13 @@ mod tests {
     }
 
     #[test]
-    fn dyn_predictor_set_demos_from_examples_round_trips_raw_rows() {
+    fn dyn_predictor_apply_update_round_trips_raw_demo_rows() {
         let typed = typed_row("demo-input", "demo-output");
         let raw = raw_example_from_typed::<PredictConversionSig>(&typed)
             .expect("typed demo should convert to raw demo");
         let mut predictor = Predict::<PredictConversionSig>::new();
 
-        DynPredictor::set_demos_from_examples(&mut predictor, vec![raw])
+        DynPredictor::apply_update(&mut predictor, StateUpdate::demos(vec![raw]))
             .expect("predictor should accept raw demos");
 
         let demos = DynPredictor::demos_as_examples(&predictor);

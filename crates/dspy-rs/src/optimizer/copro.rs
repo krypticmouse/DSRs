@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
 use bon::Builder;
 
-use crate::core::DynPredictor;
+use crate::core::{DynPredictor, StateUpdate};
 use crate::evaluate::{TypedMetric, average_score};
 use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
+    Optimizer, evaluate_with_instruction, predictor_names, with_named_predictor,
 };
 use crate::predictors::Example;
 use crate::{Facet, Module, Signature};
@@ -76,8 +76,7 @@ impl COPRO {
         M: for<'a> Facet<'a>,
     {
         with_named_predictor(module, predictor_name, |predictor| {
-            predictor.set_instruction(instruction);
-            Ok(())
+            predictor.apply_update(StateUpdate::instruction(Some(instruction)))
         })
     }
 
@@ -95,37 +94,16 @@ impl COPRO {
         M: Module<Input = S::Input> + for<'a> Facet<'a>,
         MT: TypedMetric<S, M>,
     {
-        // Instruction-only save/restore — no demo serialization round-trip.
-        let original_instruction = with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.instruction_override())
-        })?;
-
-        Self::set_instruction(module, predictor_name, candidate_instruction.to_string())?;
-        let evaluation =
-            evaluate_module_with_metric(&*module, trainset, metric, self.eval_concurrency).await;
-
-        match evaluation {
-            Ok(outcomes) => {
-                with_named_predictor(module, predictor_name, |predictor| {
-                    predictor.restore_instruction(original_instruction);
-                    Ok(())
-                })?;
-                Ok(average_score(&outcomes))
-            }
-            Err(eval_err) => {
-                if let Err(restore_err) =
-                    with_named_predictor(module, predictor_name, |predictor| {
-                        predictor.restore_instruction(original_instruction.clone());
-                        Ok(())
-                    })
-                {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
-                    ));
-                }
-                Err(eval_err)
-            }
-        }
+        let outcomes = evaluate_with_instruction(
+            module,
+            predictor_name,
+            candidate_instruction,
+            trainset,
+            metric,
+            self.eval_concurrency,
+        )
+        .await?;
+        Ok(average_score(&outcomes))
     }
 
     fn candidate_instructions(
