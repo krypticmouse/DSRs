@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -91,6 +92,39 @@ impl Module for BarrierModule {
 
     async fn forward(&self, input: EngSigInput) -> Result<Predicted<EngSigOutput>, PredictError> {
         self.barrier.wait().await;
+        Ok(Predicted::new(
+            EngSigOutput {
+                answer: input.prompt,
+            },
+            CallMetadata::default(),
+        ))
+    }
+}
+
+/// Echo module that gauges how many rollouts are inside `forward` at once.
+/// The pair barrier forces at least two to overlap, so a sequential engine
+/// deadlocks; the gauge proves the bound is never exceeded.
+#[derive(facet::Facet)]
+#[facet(crate = facet)]
+struct GaugeModule {
+    predictor: Predict<EngSig>,
+    #[facet(opaque, skip)]
+    in_flight: Arc<AtomicUsize>,
+    #[facet(opaque, skip)]
+    max_in_flight: Arc<AtomicUsize>,
+    #[facet(opaque, skip)]
+    pair_barrier: Arc<tokio::sync::Barrier>,
+}
+
+impl Module for GaugeModule {
+    type Input = EngSigInput;
+    type Output = EngSigOutput;
+
+    async fn forward(&self, input: EngSigInput) -> Result<Predicted<EngSigOutput>, PredictError> {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_in_flight.fetch_max(now, Ordering::SeqCst);
+        self.pair_barrier.wait().await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
         Ok(Predicted::new(
             EngSigOutput {
                 answer: input.prompt,
@@ -499,6 +533,260 @@ async fn checkpoint_resume_skips_completed_rollouts() {
         Err(err) => assert!(err.to_string().contains("does not match")),
         Ok(_) => panic!("mismatched examples must fail resume"),
     }
+}
+
+#[tokio::test]
+async fn fan_out_never_exceeds_the_concurrency_bound() {
+    const N: usize = 6;
+    const BOUND: usize = 2;
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let mut module = GaugeModule {
+        predictor: Predict::<EngSig>::builder().instruction("seed").build(),
+        in_flight: Arc::new(AtomicUsize::new(0)),
+        max_in_flight: Arc::clone(&max_in_flight),
+        // Pairs must overlap to release the barrier: a concurrency-1 engine
+        // deadlocks here and trips the timeout.
+        pair_barrier: Arc::new(tokio::sync::Barrier::new(BOUND)),
+    };
+    let metric = IndexMetric;
+    let mut engine = EvalEngine::new(
+        trainset(N),
+        &metric,
+        EngineConfig {
+            concurrency: BOUND,
+            ..EngineConfig::default()
+        },
+    );
+
+    let candidate = engine.register(Candidate::new());
+    let eval = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.evaluate(&mut module, candidate, None),
+    )
+    .await
+    .expect("bounded fan-out must still overlap rollouts")
+    .expect("evaluation should succeed")
+    .completed()
+    .unwrap();
+
+    assert_eq!(eval.rollouts.len(), N);
+    assert_eq!(
+        max_in_flight.load(Ordering::SeqCst),
+        BOUND,
+        "the engine must saturate but never exceed EngineConfig::concurrency"
+    );
+}
+
+#[tokio::test]
+async fn gate_reports_budget_exhaustion_for_minibatch_and_promotion() {
+    let metric = IndexMetric;
+
+    // Minibatch itself doesn't fit: nothing runs, spend unchanged.
+    let mut module = EchoModule::new();
+    let mut engine = EvalEngine::new(
+        trainset(4),
+        &metric,
+        EngineConfig {
+            budget: Budget {
+                max_metric_calls: Some(1),
+                ..Budget::unlimited()
+            },
+            ..EngineConfig::default()
+        },
+    );
+    let candidate = engine.register(Candidate::new());
+    match engine
+        .evaluate_gated(&mut module, candidate, &[0, 1], 0.0)
+        .await
+        .unwrap()
+    {
+        GateOutcome::BudgetExhausted { needed } => assert_eq!(needed, 2),
+        other => panic!("minibatch must not fit a 1-rollout budget, got {other:?}"),
+    }
+    assert_eq!(engine.spend().metric_calls, 0);
+
+    // Minibatch fits and passes the gate, but the full-set promotion doesn't.
+    let mut engine = EvalEngine::new(
+        trainset(4),
+        &metric,
+        EngineConfig {
+            budget: Budget {
+                max_metric_calls: Some(3),
+                ..Budget::unlimited()
+            },
+            ..EngineConfig::default()
+        },
+    );
+    let candidate = engine.register(Candidate::new());
+    match engine
+        .evaluate_gated(&mut module, candidate, &[2, 3], 0.0)
+        .await
+        .unwrap()
+    {
+        // Full set needs 2 uncached rollouts (examples 0 and 1); 1 remains.
+        GateOutcome::BudgetExhausted { needed } => assert_eq!(needed, 2),
+        other => panic!("promotion must not fit the remaining budget, got {other:?}"),
+    }
+    assert_eq!(engine.spend().metric_calls, 2, "only the minibatch ran");
+    assert!(engine.matrix().score(candidate, 2).is_some());
+    assert!(engine.matrix().score(candidate, 0).is_none());
+}
+
+#[tokio::test]
+async fn auxiliary_charges_count_against_the_budget() {
+    let mut module = EchoModule::new();
+    let metric = IndexMetric;
+    let mut engine = EvalEngine::new(
+        trainset(3),
+        &metric,
+        EngineConfig {
+            budget: Budget {
+                max_lm_calls: Some(5),
+                ..Budget::unlimited()
+            },
+            ..EngineConfig::default()
+        },
+    );
+
+    let candidate = engine.register(Candidate::new());
+    engine
+        .evaluate(&mut module, candidate, None)
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().lm_calls, 3);
+    assert!(engine.budget_allows(2));
+
+    // A strategy-side reflection call spends budget the engine didn't run.
+    engine.charge(0, 2);
+    assert_eq!(engine.spend().lm_calls, 5);
+    assert!(!engine.budget_allows(1));
+
+    // Charged spend survives checkpoint/resume.
+    let checkpoint = engine.checkpoint().unwrap();
+    let resumed =
+        EvalEngine::<EngSig, IndexMetric>::resume(trainset(3), &metric, *engine.config(), &checkpoint)
+            .unwrap();
+    assert_eq!(resumed.spend().lm_calls, 5);
+    assert_eq!(resumed.spend().metric_calls, 3);
+}
+
+#[tokio::test]
+async fn checkpoint_with_unknown_version_is_rejected() {
+    let metric = IndexMetric;
+    let engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
+    let checkpoint = engine.checkpoint().unwrap();
+
+    let mut doctored: serde_json::Value = serde_json::from_str(&checkpoint).unwrap();
+    doctored["version"] = serde_json::json!(99);
+    let doctored = serde_json::to_string(&doctored).unwrap();
+
+    match EvalEngine::<EngSig, IndexMetric>::resume(
+        trainset(2),
+        &metric,
+        EngineConfig::default(),
+        &doctored,
+    ) {
+        Err(err) => assert!(err.to_string().contains("version")),
+        Ok(_) => panic!("unknown checkpoint versions must fail resume"),
+    }
+}
+
+#[tokio::test]
+async fn permanent_install_invalidates_the_cache_via_baseline_hash() {
+    let client = TestCompletionModel::new([answer_response("0"), answer_response("1")]);
+    let mut module = lm_module(client.clone()).await;
+    let metric = ExactMatch;
+    let mut engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
+
+    let candidate = engine.register(Candidate::new());
+    engine
+        .evaluate(&mut module, candidate, None)
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().lm_calls, 2);
+
+    // Permanently install a winner mid-run (the COPRO-between-rounds shape):
+    // the module skeleton changed, so cached entries for the old baseline
+    // must NOT be served for the same candidate on the new baseline.
+    apply_candidate(
+        &mut module,
+        &Candidate::with_instruction("predictor", "installed"),
+    )
+    .unwrap();
+
+    client.push_response(answer_response("0"));
+    client.push_response(answer_response("1"));
+    let eval = engine
+        .evaluate(&mut module, candidate, None)
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().lm_calls, 4, "new baseline means fresh rollouts");
+    assert_eq!(engine.spend().cache_hits, 0);
+    assert!(eval.rollouts.iter().all(|r| r.trace.is_some()));
+}
+
+#[tokio::test]
+async fn cache_salt_partitions_the_rollout_cache() {
+    let client = TestCompletionModel::new([answer_response("0"), answer_response("1")]);
+    let metric = ExactMatch;
+    let candidate = Candidate::with_instruction("predictor", "salted");
+
+    let checkpoint = {
+        let mut module = lm_module(client.clone()).await;
+        let mut engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
+        let idx = engine.register(candidate.clone());
+        engine
+            .evaluate(&mut module, idx, None)
+            .await
+            .unwrap()
+            .completed()
+            .unwrap();
+        engine.checkpoint().unwrap()
+    };
+
+    // Same checkpoint, bumped salt (the sampling-params seam): every rollout
+    // is a cache miss and needs fresh LM responses.
+    let mut module = lm_module(client.clone()).await;
+    let mut engine = EvalEngine::resume(
+        trainset(2),
+        &metric,
+        EngineConfig {
+            cache_salt: 1,
+            ..EngineConfig::default()
+        },
+        &checkpoint,
+    )
+    .unwrap();
+    client.push_response(answer_response("0"));
+    client.push_response(answer_response("1"));
+    let idx = engine.register(candidate.clone());
+    engine
+        .evaluate(&mut module, idx, None)
+        .await
+        .expect("salted evaluation must run fresh rollouts")
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().cache_hits, 0, "bumped salt never hits the cache");
+
+    // Salt 0 again: the checkpointed entries are served with no LM calls.
+    let mut module = lm_module(TestCompletionModel::new([])).await;
+    let mut engine =
+        EvalEngine::resume(trainset(2), &metric, EngineConfig::default(), &checkpoint).unwrap();
+    let idx = engine.register(candidate);
+    let eval = engine
+        .evaluate(&mut module, idx, None)
+        .await
+        .expect("original salt must serve from the checkpointed cache")
+        .completed()
+        .unwrap();
+    assert_eq!(engine.spend().cache_hits, 2);
+    assert!(eval.rollouts.iter().all(|r| r.trace.is_none()));
 }
 
 #[tokio::test]
