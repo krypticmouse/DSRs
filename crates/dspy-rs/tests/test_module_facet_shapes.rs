@@ -56,13 +56,13 @@ fn drop_reasoning_checked(
 }
 
 #[test]
-fn chain_of_thought_shape_exposes_predictor_field() {
+fn chain_of_thought_is_a_predict_leaf() {
+    // `ChainOfThought<S>` is an alias for `Predict<Augmented<S, Reasoning>>`,
+    // so the module itself is the optimizable leaf — no wrapper field.
     let module = ChainOfThought::<QA>::new();
     let shape = shape_of(&module);
-    let predictor = find_field(shape, "predictor");
 
-    assert!(!predictor.should_skip_deserializing());
-    assert_eq!(predictor.shape().type_identifier, "Predict");
+    assert_eq!(shape.type_identifier, "Predict");
 }
 
 #[test]
@@ -91,10 +91,7 @@ fn map_shape_exposes_inner_chain_of_thought_shape() {
     let inner = find_field(map_shape, "inner");
 
     assert!(!inner.should_skip_deserializing());
-    assert_eq!(inner.shape().type_identifier, "ChainOfThought");
-
-    let nested_predictor = find_field(inner.shape(), "predictor");
-    assert_eq!(nested_predictor.shape().type_identifier, "Predict");
+    assert_eq!(inner.shape().type_identifier, "Predict");
 }
 
 #[test]
@@ -107,8 +104,5 @@ fn and_then_shape_exposes_inner_chain_of_thought_shape() {
     let inner = find_field(and_then_shape, "inner");
 
     assert!(!inner.should_skip_deserializing());
-    assert_eq!(inner.shape().type_identifier, "ChainOfThought");
-
-    let nested_predictor = find_field(inner.shape(), "predictor");
-    assert_eq!(nested_predictor.shape().type_identifier, "Predict");
+    assert_eq!(inner.shape().type_identifier, "Predict");
 }
