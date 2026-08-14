@@ -46,7 +46,8 @@ pub use builder::{
 };
 #[cfg(feature = "ir")]
 pub use graph::{
-    AgentLoopNode, Binding, BudgetPolicy, CapSet, ForkJoinNode, HoleNode, Interner, Lineage,
+    AgentLoopNode, BakeError, Binding, BudgetPolicy, CapSet, ForkJoinNode, HoleNode, Interner,
+    Lineage,
     LoopNode, ModelDef, ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode, Program,
     ProgramMeta, RefineNode, RetryNode, RouteNode, SeqNode, SigId, StopSpec, Sym, ToolDef, ToolId,
     ToolKind,

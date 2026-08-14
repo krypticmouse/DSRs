@@ -425,7 +425,7 @@ pub struct ProgramMeta {
     pub lineage: Option<Lineage>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Lineage {
     /// `"gepa-0.3"`.
     pub optimizer: Box<str>,
@@ -433,9 +433,14 @@ pub struct Lineage {
     pub trainset: Box<str>,
     /// `"412 rollouts / $18.40"`.
     pub budget: Box<str>,
-    /// Parent `program_hash`, hex.
+    /// Parent `program_hash`, hex. Stamped by [`Program::bake`].
     pub parent: Option<Box<str>>,
     pub date: Box<str>,
+    /// Hash of the overlay that was baked, hex. Stamped by [`Program::bake`].
+    /// (Additive to RFC 0002 §2.1: baking must record which candidate was
+    /// promoted, and `Lineage` is where provenance lives.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<Box<str>>,
 }
 
 /// A loaded IR program: arenas + interner + capability ceiling.
@@ -525,6 +530,75 @@ impl Program {
     pub(crate) fn seal(&mut self) {
         self.meta.program_hash = self.compute_hash();
     }
+
+    /// Promotion (RFC 0002 §5, overlay lifecycle): folds `overlay` into a new
+    /// `Program` value — every overlay entry (instruction, demos, tool desc,
+    /// model ref, context policy, code) becomes the corresponding slot's
+    /// *default* — stamps [`Lineage`], and recomputes the program hash.
+    ///
+    /// `self` is untouched; the returned program is a first-class artifact:
+    /// it validates, serializes, and runs identically to `self` + `overlay`
+    /// (overlay read-through and baked defaults render the same prompts).
+    ///
+    /// Lineage: `note` supplies the caller's provenance (optimizer name,
+    /// trainset id, budget spent, date); [`Lineage::parent`] is overwritten
+    /// with `self`'s `program_hash` and [`Lineage::overlay`] with
+    /// [`Overlay::hash`], both as hex.
+    ///
+    /// Because the hash changes, overlays minted against `self` do **not**
+    /// apply to the baked program (the [`Overlay::base`] check) — candidates
+    /// are re-minted against the new skeleton by design.
+    pub fn bake(
+        &self,
+        overlay: &crate::ir::params::Overlay,
+        note: Lineage,
+    ) -> Result<Program, BakeError> {
+        use crate::ir::params::OverlayError;
+
+        if overlay.base != self.meta.program_hash {
+            return Err(OverlayError::BaseMismatch {
+                expected: overlay.base,
+                got: self.meta.program_hash,
+            }
+            .into());
+        }
+
+        let mut baked = self.clone();
+        for (id, value) in overlay.entries() {
+            let slot = &mut baked.params[id];
+            if slot.kind != value.kind() {
+                return Err(OverlayError::KindMismatch {
+                    path: slot.path.to_string(),
+                    expected: slot.kind,
+                    got: value.kind(),
+                }
+                .into());
+            }
+            slot.default = value.clone();
+        }
+
+        baked.meta.lineage = Some(Lineage {
+            parent: Some(format!("{:016x}", self.meta.program_hash).into()),
+            overlay: Some(format!("{:016x}", overlay.hash()).into()),
+            ..note
+        });
+        baked.seal();
+        baked.validate()?;
+        Ok(baked)
+    }
+}
+
+/// Why [`Program::bake`] refused.
+#[derive(Debug, thiserror::Error)]
+pub enum BakeError {
+    /// The overlay does not apply to this program (stale base or a
+    /// kind-mismatched entry).
+    #[error(transparent)]
+    Overlay(#[from] crate::ir::params::OverlayError),
+    /// The baked program failed validation — the overlay carried values the
+    /// graph rules reject.
+    #[error("baked program failed validation: {0}")]
+    Invalid(#[from] ValidateError),
 }
 
 // ---------------------------------------------------------------------------
