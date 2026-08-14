@@ -57,7 +57,7 @@ struct CodeExec {
 /// 1. Predict builds initial chat → calls LM → model requests a tool call
 /// 2. CallerManaged mode: LM returns the tool call without executing it
 /// 3. Caller manually executes the tool, appends result to chat
-/// 4. Caller calls forward_continue → LM returns the final text answer
+/// 4. Caller calls call_and_parse → LM returns the final text answer
 ///
 /// This is the exact pattern RLM will use for Python REPL interaction.
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -98,7 +98,7 @@ async fn caller_managed_tool_loop_with_conversation() {
 
     // Turn 2: Continue the conversation
     let (second_result, final_chat) = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect("second turn should succeed");
     assert_eq!(second_result.into_inner().result, "42");
@@ -185,7 +185,7 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     // Turn 2: should fail with parse error containing the bad response
     chat.push_message(Message::user("follow up"));
     let err = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect_err("second turn should fail");
 

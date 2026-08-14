@@ -76,14 +76,6 @@ where
         ReActBuilder::new()
     }
 
-    pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        self.forward(input).await
-    }
-
-    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        self.run(input).await
-    }
-
     async fn render_tool_manifest(&self) -> String {
         if self.tools.is_empty() {
             return "Available tools: (none)".to_string();
@@ -250,7 +242,7 @@ where
     type Output = S::Output;
 
     async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        ReAct::forward(self, input).await
+        self.run(input).await
     }
 }
 

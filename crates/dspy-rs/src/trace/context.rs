@@ -64,7 +64,7 @@ pub fn last_node_id() -> Option<usize> {
 /// Records a node in the current trace graph. Returns the node ID, or `None` if
 /// not inside a [`trace()`] scope.
 ///
-/// Called internally by [`Predict::forward`](crate::Predict) — you don't call this directly
+/// Called internally by [`Predict::call`](crate::Predict) — you don't call this directly
 /// unless you're implementing a custom module that needs trace integration.
 pub fn record_node(
     node_type: NodeType,

@@ -185,10 +185,23 @@ impl<S: Signature> Predict<S> {
         self.prompt_prefix = OnceLock::new();
     }
 
-    /// Calls the LM with this predictor's signature, demos, and tools.
+    /// The typed direct call: builds the prompt, calls the LM, and parses the response.
     ///
-    /// Delegates to [`forward`](Predict::forward). Both exist for symmetry with the
-    /// [`Module`] trait; `call` is what you use, `forward` is the implementation.
+    /// The full pipeline:
+    /// 1. Format system message from the signature's schema and instruction override
+    /// 2. Format demo examples as user/assistant exchanges
+    /// 3. Format the input as the final user message
+    /// 4. Call the LM (with any tools attached)
+    /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
+    /// 6. Record a trace node if inside a [`trace()`](crate::trace::trace) scope
+    ///
+    /// [`Module::forward`] delegates here; for multi-turn conversations, build the
+    /// chat yourself and use [`call_and_parse`](Predict::call_and_parse).
+    ///
+    /// # Errors
+    ///
+    /// - [`PredictError::Lm`] if the LM call fails (network, rate limit, timeout)
+    /// - [`PredictError::Parse`] if the response can't be parsed into the output fields
     #[tracing::instrument(
         name = "dsrs.predict.call",
         level = "debug",
@@ -206,28 +219,6 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
-        self.forward(input).await
-    }
-
-    /// Builds the prompt, calls the LM, and parses the response.
-    ///
-    /// The full pipeline:
-    /// 1. Format system message from the signature's schema and instruction override
-    /// 2. Format demo examples as user/assistant exchanges
-    /// 3. Format the input as the final user message
-    /// 4. Call the LM (with any tools attached)
-    /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
-    /// 6. Record a trace node if inside a [`trace()`](crate::trace::trace) scope
-    ///
-    /// # Errors
-    ///
-    /// - [`PredictError::Lm`] if the LM call fails (network, rate limit, timeout)
-    /// - [`PredictError::Parse`] if the response can't be parsed into the output fields
-    pub async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
-    where
-        S::Input: Schema,
-        S::Output: Schema,
-    {
         // Serialize the input for the trace node only when a trace scope is active.
         let input_data = if crate::trace::is_tracing() {
             raw_example_from_input::<S>(&input).ok()
@@ -239,33 +230,11 @@ impl<S: Signature> Predict<S> {
         Ok(predicted)
     }
 
-    /// Continues a prior conversation and parses the LM's response.
-    ///
-    /// The caller owns the `Chat` between calls:
-    /// 1. Call [`forward`] to get the first turn's `(Predicted, Chat)`.
-    /// 2. Append a follow-up user message to the returned `Chat`.
-    /// 3. Call `forward_continue` with the updated `Chat`.
-    ///
-    /// The LM response is parsed using the same `[[ ## field ## ]]` protocol.
-    /// The caller is responsible for including format instructions in follow-up
-    /// messages if the model needs reminding of the output format.
-    pub async fn forward_continue(
-        &self,
-        chat: Chat,
-    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
-    where
-        S::Input: Schema,
-        S::Output: Schema,
-    {
-        trace!(message_count = chat.len(), "continuing prior chat");
-        self.call_and_parse(chat).await
-    }
-
     /// Builds the first-turn chat from the signature, demos, and input.
     ///
-    /// Returns a [`Chat`] ready to pass to [`call_and_parse`](Predict::call_and_parse)
-    /// or [`forward_continue`](Predict::forward_continue). Useful when you need to
-    /// inspect or modify the prompt before sending it to the LM.
+    /// Returns a [`Chat`] ready to pass to [`call_and_parse`](Predict::call_and_parse).
+    /// Useful when you need to inspect or modify the prompt before sending it to
+    /// the LM.
     ///
     /// The system message and demo turns are formatted once per (instruction,
     /// demos) configuration and cached on the instance — only the live user
@@ -351,11 +320,19 @@ impl<S: Signature> Predict<S> {
         ))
     }
 
-    /// Calls the LM with the given chat and parses the response.
+    /// The chat-level call: sends `chat` to the LM and parses the response,
+    /// returning both the prediction and the updated conversation history.
     ///
-    /// This is the shared implementation behind [`forward`](Predict::forward) and
-    /// [`forward_continue`](Predict::forward_continue). Use it directly when you need
-    /// both the prediction and the updated conversation history.
+    /// This is the one conversation seam. The caller owns the `Chat` between
+    /// turns:
+    /// 1. Build the first turn with [`build_chat`](Predict::build_chat) (or take
+    ///    the `Chat` returned by a previous `call_and_parse`).
+    /// 2. Append follow-up user messages to the returned `Chat`.
+    /// 3. Call `call_and_parse` again with the updated `Chat`.
+    ///
+    /// Every turn parses with the same `[[ ## field ## ]]` protocol; the caller
+    /// is responsible for including format instructions in follow-up messages if
+    /// the model needs reminding of the output format.
     pub async fn call_and_parse(
         &self,
         chat: Chat,
@@ -364,6 +341,7 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
+        trace!(message_count = chat.len(), "chat-level call");
         self.call_and_parse_with_input(chat, None).await
     }
 
@@ -761,7 +739,7 @@ where
         )
     )]
     async fn forward(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
-        Predict::forward(self, input).await
+        Predict::call(self, input).await
     }
 }
 
