@@ -452,6 +452,84 @@ impl Executor for QuickJsExecutor {
     }
 }
 
+/// Execute a standalone JavaScript program in a fresh, fully fenced sandbox
+/// with `capabilities` injected — the Code Mode execution primitive.
+///
+/// The source runs as the body of an async IIFE: top-level `return` produces
+/// the result (a JSON-serializable value; `undefined` maps to `null`), and
+/// `await` is tolerated but only microtask-resolvable promises settle (there
+/// is no event loop). Capabilities appear as plain global functions. Errors
+/// are attributed to the pseudo-tool name
+/// [`RUN_JS_TOOL_NAME`](crate::RUN_JS_TOOL_NAME); a syntax error surfaces as
+/// [`ExecError::Js`] so a generating LLM can repair the script.
+pub async fn run_script(
+    source: &str,
+    capabilities: Vec<Capability>,
+    config: SandboxConfig,
+) -> Result<Value, ExecError> {
+    let handle = current_handle()?;
+    let source = source.to_string();
+    let cap_handle = handle.clone();
+    handle
+        .spawn_blocking(move || run_script_blocking(&source, &capabilities, config, Some(cap_handle)))
+        .await
+        .map_err(|e| ExecError::Internal {
+            message: format!("sandbox task failed: {e}"),
+        })?
+}
+
+fn run_script_blocking(
+    source: &str,
+    capabilities: &[Capability],
+    config: SandboxConfig,
+    handle: Option<Handle>,
+) -> Result<Value, ExecError> {
+    let name = crate::code_mode::RUN_JS_TOOL_NAME;
+    let sandbox = Sandbox::create(config, capabilities, handle)?;
+    let wrapped = format!("export default (async () => {{\n{source}\n}})();");
+    sandbox.context.with(|ctx| {
+        let module = Module::declare(ctx.clone(), "dsrs_script", wrapped)
+            .catch(&ctx)
+            .map_err(|caught| classify(name, &caught, &sandbox))?;
+        let (module, promise) = module
+            .eval()
+            .catch(&ctx)
+            .map_err(|caught| classify(name, &caught, &sandbox))?;
+        promise
+            .finish::<()>()
+            .catch(&ctx)
+            .map_err(|caught| classify(name, &caught, &sandbox))?;
+        let export: JsValue<'_> = module
+            .namespace()
+            .and_then(|ns| ns.get("default"))
+            .catch(&ctx)
+            .map_err(|caught| classify(name, &caught, &sandbox))?;
+        // The async IIFE returns a promise; settle it on the microtask queue.
+        let result = match export.as_promise() {
+            Some(promise) => promise
+                .finish::<JsValue<'_>>()
+                .catch(&ctx)
+                .map_err(|caught| classify(name, &caught, &sandbox))?,
+            None => export,
+        };
+        let serialized = ctx
+            .json_stringify(result)
+            .catch(&ctx)
+            .map_err(|caught| classify(name, &caught, &sandbox))?;
+        match serialized {
+            None => Ok(Value::Null),
+            Some(json) => {
+                let json = json.to_string().map_err(|e| ExecError::Internal {
+                    message: format!("result was not valid UTF-8: {e}"),
+                })?;
+                serde_json::from_str(&json).map_err(|e| ExecError::Internal {
+                    message: format!("result round-trip failed: {e}"),
+                })
+            }
+        }
+    })
+}
+
 fn current_handle() -> Result<Handle, ExecError> {
     Handle::try_current().map_err(|_| ExecError::Internal {
         message: "QuickJsExecutor requires a Tokio runtime (used for its blocking pool)"

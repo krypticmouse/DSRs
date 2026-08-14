@@ -62,16 +62,20 @@
 //! ```
 
 mod capability;
+mod code_mode;
 mod error;
 mod executor;
 mod quickjs;
 mod rig_tool;
 mod source;
 
-pub use capability::{Capability, CapabilityHandler};
+pub use capability::{Capability, CapabilityHandler, js_identifier};
+pub use code_mode::{
+    CodeModeTool, RUN_JS_TOOL_NAME, ToolApi, code_mode_description, run_js_parameters,
+};
 pub use error::{ExecError, RegisterError};
 pub use executor::{Executor, RegisteredTool, ToolInvocation};
-pub use quickjs::{CacheStats, QuickJsExecutor, QuickJsExecutorBuilder, SandboxConfig};
+pub use quickjs::{CacheStats, QuickJsExecutor, QuickJsExecutorBuilder, SandboxConfig, run_script};
 pub use rig_tool::SandboxTool;
 pub use source::ToolSource;
 

@@ -91,6 +91,23 @@ impl ToolSet {
         }
     }
 
+    /// Collapses `tools` into a single sandboxed `run_js` tool (Code Mode):
+    /// instead of emitting one JSON tool call per step, the model writes
+    /// JavaScript against the tools as a JS API and composes their results in
+    /// one execution. Drop the returned set into any tool loop
+    /// ([`LM::call_with_toolset`], `Predict`) exactly like a normal `ToolSet`.
+    ///
+    /// Errors if two tool names mangle to the same JS identifier (see
+    /// [`dsrs_tools::js_identifier`]).
+    #[cfg(feature = "code-mode")]
+    pub async fn code_mode(
+        tools: Vec<Arc<dyn ToolDyn>>,
+        config: dsrs_tools::SandboxConfig,
+    ) -> Result<Self> {
+        let tool = dsrs_tools::CodeModeTool::new(tools, config).await?;
+        Ok(Self::build(&[Arc::new(tool) as Arc<dyn ToolDyn>]).await)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.definitions.is_empty()
     }
