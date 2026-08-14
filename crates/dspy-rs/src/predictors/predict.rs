@@ -398,7 +398,7 @@ impl<S: Signature> Predict<S> {
             Err(err) => {
                 return Err(PredictError::Lm {
                     source: LmError::Provider {
-                        provider: lm.model.clone(),
+                        provider: lm.config.model.clone(),
                         message: err.to_string(),
                         source: None,
                     },

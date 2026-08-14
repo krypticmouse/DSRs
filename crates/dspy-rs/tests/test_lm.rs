@@ -1,5 +1,45 @@
-use dspy_rs::{Cache, LM, LmUsage};
+use dspy_rs::{Cache, LM, LMConfig, LmUsage};
 use rstest::*;
+
+#[rstest]
+fn lm_config_serializes_without_secrets() {
+    let config = LMConfig {
+        api_key: Some("sk-super-secret".to_string()),
+        model: "openai:gpt-4o".to_string(),
+        ..Default::default()
+    };
+
+    let json = serde_json::to_string(&config).unwrap();
+    assert!(!json.contains("sk-super-secret"));
+    assert!(!json.contains("api_key"));
+
+    let restored: LMConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.api_key, None);
+    assert_eq!(restored.model, "openai:gpt-4o");
+    assert_eq!(restored.temperature, config.temperature);
+    assert_eq!(restored.max_tokens, config.max_tokens);
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn lm_from_config_builds_live_client() {
+    let config = LMConfig {
+        model: "openai:gpt-4o-mini".to_string(),
+        cache: true,
+        ..Default::default()
+    };
+
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::from_config(config.clone()),
+    )
+    .await
+    .unwrap();
+
+    // The live LM carries its config verbatim and initialized live state.
+    assert_eq!(lm.config, config);
+    assert!(lm.cache_handler.is_some());
+}
 
 #[rstest]
 fn test_lm_usage_add() {

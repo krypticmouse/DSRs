@@ -14,7 +14,7 @@ async fn test_settings() {
     configure(lm1);
 
     let lm = get_lm();
-    assert_eq!(lm.model, "openai:gpt-4o-mini");
+    assert_eq!(lm.config.model, "openai:gpt-4o-mini");
 
     let lm2 = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -25,5 +25,5 @@ async fn test_settings() {
     configure(lm2);
 
     let lm = get_lm();
-    assert_eq!(lm.model, "openai:gpt-4o");
+    assert_eq!(lm.config.model, "openai:gpt-4o");
 }

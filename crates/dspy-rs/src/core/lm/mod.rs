@@ -15,6 +15,7 @@ use rig::{
 };
 
 use bon::Builder;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
@@ -83,10 +84,18 @@ impl ToolSet {
     }
 }
 
-#[derive(Builder)]
+/// The data half of an LM: every generation parameter, no live state.
+///
+/// This is the serializable artifact — what a program file records, what an
+/// optimizer can hash, diff, and mutate. The live half ([`LM`]) is built from
+/// it with [`LM::from_config`]. `api_key` is deliberately `#[serde(skip)]`:
+/// secrets never serialize, and on load the key is resolved from provider env
+/// vars at client initialization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
-pub struct LM {
+pub struct LMConfig {
     pub base_url: Option<String>,
+    #[serde(skip)]
     pub api_key: Option<String>,
     #[builder(default = "openai:gpt-4o-mini".to_string())]
     pub model: String,
@@ -106,8 +115,20 @@ pub struct LM {
     pub retry_base_delay_ms: u64,
     #[builder(default = false)]
     pub cache: bool,
+}
+
+impl Default for LMConfig {
+    fn default() -> Self {
+        LMConfig::builder().__internal_build()
+    }
+}
+
+/// The live half: an [`LMConfig`] plus the initialized provider client and
+/// response cache. Constructed via [`LM::builder()`] or [`LM::from_config`].
+#[derive(Clone)]
+pub struct LM {
+    pub config: LMConfig,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
-    #[builder(skip)]
     client: Option<Arc<LMClient>>,
 }
 
@@ -117,27 +138,15 @@ impl Default for LM {
     }
 }
 
-impl Clone for LM {
-    fn clone(&self) -> Self {
-        Self {
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            temperature: self.temperature,
-            max_tokens: self.max_tokens,
-            max_tool_iterations: self.max_tool_iterations,
-            max_retries: self.max_retries,
-            retry_base_delay_ms: self.retry_base_delay_ms,
-            cache: self.cache,
-            cache_handler: self.cache_handler.clone(),
-            client: self.client.clone(),
-        }
-    }
-}
-
 impl LM {
-    /// Finalizes construction of an [`LM`], initializing the HTTP client and
-    /// optional response cache based on provided parameters.
+    /// Entry point for fluent construction: `LM::builder().model(...).build().await`.
+    /// The builder collects an [`LMConfig`]; `build()` initializes the live client.
+    pub fn builder() -> LMConfigBuilder {
+        LMConfig::builder()
+    }
+
+    /// Builds the live [`LM`] from a config, initializing the provider client and
+    /// optional response cache.
     ///
     /// Supports 3 build cases:
     /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
@@ -147,22 +156,22 @@ impl LM {
     /// 3. Provider via model string: no `base_url`, model in "provider:model" format
     ///    → Uses provider-specific client (openai, anthropic, gemini, etc.)
     #[tracing::instrument(
-        name = "dsrs.lm.initialize_client",
+        name = "dsrs.lm.from_config",
         level = "debug",
-        skip(self),
+        skip(config),
         fields(
-            model = %self.model,
-            base_url_present = self.base_url.is_some(),
-            api_key_present = self.api_key.is_some(),
-            cache_enabled = self.cache,
-            max_tokens = self.max_tokens,
-            temperature = self.temperature,
-            max_tool_iterations = self.max_tool_iterations
+            model = %config.model,
+            base_url_present = config.base_url.is_some(),
+            api_key_present = config.api_key.is_some(),
+            cache_enabled = config.cache,
+            max_tokens = config.max_tokens,
+            temperature = config.temperature,
+            max_tool_iterations = config.max_tool_iterations
         )
     )]
-    async fn initialize_client(mut self) -> Result<Self> {
+    pub async fn from_config(config: LMConfig) -> Result<Self> {
         // Determine which build case based on what's provided
-        let client = match (&self.base_url, &self.api_key, &self.model) {
+        let client = match (&config.base_url, &config.api_key, &config.model) {
             // Case 1: OpenAI-compatible with authentication (base_url + api_key)
             // For custom OpenAI-compatible APIs that require API keys
             (Some(base_url), Some(api_key), _) => {
@@ -170,14 +179,14 @@ impl LM {
                 Arc::new(LMClient::from_openai_compatible(
                     base_url,
                     api_key,
-                    &self.model,
+                    &config.model,
                 )?)
             }
             // Case 2: Local OpenAI-compatible server (base_url only, no api_key)
             // For vLLM, text-generation-inference, and other local OpenAI-compatible servers
             (Some(base_url), None, _) => {
                 debug!(build_case = 2, "using local openai-compatible client");
-                Arc::new(LMClient::from_local(base_url, &self.model)?)
+                Arc::new(LMClient::from_local(base_url, &config.model)?)
             }
             // Case 3: Provider via model string (no base_url, model in "provider:model" format)
             // Uses provider-specific clients
@@ -197,16 +206,19 @@ impl LM {
             }
         };
 
-        self.client = Some(client);
-
-        // Initialize cache if enabled
-        if self.cache && self.cache_handler.is_none() {
+        let cache_handler = if config.cache {
             debug!("initializing response cache");
-            self.cache_handler = Some(Arc::new(Mutex::new(ResponseCache::new().await)));
-        }
+            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
+        } else {
+            None
+        };
 
         debug!("lm client initialized");
-        Ok(self)
+        Ok(LM {
+            config,
+            cache_handler,
+            client: Some(client),
+        })
     }
 
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
@@ -218,24 +230,19 @@ impl LM {
 }
 
 // Implement build() for all builder states since optional fields don't require setting
-impl<S: l_m_builder::State> LMBuilder<S> {
-    /// Builds the LM instance with proper client initialization
-    ///
-    /// Supports 3 build cases:
-    /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
-    /// 2. Local OpenAI-compatible: `base_url` only (for vLLM, etc.)
-    /// 3. Provider via model string: model in "provider:model" format
+impl<S: l_m_config_builder::State> LMConfigBuilder<S> {
+    /// Finishes the config and initializes the live client — see [`LM::from_config`].
     #[tracing::instrument(name = "dsrs.lm.build", level = "debug", skip(self))]
     pub async fn build(self) -> Result<LM> {
-        let lm = self.__internal_build();
+        let config = self.__internal_build();
         debug!(
-            model = %lm.model,
-            base_url_present = lm.base_url.is_some(),
-            api_key_present = lm.api_key.is_some(),
-            cache_enabled = lm.cache,
+            model = %config.model,
+            base_url_present = config.base_url.is_some(),
+            api_key_present = config.api_key.is_some(),
+            cache_enabled = config.cache,
             "building lm"
         );
-        lm.initialize_client().await
+        LM::from_config(config).await
     }
 }
 
@@ -356,9 +363,9 @@ impl LM {
         }
 
         let mut hasher = std::hash::DefaultHasher::new();
-        hasher.write(self.model.as_bytes());
-        hasher.write(&self.temperature.to_bits().to_le_bytes());
-        hasher.write(&self.max_tokens.to_le_bytes());
+        hasher.write(self.config.model.as_bytes());
+        hasher.write(&self.config.temperature.to_bits().to_le_bytes());
+        hasher.write(&self.config.max_tokens.to_le_bytes());
         use std::fmt::Write as _;
         let _ = write!(FmtHasher(&mut hasher), "{messages:?}");
         hasher.finish()
@@ -398,8 +405,8 @@ impl LM {
             },
             documents: Vec::new(),
             tools: tool_definitions.to_vec(),
-            temperature: Some(self.temperature as f64),
-            max_tokens: Some(self.max_tokens as u64),
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
             additional_params: None,
             output_schema: None,
@@ -423,8 +430,9 @@ impl LM {
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.max_retries && is_retryable_completion_error(&err) => {
+                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
                     let backoff = self
+                        .config
                         .retry_base_delay_ms
                         .saturating_mul(1u64 << attempt.min(16));
                     // Scope the RNG so it drops before the await (thread_rng is !Send).
@@ -435,7 +443,7 @@ impl LM {
                     let delay = Duration::from_millis(backoff.saturating_add(jitter));
                     warn!(
                         attempt = attempt + 1,
-                        max_retries = self.max_retries,
+                        max_retries = self.config.max_retries,
                         delay_ms = delay.as_millis() as u64,
                         error = %err,
                         "retrying transient lm completion failure"
@@ -525,7 +533,7 @@ impl LM {
         ),
         fields(
             initial_tool_count = initial_calls.len(),
-            max_iterations = self.max_tool_iterations as usize
+            max_iterations = self.config.max_tool_iterations as usize
         )
     )]
     async fn execute_tool_loop(
@@ -537,7 +545,7 @@ impl LM {
         system_prompt: String,
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
-        let max_iterations = self.max_tool_iterations as usize;
+        let max_iterations = self.config.max_tool_iterations as usize;
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
 
@@ -649,10 +657,10 @@ impl LM {
         level = "debug",
         skip(self, messages, tools),
         fields(
-            model = %self.model,
+            model = %self.config.model,
             message_count = messages.len(),
             tool_count = tools.definitions.len(),
-            cache_enabled = self.cache,
+            cache_enabled = self.config.cache,
             tool_loop_mode = ?tool_loop_mode
         )
     )]
@@ -667,7 +675,7 @@ impl LM {
 
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
-        let cache_key = if self.cache && self.cache_handler.is_some() && tools.is_empty() {
+        let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
             Some(self.cache_key_for(&messages))
         } else {
             None
@@ -1077,15 +1085,17 @@ mod tests {
 
     fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
-            base_url: None,
-            api_key: None,
-            model: "openai:gpt-4o-mini".to_string(),
-            temperature: 0.0,
-            max_tokens: 128,
-            max_tool_iterations: 4,
-            max_retries: 0,
-            retry_base_delay_ms: 1,
-            cache: false,
+            config: LMConfig {
+                base_url: None,
+                api_key: None,
+                model: "openai:gpt-4o-mini".to_string(),
+                temperature: 0.0,
+                max_tokens: 128,
+                max_tool_iterations: 4,
+                max_retries: 0,
+                retry_base_delay_ms: 1,
+                cache: false,
+            },
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
         }
