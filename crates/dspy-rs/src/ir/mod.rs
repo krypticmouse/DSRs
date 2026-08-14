@@ -29,14 +29,16 @@ pub mod builder;
 #[cfg(feature = "ir")]
 pub mod graph;
 #[cfg(feature = "ir")]
+pub mod interp;
+#[cfg(feature = "ir")]
 pub mod params;
 #[cfg(feature = "ir")]
 pub mod validate;
 
 #[cfg(feature = "ir")]
 pub use builder::{
-    AsNodeName, BuildError, NodeSpec, Port, ProgramBuilder, agent, carried, cot, fork, hole,
-    input, lit, loop_, out, predict, refine, retry, route, seq,
+    AsNodeName, BuildError, NodeSpec, Port, ProgramBuilder, agent, carried, cot, fork, hole, input,
+    lit, loop_, out, predict, refine, retry, route, seq,
 };
 #[cfg(feature = "ir")]
 pub use graph::{
@@ -45,6 +47,8 @@ pub use graph::{
     ProgramMeta, RefineNode, RetryNode, RouteNode, SeqNode, SigId, StopSpec, Sym, ToolDef, ToolId,
     ToolKind,
 };
+#[cfg(feature = "ir")]
+pub use interp::{Budget, BudgetMeter, Exhausted, Interpreter, LoadError, RunError, RuntimeEnv};
 #[cfg(feature = "ir")]
 pub use params::{
     CodeK, CodeLang, ContextK, ContextPolicy, DemoRow, Demos, Instruction, KindTag, ModelRefK,

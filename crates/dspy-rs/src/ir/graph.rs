@@ -500,11 +500,7 @@ impl Program {
     pub(crate) fn rebuild_param_index(&mut self) -> Result<(), ValidateError> {
         self.param_index.clear();
         for (id, slot) in self.params.iter() {
-            if self
-                .param_index
-                .insert(slot.path.clone(), id)
-                .is_some()
-            {
+            if self.param_index.insert(slot.path.clone(), id).is_some() {
                 return Err(ValidateError::DuplicateParamPath {
                     path: slot.path.to_string(),
                 });

@@ -21,9 +21,7 @@ use std::collections::{HashMap, HashSet};
 use cranelift_entity::EntityRef;
 use indexmap::IndexMap;
 
-use crate::ir::graph::{
-    Binding, Node, NodeId, PortRef, Program, SigId, Sym, ToolKind,
-};
+use crate::ir::graph::{Binding, Node, NodeId, PortRef, Program, SigId, Sym, ToolKind};
 use crate::ir::params::{ParamId, ParamKind, ParamOwner};
 use crate::ir::sig::SignatureDef;
 use crate::typesys::{FieldType, TypeTable};
@@ -119,7 +117,9 @@ pub enum ValidateError {
          compatible type (v1 rule: carry gives iteration-0 values from the scope input)"
     )]
     CarryNotScopeInput { at: String, field: String },
-    #[error("program output `{field}` is not exported by the root seq (or has an incompatible type)")]
+    #[error(
+        "program output `{field}` is not exported by the root seq (or has an incompatible type)"
+    )]
     ProgramOutputMissing { field: String },
 }
 
@@ -469,7 +469,12 @@ impl<'p> Validator<'p> {
         let iface = match &node {
             Node::Predict(n) => {
                 let at = self.leaf(n.name)?;
-                self.check_param_ref(&at, n.instruction, ParamKind::Instruction, ParamOwner::Node(id))?;
+                self.check_param_ref(
+                    &at,
+                    n.instruction,
+                    ParamKind::Instruction,
+                    ParamOwner::Node(id),
+                )?;
                 self.check_param_ref(&at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
                 self.check_param_ref(&at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
                 self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;
@@ -477,7 +482,12 @@ impl<'p> Validator<'p> {
             }
             Node::AgentLoop(n) => {
                 let at = self.leaf(n.name)?;
-                self.check_param_ref(&at, n.instruction, ParamKind::Instruction, ParamOwner::Node(id))?;
+                self.check_param_ref(
+                    &at,
+                    n.instruction,
+                    ParamKind::Instruction,
+                    ParamOwner::Node(id),
+                )?;
                 self.check_param_ref(&at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
                 self.check_param_ref(&at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
                 self.check_param_ref(
@@ -531,10 +541,7 @@ impl<'p> Validator<'p> {
                 for (variant, arm) in n.arms.iter() {
                     let vname = self.p.syms.get(*variant).to_string();
                     if !variants.contains(&vname) {
-                        return Err(ValidateError::RouteUnknownVariant {
-                            at,
-                            variant: vname,
-                        });
+                        return Err(ValidateError::RouteUnknownVariant { at, variant: vname });
                     }
                     covered.insert(vname.clone());
                     let iface = self.check_node(*arm, scope)?;
@@ -630,11 +637,18 @@ impl<'p> Validator<'p> {
                     in_loop: true,
                 };
                 self.check_node(n.body, &body_scope)?;
+                // `while`/`carry`/`out` ports resolve in the body's final
+                // scope: the body node itself plus, when the body is a Seq,
+                // its steps — the text form (`loop { step+ }`) references
+                // step names directly.
                 let after = Scope {
                     inputs: scope.inputs,
                     visible: {
                         let mut v = scope.visible.clone();
                         v.push(n.body);
+                        if let Node::Seq(seq) = &self.p.nodes[n.body] {
+                            v.extend(seq.body.iter().copied());
+                        }
                         v
                     },
                     in_loop: true,
@@ -721,13 +735,13 @@ impl<'p> Validator<'p> {
         for b in binds {
             let dst = self.p.syms.get(b.dst).to_string();
             let ty = match &b.src {
-                PortRef::Lit(value) => infer_lit_type(value).ok_or_else(|| {
-                    ValidateError::LiteralTypeMismatch {
+                PortRef::Lit(value) => {
+                    infer_lit_type(value).ok_or_else(|| ValidateError::LiteralTypeMismatch {
                         at: at.to_string(),
                         field: dst.clone(),
                         expected: "an inferable literal type".to_string(),
-                    }
-                })?,
+                    })?
+                }
                 src => self.port_type(at, src, scope)?,
             };
             if iface.insert(dst.clone(), ty).is_some() {
@@ -902,25 +916,28 @@ pub(crate) fn compat(src: &FieldType, dst: &FieldType) -> bool {
 fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), ValidateError> {
     match ty {
         FieldType::Class(token) => {
-            let def = types.classes.get(token).ok_or_else(|| {
-                ValidateError::UnknownTypeToken {
+            let def = types
+                .classes
+                .get(token)
+                .ok_or_else(|| ValidateError::UnknownTypeToken {
                     sig: sig.to_string(),
                     token: token.clone(),
-                }
-            })?;
+                })?;
             for field in &def.fields {
                 check_tokens(sig, &field.field_type, types)?;
             }
             Ok(())
         }
-        FieldType::Enum(token) => types
-            .enums
-            .get(token)
-            .map(|_| ())
-            .ok_or_else(|| ValidateError::UnknownTypeToken {
-                sig: sig.to_string(),
-                token: token.clone(),
-            }),
+        FieldType::Enum(token) => {
+            types
+                .enums
+                .get(token)
+                .map(|_| ())
+                .ok_or_else(|| ValidateError::UnknownTypeToken {
+                    sig: sig.to_string(),
+                    token: token.clone(),
+                })
+        }
         FieldType::List(inner) | FieldType::Optional(inner) => check_tokens(sig, inner, types),
         FieldType::Map(key, value) => {
             check_tokens(sig, key, types)?;
@@ -953,12 +970,12 @@ pub(crate) fn json_matches_type(
             .as_object()
             .is_some_and(|map| map.values().all(|v| json_matches_type(v, inner, types))),
         FieldType::Class(token) => match (value, types.classes.get(token)) {
-            (Value::Object(map), Some(def)) => def.fields.iter().all(|field| {
-                match map.get(&field.name) {
+            (Value::Object(map), Some(def)) => {
+                def.fields.iter().all(|field| match map.get(&field.name) {
                     Some(v) => json_matches_type(v, &field.field_type, types),
                     None => field.field_type.is_optional(),
-                }
-            }),
+                })
+            }
             _ => false,
         },
         FieldType::Enum(token) => match (value.as_str(), types.enums.get(token)) {

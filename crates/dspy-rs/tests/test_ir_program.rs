@@ -140,8 +140,16 @@ fn param_paths_are_addressable() {
     assert!(program.param_id("drafter.code").is_none());
 
     // Typed handles are kind-checked.
-    assert!(program.slot_of::<ir::Instruction>("drafter.instruction").is_some());
-    assert!(program.slot_of::<ir::Demos>("drafter.instruction").is_none());
+    assert!(
+        program
+            .slot_of::<ir::Instruction>("drafter.instruction")
+            .is_some()
+    );
+    assert!(
+        program
+            .slot_of::<ir::Demos>("drafter.instruction")
+            .is_none()
+    );
 
     // The optimizer contract: enumerable typed genes.
     let instructions: Vec<&str> = program
@@ -362,8 +370,13 @@ fn duplicate_leaf_names_are_rejected() {
 fn capability_violation_is_rejected() {
     let (b, main_sig, qa) = tiny_builder();
     // Program ceiling is empty; the hole asks for net:fetch.
-    let node = ir::hole("fetcher", qa, "(a) => ({answer: a.question})", &["net:fetch"])
-        .bind("question", ir::input("question"));
+    let node = ir::hole(
+        "fetcher",
+        qa,
+        "(a) => ({answer: a.question})",
+        &["net:fetch"],
+    )
+    .bind("question", ir::input("question"));
     let err = b
         .main(
             main_sig,

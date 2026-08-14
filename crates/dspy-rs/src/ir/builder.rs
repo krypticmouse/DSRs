@@ -612,10 +612,16 @@ impl ProgramBuilder {
         let def = SignatureDef::of::<S>().clone();
         let types = SignatureDef::types_of::<S>();
         for (token, class) in &types.classes {
-            self.types.classes.entry(token.clone()).or_insert_with(|| class.clone());
+            self.types
+                .classes
+                .entry(token.clone())
+                .or_insert_with(|| class.clone());
         }
         for (token, enm) in &types.enums {
-            self.types.enums.entry(token.clone()).or_insert_with(|| enm.clone());
+            self.types
+                .enums
+                .entry(token.clone())
+                .or_insert_with(|| enm.clone());
         }
         self.sigs.push(def)
     }
@@ -624,10 +630,16 @@ impl ProgramBuilder {
     /// signatures that reference them).
     pub fn add_types(&mut self, types: &crate::typesys::TypeTable) -> &mut Self {
         for (token, class) in &types.classes {
-            self.types.classes.entry(token.clone()).or_insert_with(|| class.clone());
+            self.types
+                .classes
+                .entry(token.clone())
+                .or_insert_with(|| class.clone());
         }
         for (token, enm) in &types.enums {
-            self.types.enums.entry(token.clone()).or_insert_with(|| enm.clone());
+            self.types
+                .enums
+                .entry(token.clone())
+                .or_insert_with(|| enm.clone());
         }
         self
     }
@@ -776,20 +788,18 @@ impl Lowering {
                 binds,
             } => {
                 let sig = if cot {
-                    let augmented = sigs[sig].augmented_with(&[FieldDef::new(
-                        "reasoning",
-                        FieldType::String,
-                    )
-                    .with_docs("Think step by step to reach the answer.")]);
+                    let augmented =
+                        sigs[sig].augmented_with(&[FieldDef::new("reasoning", FieldType::String)
+                            .with_docs("Think step by step to reach the answer.")]);
                     sigs.push(augmented)
                 } else {
                     sig
                 };
                 let name_sym = self.syms.intern(&name);
                 let node_id = NodeId::new(self.nodes.len());
-                let model = model.or(self.single_model).ok_or_else(|| {
-                    BuildError::MissingModel { at: name.clone() }
-                })?;
+                let model = model
+                    .or(self.single_model)
+                    .ok_or_else(|| BuildError::MissingModel { at: name.clone() })?;
                 let instruction_text =
                     instruction.unwrap_or_else(|| sigs[sig].instruction.to_string());
                 let instruction = self.leaf_param(
@@ -841,9 +851,9 @@ impl Lowering {
             } => {
                 let name_sym = self.syms.intern(&name);
                 let node_id = NodeId::new(self.nodes.len());
-                let model = model.or(self.single_model).ok_or_else(|| {
-                    BuildError::MissingModel { at: name.clone() }
-                })?;
+                let model = model
+                    .or(self.single_model)
+                    .ok_or_else(|| BuildError::MissingModel { at: name.clone() })?;
                 let instruction_text =
                     instruction.unwrap_or_else(|| sigs[sig].instruction.to_string());
                 let instruction = self.leaf_param(

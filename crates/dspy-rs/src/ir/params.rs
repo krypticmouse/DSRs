@@ -314,10 +314,7 @@ impl Overlay {
 
     /// Rebuilds an overlay from the path-keyed form, verifying paths and
     /// kinds against `p`.
-    pub fn from_named(
-        p: &Program,
-        m: BTreeMap<String, ParamValue>,
-    ) -> Result<Self, OverlayError> {
+    pub fn from_named(p: &Program, m: BTreeMap<String, ParamValue>) -> Result<Self, OverlayError> {
         let mut overlay = Self::new(p);
         for (path, value) in m {
             let id = p
