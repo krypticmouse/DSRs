@@ -416,6 +416,14 @@ impl NodeSpec {
     }
 }
 
+/// The output field `cot` prepends to the base signature (RFC 0002 §4.2: `cot`
+/// is signature sugar). The text-format printer detects exactly this field to
+/// re-sugar augmented Predicts, so builder and parser must share it.
+pub(crate) fn cot_reasoning_field() -> FieldDef {
+    FieldDef::new("reasoning", FieldType::String)
+        .with_docs("Think step by step to reach the answer.")
+}
+
 /// One LM call over `sig`.
 pub fn predict(name: &str, sig: SigId) -> NodeSpec {
     NodeSpec {
@@ -752,8 +760,10 @@ impl ProgramBuilder {
             param_index: HashMap::new(),
         };
         program.rebuild_param_index().map_err(BuildError::Invalid)?;
-        program.seal();
+        // Validate before sealing: the hash preimage is the canonical printed
+        // text, and printing assumes structurally valid arenas.
         program.validate().map_err(BuildError::Invalid)?;
+        program.seal();
         Ok(program)
     }
 }
@@ -788,9 +798,7 @@ impl Lowering {
                 binds,
             } => {
                 let sig = if cot {
-                    let augmented =
-                        sigs[sig].augmented_with(&[FieldDef::new("reasoning", FieldType::String)
-                            .with_docs("Think step by step to reach the answer.")]);
+                    let augmented = sigs[sig].augmented_with(&[cot_reasoning_field()]);
                     sigs.push(augmented)
                 } else {
                     sig
