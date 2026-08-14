@@ -226,8 +226,11 @@ fn runtime_only_signature() -> (SignatureDef, TypeTable) {
         .instruction("Triage the support ticket.")
         .input("ticket", FieldType::String)
         .input_full(
-            FieldDef::new("context_notes", FieldType::List(Box::new(FieldType::String)))
-                .with_render(RenderSpec::Format("json".into())),
+            FieldDef::new(
+                "context_notes",
+                FieldType::List(Box::new(FieldType::String)),
+            )
+            .with_render(RenderSpec::Format("json".into())),
         )
         .output("severity", FieldType::Enum(enum_token))
         .output("routing", FieldType::Class(class_token))

@@ -273,8 +273,7 @@ fn builder_rejects_what_the_derive_rejects() {
     assert!(matches!(
         SignatureDef::build("s")
             .input_full(
-                FieldDef::new("q", FieldType::String)
-                    .with_render(RenderSpec::Format("xml".into()))
+                FieldDef::new("q", FieldType::String).with_render(RenderSpec::Format("xml".into()))
             )
             .output("answer", FieldType::String)
             .finish(),

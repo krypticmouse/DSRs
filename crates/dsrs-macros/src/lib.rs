@@ -222,10 +222,7 @@ fn expand_fn_predictor_inner(
     // The signature type the fx call is parameterized by, and the value the
     // generated function resolves to.
     let (call_sig, predicted_output) = match kind {
-        PredictorKind::Predict => (
-            quote! { #fn_name::Sig },
-            quote! { #fn_name::SigOutput },
-        ),
+        PredictorKind::Predict => (quote! { #fn_name::Sig }, quote! { #fn_name::SigOutput }),
         PredictorKind::ChainOfThought => (
             quote! { #runtime::Augmented<#fn_name::Sig, #runtime::Reasoning> },
             quote! { #runtime::WithReasoning<#fn_name::SigOutput> },

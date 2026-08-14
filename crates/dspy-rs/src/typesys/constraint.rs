@@ -85,10 +85,13 @@ pub fn evaluate_constraints(value: &Value, constraints: &[Constraint]) -> Vec<Co
         .iter()
         .map(|constraint| {
             let passed = eval_expression(&constraint.expression, value).unwrap_or(false);
-            let label = constraint.label.clone().unwrap_or_else(|| match constraint.level {
-                ConstraintKind::Assert => "assert".to_string(),
-                ConstraintKind::Check => "check".to_string(),
-            });
+            let label = constraint
+                .label
+                .clone()
+                .unwrap_or_else(|| match constraint.level {
+                    ConstraintKind::Assert => "assert".to_string(),
+                    ConstraintKind::Check => "check".to_string(),
+                });
             ConstraintOutcome {
                 level: constraint.level,
                 label,
@@ -124,7 +127,9 @@ fn eval_expression(expression: &str, value: &Value) -> Result<bool, minijinja::E
 /// [`evaluate_constraints`].
 pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -> bool {
     {
-        let cache = COMPILED_EXPRESSIONS.read().expect("constraint cache poisoned");
+        let cache = COMPILED_EXPRESSIONS
+            .read()
+            .expect("constraint cache poisoned");
         if let Some(entry) = cache.get(expression) {
             return entry
                 .as_ref()
@@ -148,5 +153,7 @@ pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -
 
 fn eval_compiled(expr: &Expression<'static, 'static>, value: &Value) -> bool {
     let ctx = minijinja::context! { this => value };
-    expr.eval(ctx).map(|result| result.is_true()).unwrap_or(false)
+    expr.eval(ctx)
+        .map(|result| result.is_true())
+        .unwrap_or(false)
 }

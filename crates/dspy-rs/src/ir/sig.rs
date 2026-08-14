@@ -14,11 +14,10 @@
 //! is a static allocation in disguise; the failure mode was dynamic loading through
 //! the same caches — an unbounded leak per load. They collapse to:
 //!
-//! - **Static lane:** [`StaticSigCache`] — the *one* deliberate leak, bounded by the
+//! - **Static lane:** `StaticSigCache` — the *one* deliberate leak, bounded by the
 //!   closed set of compiled `Signature` types. One entry per type holds the
-//!   [`SignatureDef`], its [`TypeTable`], and the legacy
-//!   [`SignatureSchema`](crate::SignatureSchema) façade. `Signature::schema()` keeps
-//!   returning `&'static` — no API break.
+//!   [`SignatureDef`], its [`TypeTable`], and the legacy [`SignatureSchema`]
+//!   façade. `Signature::schema()` keeps returning `&'static` — no API break.
 //! - **Dynamic lane:** a loaded program owns its `SignatureDef`s and `TypeTable`
 //!   outright and drops them with the program. Nothing constructed at runtime ever
 //!   touches a global cache or leaks.
@@ -128,7 +127,7 @@ impl ConstraintDef {
     }
 }
 
-/// Owned runtime form of [`InputRenderSpec`](crate::InputRenderSpec).
+/// Owned runtime form of [`InputRenderSpec`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RenderSpec {
@@ -159,7 +158,9 @@ pub enum SigError {
         previous: String,
         current: String,
     },
-    #[error("unsupported format value `{value}` on field `{field}`; use \"json\", \"yaml\", or \"toon\"")]
+    #[error(
+        "unsupported format value `{value}` on field `{field}`; use \"json\", \"yaml\", or \"toon\""
+    )]
     InvalidFormat { field: String, value: String },
     #[error("invalid Jinja syntax in render template on field `{field}`")]
     InvalidJinja { field: String },
@@ -194,7 +195,7 @@ impl SignatureDef {
     }
 
     /// Static → value lane bridge: the owned equivalent of `S::schema()`,
-    /// converted once per type and cached in [`StaticSigCache`].
+    /// converted once per type and cached in the crate's single `StaticSigCache`.
     pub fn of<S: Signature>() -> &'static SignatureDef {
         &static_sig_entry::<S>().def
     }
@@ -342,7 +343,10 @@ fn validate_field(field: &FieldDef) -> Result<(), SigError> {
     match &field.render {
         RenderSpec::Default => {}
         RenderSpec::Format(value) => {
-            if !matches!(value.to_ascii_lowercase().as_str(), "json" | "yaml" | "toon") {
+            if !matches!(
+                value.to_ascii_lowercase().as_str(),
+                "json" | "yaml" | "toon"
+            ) {
                 return Err(SigError::InvalidFormat {
                     field: field.name.to_string(),
                     value: value.to_string(),

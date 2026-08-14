@@ -23,7 +23,11 @@ pub fn type_name(field_type: &FieldType, schema: Option<&TypeTable>) -> String {
         FieldType::List(inner) => format!("{}[]", type_name(inner, schema)),
         FieldType::Optional(inner) => format!("{} or null", type_name(inner, schema)),
         FieldType::Map(key, value) => {
-            format!("map<{}, {}>", type_name(key, schema), type_name(value, schema))
+            format!(
+                "map<{}, {}>",
+                type_name(key, schema),
+                type_name(value, schema)
+            )
         }
         FieldType::Class(name) | FieldType::Enum(name) => resolve_name(name, schema),
         FieldType::Union(items) => items

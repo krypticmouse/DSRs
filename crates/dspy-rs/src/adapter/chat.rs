@@ -16,8 +16,8 @@ use crate::typesys::constraint::{evaluate_constraint_expression, evaluate_expres
 use crate::typesys::render::{schema_block, type_name};
 use crate::typesys::{FieldType, TypeTable};
 use crate::{
-    ConstraintKind, ConstraintResult, FieldMeta, FieldSchema, InputRenderSpec,
-    JsonishError, Message, ParseError, PredictError, Predicted, Schema, Signature,
+    ConstraintKind, ConstraintResult, FieldMeta, FieldSchema, InputRenderSpec, JsonishError,
+    Message, ParseError, PredictError, Predicted, Schema, Signature,
 };
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
@@ -428,7 +428,8 @@ impl ChatAdapter {
         }
 
         result.push_str(
-            schema.response_instructions_cached(|| self.format_response_instructions_schema(schema)),
+            schema
+                .response_instructions_cached(|| self.format_response_instructions_schema(schema)),
         );
         result
     }
@@ -680,10 +681,11 @@ impl ChatAdapter {
 
         // Deserialize straight from the coerced field pairs — the historical
         // `Value::Object` assembly + `from_value` re-walk is skipped entirely.
-        let typed_output = O::deserialize(serde::de::value::MapDeserializer::<
-            _,
-            serde_json::Error,
-        >::new(output_fields.into_iter()))
+        let typed_output = O::deserialize(
+            serde::de::value::MapDeserializer::<_, serde_json::Error>::new(
+                output_fields.into_iter(),
+            ),
+        )
         .map_err(|err| ParseError::ExtractionFailed {
             field: "<all>".to_string(),
             raw_response: content.to_string(),
@@ -905,7 +907,12 @@ fn parse_sections_cow(content: &str) -> IndexMap<&str, std::borrow::Cow<'_, str>
             let slice = content[start..end].trim();
             let text = if slice.contains('\r') {
                 std::borrow::Cow::Owned(
-                    slice.lines().collect::<Vec<_>>().join("\n").trim().to_string(),
+                    slice
+                        .lines()
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .trim()
+                        .to_string(),
                 )
             } else {
                 std::borrow::Cow::Borrowed(slice)
@@ -1136,4 +1143,3 @@ fn render_input_field_jinja(
             )
         })
 }
-

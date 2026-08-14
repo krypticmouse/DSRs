@@ -55,7 +55,9 @@ fn coerce_inner(
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     match field_type {
-        FieldType::String => Ok(Value::String(raw.trim_end_matches(['\n', '\r']).to_string())),
+        FieldType::String => Ok(Value::String(
+            raw.trim_end_matches(['\n', '\r']).to_string(),
+        )),
         FieldType::Int => coerce_int(raw, flags),
         FieldType::Float => coerce_float(raw, flags),
         FieldType::Bool => coerce_bool(raw, flags),
@@ -279,10 +281,7 @@ fn coerce_enum(raw: &str, enum_name: &str, schema: &TypeTable) -> Result<Value> 
             return Ok(Value::String(value.name.clone()));
         }
     }
-    bail!(
-        "`{needle}` is not a valid `{}` variant",
-        enm.rendered_name
-    )
+    bail!("`{needle}` is not a valid `{}` variant", enm.rendered_name)
 }
 
 /// Coerces an already-parsed JSON value into the target type. Used for list items and
@@ -386,7 +385,11 @@ fn json_scalar_to_string(value: &Value) -> String {
 
 fn is_nullish(raw: &str) -> bool {
     let trimmed = strip_quotes(raw.trim()).to_ascii_lowercase();
-    trimmed.is_empty() || trimmed == "null" || trimmed == "none" || trimmed == "~" || trimmed == "nil"
+    trimmed.is_empty()
+        || trimmed == "null"
+        || trimmed == "none"
+        || trimmed == "~"
+        || trimmed == "nil"
 }
 
 fn strip_quotes(text: &str) -> String {
@@ -459,7 +462,11 @@ fn extract_json(text: &str) -> Option<Value> {
 /// Splits free-form text into list items: bulleted (`-`, `*`, `+`), numbered (`1.`), or
 /// one-per-line. Falls back to comma separation for single-line input.
 fn split_list_items(text: &str) -> Vec<String> {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
 
     let looks_like_list = lines.iter().any(|line| {
         line.starts_with("- ")

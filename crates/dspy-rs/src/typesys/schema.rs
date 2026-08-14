@@ -29,9 +29,9 @@ pub enum FieldType {
     List(Box<FieldType>),
     Optional(Box<FieldType>),
     Map(Box<FieldType>, Box<FieldType>),
-    /// Named struct; look up the definition in [`OutputSchema::classes`].
+    /// Named struct; look up the definition in [`TypeTable::classes`].
     Class(String),
-    /// Named unit enum; look up the definition in [`OutputSchema::enums`].
+    /// Named unit enum; look up the definition in [`TypeTable::enums`].
     Enum(String),
     /// Union of alternatives (e.g. untagged enums rendered as `A | B`).
     Union(Vec<FieldType>),
@@ -420,7 +420,11 @@ fn doc_to_description(doc: &'static [&'static str]) -> Option<String> {
         .map(|line| line.trim())
         .collect::<Vec<_>>()
         .join("\n");
-    if joined.is_empty() { None } else { Some(joined) }
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
 }
 
 /// Reads `#[check]`/`#[assert]` constraints declared directly on a facet field via the
