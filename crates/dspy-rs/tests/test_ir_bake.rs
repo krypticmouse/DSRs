@@ -153,10 +153,9 @@ async fn baked_program_runs_identically_to_base_plus_overlay() {
         .unwrap();
 
     let input = obj(&[("question", json!("what is 6*7?"))]);
-    let (base_result, base_trace) = capture(|| {
-        base_interp.run(input.clone(), Some(Arc::new(overlay)), Budget::unlimited())
-    })
-    .await;
+    let (base_result, base_trace) =
+        capture(|| base_interp.run(input.clone(), Some(Arc::new(overlay)), Budget::unlimited()))
+            .await;
     let (baked_result, baked_trace) =
         capture(|| baked_interp.run(input.clone(), None, Budget::unlimited())).await;
 

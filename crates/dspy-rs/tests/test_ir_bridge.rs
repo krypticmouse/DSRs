@@ -6,9 +6,7 @@
 use dspy_rs::ir::{
     self, FieldType as T, Overlay, OverlayError, ParamValue, Program, ProgramBuilder, SignatureDef,
 };
-use dspy_rs::{
-    LM, LMClient, LMConfig, ModuleState, Signature, TestCompletionModel, configure, fx,
-};
+use dspy_rs::{LM, LMClient, LMConfig, ModuleState, Signature, TestCompletionModel, configure, fx};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use serde_json::json;
@@ -175,10 +173,7 @@ fn params_round_trip_through_overlay() {
     params.set(
         "checker",
         dspy_rs::PredictState {
-            demos: vec![obj(&[
-                ("answer", json!("a")),
-                ("verdict", json!("v")),
-            ])],
+            demos: vec![obj(&[("answer", json!("a")), ("verdict", json!("v"))])],
             instruction_override: None,
         },
     );
@@ -216,7 +211,10 @@ fn from_overlay_is_restricted_to_instruction_and_demos() {
         .model(m1)
         .bind("question", ir::input("question"));
     let program = b
-        .main(sig, ir::seq([node]).out("answer", ir::out("answerer", "answer")))
+        .main(
+            sig,
+            ir::seq([node]).out("answer", ir::out("answerer", "answer")),
+        )
         .unwrap();
 
     let mut overlay = Overlay::new(&program);
@@ -280,8 +278,11 @@ fn fx_shaped_program() -> Program {
             .unwrap(),
     );
     let node = ir::predict("bridge_slot", qa).bind("question", ir::input("question"));
-    b.main(qa, ir::seq([node]).out("answer", ir::out("bridge_slot", "answer")))
-        .unwrap()
+    b.main(
+        qa,
+        ir::seq([node]).out("answer", ir::out("bridge_slot", "answer")),
+    )
+    .unwrap()
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -293,7 +294,9 @@ async fn with_overlay_drives_an_fx_harness() {
     })]);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -405,4 +408,3 @@ fn overlay_to_module_state_refuses_a_stale_base() {
     let err = stale.to_module_state(&program).unwrap_err();
     assert!(matches!(err, OverlayError::BaseMismatch { .. }));
 }
-

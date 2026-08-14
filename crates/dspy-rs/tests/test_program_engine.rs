@@ -93,7 +93,10 @@ fn two_model_program() -> (Program, ir::ModelId, ir::ModelId) {
         .model(m1)
         .bind("question", ir::input("question"));
     let program = b
-        .main(qa, ir::seq([node]).out("answer", ir::out("answerer", "answer")))
+        .main(
+            qa,
+            ir::seq([node]).out("answer", ir::out("answerer", "answer")),
+        )
         .unwrap();
     (program, m1, m2)
 }
@@ -186,11 +189,8 @@ async fn candidates_evaluate_concurrently_with_per_candidate_outputs_and_cache()
     let metric = RendezvousMetric {
         barrier: Barrier::new(2),
     };
-    let mut engine = ProgramEvalEngine::new(
-        vec![example("q", "any")],
-        &metric,
-        EngineConfig::default(),
-    );
+    let mut engine =
+        ProgramEvalEngine::new(vec![example("q", "any")], &metric, EngineConfig::default());
     let a = engine.register(cand_a);
     let b = engine.register(cand_b);
 

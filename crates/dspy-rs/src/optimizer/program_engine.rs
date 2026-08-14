@@ -351,9 +351,7 @@ impl<'m, MT: ProgramMetric> ProgramEvalEngine<'m, MT> {
             .evaluate_program_candidates(interp, &[candidate], subset)
             .await?
         {
-            ProgramEvalOutcome::Complete(mut evals) => {
-                Ok(EvalOutcome::Complete(evals.remove(0)))
-            }
+            ProgramEvalOutcome::Complete(mut evals) => Ok(EvalOutcome::Complete(evals.remove(0))),
             ProgramEvalOutcome::BudgetExhausted { needed } => {
                 Ok(EvalOutcome::BudgetExhausted { needed })
             }
@@ -406,8 +404,8 @@ impl<'m, MT: ProgramMetric> ProgramEvalEngine<'m, MT> {
         let program_tag = format!("{:016x}", interp.program().meta.program_hash);
         let gauge = Gauge::default();
 
-        let fresh: Vec<(usize, usize, Eval, Trace)> = stream::iter(pending.iter().map(
-            |&(candidate, idx)| {
+        let fresh: Vec<(usize, usize, Eval, Trace)> =
+            stream::iter(pending.iter().map(|&(candidate, idx)| {
                 let overlay = Arc::clone(&self.candidates[candidate]);
                 let candidate_hash = self.candidate_hashes[candidate];
                 let example = &self.examples[idx];
@@ -425,11 +423,7 @@ impl<'m, MT: ProgramMetric> ProgramEvalEngine<'m, MT> {
                     };
                     let started = Instant::now();
                     let (result, mut trace) = capture_with_meta(meta, || {
-                        interp.run(
-                            example.input.clone(),
-                            Some(overlay),
-                            RunBudget::unlimited(),
-                        )
+                        interp.run(example.input.clone(), Some(overlay), RunBudget::unlimited())
                     })
                     .await;
                     let output = result.map_err(|err| {
@@ -446,11 +440,10 @@ impl<'m, MT: ProgramMetric> ProgramEvalEngine<'m, MT> {
                     });
                     Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
                 }
-            },
-        ))
-        .buffer_unordered(self.config.concurrency.max(1))
-        .try_collect()
-        .await?;
+            }))
+            .buffer_unordered(self.config.concurrency.max(1))
+            .try_collect()
+            .await?;
 
         Ok((fresh, gauge.peak()))
     }

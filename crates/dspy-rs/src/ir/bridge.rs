@@ -130,7 +130,10 @@ pub async fn with_overlay<Fut: Future>(
 /// Builds an overlay from `(leaf name, PredictState)` pairs — the shared core
 /// of [`fx::Params::bind`](crate::fx::Params::bind) and
 /// [`ModuleState::to_overlay`].
-pub(crate) fn states_to_overlay<'a, I>(program: &Program, states: I) -> Result<Overlay, OverlayError>
+pub(crate) fn states_to_overlay<'a, I>(
+    program: &Program,
+    states: I,
+) -> Result<Overlay, OverlayError>
 where
     I: IntoIterator<Item = (&'a str, &'a PredictState)>,
 {
@@ -153,11 +156,12 @@ where
 
         if !state.demos.is_empty() {
             let demos_path = format!("{name}.demos");
-            let demos_id = program
-                .param_id(&demos_path)
-                .ok_or_else(|| OverlayError::UnknownPath {
-                    path: demos_path.clone(),
-                })?;
+            let demos_id =
+                program
+                    .param_id(&demos_path)
+                    .ok_or_else(|| OverlayError::UnknownPath {
+                        path: demos_path.clone(),
+                    })?;
             let def = leaf_sig_of(program, demos_id);
             let rows = state
                 .demos
@@ -194,8 +198,10 @@ pub(crate) fn overlay_to_states(
         };
         match value {
             ParamValue::Instruction { text } => {
-                states.entry(leaf.to_string()).or_default().instruction_override =
-                    Some(text.clone());
+                states
+                    .entry(leaf.to_string())
+                    .or_default()
+                    .instruction_override = Some(text.clone());
             }
             ParamValue::Demos { rows } => {
                 states.entry(leaf.to_string()).or_default().demos =
@@ -226,11 +232,7 @@ fn leaf_sig_of(program: &Program, demos_id: crate::ir::params::ParamId) -> &Sign
 /// Splits a flat demo row (input and output fields merged — the
 /// [`PredictState::demos`] shape) into a [`DemoRow`] using the leaf
 /// signature's field names.
-fn split_demo_row(
-    def: &SignatureDef,
-    path: &str,
-    flat: &JsonMap,
-) -> Result<DemoRow, OverlayError> {
+fn split_demo_row(def: &SignatureDef, path: &str, flat: &JsonMap) -> Result<DemoRow, OverlayError> {
     let mut input = JsonMap::new();
     let mut output = JsonMap::new();
     for (field, value) in flat {
