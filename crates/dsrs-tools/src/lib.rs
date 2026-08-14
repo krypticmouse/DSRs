@@ -68,7 +68,7 @@ mod quickjs;
 mod rig_tool;
 mod source;
 
-pub use capability::{Capability, CapabilityHandler};
+pub use capability::{Capability, CapabilityHandler, js_identifier};
 pub use error::{ExecError, RegisterError};
 pub use executor::{Executor, RegisteredTool, ToolInvocation};
 pub use quickjs::{CacheStats, QuickJsExecutor, QuickJsExecutorBuilder, SandboxConfig};
