@@ -1276,22 +1276,9 @@ fn generate_signature_impl(
     let output_metadata_static =
         format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
-    // Per-type schema fast path: a monomorphized static skips the global
-    // TypeId-keyed cache lock on every `S::schema()` call. Only emitted for
-    // non-generic signatures — a static inside a generic impl would be shared
-    // across monomorphizations and return the wrong schema.
-    let schema_fast_path = if generics.params.is_empty() {
-        quote! {
-            fn schema() -> &'static #runtime::SignatureSchema {
-                static SCHEMA: ::std::sync::OnceLock<&'static #runtime::SignatureSchema> =
-                    ::std::sync::OnceLock::new();
-                *SCHEMA.get_or_init(|| #runtime::SignatureSchema::of::<Self>())
-            }
-        }
-    } else {
-        quote! {}
-    };
-
+    // Note: no per-type `schema()` override. The default trait method resolves
+    // through the single `StaticSigCache` (RFC 0002 §1.2) — the per-derive
+    // `OnceLock` fast path was one of the four leaked caches it collapsed.
     quote! {
         impl #impl_generics #runtime::Signature for #name #ty_generics #where_clause {
             type Input = #input_name #ty_generics;
@@ -1300,8 +1287,6 @@ fn generate_signature_impl(
             fn instruction() -> &'static str {
                 #instruction
             }
-
-            #schema_fast_path
 
             fn input_shape() -> &'static #runtime::Shape {
                 <#input_name #ty_generics as #runtime::__macro_support::facet::Facet<'static>>::SHAPE

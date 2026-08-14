@@ -100,6 +100,7 @@ pub mod core;
 pub mod data;
 pub mod evaluate;
 pub mod fx;
+pub mod ir;
 pub mod modules;
 pub mod optimizer;
 pub mod predictors;

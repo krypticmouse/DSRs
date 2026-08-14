@@ -13,7 +13,8 @@ pub struct ConstraintSpec {
 }
 
 /// Whether a constraint is a soft check (reported but not fatal) or a hard assert (fails the call).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConstraintKind {
     /// Soft: evaluated and reported in [`FieldMeta::checks`](crate::FieldMeta::checks), but doesn't fail the call.
     Check,
