@@ -31,11 +31,13 @@
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 
 pub mod copro;
+pub mod engine;
 pub mod gepa;
 pub mod mipro;
 pub mod pareto;
 
 pub use copro::*;
+pub use engine::*;
 pub use gepa::*;
 pub use mipro::*;
 pub use pareto::*;
