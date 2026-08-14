@@ -9,7 +9,7 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use dspy_rs::{
-    DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
+    DataLoader, Example, LM, Eval, Predict, Predicted, Signature,
     TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset_with_concurrency,
     init_tracing,
 };
@@ -32,11 +32,12 @@ impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
         &self,
         example: &Example<QA>,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        Ok(Eval::score((expected == actual) as u8 as f64))
     }
 }
 

@@ -1,21 +1,30 @@
-//! Execution graph recording for debugging and inspection.
+//! Execution trace capture (RFC 0001).
 //!
-//! Wrap a module call in [`trace()`] to capture a DAG of every [`Predict`](crate::Predict)
-//! invocation, with inputs and outputs at each node. The trace is scoped — only calls
-//! within the closure are recorded; the resulting [`Graph`] can be inspected.
+//! The unified trace format records one [`Span`] per [`Predict`](crate::Predict)
+//! invocation into a [`Trace`] while a [`capture()`] scope is active:
 //!
 //! ```ignore
-//! let (result, graph) = dspy_rs::trace::trace(|| module.call(input)).await;
-//! println!("{} nodes recorded", graph.nodes.len());
+//! let (result, trace) = dspy_rs::trace::capture(|| module.call(input)).await;
+//! for span in trace.for_component("drafter") {
+//!     println!("call {}: {:?}", span.seq, span.output);
+//! }
 //! ```
 //!
-//! This is a debugging tool, not a performance tool. The `Mutex<Graph>` inside the
-//! trace scope adds synchronization overhead. Don't trace in production hot paths.
+//! Spans are addressed by the same names the params system uses (fx slot names,
+//! facet dotted paths), so traces join back to optimizable parameters without
+//! any pointer bookkeeping. A tool-looping `Predict` stays one span; the loop's
+//! provider round-trips and tool executions are its ordered [`SpanEvent`]s.
+//!
+//! Capture is scoped to the current tokio task — spawned subtasks do not
+//! inherit it, and nested scopes are exclusive (innermost wins). With no scope
+//! active, the cost is one task-local probe per `Predict` call.
+//!
+//! Traces serialize to JSONL via [`Trace::to_jsonl`]/[`Trace::from_jsonl`].
 
-pub mod context;
-pub mod dag;
-pub mod value;
+pub mod capture;
+pub mod serialize;
+pub mod span;
 
-pub use context::*;
-pub use dag::*;
-pub use value::*;
+pub use capture::*;
+pub use serialize::TRACE_FORMAT_VERSION;
+pub use span::*;

@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    Example, Eval, GEPA, LM, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
     evaluate_trainset, init_tracing,
 };
@@ -55,20 +55,19 @@ impl TypedMetric<SentimentSignature, SentimentAnalyzer> for SentimentMetric {
         &self,
         example: &Example<SentimentSignature>,
         prediction: &Predicted<SentimentSignatureOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let predicted = prediction.sentiment.trim().to_lowercase();
         let expected = example.output.sentiment.trim().to_lowercase();
 
-        let score = (predicted == expected) as u8 as f32;
-        let feedback = FeedbackMetric::new(
+        let score = (predicted == expected) as u8 as f64;
+        Ok(Eval::with_feedback(
             score,
             format!(
                 "expected={expected}; predicted={predicted}; reasoning={}",
                 prediction.reasoning
             ),
-        );
-
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        ))
     }
 }
 
@@ -145,12 +144,12 @@ async fn main() -> Result<()> {
             text: "This product changed my life! Absolutely amazing!".to_string(),
         })
         .await?;
-    let test_feedback = metric.evaluate(&test_example, &test_prediction).await?;
+    let test_feedback = metric.evaluate(&test_example, &test_prediction, None).await?;
 
     println!("Test prediction: {}", test_prediction.sentiment);
     println!("Test score: {:.3}", test_feedback.score);
     if let Some(feedback) = test_feedback.feedback {
-        println!("Feedback: {}", feedback.feedback);
+        println!("Feedback: {feedback}");
     }
 
     // Persist the optimized instructions/demos so production can reload them

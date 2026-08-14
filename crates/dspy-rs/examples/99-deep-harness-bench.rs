@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use dspy_rs::{
-    Example, LM, LMClient, MetricOutcome, Module, Predict, PredictError, Predicted,
+    Example, LM, LMClient, Eval, Module, Predict, PredictError, Predicted,
     Signature, TestCompletionModel, TypedMetric, evaluate_trainset_with_concurrency,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
@@ -202,9 +202,10 @@ impl TypedMetric<Step, Chain> for Exact {
         &self,
         _example: &Example<Step>,
         prediction: &Predicted<StepOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(
-            (!prediction.result.is_empty()) as u8 as f32,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(
+            (!prediction.result.is_empty()) as u8 as f64,
         ))
     }
 }

@@ -8,6 +8,7 @@
 //! are not shared across LM instances.
 
 pub mod cache;
+pub mod hash;
 pub mod serde_utils;
 pub mod telemetry;
 

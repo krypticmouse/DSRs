@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
+    Example, Eval, GEPA, LM, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
@@ -77,7 +77,8 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
         &self,
         example: &Example<MathWordProblem>,
         prediction: &Predicted<MathWordProblemOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let problem = example.input.problem.clone();
         let expected = example.output.answer.clone();
 
@@ -119,18 +120,16 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
                 let fallback = format!(
                     "judge call failed: {err}; expected={expected}; predicted={student_answer}"
                 );
-                ((exact_match as u8 as f32), fallback)
+                ((exact_match as u8 as f64), fallback)
             }
         };
 
-        let feedback = FeedbackMetric::new(
+        Ok(Eval::with_feedback(
             score,
             format!(
                 "problem={problem}\nexpected={expected}\npredicted={student_answer}\njudge={evaluation_text}"
             ),
-        );
-
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        ))
     }
 }
 
@@ -205,12 +204,12 @@ async fn main() -> Result<()> {
         })
         .await?;
     let test_example = training_example(test_problem, "2");
-    let test_metric = metric.evaluate(&test_example, &test_predicted).await?;
+    let test_metric = metric.evaluate(&test_example, &test_predicted, None).await?;
 
     println!("Test answer: {}", test_predicted.answer);
     println!("Test score: {:.3}", test_metric.score);
     if let Some(feedback) = test_metric.feedback {
-        println!("Judge feedback:\n{}", feedback.feedback);
+        println!("Judge feedback:\n{feedback}");
     }
 
     Ok(())

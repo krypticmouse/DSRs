@@ -4,7 +4,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Example, MetricOutcome, Module, Optimizer, Predict,
+    COPRO, CallMetadata, DataLoader, Example, Eval, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
     average_score, evaluate_trainset,
 };
@@ -65,9 +65,10 @@ impl TypedMetric<LoaderSig, EchoModule> for ExactMatch {
         &self,
         example: &Example<LoaderSig>,
         prediction: &Predicted<LoaderSigOutput>,
-    ) -> Result<MetricOutcome> {
-        let score = (example.output.answer == prediction.answer) as u8 as f32;
-        Ok(MetricOutcome::score(score))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = (example.output.answer == prediction.answer) as u8 as f64;
+        Ok(Eval::score(score))
     }
 }
 

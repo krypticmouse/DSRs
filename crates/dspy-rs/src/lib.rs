@@ -85,7 +85,7 @@
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
-//! - [`trace`] — Execution graph recording for debugging
+//! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
 
 // TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
@@ -118,6 +118,12 @@ pub use evaluate::*;
 pub use modules::*;
 pub use optimizer::*;
 pub use predictors::*;
+// The unified trace format (RFC 0001).
+pub use trace::{
+    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, Span, SpanError,
+    SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome, SpanRequest, Trace, TraceMeta,
+    TraceOutcome, begin_span, capture, capture_with_meta, is_capturing,
+};
 pub use utils::*;
 
 pub mod typesys;

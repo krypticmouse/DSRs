@@ -62,6 +62,13 @@ pub(crate) trait DynPredictor: Send + Sync {
     fn load_state(&mut self, state: PredictState) -> Result<()> {
         self.apply_update(StateUpdate::from(state))
     }
+
+    /// Assigns the component name this predictor records on trace spans.
+    ///
+    /// Optimizers call this with each leaf's dotted path before running traced
+    /// passes, so spans join back to the same names the mutation seam addresses
+    /// — identity data, not optimizable state.
+    fn set_trace_name(&mut self, name: &str);
 }
 
 /// A partial update to a predictor's mutable state, applied through the single

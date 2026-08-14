@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use dspy_rs::{
-    COPRO, ChainOfThought, Example, LM, MetricOutcome, Optimizer, Predicted,
+    COPRO, ChainOfThought, Example, LM, Eval, Optimizer, Predicted,
     Signature, TypedMetric, WithReasoning, configure,
 };
 
@@ -21,10 +21,11 @@ impl TypedMetric<SmokeSig, ChainOfThought<SmokeSig>> for SmokeMetric {
         &self,
         _example: &Example<SmokeSig>,
         prediction: &Predicted<WithReasoning<SmokeSigOutput>>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let answer = prediction.answer.to_ascii_lowercase();
-        Ok(MetricOutcome::score(
-            (answer.contains("smoke") || answer.contains("ok")) as u8 as f32,
+        Ok(Eval::score(
+            (answer.contains("smoke") || answer.contains("ok")) as u8 as f64,
         ))
     }
 }

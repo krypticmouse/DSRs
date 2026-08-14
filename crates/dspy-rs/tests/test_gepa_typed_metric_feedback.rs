@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Example, FeedbackMetric, GEPA, MetricOutcome, Module, Optimizer, Predict,
+    CallMetadata, Example, Eval, GEPA, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,12 +46,10 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for FeedbackMetricImpl {
         &self,
         _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
-        let score = prediction.answer.len() as f32;
-        Ok(MetricOutcome::with_feedback(
-            score,
-            FeedbackMetric::new(score, format!("answer={}", prediction.answer)),
-        ))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = prediction.answer.len() as f64;
+        Ok(Eval::with_feedback(score, format!("answer={}", prediction.answer)))
     }
 }
 
@@ -62,8 +60,9 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for ScoreOnlyMetric {
         &self,
         _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(prediction.answer.len() as f32))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(prediction.answer.len() as f64))
     }
 }
 
@@ -74,16 +73,14 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for PartialFeedbackMetric 
         &self,
         example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
-        let score = prediction.answer.len() as f32;
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = prediction.answer.len() as f64;
 
         if example.input.prompt == "one" {
-            Ok(MetricOutcome::with_feedback(
-                score,
-                FeedbackMetric::new(score, "only first example has feedback"),
-            ))
+            Ok(Eval::with_feedback(score, "only first example has feedback"))
         } else {
-            Ok(MetricOutcome::score(score))
+            Ok(Eval::score(score))
         }
     }
 }
@@ -107,16 +104,14 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for FeedbackThenScoreMetri
         &self,
         _example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let call_index = self.calls.fetch_add(1, Ordering::SeqCst);
-        let score = prediction.answer.len() as f32;
+        let score = prediction.answer.len() as f64;
         if call_index < self.feedback_calls {
-            Ok(MetricOutcome::with_feedback(
-                score,
-                FeedbackMetric::new(score, format!("call={call_index}: feedback")),
-            ))
+            Ok(Eval::with_feedback(score, format!("call={call_index}: feedback")))
         } else {
-            Ok(MetricOutcome::score(score))
+            Ok(Eval::score(score))
         }
     }
 }
@@ -130,7 +125,8 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for RecordingFeedbackMetri
         &self,
         example: &Example<OptimizerSig>,
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let prompt = example.input.prompt.clone();
         self.seen_prompts
             .lock()
@@ -138,14 +134,11 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for RecordingFeedbackMetri
             .push(prompt.clone());
 
         let score = if prompt == "val-only" {
-            prediction.answer.len() as f32 + 100.0
+            prediction.answer.len() as f64 + 100.0
         } else {
-            prediction.answer.len() as f32
+            prediction.answer.len() as f64
         };
-        Ok(MetricOutcome::with_feedback(
-            score,
-            FeedbackMetric::new(score, format!("prompt={prompt}")),
-        ))
+        Ok(Eval::with_feedback(score, format!("prompt={prompt}")))
     }
 }
 

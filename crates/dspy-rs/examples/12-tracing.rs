@@ -1,5 +1,12 @@
 /*
-Example showing typed tracing for a composed module.
+Example showing scoped trace capture for a composed module.
+
+Wrapping a call in `trace::capture` records one span per `Predict` invocation:
+the rendered prompt (interned prefix + live suffix), typed input/output as
+JSON, usage, timing, and — for tool loops — every provider round-trip and tool
+execution as ordered events. Spans are addressed by the same names the params
+system uses, so `trace.for_component("answerer")` is the sub-trace of that one
+predictor.
 
 Run with:
 ```
@@ -10,8 +17,8 @@ cargo run --example 12-tracing
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
-    Signature, configure, init_tracing, trace,
+    CallMetadata, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction, Signature,
+    configure, init_tracing, trace,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -39,10 +46,10 @@ struct RateSignature {
 
 #[derive(Builder)]
 struct QARater {
-    #[builder(default = Predict::<QASignature>::new())]
+    #[builder(default = Predict::<QASignature>::builder().named("answerer").build())]
     answerer: Predict<QASignature>,
 
-    #[builder(default = Predict::<RateSignature>::new())]
+    #[builder(default = Predict::<RateSignature>::builder().named("rater").build())]
     rater: Predict<RateSignature>,
 }
 
@@ -96,8 +103,8 @@ async fn main() -> Result<()> {
 
     let module = QARater::builder().build();
 
-    println!("Starting trace...");
-    let (result, graph) = trace::trace(|| async {
+    println!("Starting capture...");
+    let (result, trace) = trace::capture(|| async {
         module
             .call(QASignatureInput {
                 question: "Hello".to_string(),
@@ -111,21 +118,44 @@ async fn main() -> Result<()> {
         Err(err) => println!("Error (expected without credentials/network): {err}"),
     }
 
-    // Each Predict call records its typed inputs, its parsed output, an edge to
-    // the previously recorded node, and an `instance_key` that optimizers can
-    // join back to named predictor paths (see `predictor_instance_keys`).
-    println!("Graph nodes: {}", graph.nodes.len());
-    for node in &graph.nodes {
+    // Each Predict call records one span: component name, invocation seq,
+    // typed input/output as JSON, a link to the previous span, and timing.
+    // Failed calls stay visible with the prompt recorded and output absent.
+    println!("Trace {} spans: {}", trace.meta.trace_id, trace.spans.len());
+    for span in &trace.spans {
         println!(
-            "Node {}: type={:?}, inputs={:?}",
-            node.id, node.node_type, node.inputs
+            "Span {}: component={:?} seq={} links={:?} events={}",
+            span.id.0,
+            trace.component_name(span.component),
+            span.seq,
+            span.links,
+            span.events.len(),
         );
-        if let Some(input_data) = &node.input_data {
-            println!("  recorded input: {:?}", input_data.data);
+        if let Some(input) = &span.input {
+            println!("  recorded input: {input:?}");
         }
-        if let Some(output) = &node.output {
-            println!("  recorded output: {:?}", output.data);
+        match (&span.output, &span.error) {
+            (Some(output), _) => println!("  recorded output: {output:?}"),
+            (None, Some(error)) => println!("  error ({}): {}", error.kind.as_str(), error.message),
+            (None, None) => {}
         }
+    }
+
+    // Spans are addressed by the same names an optimizer would mutate.
+    for span in trace.for_component("rater") {
+        println!(
+            "rater call {} rendered a {}-message prompt",
+            span.seq,
+            trace.prompt(span).len()
+        );
+    }
+
+    // The whole rollout serializes to JSONL (header + one line per span).
+    let jsonl = trace.to_jsonl()?;
+    println!("\nJSONL ({} lines):", jsonl.lines().count());
+    for line in jsonl.lines() {
+        let preview: String = line.chars().take(120).collect();
+        println!("  {preview}...");
     }
 
     Ok(())
