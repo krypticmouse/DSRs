@@ -310,9 +310,19 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
             answer: "echo".to_string(),
         },
     )];
+    // A distinct valset keeps the trainset minibatch out of the engine's
+    // rollout cache, so every phase below is a fresh, countable rollout.
+    let valset = vec![Example::new(
+        QAInput {
+            question: "echo-val".to_string(),
+        },
+        QAOutput {
+            answer: "echo-val".to_string(),
+        },
+    )];
 
     let report = optimizer
-        .compile(&mut module, trainset, &FeedbackEcho)
+        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackEcho)
         .await
         .expect("gepa compile should succeed");
 
@@ -322,7 +332,8 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
         "Be concise and cite evidence.",
         "child instruction should come from the reflection LM, not concatenation"
     );
-    // seed eval (1) + parent minibatch (1) + reflection (1) + child eval (1)
+    // seed eval on valset (1) + parent minibatch on trainset (1)
+    // + reflection (1) + child eval on valset (1)
     assert_eq!(report.total_lm_calls, 4);
 }
 
@@ -386,9 +397,20 @@ async fn gepa_reflection_receives_component_subtrace() {
             answer: "4".to_string(),
         },
     )];
+    // A distinct valset keeps the parent's trainset minibatch out of the
+    // engine's rollout cache, so its rollout carries a fresh trace for the
+    // reflector to read.
+    let valset = vec![Example::new(
+        QAInput {
+            question: "What is 3+1?".to_string(),
+        },
+        QAOutput {
+            answer: "4".to_string(),
+        },
+    )];
 
     optimizer
-        .compile(&mut module, trainset, &FeedbackForPredict)
+        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackForPredict)
         .await
         .expect("gepa compile should succeed");
 

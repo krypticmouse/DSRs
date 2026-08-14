@@ -73,7 +73,7 @@ use crate::{Facet, LmUsage, Module, Signature};
 
 /// Score tolerance for Pareto win/tie comparisons (matches the historical
 /// `ParetoFrontier` tolerance).
-const SCORE_EPS: f64 = 1e-6;
+pub(crate) const SCORE_EPS: f64 = 1e-6;
 
 // ---------------------------------------------------------------------------
 // Canonical hashing
@@ -438,22 +438,33 @@ impl ScoreMatrix {
         self.columns
     }
 
-    /// Grows the matrix to at least `candidates` rows.
+    /// Grows the matrix to at least `candidates` rows. Rows are stored
+    /// sparsely — cells past a row's recorded extent read as `None`.
     pub fn ensure_rows(&mut self, candidates: usize) {
         while self.rows.len() < candidates {
-            self.rows.push(vec![None; self.columns]);
+            self.rows.push(Vec::new());
         }
     }
 
+    /// Records a score, growing rows and columns as needed.
     pub fn record(&mut self, candidate: usize, example: usize, score: f64) {
         self.ensure_rows(candidate + 1);
-        self.rows[candidate][example] = Some(score);
+        if example >= self.columns {
+            self.columns = example + 1;
+        }
+        let row = &mut self.rows[candidate];
+        if row.len() <= example {
+            row.resize(example + 1, None);
+        }
+        row[example] = Some(score);
     }
 
     pub fn score(&self, candidate: usize, example: usize) -> Option<f64> {
         self.rows.get(candidate)?.get(example).copied().flatten()
     }
 
+    /// A candidate's recorded row. May be shorter than
+    /// [`examples`](Self::examples); missing cells mean "not evaluated".
     pub fn row(&self, candidate: usize) -> &[Option<f64>] {
         &self.rows[candidate]
     }

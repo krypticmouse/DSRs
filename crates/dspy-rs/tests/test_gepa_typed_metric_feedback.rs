@@ -245,9 +245,10 @@ async fn gepa_compile_fails_when_feedback_is_partial() {
 async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
     // Trainset has two examples and one predictor:
     // calls 0-1: initial frontier seeding
-    // calls 2-3: parent minibatch in generation 0
-    // call 4+: child eval in generation 1 should fail GEPA feedback gate.
-    let metric = FeedbackThenScoreMetric::new(4);
+    // (the gen-0 parent minibatch re-uses those rollouts via the engine's
+    //  rollout cache, so the metric does not run again for it)
+    // calls 2-3: child eval in generation 1 should fail GEPA feedback gate.
+    let metric = FeedbackThenScoreMetric::new(2);
     let mut module = InstructionEchoModule {
         predictor: Predict::<OptimizerSig>::builder()
             .instruction("seed")
