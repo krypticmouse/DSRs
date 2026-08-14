@@ -4,6 +4,8 @@
 //! Everything here is a pure serialization-side projection — no new capture
 //! machinery, no external dependencies.
 
+pub mod otel;
 pub mod rl;
 
+pub use otel::{OtelEvent, OtelKeyValue, OtelSpan, OtelStatus, OtelValue};
 pub use rl::{RlRollout, RlTransition};

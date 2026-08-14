@@ -233,3 +233,88 @@ fn rl_rollout_requires_a_recorded_eval() {
     trace.outcome = None;
     assert!(trace.to_rl_rollout().is_none());
 }
+
+#[test]
+fn otel_export_matches_golden() {
+    let trace = canned_trace();
+    let produced = trace.to_otlp_json("dsrs-test", true);
+
+    // Shape sanity before the byte-level golden.
+    let spans = &produced["resourceSpans"][0]["scopeSpans"][0]["spans"];
+    let spans = spans.as_array().expect("spans array");
+    // Root + 3 predict spans + 1 tool child.
+    assert_eq!(spans.len(), 5);
+
+    let root = &spans[0];
+    assert_eq!(root["name"], json!("dsrs.rollout"));
+    assert_eq!(root["traceId"], json!("0123456789abcdef0123456789abcdef"));
+    assert!(root.get("parentSpanId").is_none());
+    assert_eq!(root["startTimeUnixNano"], json!("1000000000"));
+    assert_eq!(root["endTimeUnixNano"], json!("1005000000"));
+
+    let drafter = &spans[1];
+    assert_eq!(drafter["name"], json!("drafter"));
+    assert_eq!(drafter["kind"], json!(3), "predict spans are CLIENT");
+    assert_eq!(drafter["parentSpanId"], root["spanId"]);
+    let attrs: Vec<(&str, &Value)> = drafter["attributes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|kv| (kv["key"].as_str().unwrap(), &kv["value"]))
+        .collect();
+    assert!(attrs.contains(&(
+        "gen_ai.request.model",
+        &json!({"stringValue": "openai:gpt-4o-mini"})
+    )));
+    assert!(attrs.contains(&("gen_ai.usage.input_tokens", &json!({"intValue": "10"}))));
+    assert!(attrs.contains(&(
+        "dsrs.request_hash",
+        &json!({"stringValue": "0000000000001111"})
+    )));
+
+    let tool = &spans[3];
+    assert_eq!(tool["name"], json!("tool:search"));
+    assert_eq!(tool["parentSpanId"], spans[2]["spanId"]);
+    assert_eq!(tool["kind"], json!(1), "tool spans are INTERNAL");
+
+    let failed = &spans[4];
+    assert_eq!(failed["status"]["code"], json!(2));
+    assert!(
+        failed["status"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("provider unreachable")
+    );
+
+    assert_matches_golden(&produced, "otel_export.golden.json");
+}
+
+#[test]
+fn otel_content_capture_is_opt_in() {
+    let trace = canned_trace();
+    let produced = trace.to_otlp_json("dsrs-test", false);
+    let spans = produced["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .expect("spans array")
+        .clone();
+
+    let all_attr_keys: Vec<String> = spans
+        .iter()
+        .flat_map(|span| span["attributes"].as_array().unwrap().iter())
+        .map(|kv| kv["key"].as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        !all_attr_keys.iter().any(|key| key.contains("arguments") || key.contains("result")),
+        "tool payloads are content"
+    );
+    for span in &spans {
+        assert!(
+            span.get("events").is_none(),
+            "prompt/completion events are content: {span}"
+        );
+    }
+    // Identity, usage, and timing stay.
+    assert!(all_attr_keys.iter().any(|key| key == "gen_ai.usage.input_tokens"));
+    assert!(all_attr_keys.iter().any(|key| key == "dsrs.request_hash"));
+    assert!(all_attr_keys.iter().any(|key| key == "gen_ai.tool.name"));
+}

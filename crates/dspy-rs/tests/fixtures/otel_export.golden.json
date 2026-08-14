@@ -1,0 +1,426 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "dsrs-test"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "dsrs.trace",
+            "version": "0.7.3"
+          },
+          "spans": [
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0200000000000000",
+              "name": "dsrs.rollout",
+              "kind": 1,
+              "startTimeUnixNano": "1000000000",
+              "endTimeUnixNano": "1005000000",
+              "attributes": [
+                {
+                  "key": "dsrs.trace_id",
+                  "value": {
+                    "stringValue": "0123456789abcdef0123456789abcdef"
+                  }
+                },
+                {
+                  "key": "dsrs.candidate_hash",
+                  "value": {
+                    "stringValue": "000000000000002a"
+                  }
+                },
+                {
+                  "key": "dsrs.tag.optimizer",
+                  "value": {
+                    "stringValue": "gepa"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0100000000000000",
+              "parentSpanId": "0200000000000000",
+              "name": "drafter",
+              "kind": 3,
+              "startTimeUnixNano": "1000100000",
+              "endTimeUnixNano": "1000300000",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai:gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.temperature",
+                  "value": {
+                    "doubleValue": 0.0
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "128"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "10"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "5"
+                  }
+                },
+                {
+                  "key": "dsrs.component",
+                  "value": {
+                    "stringValue": "drafter"
+                  }
+                },
+                {
+                  "key": "dsrs.seq",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "dsrs.request_hash",
+                  "value": {
+                    "stringValue": "0000000000001111"
+                  }
+                },
+                {
+                  "key": "dsrs.candidate_hash",
+                  "value": {
+                    "stringValue": "000000000000002a"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1000100000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "system"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "You draft answers."
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1000100000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "user"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "[[ ## question ## ]]\ndemo-q"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1000100000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "assistant"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "[[ ## answer ## ]]\ndemo-a"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1000100000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "user"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "[[ ## question ## ]]\nq"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1000300000",
+                  "name": "gen_ai.completion",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.completion.content",
+                      "value": {
+                        "stringValue": "[[ ## answer ## ]]\ndraft"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0100000000000001",
+              "parentSpanId": "0200000000000000",
+              "name": "tooler",
+              "kind": 3,
+              "startTimeUnixNano": "1000400000",
+              "endTimeUnixNano": "1001100000",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai:gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.temperature",
+                  "value": {
+                    "doubleValue": 0.0
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "128"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "20"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "8"
+                  }
+                },
+                {
+                  "key": "dsrs.component",
+                  "value": {
+                    "stringValue": "tooler"
+                  }
+                },
+                {
+                  "key": "dsrs.seq",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "dsrs.request_hash",
+                  "value": {
+                    "stringValue": "0000000000002222"
+                  }
+                },
+                {
+                  "key": "dsrs.candidate_hash",
+                  "value": {
+                    "stringValue": "000000000000002a"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1000400000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "user"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "use the tool on: draft"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "timeUnixNano": "1001100000",
+                  "name": "gen_ai.completion",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.completion.content",
+                      "value": {
+                        "stringValue": "[[ ## answer ## ]]\nfinal"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0300000000010001",
+              "parentSpanId": "0100000000000001",
+              "name": "tool:search",
+              "kind": 1,
+              "startTimeUnixNano": "1000400000",
+              "endTimeUnixNano": "1000700000",
+              "attributes": [
+                {
+                  "key": "gen_ai.tool.name",
+                  "value": {
+                    "stringValue": "search"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.id",
+                  "value": {
+                    "stringValue": "call_1"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.arguments",
+                  "value": {
+                    "stringValue": "{\"q\":\"draft\"}"
+                  }
+                },
+                {
+                  "key": "gen_ai.tool.call.result",
+                  "value": {
+                    "stringValue": "found: relevant doc"
+                  }
+                }
+              ]
+            },
+            {
+              "traceId": "0123456789abcdef0123456789abcdef",
+              "spanId": "0100000000000002",
+              "parentSpanId": "0200000000000000",
+              "name": "drafter",
+              "kind": 3,
+              "startTimeUnixNano": "1001200000",
+              "endTimeUnixNano": "1001290000",
+              "attributes": [
+                {
+                  "key": "gen_ai.request.model",
+                  "value": {
+                    "stringValue": "openai:gpt-4o-mini"
+                  }
+                },
+                {
+                  "key": "gen_ai.request.temperature",
+                  "value": {
+                    "doubleValue": 0.0
+                  }
+                },
+                {
+                  "key": "gen_ai.request.max_tokens",
+                  "value": {
+                    "intValue": "128"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.input_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "gen_ai.usage.output_tokens",
+                  "value": {
+                    "intValue": "0"
+                  }
+                },
+                {
+                  "key": "dsrs.component",
+                  "value": {
+                    "stringValue": "drafter"
+                  }
+                },
+                {
+                  "key": "dsrs.seq",
+                  "value": {
+                    "intValue": "1"
+                  }
+                },
+                {
+                  "key": "dsrs.request_hash",
+                  "value": {
+                    "stringValue": "0000000000003333"
+                  }
+                },
+                {
+                  "key": "dsrs.candidate_hash",
+                  "value": {
+                    "stringValue": "000000000000002a"
+                  }
+                }
+              ],
+              "events": [
+                {
+                  "timeUnixNano": "1001200000",
+                  "name": "gen_ai.prompt",
+                  "attributes": [
+                    {
+                      "key": "gen_ai.prompt.role",
+                      "value": {
+                        "stringValue": "user"
+                      }
+                    },
+                    {
+                      "key": "gen_ai.prompt.content",
+                      "value": {
+                        "stringValue": "[[ ## question ## ]]\nretry q"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "status": {
+                "code": 2,
+                "message": "lm: provider unreachable"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
