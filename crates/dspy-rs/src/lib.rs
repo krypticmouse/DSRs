@@ -111,7 +111,6 @@ pub use adapter::chat::*;
 pub use augmentation::*;
 pub use core::*;
 pub use data::dataloader::*;
-pub use data::serialize::*;
 pub use data::utils::*;
 pub use evaluate::*;
 pub use modules::*;
@@ -193,18 +192,3 @@ macro_rules! sign {
     }};
 }
 
-/// Source: <https://github.com/wholesome-ghoul/hashmap_macro/blob/master/src/lib.rs>
-/// Author: <https://github.com/wholesome-ghoul>
-/// License: MIT
-/// Description: This macro creates a HashMap from a list of key-value pairs.
-/// Reason for Reuse: Want to avoid adding a dependency for a simple macro.
-#[macro_export]
-macro_rules! hashmap {
-    () => {
-        ::std::collections::HashMap::new()
-    };
-
-    ($($key:expr => $value:expr),+ $(,)?) => {
-        ::std::collections::HashMap::from([ $(($key, $value)),* ])
-    };
-}
