@@ -111,8 +111,6 @@ pub use adapter::chat::*;
 pub use augmentation::*;
 pub use core::*;
 pub use data::dataloader::*;
-pub(crate) use data::example::Example as RawExample;
-pub use data::prediction::*;
 pub use data::serialize::*;
 pub use data::utils::*;
 pub use evaluate::*;

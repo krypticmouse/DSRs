@@ -22,7 +22,7 @@ use tracing::{debug, trace, warn};
 
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::{Cache, Prediction, ResponseCache};
+use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -762,13 +762,13 @@ impl LM {
             chat.push_message(output.clone());
             return Ok(LMResponse {
                 output: output.clone(),
-                usage: entry.prediction.lm_usage,
+                usage: entry.usage,
                 chat,
                 tool_calls: Vec::new(),
                 tool_executions: Vec::new(),
                 events: vec![SpanEvent::Exchange {
                     message: output,
-                    usage: entry.prediction.lm_usage,
+                    usage: entry.usage,
                 }],
             });
         }
@@ -892,7 +892,7 @@ impl LM {
         {
             let entry = CacheEntry {
                 prompt: messages.to_json().to_string(),
-                prediction: Prediction::new(HashMap::new(), accumulated_usage),
+                usage: accumulated_usage,
                 raw_output: Some(first_choice.content()),
             };
             cache.lock().await.insert_entry(key, entry);
