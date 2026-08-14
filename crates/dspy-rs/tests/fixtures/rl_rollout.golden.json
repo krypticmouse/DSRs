@@ -1,0 +1,137 @@
+{
+  "trace_id": "0123456789abcdef0123456789abcdef",
+  "reward": 0.75,
+  "transitions": [
+    {
+      "component": "drafter",
+      "seq": 0,
+      "messages": [
+        {
+          "role": "system",
+          "content": [
+            {
+              "type": "text",
+              "text": "You draft answers."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[[ ## question ## ]]\ndemo-q"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "[[ ## answer ## ]]\ndemo-a"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "[[ ## question ## ]]\nq"
+            }
+          ]
+        }
+      ],
+      "completion": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "[[ ## answer ## ]]\ndraft"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15
+      },
+      "model": "openai:gpt-4o-mini"
+    },
+    {
+      "component": "tooler",
+      "seq": 0,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "use the tool on: draft"
+            }
+          ]
+        }
+      ],
+      "completion": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool_call",
+              "tool_call": {
+                "id": "call_1",
+                "call_id": null,
+                "function": {
+                  "name": "search",
+                  "arguments": {
+                    "q": "draft"
+                  }
+                },
+                "signature": null,
+                "additional_params": null
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "tool_result",
+              "tool_result": {
+                "id": "call_1",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "found: relevant doc"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "[[ ## answer ## ]]\nfinal"
+            }
+          ]
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 20,
+        "completion_tokens": 8,
+        "total_tokens": 28
+      },
+      "model": "openai:gpt-4o-mini"
+    }
+  ],
+  "metadata": {
+    "optimizer": "gepa"
+  }
+}

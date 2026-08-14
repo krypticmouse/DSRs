@@ -424,6 +424,53 @@ impl Trace {
     }
 }
 
+impl Span {
+    /// Rebuilds everything the policy emitted for this span from its events:
+    /// each `Exchange`'s assistant message verbatim, with consecutive
+    /// `ToolRun`s batched into a single user-role tool-result turn — the same
+    /// shape the live tool loop feeds back to the model.
+    ///
+    /// Appending this to [`Trace::prompt`] reconstructs the full conversation.
+    /// Used by replay to rebuild the returned chat and by the RL export's
+    /// `completion` field.
+    pub fn completion_messages(&self) -> Vec<Message> {
+        use rig::OneOrMany;
+        use rig::message::UserContent;
+
+        fn flush(out: &mut Vec<Message>, pending: &mut Vec<UserContent>) {
+            if pending.is_empty() {
+                return;
+            }
+            let contents = std::mem::take(pending);
+            let rig_msg = rig::message::Message::User {
+                content: OneOrMany::many(contents)
+                    .expect("flush is only called with a non-empty batch"),
+            };
+            out.push(Message::from(rig_msg));
+        }
+
+        let mut out = Vec::new();
+        let mut pending: Vec<UserContent> = Vec::new();
+        for event in &self.events {
+            match event {
+                SpanEvent::Exchange { message, .. } => {
+                    flush(&mut out, &mut pending);
+                    out.push(message.clone());
+                }
+                SpanEvent::ToolRun { id, result, .. } => {
+                    pending.push(UserContent::tool_result(
+                        id.clone(),
+                        OneOrMany::one(result.clone().into()),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        flush(&mut out, &mut pending);
+        out
+    }
+}
+
 /// Computes a span's `request_hash`: stable hash over the redacted model config
 /// hash and the full rendered prompt (prefix ++ suffix), streamed through the
 /// messages' `Debug` representation.

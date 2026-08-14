@@ -402,6 +402,31 @@ impl<S: Signature> Predict<S> {
             model: &lm.config,
         });
 
+        // Replay scope (RFC 0001 §4d/e): intercept above the LM. A served call
+        // constructs no client, reaches no provider, and re-executes no tool.
+        match crate::trace::replay::intercept(self.component_name(), &lm.config, &chat.messages) {
+            Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                return self.serve_recorded_span(*span, chat, guard);
+            }
+            Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events: Vec::new(),
+                        raw_output: None,
+                        output: None,
+                        usage: LmUsage::default(),
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Lm,
+                            message: err.to_string(),
+                        }),
+                    });
+                }
+                return Err(PredictError::Replay { source: err });
+            }
+            // Live directive (post-divergence) or no replay scope: proceed.
+            Some(crate::trace::replay::ReplayDirective::Live) | None => {}
+        }
+
         let toolset = self.cached_toolset().await;
         let empty_toolset = ToolSet::default();
         let toolset_ref = toolset.as_deref().unwrap_or(&empty_toolset);
@@ -523,6 +548,103 @@ impl<S: Signature> Predict<S> {
             field_metas,
         );
 
+        Ok((Predicted::new(typed_output, metadata), chat))
+    }
+
+    /// Serves one call from a recorded span (replay scope, RFC 0001 §4d):
+    /// deserializes the recorded parsed output into `S::Output`, extends the
+    /// chat with the recorded completion, and records the served span into any
+    /// active capture scope. Zero provider calls, zero tool executions.
+    #[allow(clippy::result_large_err)]
+    fn serve_recorded_span(
+        &self,
+        span: crate::trace::Span,
+        mut chat: Chat,
+        guard: Option<crate::trace::SpanGuard>,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError>
+    where
+        S::Output: Schema,
+    {
+        let output_map = span
+            .output
+            .clone()
+            .expect("replay serves only spans with parsed output");
+        let typed_output: S::Output = match serde_json::from_value(Value::Object(output_map)) {
+            Ok(output) => output,
+            Err(err) => {
+                let source = crate::trace::ReplayError::OutputDecode {
+                    component: self.component_name().to_string(),
+                    seq: span.seq,
+                    span: span.id,
+                    message: err.to_string(),
+                };
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events: Vec::new(),
+                        raw_output: span.raw_output.clone(),
+                        output: None,
+                        usage: span.usage,
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Parse,
+                            message: source.to_string(),
+                        }),
+                    });
+                }
+                return Err(PredictError::Replay { source });
+            }
+        };
+
+        let raw_response = span.raw_output.clone().unwrap_or_default();
+        debug!(
+            component = self.component_name(),
+            seq = span.seq,
+            "predict call served from recorded trace"
+        );
+
+        // Rebuild the conversation the live call would have returned: the
+        // recorded exchanges and tool results, in order. Tool effects are baked
+        // into the recording — nothing re-executes.
+        let mut completion = span.completion_messages();
+        if completion.is_empty() && !raw_response.is_empty() {
+            completion.push(Message::assistant(raw_response.clone()));
+        }
+        let tool_calls = completion
+            .iter()
+            .flat_map(|message| message.tool_calls().into_iter().cloned())
+            .collect();
+        let tool_executions = span
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                crate::trace::SpanEvent::ToolRun { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .collect();
+        for message in &completion {
+            chat.push_message(message.clone());
+        }
+
+        let span_id = guard.as_ref().map(|guard| guard.id());
+        if let Some(guard) = guard {
+            guard.finish(crate::trace::SpanOutcome {
+                events: span.events.clone(),
+                raw_output: span.raw_output.clone(),
+                output: span.output.clone(),
+                usage: span.usage,
+                error: None,
+            });
+        }
+
+        // Served predictions carry no per-field parse metadata: the recording
+        // stores the parsed output, not the parser's field-level bookkeeping.
+        let metadata = CallMetadata::new(
+            raw_response,
+            span.usage,
+            tool_calls,
+            tool_executions,
+            span_id,
+            Default::default(),
+        );
         Ok((Predicted::new(typed_output, metadata), chat))
     }
 }

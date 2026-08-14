@@ -91,6 +91,17 @@ pub enum PredictError {
         /// The successfully parsed `serde_json::Value` that failed type conversion.
         parsed: serde_json::Value,
     },
+
+    /// A strict [`replay`](crate::trace::replay) scope refused the call: the live
+    /// request diverged from its recording (or the recorded span is unusable).
+    ///
+    /// The fixture and the code disagree — re-record the trace or fix the drift.
+    /// **Not retryable**: the same request diverges the same way.
+    #[error("strict replay refused the call")]
+    Replay {
+        #[source]
+        source: crate::trace::ReplayError,
+    },
 }
 
 impl PredictError {
@@ -99,6 +110,7 @@ impl PredictError {
             Self::Lm { source } => source.class(),
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
+            Self::Replay { .. } => ErrorClass::Internal,
         }
     }
 
@@ -107,6 +119,7 @@ impl PredictError {
             Self::Lm { source } => source.is_retryable(),
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
+            Self::Replay { .. } => false,
         }
     }
 }
