@@ -85,7 +85,7 @@
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
-//! - [`trace`] — Execution graph recording for debugging
+//! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
 
 // TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
@@ -118,8 +118,7 @@ pub use evaluate::*;
 pub use modules::*;
 pub use optimizer::*;
 pub use predictors::*;
-// The unified trace format (RFC 0001). Explicit re-exports (not a glob): the
-// legacy graph API stays namespaced under `trace::` until it is removed.
+// The unified trace format (RFC 0001).
 pub use trace::{
     CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, Span, SpanError,
     SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome, SpanRequest, Trace, TraceMeta,

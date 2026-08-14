@@ -6,7 +6,8 @@ pipeline below is just an async function calling `fx::predict` atoms. The
 optimizable state (instructions, demos) lives OUTSIDE the function in an
 `fx::Params` pytree, injected ambiently with `fx::with_params` — same function,
 different candidate, nothing mutated. Struct-based modules remain fully
-supported; the two styles share traces and the `ModuleState` persistence format.
+supported; the two styles share the trace format and the `ModuleState`
+persistence format.
 
 Runs offline with the in-process test client — no API key needed.
 
@@ -97,23 +98,29 @@ async fn main() -> Result<()> {
     let out = pipeline(question.clone()).await?;
     println!("default params  -> {}", out.answer);
 
-    // 2. Same function under a traced scope with candidate params injected.
+    // 2. Same function under a capture scope with candidate params injected.
     let mut candidate = fx::Params::new();
     candidate.set_instruction("drafter", "Draft thoroughly; include one supporting fact.");
     candidate.set_instruction("refiner", "Refine into one precise sentence, keep the fact.");
 
-    let (result, graph) = dspy_rs::trace::trace(|| fx::with_params(candidate.clone(), pipeline(question))).await;
+    let (result, trace) =
+        dspy_rs::trace::capture(|| fx::with_params(candidate.clone(), pipeline(question))).await;
     println!("candidate params -> {}", result?.answer);
 
-    // The trace addresses nodes by the SAME names the params use.
-    for node in &graph.nodes {
-        if let dspy_rs::trace::NodeType::Predict { param_name, .. } = &node.node_type {
-            println!(
-                "  traced node {} = {:?} (inputs: {:?})",
-                node.id, param_name, node.inputs
-            );
-        }
+    // The trace addresses spans by the SAME names the params use — the slot
+    // names above are the component names below, so a sub-trace of one
+    // parameter is one `for_component` call.
+    for span in &trace.spans {
+        println!(
+            "  span {} = {:?} seq={} (links: {:?})",
+            span.id.0,
+            trace.component_name(span.component),
+            span.seq,
+            span.links
+        );
     }
+    let refiner_calls = trace.for_component("refiner").count();
+    println!("  refiner sub-trace: {refiner_calls} invocation(s)");
 
     // 3. The #[predict] macro form: a bodyless fn, called like any function.
     let quick = quick_answer("Capital of France?".to_string()).await?;

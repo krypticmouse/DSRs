@@ -25,7 +25,7 @@ impl Module for MaybeFails {
             dspy_rs::LmUsage::default(),
             Vec::new(),
             Vec::new(),
-            Some(input_value.max(0) as usize),
+            Some(dspy_rs::SpanId(input_value.max(0) as u32)),
             indexmap::IndexMap::new(),
         );
 

@@ -11,9 +11,6 @@ pub struct Example {
     pub input_keys: Vec<String>,
     #[facet(skip)]
     pub output_keys: Vec<String>,
-    #[serde(skip)]
-    #[facet(skip)]
-    pub node_id: Option<usize>,
 }
 
 impl Example {
@@ -38,7 +35,6 @@ impl Example {
             data,
             input_keys,
             output_keys,
-            node_id: None,
         }
     }
 
@@ -80,7 +76,6 @@ impl Example {
             data: self.data.clone(),
             input_keys: keys,
             output_keys,
-            node_id: self.node_id,
         }
     }
 
@@ -104,7 +99,6 @@ impl Example {
                 .filter(|key| !keys.contains(key))
                 .cloned()
                 .collect(),
-            node_id: self.node_id,
         }
     }
 }

@@ -42,7 +42,6 @@ pub use pareto::*;
 
 use anyhow::Result;
 use anyhow::anyhow;
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 
 use crate::core::{DynPredictor, StateUpdate, visit_named_predictors_mut};
@@ -202,27 +201,6 @@ where
         ControlFlow::Continue(())
     })?;
     Ok(names)
-}
-
-/// Maps each [`Predict`](crate::Predict) leaf's instance address to its dotted path.
-///
-/// Trace nodes record the same address as
-/// [`NodeType::Predict::instance_key`](crate::trace::NodeType), so this map joins
-/// per-node trace data (inputs/outputs per LM call) back to named predictors for
-/// demo bootstrapping and credit assignment. Addresses are only stable while the
-/// module value is not moved — build the map and consume traces under the same
-/// `&mut` borrow.
-pub fn predictor_instance_keys<M>(module: &mut M) -> Result<HashMap<usize, String>>
-where
-    M: for<'a> Facet<'a>,
-{
-    let mut keys = HashMap::new();
-    visit_named_predictors_mut(module, |name, predictor| {
-        let address = std::ptr::from_mut(predictor).cast::<()>() as usize;
-        keys.insert(address, name.to_string());
-        ControlFlow::Continue(())
-    })?;
-    Ok(keys)
 }
 
 /// Looks up a single named predictor and applies a closure to it.

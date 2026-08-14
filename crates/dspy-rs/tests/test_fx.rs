@@ -100,7 +100,7 @@ async fn with_params_injects_instruction_ambiently() {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn trace_names_nodes_and_cache_reuses_instances() {
+async fn capture_names_spans_after_fx_slots() {
     let _lock = SETTINGS_LOCK.lock().await;
     let (lm, _client) = make_test_lm(vec![
         response_with_fields(&[("answer", "a")]),
@@ -110,7 +110,7 @@ async fn trace_names_nodes_and_cache_reuses_instances() {
     .await;
     configure(lm);
 
-    let (result, graph) = dspy_rs::trace::trace(|| async {
+    let (result, trace) = dspy_rs::trace::capture(|| async {
         for i in 0..2 {
             fx::predict::<FxQA>(
                 "trace_test",
@@ -123,30 +123,21 @@ async fn trace_names_nodes_and_cache_reuses_instances() {
         Ok::<_, dspy_rs::PredictError>(())
     })
     .await;
-    result.expect("traced calls should succeed");
+    result.expect("captured calls should succeed");
 
-    assert_eq!(graph.nodes.len(), 2);
-    let keys: Vec<usize> = graph
-        .nodes
-        .iter()
-        .map(|node| match &node.node_type {
-            dspy_rs::trace::NodeType::Predict {
-                instance_key,
-                param_name,
-                ..
-            } => {
-                assert_eq!(param_name.as_deref(), Some("trace_test"));
-                *instance_key
-            }
-            other => panic!("expected Predict node, got {other:?}"),
-        })
-        .collect();
-    assert_eq!(keys[0], keys[1], "same config should reuse the cached instance");
+    // Spans record the fx slot name as their component, with per-invocation seq.
+    assert_eq!(trace.spans.len(), 2);
+    assert_eq!(trace.components, vec!["trace_test"]);
+    let spans: Vec<_> = trace.for_component("trace_test").collect();
+    assert_eq!(spans[0].seq, 0);
+    assert_eq!(spans[1].seq, 1);
+    // Same slot + same config: both calls share one interned prompt prefix.
+    assert_eq!(spans[0].prefix, spans[1].prefix);
 
-    // A different config resolves to a different cached instance.
+    // A different config renders (and records) a different prefix.
     let mut params = fx::Params::new();
     params.set_instruction("trace_test", "different config");
-    let (result, graph) = dspy_rs::trace::trace(|| {
+    let (result, trace) = dspy_rs::trace::capture(|| {
         fx::with_params(
             params,
             fx::predict::<FxQA>(
@@ -159,12 +150,12 @@ async fn trace_names_nodes_and_cache_reuses_instances() {
     })
     .await;
     result.expect("params call should succeed");
-    match &graph.nodes[0].node_type {
-        dspy_rs::trace::NodeType::Predict { instance_key, .. } => {
-            assert_ne!(*instance_key, keys[0]);
-        }
-        other => panic!("expected Predict node, got {other:?}"),
-    }
+    let span = &trace.spans[0];
+    let prompt = trace.prompt(span);
+    assert!(
+        prompt[0].content().contains("different config"),
+        "injected instruction should appear in the recorded prompt prefix"
+    );
 }
 
 struct EchoMatch;

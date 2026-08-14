@@ -258,8 +258,7 @@ pub struct TraceOutcome {
     pub duration_us: u64,
 }
 
-/// The metric result type: one score, optional textual feedback. Replaces
-/// `MetricOutcome`/`FeedbackMetric` in the trace-facing contract.
+/// The metric result type: one score, optional textual feedback.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Eval {
     pub score: f64,

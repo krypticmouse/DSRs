@@ -47,7 +47,7 @@ struct QA {
     answer: String,
 }
 
-// --- Trace: inputs, edges, and instance keys -------------------------------
+// --- Trace: inputs, edges, and component names ------------------------------
 
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
@@ -72,60 +72,59 @@ impl Module for TwoStep {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn trace_records_inputs_edges_and_instance_keys() {
+async fn capture_records_inputs_edges_and_component_names() {
     let module = TwoStep {
         first: Predict::<QA>::builder()
+            .named("first")
             .lm(make_test_lm(vec![response_with_fields(&[("answer", "intermediate")])]).await)
             .build(),
         second: Predict::<QA>::builder()
+            .named("second")
             .lm(make_test_lm(vec![response_with_fields(&[("answer", "final")])]).await)
             .build(),
     };
 
-    let (result, graph) = dspy_rs::trace::trace(|| {
+    let (result, trace) = dspy_rs::trace::capture(|| {
         module.forward(QAInput {
             question: "start".to_string(),
         })
     })
     .await;
-    let predicted = result.expect("traced pipeline should succeed");
+    let predicted = result.expect("captured pipeline should succeed");
     assert_eq!(predicted.answer, "final");
 
-    assert_eq!(graph.nodes.len(), 2, "one node per Predict call");
+    assert_eq!(trace.spans.len(), 2, "one span per Predict call");
 
-    let first = &graph.nodes[0];
-    let second = &graph.nodes[1];
+    let first = &trace.spans[0];
+    let second = &trace.spans[1];
 
-    // Inputs are recorded for both nodes.
-    let first_input = first.input_data.as_ref().expect("first node input recorded");
-    assert_eq!(first_input.data["question"], "start");
-    let second_input = second
-        .input_data
-        .as_ref()
-        .expect("second node input recorded");
-    assert_eq!(second_input.data["question"], "intermediate");
+    // Inputs are recorded for both spans.
+    assert_eq!(first.input.as_ref().expect("first input")["question"], "start");
+    assert_eq!(
+        second.input.as_ref().expect("second input")["question"],
+        "intermediate"
+    );
 
-    // The second node is chained to the first.
-    assert!(first.inputs.is_empty());
-    assert_eq!(second.inputs, vec![first.id]);
+    // The second span is chained to the first.
+    assert!(first.links.is_empty());
+    assert_eq!(second.links, vec![first.id]);
 
     // Outputs are recorded.
     assert_eq!(
-        first.output.as_ref().expect("first output").data["answer"],
+        first.output.as_ref().expect("first output")["answer"],
         "intermediate"
     );
     assert_eq!(
-        second.output.as_ref().expect("second output").data["answer"],
+        second.output.as_ref().expect("second output")["answer"],
         "final"
     );
 
-    // Instance keys identify distinct Predict instances.
-    let key = |node: &dspy_rs::trace::Node| match &node.node_type {
-        dspy_rs::trace::NodeType::Predict { instance_key, .. } => *instance_key,
-        other => panic!("expected Predict node, got {other:?}"),
-    };
-    assert_ne!(key(first), 0);
-    assert_ne!(key(first), key(second));
+    // Distinct Predict instances record under their own component names — the
+    // same names the params system addresses.
+    assert_eq!(trace.component_name(first.component), "first");
+    assert_eq!(trace.component_name(second.component), "second");
+    assert_eq!(trace.for_component("first").count(), 1);
+    assert_eq!(trace.for_component("second").count(), 1);
 }
 
 // --- ModuleState: save / load round trip -----------------------------------

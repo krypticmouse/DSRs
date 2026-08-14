@@ -29,10 +29,10 @@
 //! ```
 //!
 //! Predictors are addressed by **name** instead of struct-field path; the same
-//! names appear on trace nodes (`NodeType::Predict::param_name`), and [`Params`]
-//! converts losslessly to/from [`ModuleState`], so persistence works across both
-//! styles. Like [`trace()`](crate::trace::trace), the ambient params scope is a
-//! tokio task-local: spawned subtasks do not inherit it.
+//! names appear as trace-span components (`Trace::for_component(name)`), and
+//! [`Params`] converts losslessly to/from [`ModuleState`], so persistence works
+//! across both styles. Like [`capture()`](crate::trace::capture), the ambient
+//! params scope is a tokio task-local: spawned subtasks do not inherit it.
 
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
@@ -219,8 +219,8 @@ where
 /// [`Params`] injected by [`with_params`]; with no scope active, the signature's
 /// defaults apply. The LM is resolved exactly like struct-based `Predict` calls
 /// (global [`configure`](crate::configure)d LM). Under a
-/// [`trace()`](crate::trace::trace) scope the node records `name` as its
-/// `param_name`, so traces from functional harnesses are addressable by the
+/// [`capture()`](crate::trace::capture) scope the span records `name` as its
+/// component, so traces from functional harnesses are addressable by the
 /// same names the optimizer would mutate.
 pub async fn predict<S>(name: &str, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
 where

@@ -13,7 +13,7 @@ use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signat
 use crate::data::example::Example as RawExample;
 use crate::{
     CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage, Message, PredictError,
-    Predicted, Prediction, Schema, SignatureSchema,
+    Predicted, Schema, SignatureSchema,
 };
 
 /// A typed input/output pair for few-shot prompting.
@@ -137,8 +137,9 @@ pub struct Predict<S: Signature> {
     /// settable at build time, so this never needs invalidation.
     #[facet(skip, opaque)]
     toolset: tokio::sync::OnceCell<Arc<ToolSet>>,
-    /// Human-assigned name recorded on trace nodes; set by
-    /// [`PredictBuilder::named`] or [`fx::predict`](crate::fx::predict).
+    /// Component name recorded on trace spans; set by
+    /// [`PredictBuilder::named`], [`fx::predict`](crate::fx::predict), or the
+    /// optimizer naming pass.
     #[facet(skip, opaque)]
     trace_name: Option<String>,
     #[facet(skip, opaque)]
@@ -193,7 +194,7 @@ impl<S: Signature> Predict<S> {
     /// 3. Format the input as the final user message
     /// 4. Call the LM (with any tools attached)
     /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
-    /// 6. Record a trace node if inside a [`trace()`](crate::trace::trace) scope
+    /// 6. Record a trace span if inside a [`capture()`](crate::trace::capture) scope
     ///
     /// [`Module::forward`] delegates here; for multi-turn conversations, build the
     /// chat yourself and use [`call_and_parse`](Predict::call_and_parse).
@@ -211,7 +212,7 @@ impl<S: Signature> Predict<S> {
             demo_count = self.demos.len(),
             tool_count = self.tools.len(),
             instruction_override = self.instruction_override.is_some(),
-            tracing_graph = crate::trace::is_tracing()
+            capturing = crate::trace::is_capturing()
         )
     )]
     pub async fn call(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
@@ -220,11 +221,6 @@ impl<S: Signature> Predict<S> {
         S::Output: Schema,
     {
         // Serialize the input for trace recording only when a scope is active.
-        let input_data = if crate::trace::is_tracing() {
-            raw_example_from_input::<S>(&input).ok()
-        } else {
-            None
-        };
         let capture_input = if crate::trace::is_capturing() {
             json_map_from_input::<S>(&input).ok()
         } else {
@@ -235,7 +231,7 @@ impl<S: Signature> Predict<S> {
         // final message is the interned span prefix.
         let prefix_len = chat.len().saturating_sub(1);
         let (predicted, _) = self
-            .call_and_parse_with_input(chat, input_data, capture_input, prefix_len)
+            .call_and_parse_with_input(chat, capture_input, prefix_len)
             .await?;
         Ok(predicted)
     }
@@ -369,18 +365,17 @@ impl<S: Signature> Predict<S> {
         S::Output: Schema,
     {
         trace!(message_count = chat.len(), "chat-level call");
-        self.call_and_parse_with_input(chat, None, None, 0).await
+        self.call_and_parse_with_input(chat, None, 0).await
     }
 
     /// [`call_and_parse`](Predict::call_and_parse) with the typed input captured
-    /// for trace recording. `input_data`/`capture_input` are only recorded when a
-    /// trace scope is active; pass `None` when the input is unavailable (e.g.
+    /// for trace recording. `capture_input` is only recorded when a capture
+    /// scope is active; pass `None` when the input is unavailable (e.g.
     /// multi-turn continuations). `prefix_len` is the number of leading chat
     /// messages that are the cached system+demos prefix (0 for caller-owned chats).
     async fn call_and_parse_with_input(
         &self,
         chat: Chat,
-        input_data: Option<RawExample>,
         capture_input: Option<Map<String, Value>>,
         prefix_len: usize,
     ) -> Result<(Predicted<S::Output>, Chat), PredictError>
@@ -388,24 +383,6 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
-        // Record the node before the LM call so failed calls still appear in the
-        // trace (input recorded, output absent) — that visibility is what lets
-        // optimizers assign blame for pipeline failures.
-        let node_id = if crate::trace::is_tracing() {
-            let inputs = crate::trace::last_node_id().into_iter().collect();
-            crate::trace::record_node(
-                crate::trace::NodeType::Predict {
-                    signature_name: std::any::type_name::<S>().to_string(),
-                    instance_key: self as *const Self as *const () as usize,
-                    param_name: self.trace_name.clone(),
-                },
-                inputs,
-                input_data,
-            )
-        } else {
-            None
-        };
-
         let lm = match &self.lm {
             Some(lm) => Arc::clone(lm),
             None => {
@@ -508,6 +485,7 @@ impl<S: Signature> Predict<S> {
             }
         };
 
+        let span_id = guard.as_ref().map(|guard| guard.id());
         if let Some(guard) = guard {
             guard.finish(crate::trace::SpanOutcome {
                 events,
@@ -536,24 +514,12 @@ impl<S: Signature> Predict<S> {
             checks_total, checks_failed, flagged_fields, "typed parse completed"
         );
 
-        if let Some(id) = node_id {
-            match prediction_from_output::<S>(&typed_output, lm_usage, Some(id)) {
-                Ok(prediction) => {
-                    crate::trace::record_output(id, prediction);
-                    trace!(node_id = id, "recorded typed predictor output");
-                }
-                Err(err) => {
-                    debug!(error = %err, "failed to build typed prediction for trace output");
-                }
-            }
-        }
-
         let metadata = CallMetadata::new(
             raw_response,
             lm_usage,
             tool_calls,
             tool_executions,
-            node_id,
+            span_id,
             field_metas,
         );
 
@@ -598,7 +564,7 @@ impl<S: Signature> PredictBuilder<S> {
         }
     }
 
-    /// Assigns a human-readable name recorded on this predictor's trace nodes.
+    /// Assigns a human-readable name recorded on this predictor's trace spans.
     pub fn named(mut self, name: impl Into<String>) -> Self {
         self.trace_name = Some(name.into());
         self
@@ -776,45 +742,6 @@ where
         Value::Object(map) => Ok(map),
         _ => Err(anyhow::anyhow!("expected object for signature output")),
     }
-}
-
-fn raw_example_from_input<S: Signature>(input: &S::Input) -> Result<RawExample>
-where
-    S::Input: Schema,
-{
-    let input_value = serde_json::to_value(input)?;
-    let input_map = input_value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("expected object for signature input"))?;
-
-    let data = input_map
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<HashMap<String, Value>>();
-    let input_keys = input_map.keys().cloned().collect();
-    Ok(RawExample::new(data, input_keys, Vec::new()))
-}
-
-fn prediction_from_output<S: Signature>(
-    output: &S::Output,
-    lm_usage: LmUsage,
-    node_id: Option<usize>,
-) -> Result<Prediction>
-where
-    S::Output: Schema,
-{
-    let output_value = serde_json::to_value(output)?;
-    let output_map = output_value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("expected object for signature output"))?;
-
-    let data = output_map
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect::<HashMap<String, Value>>();
-    let mut prediction = Prediction::new(data, lm_usage);
-    prediction.node_id = node_id;
-    Ok(prediction)
 }
 
 impl<S> Module for Predict<S>
