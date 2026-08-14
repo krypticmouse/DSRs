@@ -30,6 +30,10 @@ const TOOL_BUDGET: usize = 16 * 1024;
 struct HeaderRef<'a> {
     h: &'a TraceMeta,
     components: &'a [String],
+    /// RFC 0001 §1's reserved join column — additive, omitted when empty.
+    #[cfg(feature = "ir")]
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    param_ids: &'a [Option<Vec<crate::ir::ParamId>>],
     models: &'a [ModelEntry],
     prefixes: &'a [PrefixEntry],
 }
@@ -39,6 +43,9 @@ struct HeaderOwned {
     h: TraceMeta,
     #[serde(default)]
     components: Vec<String>,
+    #[cfg(feature = "ir")]
+    #[serde(default)]
+    param_ids: Vec<Option<Vec<crate::ir::ParamId>>>,
     #[serde(default)]
     models: Vec<ModelEntry>,
     #[serde(default)]
@@ -58,6 +65,8 @@ impl Trace {
         out.push_str(&serde_json::to_string(&HeaderRef {
             h: &self.meta,
             components: &self.components,
+            #[cfg(feature = "ir")]
+            param_ids: &self.param_ids,
             models: &self.models,
             prefixes: &self.prefixes,
         })?);
@@ -96,6 +105,8 @@ impl Trace {
         let mut trace = Trace {
             meta: header.h,
             components: header.components,
+            #[cfg(feature = "ir")]
+            param_ids: header.param_ids,
             models: header.models,
             prefixes: header.prefixes,
             spans: Vec::new(),
@@ -237,7 +248,7 @@ mod tests {
             models: vec![ModelEntry::from_config(&LMConfig::default())],
             prefixes: Vec::new(),
             spans: vec![span],
-            outcome: None,
+            ..Trace::default()
         }
     }
 

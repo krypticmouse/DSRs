@@ -165,6 +165,7 @@ fn canned_trace() -> Trace {
             eval: Some(Eval::with_feedback(0.75, "ok")),
             duration_us: 5_000,
         }),
+        ..Trace::default()
     }
 }
 

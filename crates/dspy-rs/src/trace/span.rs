@@ -220,6 +220,15 @@ pub struct Trace {
     pub meta: TraceMeta,
     /// `CompId` -> component name (fx name / dotted path).
     pub components: Vec<String>,
+    /// RFC 0001 §1's reserved join column, parallel to `components`: the
+    /// global [`ParamId`](crate::ir::ParamId)s of each component's slots in a
+    /// program (per RFC 0002 §3.3). Empty until
+    /// [`attach_program`](Trace::attach_program) fills it; a `None` entry is
+    /// a component the program has no leaf for (static-lane harnesses leave
+    /// the whole column empty). Additive — no format version bump.
+    #[cfg(feature = "ir")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub param_ids: Vec<Option<Vec<crate::ir::ParamId>>>,
     pub models: Vec<ModelEntry>,
     pub prefixes: Vec<PrefixEntry>,
     /// Insertion order == start order == (for the sequential case) topological
@@ -331,6 +340,34 @@ impl Trace {
         self.spans.iter().filter(|span| span.output.is_some())
     }
 
+    /// Fills the [`param_ids`](Trace::param_ids) join column against a
+    /// program (RFC 0002 §3.3): for each interned component whose name is one
+    /// of the program's leaf names, the entry becomes that leaf's node-owned
+    /// [`ParamId`](crate::ir::ParamId)s in id order — the same entities
+    /// `Program::param_id("<leaf>.<slot>")` addresses. Components the program
+    /// doesn't know (static-lane names, judge calls) get `None`.
+    ///
+    /// One addressing story: a span's `component` string == the leaf name ==
+    /// the `ParamPath` prefix, so after attaching, spans join to optimizable
+    /// slots without string surgery.
+    #[cfg(feature = "ir")]
+    pub fn attach_program(&mut self, program: &crate::ir::Program) {
+        let mut by_leaf: std::collections::HashMap<&str, Vec<crate::ir::ParamId>> =
+            std::collections::HashMap::new();
+        for (id, slot) in program.params.iter() {
+            if let crate::ir::ParamOwner::Node(node) = slot.owner
+                && let Some(leaf) = program.leaf_name(node)
+            {
+                by_leaf.entry(leaf).or_default().push(id);
+            }
+        }
+        self.param_ids = self
+            .components
+            .iter()
+            .map(|name| by_leaf.get(name.as_str()).cloned())
+            .collect();
+    }
+
     /// Merges another trace's spans into this one, remapping intern tables and
     /// span ids. Spans are ordered by `started_at_us` after the merge — provided
     /// for harnesses that fan out with `tokio::spawn` and capture per subtask.
@@ -346,6 +383,19 @@ impl Trace {
                 }
             })
             .collect();
+        // Keep the param_ids column parallel to the merged components,
+        // preferring already-attached entries on either side.
+        #[cfg(feature = "ir")]
+        if !self.param_ids.is_empty() || !other.param_ids.is_empty() {
+            self.param_ids.resize(self.components.len(), None);
+            for (idx, ids) in other.param_ids.iter().enumerate() {
+                let mapped = comp_map[idx].0 as usize;
+                if self.param_ids[mapped].is_none() {
+                    self.param_ids[mapped] = ids.clone();
+                }
+            }
+        }
+
         let model_map: Vec<ModelId> = other
             .models
             .iter()
