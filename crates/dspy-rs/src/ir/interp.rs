@@ -236,6 +236,19 @@ pub struct RuntimeEnv {
     pub sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
     /// What this host permits. `program.caps ⊄ grants` ⇒ load refused.
     pub grants: CapSet,
+    /// Code Mode: when set, every `AgentLoop` presents its non-stop tools as
+    /// a single sandboxed `run_js` tool (with this sandbox config) instead of
+    /// N JSON tools; the model writes JavaScript that calls them as globals.
+    ///
+    /// This is a `RuntimeEnv` binding option, not a `ToolKind` variant, by
+    /// design: code mode is a host presentation/execution strategy, not
+    /// program semantics — the same artifact (same tools, same genes, same
+    /// program hash) must run identically either way, so it cannot live in
+    /// the serialized program. `ToolKind` is also per-tool, while code mode
+    /// collapses a whole loop's tool surface; and leaving the closed enum
+    /// untouched keeps the `.dsrs` text format stable.
+    #[cfg(feature = "code-mode")]
+    pub code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
 impl RuntimeEnv {
@@ -262,6 +275,15 @@ impl RuntimeEnv {
         self.grants.insert(cap);
         self
     }
+
+    /// Enables Code Mode for every `AgentLoop` (see
+    /// [`code_mode`](Self::code_mode)): tools are presented to the model as a
+    /// JS API behind one `run_js` tool executing under `config`.
+    #[cfg(feature = "code-mode")]
+    pub fn with_code_mode(mut self, config: dsrs_tools::SandboxConfig) -> Self {
+        self.code_mode = Some(config);
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,6 +306,9 @@ pub struct Interpreter {
     /// Code-hash → registered sandbox tool name. Seeded at load with every
     /// default code gene; overlay code variants register on first use.
     registered: tokio::sync::Mutex<HashMap<u64, String>>,
+    /// Code Mode sandbox config (see [`RuntimeEnv::code_mode`]).
+    #[cfg(feature = "code-mode")]
+    code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
 impl std::fmt::Debug for Interpreter {
@@ -352,6 +377,36 @@ impl Interpreter {
             }
         }
 
+        // Code Mode: JS-identifier collisions among a loop's non-stop tool
+        // names are a load-time refusal (nothing lazy, nothing at call time).
+        #[cfg(feature = "code-mode")]
+        if env.code_mode.is_some() {
+            for (_, node) in program.nodes.iter() {
+                let Node::AgentLoop(agent) = node else {
+                    continue;
+                };
+                let mut seen: HashMap<String, String> = HashMap::new();
+                for &tool_id in agent.tools.iter() {
+                    if agent.stop.stop_tools.contains(&tool_id) {
+                        continue;
+                    }
+                    let name = program.syms.get(program.tools[tool_id].name).to_string();
+                    let js_name = dsrs_tools::js_identifier(&name);
+                    if let Some(previous) = seen.insert(js_name.clone(), name.clone()) {
+                        return Err(LoadError::Register {
+                            at: program.syms.get(agent.name).to_string(),
+                            source: dsrs_tools::RegisterError::InvalidCapability {
+                                name: js_name.clone(),
+                                reason: format!(
+                                    "tool names `{previous}` and `{name}` both mangle to the JS identifier `{js_name}`"
+                                ),
+                            },
+                        });
+                    }
+                }
+            }
+        }
+
         let sandbox = env.sandbox;
         let mut registered = HashMap::new();
         if !sandboxed.is_empty() {
@@ -383,6 +438,8 @@ impl Interpreter {
             tool_exec,
             sandbox,
             registered: tokio::sync::Mutex::new(registered),
+            #[cfg(feature = "code-mode")]
+            code_mode: env.code_mode,
         })
     }
 
@@ -854,6 +911,13 @@ impl Interpreter {
             .iter()
             .map(|&t| p.syms.get(p.tools[t].name).to_string())
             .collect();
+        // Code Mode: collapse the non-stop tool surface into one `run_js`
+        // definition (stop tools stay individual — the loop must see their
+        // calls by name to end).
+        #[cfg(feature = "code-mode")]
+        let code_mode = self
+            .build_code_mode_surface(&at, n, &mut definitions, &sandbox_code, &stop_names)
+            .await?;
         let toolset = ToolSet::from_definitions(definitions);
 
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
@@ -884,6 +948,8 @@ impl Interpreter {
             meter: &meter,
             run_meter: &cx.meter,
             policy: &policy,
+            #[cfg(feature = "code-mode")]
+            code_mode: code_mode.as_ref(),
         };
         let mut events: Vec<SpanEvent> = Vec::new();
         let mut usage = LmUsage::default();
@@ -1050,18 +1116,15 @@ impl Interpreter {
         lc: &AgentLoopCx<'_>,
         call: &rig::message::ToolCall,
     ) -> (String, Option<String>) {
-        let name = call.function.name.as_str();
-        let outcome: Result<String, String> = match lc.by_name.get(name) {
-            None => Err(format!("Tool '{name}' not found")),
-            Some(&tool_id) => match &self.tool_exec[tool_id] {
-                Some(ToolExec::Host(tool)) => tool
-                    .call(call.function.arguments.to_string())
-                    .await
-                    .map_err(|err| format!("tool `{name}` failed: {err}")),
-                Some(ToolExec::Sandboxed) => self.execute_sandboxed_tool(lc, tool_id, call).await,
-                None => Err(format!("tool `{name}` is not bound")),
-            },
+        #[cfg(feature = "code-mode")]
+        let outcome: Result<String, String> = match lc.code_mode {
+            Some(surface) if call.function.name == dsrs_tools::RUN_JS_TOOL_NAME => {
+                execute_code_mode_script(surface, &call.function.arguments).await
+            }
+            _ => self.dispatch_agent_tool(lc, call).await,
         };
+        #[cfg(not(feature = "code-mode"))]
+        let outcome = self.dispatch_agent_tool(lc, call).await;
         let (mut text, error) = match outcome {
             Ok(text) => (text, None),
             Err(message) => (message.clone(), Some(message)),
@@ -1078,6 +1141,27 @@ impl Interpreter {
             }
         }
         (text, error)
+    }
+
+    /// Routes one tool call to its bound executor (host `ToolDyn` or the
+    /// sandbox), by declared name.
+    async fn dispatch_agent_tool(
+        &self,
+        lc: &AgentLoopCx<'_>,
+        call: &rig::message::ToolCall,
+    ) -> Result<String, String> {
+        let name = call.function.name.as_str();
+        match lc.by_name.get(name) {
+            None => Err(format!("Tool '{name}' not found")),
+            Some(&tool_id) => match &self.tool_exec[tool_id] {
+                Some(ToolExec::Host(tool)) => tool
+                    .call(call.function.arguments.to_string())
+                    .await
+                    .map_err(|err| format!("tool `{name}` failed: {err}")),
+                Some(ToolExec::Sandboxed) => self.execute_sandboxed_tool(lc, tool_id, call).await,
+                None => Err(format!("tool `{name}` is not bound")),
+            },
+        }
     }
 
     async fn execute_sandboxed_tool(
@@ -1113,6 +1197,111 @@ impl Interpreter {
             .await
             .map(|value| value.to_string())
             .map_err(|err| err.to_llm_json())
+    }
+
+    /// Builds one agent loop's Code Mode surface: wraps every non-stop tool
+    /// as a sandbox [`Capability`](dsrs_tools::Capability) (host tools call
+    /// straight through `ToolDyn`; sandboxed tools route through the
+    /// executor under their registered names) and replaces their definitions
+    /// with a single `run_js` definition whose description is generated from
+    /// the *overlay-resolved* tool descriptions — `ToolDesc` genes keep
+    /// flowing into the surface the model sees. Returns `None` when code
+    /// mode is off or the loop has no non-stop tools.
+    #[cfg(feature = "code-mode")]
+    async fn build_code_mode_surface(
+        &self,
+        at: &str,
+        n: &AgentLoopNode,
+        definitions: &mut Vec<rig::completion::ToolDefinition>,
+        sandbox_code: &HashMap<ToolId, (String, u64)>,
+        stop_names: &[String],
+    ) -> Result<Option<CodeModeSurface>, RunError> {
+        let Some(config) = self.code_mode else {
+            return Ok(None);
+        };
+        let p = &*self.program;
+        let internal = |message: String| RunError::Internal {
+            at: at.into(),
+            message,
+        };
+        let mut kept = Vec::new();
+        let mut apis = Vec::new();
+        let mut capabilities = Vec::new();
+        // `definitions[i]` was built from `n.tools[i]` — same order.
+        for (&tool_id, definition) in n.tools.iter().zip(definitions.iter()) {
+            if stop_names.contains(&definition.name) {
+                kept.push(definition.clone());
+                continue;
+            }
+            // Collisions were refused at load; names here are unique.
+            let js_name = dsrs_tools::js_identifier(&definition.name);
+            let capability = match &self.tool_exec[tool_id] {
+                Some(ToolExec::Host(tool)) => dsrs_tools::Capability::wrap_tool(
+                    js_name.clone(),
+                    definition.description.clone(),
+                    definition.name.clone(),
+                    Arc::clone(tool),
+                ),
+                Some(ToolExec::Sandboxed) => {
+                    let sandbox = Arc::clone(self.sandbox.as_ref().ok_or_else(|| {
+                        internal("sandbox unavailable (load should have refused)".to_string())
+                    })?);
+                    let (source, hash) = sandbox_code.get(&tool_id).ok_or_else(|| {
+                        internal(format!("sandboxed tool `{}` has no code", definition.name))
+                    })?;
+                    let registered = self
+                        .ensure_registered(
+                            at,
+                            sandbox.as_ref(),
+                            source,
+                            *hash,
+                            &p.sigs[p.tools[tool_id].sig],
+                        )
+                        .await?;
+                    let tool_name = definition.name.clone();
+                    dsrs_tools::Capability::new(
+                        js_name.clone(),
+                        definition.description.clone(),
+                        move |args| {
+                            let sandbox = Arc::clone(&sandbox);
+                            let registered = registered.clone();
+                            let tool_name = tool_name.clone();
+                            async move {
+                                sandbox
+                                    .execute(dsrs_tools::ToolInvocation::new(registered, args))
+                                    .await
+                                    .map_err(|err| format!("tool `{tool_name}` failed: {err}"))
+                            }
+                        },
+                    )
+                }
+                None => {
+                    return Err(internal(format!(
+                        "tool `{}` is not bound (load should have refused)",
+                        definition.name
+                    )));
+                }
+            };
+            apis.push(dsrs_tools::ToolApi {
+                js_name,
+                description: definition.description.clone(),
+                parameters: definition.parameters.clone(),
+            });
+            capabilities.push(capability);
+        }
+        if apis.is_empty() {
+            return Ok(None);
+        }
+        let run_js = rig::completion::ToolDefinition {
+            name: dsrs_tools::RUN_JS_TOOL_NAME.to_string(),
+            description: dsrs_tools::code_mode_description(&apis),
+            parameters: dsrs_tools::run_js_parameters(),
+        };
+        *definitions = std::iter::once(run_js).chain(kept).collect();
+        Ok(Some(CodeModeSurface {
+            capabilities,
+            config,
+        }))
     }
 
     // -- param + port resolution ----------------------------------------------
@@ -1267,6 +1456,35 @@ struct AgentLoopCx<'a> {
     meter: &'a Arc<BudgetMeter>,
     run_meter: &'a Arc<BudgetMeter>,
     policy: &'a ContextPolicy,
+    #[cfg(feature = "code-mode")]
+    code_mode: Option<&'a CodeModeSurface>,
+}
+
+/// One agent loop's Code Mode surface: the wrapped tool capabilities and the
+/// sandbox config `run_js` scripts execute under.
+#[cfg(feature = "code-mode")]
+struct CodeModeSurface {
+    capabilities: Vec<dsrs_tools::Capability>,
+    config: dsrs_tools::SandboxConfig,
+}
+
+/// Executes one `run_js` call against the loop's Code Mode surface. Failures
+/// are conversational, like every agent tool failure.
+#[cfg(feature = "code-mode")]
+async fn execute_code_mode_script(
+    surface: &CodeModeSurface,
+    args: &Value,
+) -> Result<String, String> {
+    let Some(code) = args.get("code").and_then(Value::as_str) else {
+        return Err(format!(
+            "{} requires a string `code` argument",
+            dsrs_tools::RUN_JS_TOOL_NAME
+        ));
+    };
+    dsrs_tools::run_script(code, surface.capabilities.clone(), surface.config)
+        .await
+        .map(|value| value.to_string())
+        .map_err(|err| err.to_llm_json())
 }
 
 async fn lm_call_toolset(
