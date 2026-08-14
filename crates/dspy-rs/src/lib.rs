@@ -121,9 +121,10 @@ pub use optimizer::*;
 pub use predictors::*;
 // The unified trace format (RFC 0001).
 pub use trace::{
-    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, Span, SpanError,
-    SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome, SpanRequest, Trace, TraceMeta,
-    TraceOutcome, begin_span, capture, capture_with_meta, is_capturing,
+    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, ReplayError, ReplayMode,
+    ReplayReport, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
+    SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
+    is_capturing, is_replaying, replay,
 };
 pub use utils::*;
 

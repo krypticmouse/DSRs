@@ -20,11 +20,17 @@
 //! active, the cost is one task-local probe per `Predict` call.
 //!
 //! Traces serialize to JSONL via [`Trace::to_jsonl`]/[`Trace::from_jsonl`].
+//!
+//! A recorded trace doubles as a set of canned LM responses: [`replay()`]
+//! serves `Predict` calls from it — strictly (fixtures, zero API calls) or
+//! until divergence (counterfactual replay of mutated candidates).
 
 pub mod capture;
+pub mod replay;
 pub mod serialize;
 pub mod span;
 
 pub use capture::*;
+pub use replay::{ReplayError, ReplayMode, ReplayReport, is_replaying, replay};
 pub use serialize::TRACE_FORMAT_VERSION;
 pub use span::*;
