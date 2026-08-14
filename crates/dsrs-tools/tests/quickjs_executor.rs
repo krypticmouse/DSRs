@@ -287,10 +287,14 @@ async fn capability_round_trip() {
 #[tokio::test(flavor = "multi_thread")]
 async fn capability_doing_real_async_work() {
     let executor = QuickJsExecutor::builder()
-        .capability(Capability::new("slow_echo", "sleep then echo", |args| async move {
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            Ok(args)
-        }))
+        .capability(Capability::new(
+            "slow_echo",
+            "sleep then echo",
+            |args| async move {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+                Ok(args)
+            },
+        ))
         .build()
         .expect("build");
     executor
@@ -360,7 +364,11 @@ async fn tool_can_catch_capability_errors() {
 fn reserved_and_invalid_capability_names_are_rejected() {
     for bad in ["__dsrs_cap_x", "has space", "1starts_with_digit", ""] {
         let err = QuickJsExecutor::builder()
-            .capability(Capability::new(bad, "bad", |_| async move { Ok(json!(null)) }))
+            .capability(Capability::new(
+                bad,
+                "bad",
+                |_| async move { Ok(json!(null)) },
+            ))
             .build()
             .expect_err("must reject");
         assert!(
@@ -454,12 +462,18 @@ async fn malformed_schema_is_rejected() {
     let mut source = add_tool();
     source.params = json!({"type": "object", "properties": {"x": {}}, "required": ["missing"]});
     let err = executor.register(source).await.expect_err("must fail");
-    assert!(matches!(err, RegisterError::InvalidSchema { .. }), "{err:?}");
+    assert!(
+        matches!(err, RegisterError::InvalidSchema { .. }),
+        "{err:?}"
+    );
 
     let mut source = add_tool();
     source.params = json!("not a schema");
     let err = executor.register(source).await.expect_err("must fail");
-    assert!(matches!(err, RegisterError::InvalidSchema { .. }), "{err:?}");
+    assert!(
+        matches!(err, RegisterError::InvalidSchema { .. }),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
@@ -612,6 +626,15 @@ async fn registered_tool_works_as_rig_tooldyn() {
     let again = executor.rig_tool("add").expect("registered");
     assert_eq!(again.name(), "add");
     assert!(executor.rig_tool("nope").is_none());
+}
+
+#[tokio::test]
+async fn rig_tool_coerces_to_plain_tooldyn_arc() {
+    // dspy-rs surfaces take `Arc<dyn ToolDyn>`; make sure our handle coerces.
+    let executor = Arc::new(QuickJsExecutor::new());
+    let tool = executor.register_rig(add_tool()).await.expect("register");
+    let plain: Arc<dyn dsrs_tools::ToolDyn> = tool;
+    assert_eq!(plain.name(), "add");
 }
 
 // -------------------------------------------------------------- sync escape

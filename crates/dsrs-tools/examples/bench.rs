@@ -156,9 +156,11 @@ async fn main() {
     let cap_executor = Arc::new(
         QuickJsExecutor::builder()
             .deadline(Duration::from_secs(1))
-            .capability(Capability::new("echo", "echo", |args| async move {
-                Ok(args)
-            }))
+            .capability(Capability::new(
+                "echo",
+                "echo",
+                |args| async move { Ok(args) },
+            ))
             .build()
             .expect("build"),
     );
