@@ -1,7 +1,6 @@
 use anyhow::Result;
 use rig::tool::ToolDyn;
 use serde_json::{Map, Value};
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::ControlFlow;
 use std::sync::{Arc, OnceLock};
@@ -10,10 +9,9 @@ use tracing::{debug, trace};
 use crate as dsrs;
 use crate::core::lm::ToolSet;
 use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature, StateUpdate};
-use crate::data::example::Example as RawExample;
 use crate::{
-    CallMetadata, Chat, ChatAdapter, GLOBAL_SETTINGS, LmError, LmUsage, Message, PredictError,
-    Predicted, Schema, SignatureSchema,
+    CallMetadata, Chat, ChatAdapter, FieldSchema, GLOBAL_SETTINGS, LmError, LmUsage, Message,
+    PredictError, Predicted, Schema, SignatureSchema,
 };
 
 /// A typed input/output pair for few-shot prompting.
@@ -635,93 +633,49 @@ impl<S: Signature> PredictBuilder<S> {
     }
 }
 
-fn json_map_from_example_keys(data: &HashMap<String, Value>, keys: &[String]) -> Map<String, Value> {
+/// Picks the named schema fields out of a flat demo row.
+fn pick_schema_fields(row: &Map<String, Value>, fields: &[FieldSchema]) -> Map<String, Value> {
     let mut map = Map::new();
-    for key in keys {
-        if let Some(value) = data.get(key) {
-            map.insert(key.clone(), value.clone());
+    for field in fields {
+        if let Some(value) = row.get(&field.rust_name) {
+            map.insert(field.rust_name.clone(), value.clone());
         }
     }
     map
 }
 
-fn input_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> {
-    if example.input_keys.is_empty() {
-        S::schema()
-            .input_fields()
-            .iter()
-            .map(|field| field.rust_name.clone())
-            .collect()
-    } else {
-        example.input_keys.clone()
-    }
-}
-
-fn output_keys_for_signature<S: Signature>(example: &RawExample) -> Vec<String> {
-    if example.output_keys.is_empty() {
-        S::schema()
-            .output_fields()
-            .iter()
-            .map(|field| field.rust_name.clone())
-            .collect()
-    } else {
-        example.output_keys.clone()
-    }
-}
-
-fn input_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Input>
-where
-    S::Input: Schema,
-{
-    let keys = input_keys_for_signature::<S>(example);
-    let map = json_map_from_example_keys(&example.data, &keys);
-    serde_json::from_value::<S::Input>(Value::Object(map)).map_err(|err| anyhow::anyhow!(err))
-}
-
-fn output_from_raw_example<S: Signature>(example: &RawExample) -> Result<S::Output>
-where
-    S::Output: Schema,
-{
-    let keys = output_keys_for_signature::<S>(example);
-    let map = json_map_from_example_keys(&example.data, &keys);
-    serde_json::from_value::<S::Output>(Value::Object(map)).map_err(|err| anyhow::anyhow!(err))
-}
-
-fn typed_example_from_raw<S: Signature>(example: RawExample) -> Result<Example<S>>
+/// Parses a typed example from a flat demo row (field name → value, input and
+/// output fields merged into one object). The signature schema decides which
+/// fields belong to the input and which to the output.
+fn typed_example_from_json<S: Signature>(row: &Map<String, Value>) -> Result<Example<S>>
 where
     S::Input: Schema,
     S::Output: Schema,
 {
-    let input = input_from_raw_example::<S>(&example)?;
-    let output = output_from_raw_example::<S>(&example)?;
+    let schema = S::schema();
+    let input = serde_json::from_value::<S::Input>(Value::Object(pick_schema_fields(
+        row,
+        schema.input_fields(),
+    )))
+    .map_err(|err| anyhow::anyhow!(err))?;
+    let output = serde_json::from_value::<S::Output>(Value::Object(pick_schema_fields(
+        row,
+        schema.output_fields(),
+    )))
+    .map_err(|err| anyhow::anyhow!(err))?;
     Ok(Example::new(input, output))
 }
 
-fn raw_example_from_typed<S: Signature>(example: &Example<S>) -> Result<RawExample>
+/// Serializes a typed example into a flat demo row (input and output fields
+/// merged into one object).
+fn json_from_typed_example<S: Signature>(example: &Example<S>) -> Result<Map<String, Value>>
 where
     S::Input: Schema,
     S::Output: Schema,
 {
-    let input_value = serde_json::to_value(&example.input)?;
-    let output_value = serde_json::to_value(&example.output)?;
-
-    let input_map = input_value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("expected object for signature input"))?
-        .clone();
-    let output_map = output_value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("expected object for signature output"))?
-        .clone();
-
-    let input_keys = input_map.keys().cloned().collect();
-    let output_keys = output_map.keys().cloned().collect();
-
-    let mut data = HashMap::new();
-    data.extend(input_map);
-    data.extend(output_map);
-
-    Ok(RawExample::new(data, input_keys, output_keys))
+    let mut row = json_map_from_input::<S>(&example.input)?;
+    row.extend(json_map_from_output::<S>(&example.output)?);
+    Ok(row)
 }
 
 fn json_map_from_input<S: Signature>(input: &S::Input) -> Result<Map<String, Value>>
@@ -783,11 +737,11 @@ where
             .unwrap_or_else(|| S::instruction().to_string())
     }
 
-    fn demos_as_examples(&self) -> Vec<RawExample> {
+    fn demos_as_json(&self) -> Vec<Map<String, Value>> {
         self.demos
             .iter()
             .map(|example| {
-                raw_example_from_typed::<S>(example)
+                json_from_typed_example::<S>(example)
                     .expect("typed Predict demo conversion should succeed")
             })
             .collect()
@@ -795,7 +749,7 @@ where
 
     fn dump_state(&self) -> PredictState {
         PredictState {
-            demos: self.demos_as_examples(),
+            demos: self.demos_as_json(),
             instruction_override: self.instruction_override.clone(),
         }
     }
@@ -807,8 +761,8 @@ where
             .demos
             .map(|demos| {
                 demos
-                    .into_iter()
-                    .map(typed_example_from_raw::<S>)
+                    .iter()
+                    .map(typed_example_from_json::<S>)
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?;
@@ -847,56 +801,51 @@ mod tests {
     }
 
     #[test]
-    fn typed_and_raw_example_round_trip_preserves_fields() {
+    fn typed_and_json_row_round_trip_preserves_fields() {
         let typed = typed_row("question", "response");
-        let raw = raw_example_from_typed::<PredictConversionSig>(&typed)
-            .expect("typed example should convert to raw example");
+        let row = json_from_typed_example::<PredictConversionSig>(&typed)
+            .expect("typed example should convert to a flat row");
 
-        assert_eq!(raw.input_keys, vec!["prompt".to_string()]);
-        assert_eq!(raw.output_keys, vec!["answer".to_string()]);
-        assert_eq!(raw.data.get("prompt"), Some(&json!("question")));
-        assert_eq!(raw.data.get("answer"), Some(&json!("response")));
+        assert_eq!(row.get("prompt"), Some(&json!("question")));
+        assert_eq!(row.get("answer"), Some(&json!("response")));
 
-        let round_trip = typed_example_from_raw::<PredictConversionSig>(raw)
-            .expect("raw example should convert back to typed example");
+        let round_trip = typed_example_from_json::<PredictConversionSig>(&row)
+            .expect("flat row should convert back to typed example");
         assert_eq!(round_trip.input.prompt, "question");
         assert_eq!(round_trip.output.answer, "response");
     }
 
     #[test]
-    fn typed_example_from_raw_uses_schema_keys_when_key_lists_missing() {
-        let raw = RawExample::new(
-            HashMap::from([
-                ("prompt".to_string(), json!("schema-input")),
-                ("answer".to_string(), json!("schema-output")),
-            ]),
-            Vec::new(),
-            Vec::new(),
-        );
+    fn typed_example_from_json_splits_fields_by_schema() {
+        let row = Map::from_iter([
+            ("prompt".to_string(), json!("schema-input")),
+            ("answer".to_string(), json!("schema-output")),
+            ("extra".to_string(), json!("ignored")),
+        ]);
 
-        let typed = typed_example_from_raw::<PredictConversionSig>(raw)
-            .expect("schema key fallback should parse typed example");
+        let typed = typed_example_from_json::<PredictConversionSig>(&row)
+            .expect("schema keys should split the row into typed fields");
         assert_eq!(typed.input.prompt, "schema-input");
         assert_eq!(typed.output.answer, "schema-output");
     }
 
     #[test]
-    fn dyn_predictor_apply_update_round_trips_raw_demo_rows() {
+    fn dyn_predictor_apply_update_round_trips_json_demo_rows() {
         let typed = typed_row("demo-input", "demo-output");
-        let raw = raw_example_from_typed::<PredictConversionSig>(&typed)
-            .expect("typed demo should convert to raw demo");
+        let row = json_from_typed_example::<PredictConversionSig>(&typed)
+            .expect("typed demo should convert to a flat row");
         let mut predictor = Predict::<PredictConversionSig>::new();
 
         let update = StateUpdate {
             instruction: None,
-            demos: Some(vec![raw]),
+            demos: Some(vec![row]),
         };
         DynPredictor::apply_update(&mut predictor, update)
-            .expect("predictor should accept raw demos");
+            .expect("predictor should accept JSON demo rows");
 
-        let demos = DynPredictor::demos_as_examples(&predictor);
+        let demos = DynPredictor::demos_as_json(&predictor);
         assert_eq!(demos.len(), 1);
-        assert_eq!(demos[0].data.get("prompt"), Some(&json!("demo-input")));
-        assert_eq!(demos[0].data.get("answer"), Some(&json!("demo-output")));
+        assert_eq!(demos[0].get("prompt"), Some(&json!("demo-input")));
+        assert_eq!(demos[0].get("answer"), Some(&json!("demo-output")));
     }
 }

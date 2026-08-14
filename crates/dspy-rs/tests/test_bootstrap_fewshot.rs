@@ -126,7 +126,7 @@ async fn bootstrap_harvests_demos_and_adopts_when_better() {
     let demo_prompts: Vec<String> = predictor
         .demos
         .iter()
-        .map(|demo| demo.data["prompt"].as_str().unwrap().to_string())
+        .map(|demo| demo["prompt"].as_str().unwrap().to_string())
         .collect();
     assert!(demo_prompts.contains(&"0".to_string()));
     assert!(demo_prompts.contains(&"2".to_string()));

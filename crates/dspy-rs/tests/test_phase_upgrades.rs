@@ -167,8 +167,8 @@ fn module_state_round_trips_through_json() {
         Some("tuned instruction")
     );
     assert_eq!(predictor_state.demos.len(), 1);
-    assert_eq!(predictor_state.demos[0].data["question"], "1+1?");
-    assert_eq!(predictor_state.demos[0].data["answer"], "2");
+    assert_eq!(predictor_state.demos[0]["question"], "1+1?");
+    assert_eq!(predictor_state.demos[0]["answer"], "2");
 }
 
 #[test]
@@ -509,8 +509,8 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
         1,
         "the successful trace should be installed as a demo"
     );
-    assert_eq!(predictor_state.demos[0].data["question"], "What is 2+2?");
-    assert_eq!(predictor_state.demos[0].data["answer"], "4");
+    assert_eq!(predictor_state.demos[0]["question"], "What is 2+2?");
+    assert_eq!(predictor_state.demos[0]["answer"], "4");
     assert!(
         predictor_state.instruction_override.is_some(),
         "instruction search should install a candidate"

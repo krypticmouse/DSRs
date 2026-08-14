@@ -6,7 +6,7 @@ use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 use facet_reflect::Peek;
 
 use crate::SignatureSchema;
-use crate::data::example::Example as RawExample;
+use crate::trace::JsonMap;
 
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
@@ -24,8 +24,9 @@ pub(crate) trait DynPredictor: Send + Sync {
     /// Returns the current instruction (override or default from the signature).
     fn instruction(&self) -> String;
 
-    /// Returns current demos as type-erased [`Example`]s.
-    fn demos_as_examples(&self) -> Vec<RawExample>;
+    /// Returns current demos as flat JSON rows (field name → value; input and
+    /// output fields merged into one object).
+    fn demos_as_json(&self) -> Vec<JsonMap>;
 
     /// Snapshots the predictor's mutable state (demos + instruction override).
     fn dump_state(&self) -> PredictState;
@@ -72,8 +73,9 @@ pub(crate) trait DynPredictor: Send + Sync {
 pub(crate) struct StateUpdate {
     /// `Some(override)` replaces the instruction override (`Some(None)` clears it).
     pub instruction: Option<Option<String>>,
-    /// `Some(demos)` replaces the demo set.
-    pub demos: Option<Vec<RawExample>>,
+    /// `Some(demos)` replaces the demo set (flat JSON rows, see
+    /// [`PredictState::demos`]).
+    pub demos: Option<Vec<JsonMap>>,
 }
 
 impl From<PredictState> for StateUpdate {
@@ -87,14 +89,17 @@ impl From<PredictState> for StateUpdate {
 
 /// Serializable snapshot of a [`crate::Predict`]'s mutable state.
 ///
-/// Contains demos (as type-erased [`Example`]s) and the instruction override.
+/// Contains demos (as flat JSON rows) and the instruction override.
 /// Produced by optimizers when they tune a predictor; persist a whole module's
 /// worth of these with [`ModuleState`](crate::ModuleState).
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct PredictState {
-    /// The demos as type-erased examples.
+    /// Demo rows as flat JSON objects: field name → value, with input and
+    /// output fields merged into one object. This is the serde boundary for
+    /// demos-as-data — rows are split back into the predictor's typed
+    /// `Example<S>` via the signature schema on load.
     #[serde(default)]
-    pub demos: Vec<RawExample>,
+    pub demos: Vec<JsonMap>,
     /// The instruction override, if any.
     #[serde(default)]
     pub instruction_override: Option<String>,
