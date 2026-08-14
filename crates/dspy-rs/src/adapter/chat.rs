@@ -493,6 +493,28 @@ impl ChatAdapter {
         result
     }
 
+    /// Formats a value-level output map as an assistant message — the
+    /// dynamic-lane twin of [`format_output`](ChatAdapter::format_output),
+    /// used to render demo assistant turns from [`SignatureDef`]s.
+    ///
+    /// Fields absent from `output` are skipped, mirroring the static lane's
+    /// relaxed path navigation.
+    pub fn format_output_def(&self, def: &SignatureDef, output: &JsonMap) -> String {
+        let mut sections = Vec::new();
+        for field in def.outputs.iter() {
+            if let Some(value) = output.get(&*field.name) {
+                sections.push(format!(
+                    "[[ ## {} ## ]]\n{}",
+                    field.lm_name,
+                    format_json_value_for_prompt(value)
+                ));
+            }
+        }
+        let mut result = sections.join("\n\n");
+        result.push_str("\n\n[[ ## completed ## ]]\n");
+        result
+    }
+
     /// Formats a demo example as a (user_message, assistant_message) pair.
     ///
     /// Convenience method that calls [`format_user_message_typed`](ChatAdapter::format_user_message_typed)

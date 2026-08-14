@@ -80,6 +80,17 @@ impl ToolSet {
         }
     }
 
+    /// Builds a `ToolSet` from pre-built definitions with **no executors** —
+    /// for caller-managed loops where the caller executes tools itself (the IR
+    /// interpreter's `AgentLoop` builds definitions from declared tool
+    /// signatures and overlay-resolved descriptions).
+    pub fn from_definitions(definitions: Vec<rig::completion::ToolDefinition>) -> Self {
+        Self {
+            definitions,
+            by_name: HashMap::new(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.definitions.is_empty()
     }
