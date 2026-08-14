@@ -859,6 +859,7 @@ impl<'a> Parser<'a> {
         let mut trainset = String::new();
         let mut budget = String::new();
         let mut parent = None;
+        let mut overlay = None;
         let mut date = String::new();
         while self.cur.tok != Tok::RBrace {
             let (key, key_span) = self.expect_ident("as a lineage key")?;
@@ -868,13 +869,14 @@ impl<'a> Parser<'a> {
                 "trainset" => trainset = value,
                 "budget" => budget = value,
                 "parent" => parent = Some(value.into_boxed_str()),
+                "overlay" => overlay = Some(value.into_boxed_str()),
                 "date" => date = value,
                 other => {
                     return Err(ParseError::at(
                         key_span,
                         format!(
                             "unknown lineage key `{other}`: expected `optimizer`, `trainset`, \
-                             `budget`, `parent`, or `date`"
+                             `budget`, `parent`, `overlay`, or `date`"
                         ),
                     ));
                 }
@@ -886,6 +888,7 @@ impl<'a> Parser<'a> {
             trainset: trainset.into(),
             budget: budget.into(),
             parent,
+            overlay,
             date: date.into(),
         });
         Ok(())

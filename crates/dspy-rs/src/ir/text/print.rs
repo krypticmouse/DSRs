@@ -308,6 +308,9 @@ impl<'p> Printer<'p> {
             if let Some(parent) = &lineage.parent {
                 let _ = writeln!(self.out, "  parent {}", json_str(parent));
             }
+            if let Some(overlay) = &lineage.overlay {
+                let _ = writeln!(self.out, "  overlay {}", json_str(overlay));
+            }
             let _ = writeln!(self.out, "  date {}", json_str(&lineage.date));
             self.out.push_str("}\n");
         }

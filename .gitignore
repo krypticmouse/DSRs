@@ -41,3 +41,4 @@ thoughts/
 
 # Reference copies of upstream source
 reference/
+.claude/worktrees/
