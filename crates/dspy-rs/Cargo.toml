@@ -44,12 +44,18 @@ enum_dispatch = "0.3.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["builtins", "serde", "debug"] }
+# IR graph core (RFC 0002 §2): entity arenas + the sandboxed hole executor.
+cranelift-entity = { version = "0.134", features = ["enable-serde"], optional = true }
+dsrs-tools = { version = "0.1.0", path = "../dsrs-tools", optional = true }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
 
 [features]
-default = []
+# RFC 0002 IR-3: the graph core + interpreter ship behind the `ir` feature
+# (default-on) until the text format stage stabilizes the surface.
+default = ["ir"]
+ir = ["dep:cranelift-entity", "dep:dsrs-tools"]
 
 [dev-dependencies]
 temp-env = { version = "0.3.6", features = ["async_closure"] }
