@@ -509,16 +509,19 @@ impl Program {
         Ok(())
     }
 
-    /// The canonical content hash: stable hash over the canonical JSON
-    /// projection minus `program_hash` and `lineage`.
+    /// The canonical content hash (RFC 0002 §2.1): stable hash over the
+    /// canonical `.dsrs` printed text minus the `lineage` block. The hash is
+    /// never part of the text, so serde-JSON and text loads of the same
+    /// program agree on it.
     ///
-    /// Until the `.dsrs` text format lands (IR-5), the preimage is the
-    /// canonical JSON serialization rather than the printed text.
+    /// Only call on structurally valid programs (builder/loader output —
+    /// both validate before sealing): printing walks the arenas.
     pub fn compute_hash(&self) -> u64 {
-        let mut data = ProgramData::from_program(self);
-        data.meta.program_hash = 0;
-        data.meta.lineage = None;
-        crate::optimizer::engine::canonical_hash(&data)
+        use std::hash::Hasher as _;
+        let text = crate::ir::text::print::canonical_text(self, false);
+        let mut hasher = crate::utils::hash::StableHasher::new();
+        hasher.write(text.as_bytes());
+        hasher.finish()
     }
 
     /// Stamps `meta.program_hash` from the current content.
@@ -584,9 +587,12 @@ impl<'de> Deserialize<'de> for Program {
 impl TryFrom<ProgramData> for Program {
     type Error = ValidateError;
 
-    /// The load path: rebuild the interner and param index, recompute the
-    /// content hash, and validate. Parsing constructs data; nothing here
-    /// executes code.
+    /// The load path: rebuild the interner and param index, validate, then
+    /// recompute the content hash. Validation runs *before* sealing — the
+    /// hash preimage is the canonical printed text, and printing is only
+    /// defined over structurally valid arenas (hostile ids must fail the
+    /// load, not a print). Parsing constructs data; nothing here executes
+    /// code.
     fn try_from(data: ProgramData) -> Result<Self, ValidateError> {
         let syms = Interner::from_slice(data.syms)?;
         let mut program = Program {
@@ -604,8 +610,8 @@ impl TryFrom<ProgramData> for Program {
             param_index: HashMap::new(),
         };
         program.rebuild_param_index()?;
-        program.seal();
         program.validate()?;
+        program.seal();
         Ok(program)
     }
 }

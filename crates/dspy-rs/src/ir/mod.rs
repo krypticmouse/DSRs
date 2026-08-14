@@ -14,8 +14,12 @@
 //!   evaluation of a loaded program with overlay read-through at render time,
 //!   RFC 0001 trace spans (component = leaf name), budget metering, and
 //!   sandboxed [`Hole`](Node::Hole) execution via `dsrs-tools`.
-//! - The `.dsrs` text format is stage IR-5 (not yet built); until then
-//!   programs serialize through a canonical JSON projection.
+//! - **IR-5, the `.dsrs` text format** (`ir` feature) — the wire form of a
+//!   program: [`Program::from_dsrs`]/[`Program::to_dsrs`] parse and
+//!   canonically print RFC 0002 §4 text, and the canonical text (minus
+//!   lineage) is the [`Program::compute_hash`] preimage. A canonical JSON
+//!   projection ([`serde::Serialize`]) remains for embedding programs in
+//!   JSON documents; both forms agree on the hash.
 
 pub mod sig;
 
@@ -32,6 +36,8 @@ pub mod graph;
 pub mod interp;
 #[cfg(feature = "ir")]
 pub mod params;
+#[cfg(feature = "ir")]
+pub mod text;
 #[cfg(feature = "ir")]
 pub mod validate;
 
@@ -55,5 +61,7 @@ pub use params::{
     Overlay, OverlayError, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, Slot, ToolDesc,
     code_hash,
 };
+#[cfg(feature = "ir")]
+pub use text::{DsrsFileError, ParseError};
 #[cfg(feature = "ir")]
 pub use validate::ValidateError;
