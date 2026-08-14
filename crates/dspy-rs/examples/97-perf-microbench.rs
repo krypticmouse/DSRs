@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use dspy_rs::{
     Chat, ChatAdapter, Example, LM, LMClient, Message, Predict, Signature, SignatureSchema,
-    TestCompletionModel,
+    TestCompletionModel, configure, fx,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::Text;
@@ -315,4 +315,41 @@ async fn main() {
         std::hint::black_box(tooled.forward(bench_input()).await.unwrap());
     }
     report("forward end-to-end (1 tool, unused)", iters, s);
+
+    // --- 10. fx::predict vs struct (same signature, global LM) ---------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await, ChatAdapter);
+    let s = snap();
+    for _ in 0..iters {
+        std::hint::black_box(
+            fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+        );
+    }
+    report("fx::predict (0 demos, default params)", iters, s);
+
+    // --- 11. fx::predict under a with_params scope ----------------------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await, ChatAdapter);
+    let mut params = fx::Params::new();
+    params.set_instruction("bench_fx", "Answer concisely with high confidence.");
+    let s = snap();
+    fx::with_params(params, async {
+        for _ in 0..iters {
+            std::hint::black_box(
+                fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+            );
+        }
+    })
+    .await;
+    report("fx::predict (with_params override)", iters, s);
+
+    // --- 12. Struct Predict through the same global-LM path -------------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await, ChatAdapter);
+    let global_predict = Predict::<BenchQA>::new();
+    let s = snap();
+    for _ in 0..iters {
+        std::hint::black_box(global_predict.forward(bench_input()).await.unwrap());
+    }
+    report("struct Predict (0 demos, global LM)", iters, s);
 }

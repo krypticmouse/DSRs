@@ -57,7 +57,7 @@ impl Module for QARater {
         input: QASignatureInput,
     ) -> Result<Predicted<Prediction>, PredictError> {
         let answer_predicted = self.answerer.call(input.clone()).await?;
-        let answer_usage = answer_predicted.metadata().lm_usage.clone();
+        let answer_usage = answer_predicted.metadata().lm_usage;
         let answer_output = answer_predicted.into_inner();
 
         let rating_predicted = self
@@ -67,7 +67,7 @@ impl Module for QARater {
                 answer: answer_output.answer.clone(),
             })
             .await?;
-        let rating_usage = rating_predicted.metadata().lm_usage.clone();
+        let rating_usage = rating_predicted.metadata().lm_usage;
         let rating_output = rating_predicted.into_inner();
 
         let prediction = Prediction::new(

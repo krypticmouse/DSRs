@@ -56,6 +56,13 @@ async fn pipeline(question: String) -> Result<Predicted<RefineOutput>, PredictEr
     .await
 }
 
+// Or skip signatures entirely: the function IS the signature. Parameters are
+// inputs, the return type is an output field named after the function, the doc
+// comment is the instruction, and the fn name is the params/trace slot.
+#[dspy_rs::predict]
+/// Give a one-word answer.
+fn quick_answer(question: String) -> String;
+
 fn canned(fields: &[(&str, &str)]) -> AssistantContent {
     let mut text = String::new();
     for (name, value) in fields {
@@ -73,6 +80,7 @@ async fn main() -> Result<()> {
         canned(&[("answer", "Paris is the capital of France.")]),
         canned(&[("draft", "Paris — the capital since 987 AD.")]),
         canned(&[("answer", "The capital of France is Paris (since 987 AD).")]),
+        canned(&[("quick_answer", "Paris")]),
     ]);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("offline"))],
@@ -107,7 +115,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    // 3. Params share the persistence format with struct-based modules.
+    // 3. The #[predict] macro form: a bodyless fn, called like any function.
+    let quick = quick_answer("Capital of France?".to_string()).await?;
+    println!("\n#[predict] fn -> {}", quick.quick_answer);
+
+    // 4. Params share the persistence format with struct-based modules.
     println!(
         "\ncandidate as ModuleState JSON:\n{}",
         candidate.to_module_state().to_json()?

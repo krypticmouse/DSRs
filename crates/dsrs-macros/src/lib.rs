@@ -89,6 +89,179 @@ fn expand_schema_attr(item: TokenStream) -> TokenStream {
     .into()
 }
 
+/// Declares an LM call as a bodyless function — the function *is* the signature.
+///
+/// ```ignore
+/// #[predict]
+/// /// Answer the question accurately.
+/// fn answer(question: String) -> String;
+/// ```
+///
+/// Expands to:
+/// - a module `answer` containing the generated signature (`answer::Sig`,
+///   `answer::SigInput`, `answer::SigOutput`) — parameters become `#[input]`
+///   fields, the return type becomes a single `#[output]` field named after the
+///   function, and the doc comment becomes the instruction;
+/// - an `async fn answer(question: String) -> Result<Predicted<answer::SigOutput>, PredictError>`
+///   that calls [`fx::predict`] with the function's name as its params slot.
+///
+/// The name links everything: `fx::Params::set_instruction("answer", ...)`
+/// overrides its instruction, and trace nodes record `param_name = "answer"`.
+#[proc_macro_attribute]
+pub fn predict(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_fn_predictor(attr, item, PredictorKind::Predict)
+}
+
+/// [`macro@predict`] with chain-of-thought: the LM produces a `reasoning` field
+/// before the output, and the generated function returns
+/// `Predicted<WithReasoning<...>>` (auto-derefs to the output).
+#[proc_macro_attribute]
+pub fn cot(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_fn_predictor(attr, item, PredictorKind::ChainOfThought)
+}
+
+#[derive(Clone, Copy)]
+enum PredictorKind {
+    Predict,
+    ChainOfThought,
+}
+
+fn expand_fn_predictor(attr: TokenStream, item: TokenStream, kind: PredictorKind) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[predict]/#[cot] take no arguments (yet)",
+        )
+        .to_compile_error()
+        .into();
+    }
+    // `ForeignItemFn` is the syn node for a bodyless fn with attrs + visibility.
+    let func = parse_macro_input!(item as syn::ForeignItemFn);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match expand_fn_predictor_inner(&func, &runtime, kind) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_fn_predictor_inner(
+    func: &syn::ForeignItemFn,
+    runtime: &syn::Path,
+    kind: PredictorKind,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let sig = &func.sig;
+    if let Some(asyncness) = &sig.asyncness {
+        return Err(syn::Error::new_spanned(
+            asyncness,
+            "remove `async` — the generated function is async automatically",
+        ));
+    }
+    if !sig.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &sig.generics,
+            "#[predict]/#[cot] functions cannot be generic",
+        ));
+    }
+
+    let fn_name = &sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let vis = &func.vis;
+
+    // Doc comment -> instruction, forwarded onto the generated signature struct.
+    let doc_attrs: Vec<&Attribute> = func
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .collect();
+
+    let mut arg_names = Vec::new();
+    let mut arg_types = Vec::new();
+    for input in &sig.inputs {
+        match input {
+            syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                syn::Pat::Ident(ident) => {
+                    arg_names.push(ident.ident.clone());
+                    arg_types.push(pat_type.ty.as_ref().clone());
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "#[predict]/#[cot] parameters must be plain identifiers",
+                    ));
+                }
+            },
+            syn::FnArg::Receiver(receiver) => {
+                return Err(syn::Error::new_spanned(
+                    receiver,
+                    "#[predict]/#[cot] functions cannot take self",
+                ));
+            }
+        }
+    }
+    if arg_names.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &sig.inputs,
+            "#[predict]/#[cot] functions need at least one input parameter",
+        ));
+    }
+
+    let output_type = match &sig.output {
+        syn::ReturnType::Type(_, ty) => ty.as_ref().clone(),
+        syn::ReturnType::Default => {
+            return Err(syn::Error::new_spanned(
+                sig,
+                "#[predict]/#[cot] functions need an explicit return type (the output field)",
+            ));
+        }
+    };
+
+    // The signature type the fx call is parameterized by, and the value the
+    // generated function resolves to.
+    let (call_sig, predicted_output) = match kind {
+        PredictorKind::Predict => (
+            quote! { #fn_name::Sig },
+            quote! { #fn_name::SigOutput },
+        ),
+        PredictorKind::ChainOfThought => (
+            quote! { #runtime::Augmented<#fn_name::Sig, #runtime::Reasoning> },
+            quote! { #runtime::WithReasoning<#fn_name::SigOutput> },
+        ),
+    };
+
+    Ok(quote! {
+        #vis mod #fn_name {
+            #![allow(non_camel_case_types, unused_imports)]
+            use super::*;
+
+            #(#doc_attrs)*
+            #[derive(#runtime::Signature, Clone, Debug)]
+            pub struct Sig {
+                #(
+                    #[input]
+                    pub #arg_names: #arg_types,
+                )*
+                #[output]
+                pub #fn_name: #output_type,
+            }
+        }
+
+        #(#doc_attrs)*
+        #vis async fn #fn_name(
+            #(#arg_names: #arg_types),*
+        ) -> ::core::result::Result<#runtime::Predicted<#predicted_output>, #runtime::PredictError> {
+            #runtime::fx::predict::<#call_sig>(
+                #fn_name_str,
+                #fn_name::SigInput { #(#arg_names),* },
+            )
+            .await
+        }
+    })
+}
+
 #[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
 pub fn derive_augmentation(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);

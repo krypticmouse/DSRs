@@ -65,7 +65,7 @@ fn test_lm_usage_add() {
         total_tokens: 30,
     };
 
-    let usage3 = usage1.clone() + usage2.clone();
+    let usage3 = usage1 + usage2;
 
     assert_eq!(
         usage3.prompt_tokens,

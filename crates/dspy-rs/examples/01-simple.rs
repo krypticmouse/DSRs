@@ -83,7 +83,7 @@ impl Module for QARater {
                 question: question.clone(),
             })
             .await?;
-        let answer_usage = answer_predicted.metadata().lm_usage.clone();
+        let answer_usage = answer_predicted.metadata().lm_usage;
         let answerer_prediction = answer_predicted.into_inner();
 
         // Step 2: Rate the generated answer.
@@ -94,7 +94,7 @@ impl Module for QARater {
                 answer: answerer_prediction.answer.clone(),
             })
             .await?;
-        let rate_usage = rate_predicted.metadata().lm_usage.clone();
+        let rate_usage = rate_predicted.metadata().lm_usage;
         let rate_result = rate_predicted.into_inner();
 
         // Step 3: Compose the final untyped prediction for module consumers.
