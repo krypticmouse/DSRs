@@ -100,6 +100,7 @@ pub mod core;
 pub mod data;
 pub mod evaluate;
 pub mod fx;
+pub mod ir;
 pub mod modules;
 pub mod optimizer;
 pub mod predictors;
@@ -127,12 +128,12 @@ pub use trace::{
 pub use utils::*;
 
 pub mod typesys;
+pub use dsrs_macros::*;
+pub use facet::{Facet, Shape};
 pub use typesys::{
     Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
     Schema, evaluate_constraints,
 };
-pub use dsrs_macros::*;
-pub use facet::{Facet, Shape};
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]

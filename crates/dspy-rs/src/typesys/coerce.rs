@@ -7,7 +7,7 @@
 use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 
-use super::schema::{FieldType, OutputSchema};
+use super::schema::{FieldType, TypeTable};
 
 /// A non-fatal observation made while coercing a value (e.g. a code fence was stripped).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +42,7 @@ pub struct Coerced {
 }
 
 /// Coerces `raw` into a `serde_json::Value` matching `field_type`.
-pub fn coerce(raw: &str, field_type: &FieldType, schema: &OutputSchema) -> Result<Coerced> {
+pub fn coerce(raw: &str, field_type: &FieldType, schema: &TypeTable) -> Result<Coerced> {
     let mut flags = Vec::new();
     let value = coerce_inner(raw, field_type, schema, &mut flags)?;
     Ok(Coerced { value, flags })
@@ -51,11 +51,13 @@ pub fn coerce(raw: &str, field_type: &FieldType, schema: &OutputSchema) -> Resul
 fn coerce_inner(
     raw: &str,
     field_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     match field_type {
-        FieldType::String => Ok(Value::String(raw.trim_end_matches(['\n', '\r']).to_string())),
+        FieldType::String => Ok(Value::String(
+            raw.trim_end_matches(['\n', '\r']).to_string(),
+        )),
         FieldType::Int => coerce_int(raw, flags),
         FieldType::Float => coerce_float(raw, flags),
         FieldType::Bool => coerce_bool(raw, flags),
@@ -169,7 +171,7 @@ fn coerce_bool(raw: &str, flags: &mut Vec<Flag>) -> Result<Value> {
 fn coerce_list(
     raw: &str,
     inner: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
@@ -204,7 +206,7 @@ fn coerce_list(
 fn coerce_map(
     raw: &str,
     value_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
@@ -223,7 +225,7 @@ fn coerce_map(
 fn coerce_class(
     raw: &str,
     class_name: &str,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     let class = schema
@@ -262,7 +264,7 @@ fn coerce_class(
     Ok(Value::Object(out))
 }
 
-fn coerce_enum(raw: &str, enum_name: &str, schema: &OutputSchema) -> Result<Value> {
+fn coerce_enum(raw: &str, enum_name: &str, schema: &TypeTable) -> Result<Value> {
     let enm = schema
         .enums
         .get(enum_name)
@@ -279,10 +281,7 @@ fn coerce_enum(raw: &str, enum_name: &str, schema: &OutputSchema) -> Result<Valu
             return Ok(Value::String(value.name.clone()));
         }
     }
-    bail!(
-        "`{needle}` is not a valid `{}` variant",
-        enm.rendered_name
-    )
+    bail!("`{needle}` is not a valid `{}` variant", enm.rendered_name)
 }
 
 /// Coerces an already-parsed JSON value into the target type. Used for list items and
@@ -290,7 +289,7 @@ fn coerce_enum(raw: &str, enum_name: &str, schema: &OutputSchema) -> Result<Valu
 fn coerce_json_value(
     value: Value,
     field_type: &FieldType,
-    schema: &OutputSchema,
+    schema: &TypeTable,
     flags: &mut Vec<Flag>,
 ) -> Result<Value> {
     match field_type {
@@ -386,7 +385,11 @@ fn json_scalar_to_string(value: &Value) -> String {
 
 fn is_nullish(raw: &str) -> bool {
     let trimmed = strip_quotes(raw.trim()).to_ascii_lowercase();
-    trimmed.is_empty() || trimmed == "null" || trimmed == "none" || trimmed == "~" || trimmed == "nil"
+    trimmed.is_empty()
+        || trimmed == "null"
+        || trimmed == "none"
+        || trimmed == "~"
+        || trimmed == "nil"
 }
 
 fn strip_quotes(text: &str) -> String {
@@ -459,7 +462,11 @@ fn extract_json(text: &str) -> Option<Value> {
 /// Splits free-form text into list items: bulleted (`-`, `*`, `+`), numbered (`1.`), or
 /// one-per-line. Falls back to comma separation for single-line input.
 fn split_list_items(text: &str) -> Vec<String> {
-    let lines: Vec<&str> = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
 
     let looks_like_list = lines.iter().any(|line| {
         line.starts_with("- ")
