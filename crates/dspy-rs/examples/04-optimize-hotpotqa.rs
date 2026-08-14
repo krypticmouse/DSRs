@@ -10,7 +10,7 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    COPRO, DataLoader, Example, LM, MetricOutcome, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
     configure, evaluate_trainset, init_tracing,
 };
@@ -60,13 +60,10 @@ impl TypedMetric<QA, QAModule> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let examples = DataLoader::load_hf::<QA>(
         "hotpotqa/hotpot_qa",

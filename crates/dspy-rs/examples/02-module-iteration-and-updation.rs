@@ -10,7 +10,7 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    COPRO, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
@@ -78,13 +78,10 @@ fn trainset() -> Vec<Example<QA>> {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let metric = ExactMatch;
     let mut module = QAModule::builder().build();

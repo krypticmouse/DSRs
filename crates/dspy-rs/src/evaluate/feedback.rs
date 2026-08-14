@@ -1,4 +1,4 @@
-use crate::{BamlValue, RawExample};
+use crate::{RawExample};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -82,7 +82,7 @@ impl Default for FeedbackMetric {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionTrace {
     pub inputs: RawExample,
-    pub outputs: Option<BamlValue>,
+    pub outputs: Option<serde_json::Value>,
     pub feedback: Option<FeedbackMetric>,
     pub intermediate_steps: Vec<(String, serde_json::Value)>,
     pub errors: Vec<String>,
@@ -91,7 +91,7 @@ pub struct ExecutionTrace {
 
 impl ExecutionTrace {
     /// Creates a trace with just inputs and outputs, no feedback or errors.
-    pub fn simple(inputs: RawExample, outputs: BamlValue) -> Self {
+    pub fn simple(inputs: RawExample, outputs: serde_json::Value) -> Self {
         Self {
             inputs,
             outputs: Some(outputs),
@@ -180,7 +180,7 @@ impl ExecutionTraceBuilder {
         }
     }
 
-    pub fn outputs(mut self, outputs: BamlValue) -> Self {
+    pub fn outputs(mut self, outputs: serde_json::Value) -> Self {
         self.trace.outputs = Some(outputs);
         self
     }
@@ -242,7 +242,7 @@ mod tests {
         );
 
         let trace = ExecutionTrace::builder(inputs)
-            .outputs(BamlValue::String("4".to_string()))
+            .outputs(serde_json::Value::String("4".to_string()))
             .feedback(FeedbackMetric::new(1.0, "Correct"))
             .add_step("model_call", json!({"latency_ms": 42}))
             .build();

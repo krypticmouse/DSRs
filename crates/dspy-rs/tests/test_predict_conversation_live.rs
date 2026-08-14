@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, LM, Message, Predict, Signature, configure};
+use dspy_rs::{LM, Message, Predict, Signature, configure};
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
@@ -26,7 +26,7 @@ async fn live_forward_continue_two_turn_roundtrip() {
         .build()
         .await
         .expect("failed to build LM for live smoke test");
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     let predict = Predict::<LiveConversation>::new();
 

@@ -17,7 +17,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::data::RawExample;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, Example, LM, LmError, Module, Predict, PredictError, Predicted,
+    CallMetadata, Example, LM, LmError, Module, Predict, PredictError, Predicted,
     Prediction, configure, init_tracing,
 };
 
@@ -123,13 +123,10 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     // =========================================================================
     // Example 1: Direct typed API usage (recommended for simple cases)

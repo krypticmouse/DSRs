@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use tracing::{debug, trace};
 
-use super::Adapter;
 use crate::CallMetadata;
 use crate::typesys::coerce::coerce;
 use crate::typesys::constraint::evaluate_constraint_expression;
@@ -856,4 +855,3 @@ fn render_input_field_jinja(
         })
 }
 
-impl Adapter for ChatAdapter {}

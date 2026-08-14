@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Signature, TestCompletionModel, configure};
+use dspy_rs::{LM, LMClient, Predict, Signature, TestCompletionModel, configure};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use std::sync::LazyLock;
@@ -54,7 +54,7 @@ async fn predict_uses_per_instance_lm_over_global() {
     // Configure the global LM — its response says "global"
     let global_response = response_with_fields(&[("answer", "from-global")]);
     let (global_lm, _global_client) = make_test_lm(vec![global_response]).await;
-    configure(global_lm, ChatAdapter {});
+    configure(global_lm);
 
     // Build a per-instance LM — its response says "override"
     let override_response = response_with_fields(&[("answer", "from-override")]);
@@ -83,7 +83,7 @@ async fn predict_without_override_uses_global() {
 
     let global_response = response_with_fields(&[("answer", "from-global")]);
     let (global_lm, _) = make_test_lm(vec![global_response]).await;
-    configure(global_lm, ChatAdapter {});
+    configure(global_lm);
 
     // No .lm() call — should use global
     let predict = Predict::<QA>::new();

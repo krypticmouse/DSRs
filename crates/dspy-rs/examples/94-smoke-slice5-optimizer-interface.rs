@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use dspy_rs::{
-    COPRO, ChainOfThought, ChatAdapter, Example, LM, MetricOutcome, Optimizer, Predicted,
+    COPRO, ChainOfThought, Example, LM, MetricOutcome, Optimizer, Predicted,
     Signature, TypedMetric, WithReasoning, configure,
 };
 
@@ -32,13 +32,10 @@ impl TypedMetric<SmokeSig, ChainOfThought<SmokeSig>> for SmokeMetric {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Smoke Label: Slice 5 Optimizer Interface
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-5.2".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let mut module = ChainOfThought::<SmokeSig>::new();
     let trainset = vec![Example::new(

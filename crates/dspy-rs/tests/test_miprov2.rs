@@ -1,4 +1,4 @@
-use dspy_rs::{BamlValue, MIPROv2, PromptCandidate, PromptingTips, Signature, Trace};
+use dspy_rs::{MIPROv2, PromptCandidate, PromptingTips, Signature, Trace};
 use rstest::*;
 
 #[derive(Signature, Clone, Debug)]
@@ -20,7 +20,7 @@ fn input(question: &str) -> TestSignatureInput {
 fn test_trace_formatting() {
     let trace = Trace::<TestSignature>::new(
         input("What is 2+2?"),
-        BamlValue::String("4".to_string()),
+        serde_json::Value::String("4".to_string()),
         Some(1.0),
     );
     let formatted = trace.format_for_prompt();
@@ -35,7 +35,7 @@ fn test_trace_formatting() {
 fn test_trace_formatting_without_score() {
     let trace = Trace::<TestSignature>::new(
         input("input"),
-        BamlValue::String("result".to_string()),
+        serde_json::Value::String("result".to_string()),
         None,
     );
     let formatted = trace.format_for_prompt();
@@ -90,9 +90,9 @@ fn test_select_best_traces_descending_order() {
     let optimizer = MIPROv2::builder().build();
 
     let traces = vec![
-        Trace::<TestSignature>::new(input("a"), BamlValue::String("a".to_string()), Some(0.1)),
-        Trace::<TestSignature>::new(input("b"), BamlValue::String("b".to_string()), Some(0.5)),
-        Trace::<TestSignature>::new(input("c"), BamlValue::String("c".to_string()), Some(0.3)),
+        Trace::<TestSignature>::new(input("a"), serde_json::Value::String("a".to_string()), Some(0.1)),
+        Trace::<TestSignature>::new(input("b"), serde_json::Value::String("b".to_string()), Some(0.5)),
+        Trace::<TestSignature>::new(input("c"), serde_json::Value::String("c".to_string()), Some(0.3)),
     ];
 
     let best = optimizer.select_best_traces(&traces, 2);
@@ -106,8 +106,8 @@ fn test_select_best_traces_ignores_none_scores() {
     let optimizer = MIPROv2::builder().build();
 
     let traces = vec![
-        Trace::<TestSignature>::new(input("a"), BamlValue::String("a".to_string()), None),
-        Trace::<TestSignature>::new(input("b"), BamlValue::String("b".to_string()), Some(0.8)),
+        Trace::<TestSignature>::new(input("a"), serde_json::Value::String("a".to_string()), None),
+        Trace::<TestSignature>::new(input("b"), serde_json::Value::String("b".to_string()), Some(0.8)),
     ];
 
     let best = optimizer.select_best_traces(&traces, 2);

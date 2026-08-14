@@ -18,7 +18,7 @@ cargo run --example 14-functional
 
 use anyhow::Result;
 use dspy_rs::{
-    ChatAdapter, LM, LMClient, PredictError, Predicted, Signature, TestCompletionModel, configure,
+    LM, LMClient, PredictError, Predicted, Signature, TestCompletionModel, configure,
     fx,
 };
 use rig::completion::AssistantContent;
@@ -89,7 +89,7 @@ async fn main() -> Result<()> {
     .await?
     .with_client(LMClient::Test(client))
     .await?;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     let question = "What is the capital of France?".to_string();
 

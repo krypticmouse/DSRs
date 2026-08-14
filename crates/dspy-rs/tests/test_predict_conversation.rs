@@ -1,5 +1,5 @@
 use dspy_rs::{
-    ChatAdapter, LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure,
+    LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure,
 };
 use rig::completion::{AssistantContent, CompletionRequest};
 use rig::message::{Message as RigMessage, Text, UserContent};
@@ -35,7 +35,7 @@ async fn configure_test_lm(responses: Vec<String>) -> TestCompletionModel {
     .await
     .unwrap();
 
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     client
 }

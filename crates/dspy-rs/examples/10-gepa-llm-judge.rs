@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
+    Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
@@ -150,7 +150,7 @@ fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordPro
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(LM::builder().temperature(0.7).build().await?);
 
     let trainset = vec![
         training_example(

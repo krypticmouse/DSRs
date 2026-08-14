@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, ModuleState, Optimizer,
+    Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
     evaluate_trainset, init_tracing,
 };
@@ -88,7 +88,7 @@ fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> 
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(LM::builder().temperature(0.7).build().await?);
 
     let trainset = vec![
         sentiment_example(

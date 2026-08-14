@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    ChatAdapter, Example, LM, LMClient, MetricOutcome, Module, Predicted, Signature,
+    Example, LM, LMClient, MetricOutcome, Module, Predicted, Signature,
     TestCompletionModel, TypedMetric, configure, fx,
 };
 use rig::completion::AssistantContent;
@@ -60,7 +60,7 @@ async fn with_params_injects_instruction_ambiently() {
         response_with_fields(&[("answer", "tuned")]),
     ])
     .await;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     // Without a params scope: signature default instruction.
     let out = fx::predict::<FxQA>(
@@ -108,7 +108,7 @@ async fn trace_names_nodes_and_cache_reuses_instances() {
         response_with_fields(&[("answer", "c")]),
     ])
     .await;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     let (result, graph) = dspy_rs::trace::trace(|| async {
         for i in 0..2 {
@@ -192,7 +192,7 @@ async fn fn_module_plugs_into_evaluate_trainset() {
         .map(|i| response_with_fields(&[("answer", format!("a{i}").as_str())]))
         .collect();
     let (lm, _client) = make_test_lm(responses).await;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     async fn harness(input: FxQAInput) -> Result<Predicted<FxQAOutput>, dspy_rs::PredictError> {
         fx::predict::<FxQA>("eval_test", input).await

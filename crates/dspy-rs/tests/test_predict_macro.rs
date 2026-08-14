@@ -1,6 +1,6 @@
 //! `#[predict]` / `#[cot]` attribute macros: bodyless fns as LM calls.
 
-use dspy_rs::{ChatAdapter, LM, LMClient, TestCompletionModel, configure, cot, fx, predict};
+use dspy_rs::{LM, LMClient, TestCompletionModel, configure, cot, fx, predict};
 use rig::completion::AssistantContent;
 use rig::message::Text;
 use std::sync::LazyLock;
@@ -32,7 +32,7 @@ async fn install_test_lm(responses: Vec<String>) -> TestCompletionModel {
     .with_client(LMClient::Test(client.clone()))
     .await
     .unwrap();
-    configure(lm, ChatAdapter);
+    configure(lm);
     client
 }
 

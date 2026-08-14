@@ -318,7 +318,7 @@ async fn main() {
 
     // --- 10. fx::predict vs struct (same signature, global LM) ---------------
     let iters = 50_000u64;
-    configure(make_lm(iters, false).await, ChatAdapter);
+    configure(make_lm(iters, false).await);
     let s = snap();
     for _ in 0..iters {
         std::hint::black_box(
@@ -329,7 +329,7 @@ async fn main() {
 
     // --- 11. fx::predict under a with_params scope ----------------------------
     let iters = 50_000u64;
-    configure(make_lm(iters, false).await, ChatAdapter);
+    configure(make_lm(iters, false).await);
     let mut params = fx::Params::new();
     params.set_instruction("bench_fx", "Answer concisely with high confidence.");
     let s = snap();
@@ -345,7 +345,7 @@ async fn main() {
 
     // --- 12. Struct Predict through the same global-LM path -------------------
     let iters = 50_000u64;
-    configure(make_lm(iters, false).await, ChatAdapter);
+    configure(make_lm(iters, false).await);
     let global_predict = Predict::<BenchQA>::new();
     let s = snap();
     for _ in 0..iters {

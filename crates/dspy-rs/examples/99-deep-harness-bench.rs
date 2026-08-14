@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Example, LM, LMClient, MetricOutcome, Module, Predict, PredictError, Predicted,
+    Example, LM, LMClient, MetricOutcome, Module, Predict, PredictError, Predicted,
     Signature, TestCompletionModel, TypedMetric, evaluate_trainset_with_concurrency,
 };
 use rig::completion::{AssistantContent, ToolDefinition};

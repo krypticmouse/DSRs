@@ -9,11 +9,9 @@ cargo run --example 12-tracing
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::data::RawExample;
 use dspy_rs::{
-    CallMetadata, ChatAdapter, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
-    Signature, configure, init_tracing,
-    trace::{self, Executor},
+    CallMetadata, LM, LmUsage, Module, Predict, PredictError, Predicted, Prediction,
+    Signature, configure, init_tracing, trace,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -91,13 +89,10 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let module = QARater::builder().build();
 
@@ -131,22 +126,6 @@ async fn main() -> Result<()> {
         if let Some(output) = &node.output {
             println!("  recorded output: {:?}", output.data);
         }
-    }
-
-    println!("\nExecuting graph replay...");
-    let executor = Executor::new(graph);
-    let replay_input = RawExample::new(
-        HashMap::from([(
-            "question".to_string(),
-            json!("What is the capital of Germany?"),
-        )]),
-        vec!["question".to_string()],
-        vec![],
-    );
-
-    match executor.execute(replay_input).await {
-        Ok(predictions) => println!("Replay outputs: {}", predictions.len()),
-        Err(err) => println!("Replay failed (expected for Predict nodes): {err}"),
     }
 
     Ok(())

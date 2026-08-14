@@ -822,7 +822,6 @@ dependencies = [
  "reqwest 0.13.2",
  "rig-core",
  "rstest",
- "schemars",
  "serde",
  "serde_json",
  "temp-env",

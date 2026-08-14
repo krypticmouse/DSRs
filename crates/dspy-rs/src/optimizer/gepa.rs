@@ -8,7 +8,7 @@ use crate::optimizer::{
     Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
 };
 use crate::predictors::Example;
-use crate::{BamlValue, Facet, Module, Predict, Schema, Signature, SignatureSchema};
+use crate::{Facet, Module, Predict, Schema, Signature, SignatureSchema};
 
 use super::pareto::ParetoFrontier;
 
@@ -116,7 +116,7 @@ pub struct GEPAResult {
     /// Highest score achieved per validation example across all candidates.
     pub highest_score_achieved_per_val_task: Vec<f32>,
     /// Best outputs on the validation set (only if `track_best_outputs` is enabled).
-    pub best_outputs_valset: Option<Vec<BamlValue>>,
+    pub best_outputs_valset: Option<Vec<serde_json::Value>>,
     /// Pareto frontier statistics per generation.
     pub frontier_history: Vec<ParetoStatistics>,
 }
@@ -412,7 +412,7 @@ impl GEPA {
     async fn collect_best_outputs<S, M>(
         module: &M,
         eval_set: &[Example<S>],
-    ) -> Result<Vec<BamlValue>>
+    ) -> Result<Vec<serde_json::Value>>
     where
         S: Signature,
         S::Input: Clone,
@@ -423,7 +423,7 @@ impl GEPA {
         for example in eval_set {
             let input = example.input.clone();
             let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
-            outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(BamlValue::Null));
+            outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(serde_json::Value::Null));
         }
         Ok(outputs)
     }

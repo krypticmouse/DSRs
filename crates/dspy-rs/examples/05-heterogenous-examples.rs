@@ -9,7 +9,7 @@ cargo run --example 05-heterogenous-examples
 
 use anyhow::Result;
 use dspy_rs::data::RawExample;
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, init_tracing};
+use dspy_rs::{LM, Predict, Signature, configure, init_tracing};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -29,13 +29,10 @@ struct NumberSignature {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let heterogeneous = RawExample::new(
         HashMap::from([

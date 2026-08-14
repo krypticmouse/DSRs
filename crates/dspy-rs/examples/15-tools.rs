@@ -8,7 +8,7 @@ cargo run --example 15-tools
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, init_tracing};
+use dspy_rs::{LM, Predict, Signature, configure, init_tracing};
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
         .model("groq:openai/gpt-oss-120b".to_string())
         .build()
         .await?;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     // Tool definitions are fetched once and cached on the Predict instance as a
     // `ToolSet` (definitions + name-indexed executors); repeat calls reuse it.

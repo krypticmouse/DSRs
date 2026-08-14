@@ -41,7 +41,7 @@
 //!     .build()
 //!     .await
 //!     .unwrap();
-//! dspy_rs::configure(lm, ChatAdapter);
+//! dspy_rs::configure(lm);
 //!
 //! // 2. Pick a strategy
 //! let cot = ChainOfThought::<QA>::new();
@@ -128,11 +128,6 @@ pub use typesys::{
 pub use dsrs_macros::*;
 pub use facet::{Facet, Shape};
 
-/// The runtime value model is now `serde_json::Value`. This alias keeps the historical
-/// `BamlValue` name available to downstream code and tests during the migration away from
-/// the vendored BAML value type.
-pub type BamlValue = serde_json::Value;
-
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
 pub mod doctest {
@@ -151,99 +146,8 @@ pub mod __macro_support {
     pub use anyhow;
     pub use facet;
     pub use indexmap;
-    pub use schemars;
     pub use serde;
     pub use serde_json;
-}
-
-#[macro_export]
-macro_rules! field {
-    // Example Usage: field! {
-    //   input["Description"] => question: String
-    // }
-    //
-    // Example Output:
-    //
-    // {
-    //   "question": {
-    //     "type": "String",
-    //     "desc": "Description",
-    //     "schema": ""
-    //   },
-    //   ...
-    // }
-
-    // Pattern for field definitions with descriptions
-    { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::__macro_support::serde_json::json;
-
-        let mut result = $crate::__macro_support::serde_json::Map::new();
-
-        $(
-            let type_str = stringify!($field_ty);
-            let schema = {
-                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
-                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
-                // Extract just the properties if it's an object schema
-                if let Some(obj) = schema_json.as_object() {
-                    if obj.contains_key("properties") {
-                        schema_json["properties"].clone()
-                    } else {
-                        "".to_string().into()
-                    }
-                } else {
-                    "".to_string().into()
-                }
-            };
-            result.insert(
-                stringify!($field_name).to_string(),
-                json!({
-                    "type": type_str,
-                    "desc": $desc,
-                    "schema": schema,
-                    "__dsrs_field_type": stringify!($field_type)
-                })
-            );
-        )*
-
-        $crate::__macro_support::serde_json::Value::Object(result)
-    }};
-
-    // Pattern for field definitions without descriptions
-    { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::__macro_support::serde_json::json;
-
-        let mut result = $crate::__macro_support::serde_json::Map::new();
-
-        $(
-            let type_str = stringify!($field_ty);
-            let schema = {
-                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
-                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
-                // Extract just the properties if it's an object schema
-                if let Some(obj) = schema_json.as_object() {
-                    if obj.contains_key("properties") {
-                        schema_json["properties"].clone()
-                    } else {
-                        "".to_string().into()
-                    }
-                } else {
-                    "".to_string().into()
-                }
-            };
-            result.insert(
-                stringify!($field_name).to_string(),
-                json!({
-                    "type": type_str,
-                    "desc": "",
-                    "schema": schema,
-                    "__dsrs_field_type": stringify!($field_type)
-                })
-            );
-        )*
-
-        $crate::__macro_support::serde_json::Value::Object(result)
-    }};
 }
 
 #[macro_export]

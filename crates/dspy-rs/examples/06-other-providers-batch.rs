@@ -8,7 +8,7 @@ cargo run --example 06-other-providers-batch
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, forward_all, init_tracing};
+use dspy_rs::{LM, Predict, Signature, configure, forward_all, init_tracing};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -44,13 +44,10 @@ async fn main() -> Result<()> {
         .instruction("Answer with concise factual outputs.")
         .build();
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("anthropic:claude-sonnet-4-5-20250929".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let mut anthropic = Vec::new();
     for outcome in forward_all(&predictor, prompts(), 2).await {
@@ -58,13 +55,10 @@ async fn main() -> Result<()> {
     }
     println!("Anthropic: {anthropic:?}");
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("gemini:gemini-2.0-flash".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let mut gemini = Vec::new();
     for outcome in forward_all(&predictor, prompts(), 2).await {

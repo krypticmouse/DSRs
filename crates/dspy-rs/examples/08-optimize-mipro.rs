@@ -10,7 +10,7 @@ cargo run --example 08-optimize-mipro --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, ModuleState, Optimizer,
+    DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
     configure, evaluate_trainset, init_tracing,
 };
@@ -74,7 +74,7 @@ async fn main() -> Result<()> {
 
     println!("=== MIPROv2 Optimizer Example ===\n");
 
-    configure(LM::default(), ChatAdapter);
+    configure(LM::default());
 
     println!("Loading training data from HuggingFace...");
     let train_examples = DataLoader::load_hf::<QuestionAnswering>(

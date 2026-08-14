@@ -13,7 +13,7 @@ use crate::optimizer::{
 };
 use crate::predictors::Example;
 use crate::trace::NodeType;
-use crate::{BamlValue, Facet, Module, RawExample, Signature, SignatureSchema};
+use crate::{Facet, Module, RawExample, Signature, SignatureSchema};
 
 /// A single program execution trace: input, outputs, and score.
 ///
@@ -23,12 +23,12 @@ use crate::{BamlValue, Facet, Module, RawExample, Signature, SignatureSchema};
 #[derive(Clone, Debug)]
 pub struct Trace<S: Signature> {
     pub input: S::Input,
-    pub outputs: BamlValue,
+    pub outputs: serde_json::Value,
     pub score: Option<f32>,
 }
 
 impl<S: Signature> Trace<S> {
-    pub fn new(input: S::Input, outputs: BamlValue, score: Option<f32>) -> Self {
+    pub fn new(input: S::Input, outputs: serde_json::Value, score: Option<f32>) -> Self {
         Self {
             input,
             outputs,
@@ -42,7 +42,7 @@ impl<S: Signature> Trace<S> {
 
         result.push_str(&format!(
             "  {}\n",
-            serde_json::to_value(&self.input).unwrap_or(BamlValue::Null)
+            serde_json::to_value(&self.input).unwrap_or(serde_json::Value::Null)
         ));
 
         result.push_str("Output:\n");
@@ -247,7 +247,7 @@ impl MIPROv2 {
             let (output, _) = predicted.into_parts();
             traces.push(Trace::new(
                 example.input.clone(),
-                serde_json::to_value(output).unwrap_or(BamlValue::Null),
+                serde_json::to_value(output).unwrap_or(serde_json::Value::Null),
                 Some(score),
             ));
 

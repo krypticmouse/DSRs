@@ -17,10 +17,10 @@ use rig::{
 use bon::Builder;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
-use tracing::{Instrument, debug, trace, warn};
+use tracing::{debug, trace, warn};
 
 use crate::utils::cache::CacheEntry;
-use crate::{Cache, Prediction, RawExample, ResponseCache};
+use crate::{Cache, Prediction, ResponseCache};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -846,117 +846,6 @@ impl LM {
     /// Panics if caching is disabled for this `LM`.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
-        level = "trace",
-        skip(self),
-        fields(n)
-    )]
-    pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler
-            .as_ref()
-            .unwrap()
-            .lock()
-            .await
-            .get_history(n)
-            .await
-            .unwrap()
-    }
-}
-
-/// In-memory LM used for deterministic tests and examples.
-#[derive(Clone, Builder, Default)]
-pub struct DummyLM {
-    pub api_key: String,
-    #[builder(default = "https://api.openai.com/v1".to_string())]
-    pub base_url: String,
-    #[builder(default = 0.7)]
-    pub temperature: f32,
-    #[builder(default = 512)]
-    pub max_tokens: u32,
-    #[builder(default = true)]
-    pub cache: bool,
-    /// Cache backing storage shared with the real implementation.
-    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
-}
-
-impl DummyLM {
-    /// Creates a new [`DummyLM`] with an enabled in-memory cache.
-    pub async fn new() -> Self {
-        let cache_handler = Arc::new(Mutex::new(ResponseCache::new().await));
-        Self {
-            api_key: "".into(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            temperature: 0.7,
-            max_tokens: 512,
-            cache: true,
-            cache_handler: Some(cache_handler),
-        }
-    }
-
-    /// Mimics [`LM::call`] without hitting a remote provider.
-    ///
-    /// The provided `prediction` becomes the assistant output and is inserted
-    /// into the shared cache when caching is enabled.
-    #[tracing::instrument(
-        name = "dsrs.lm.dummy_call",
-        level = "debug",
-        skip(self, example, messages, prediction),
-        fields(
-            cache_enabled = self.cache,
-            cache_handler_present = self.cache_handler.is_some(),
-            message_count = messages.len()
-        )
-    )]
-    pub async fn call(
-        &self,
-        example: RawExample,
-        messages: Chat,
-        prediction: String,
-    ) -> Result<LMResponse> {
-        let mut full_chat = messages.clone();
-        full_chat.push_message(Message::assistant(prediction.clone()));
-
-        if self.cache
-            && let Some(cache) = self.cache_handler.as_ref()
-        {
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            let cache_clone = cache.clone();
-            let example_clone = example.clone();
-
-            // Spawn the cache insert operation to avoid deadlock
-            tokio::spawn(
-                async move {
-                    let _ = cache_clone.lock().await.insert(example_clone, rx).await;
-                }
-                .instrument(tracing::Span::current()),
-            );
-            debug!("spawned async cache insert");
-
-            // Send the result to the cache
-            tx.send(CacheEntry {
-                prompt: messages.to_json().to_string(),
-                prediction: Prediction::new(
-                    HashMap::from([("prediction".to_string(), prediction.clone().into())]),
-                    LmUsage::default(),
-                ),
-                raw_output: Some(prediction.clone()),
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
-            trace!("sent dummy response to cache task");
-        }
-
-        Ok(LMResponse {
-            output: Message::assistant(prediction.clone()),
-            usage: LmUsage::default(),
-            chat: full_chat,
-            tool_calls: Vec::new(),
-            tool_executions: Vec::new(),
-        })
-    }
-
-    /// Returns cached entries just like [`LM::inspect_history`].
-    #[tracing::instrument(
-        name = "dsrs.lm.dummy.inspect_history",
         level = "trace",
         skip(self),
         fields(n)

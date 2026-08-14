@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use dspy_rs::{ChainOfThought, ChatAdapter, LM, PredictError, Signature, configure};
+use dspy_rs::{ChainOfThought, LM, PredictError, Signature, configure};
 
 #[derive(Signature, Clone, Debug)]
 struct SmokeSig {
@@ -13,13 +13,10 @@ struct SmokeSig {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Smoke Label: Slice 2 ChainOfThought
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-5.2".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let module = ChainOfThought::<SmokeSig>::new();
     let input = SmokeSigInput {

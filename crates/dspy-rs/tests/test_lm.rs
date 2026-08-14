@@ -1,56 +1,5 @@
-use dspy_rs::data::RawExample;
-use dspy_rs::{Cache, Chat, DummyLM, LM, LmUsage, Message, hashmap};
+use dspy_rs::{Cache, LM, LmUsage};
 use rstest::*;
-
-#[cfg_attr(miri, ignore)] // Miri doesn't support tokio's I/O driver
-#[tokio::test]
-async fn test_dummy_lm() {
-    let dummy_lm = DummyLM::new().await;
-
-    let chat = Chat::new(vec![
-        Message::system("You are a helpful assistant."),
-        Message::user("Hello, world!"),
-    ]);
-
-    let example = RawExample::new(
-        hashmap! {
-            "input".to_string() => "test".to_string().into(),
-        },
-        vec!["input".to_string()],
-        vec![],
-    );
-
-    let output = dummy_lm
-        .call(example.clone(), chat.clone(), "Hello, world!".to_string())
-        .await
-        .unwrap();
-    assert_eq!(output.output.content(), "Hello, world!");
-
-    // Verify the response structure
-    assert_eq!(output.chat.len(), 3); // original 2 messages + assistant response
-    assert_eq!(
-        output.chat.messages[0].content(),
-        "You are a helpful assistant.".to_string(),
-    );
-    assert_eq!(
-        output.chat.messages[1].content(),
-        "Hello, world!".to_string(),
-    );
-    assert_eq!(
-        output.chat.messages[2].content(),
-        "Hello, world!".to_string(),
-    );
-
-    // sleep for 5 seconds
-    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
-    // Check cache functionality if caching is enabled
-    if dummy_lm.cache {
-        let history = dummy_lm.inspect_history(1).await;
-        assert_eq!(history.len(), 1);
-        assert_eq!(history[0].prompt, chat.to_json().to_string());
-    }
-}
 
 #[rstest]
 fn test_lm_usage_add() {

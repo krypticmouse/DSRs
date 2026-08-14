@@ -18,7 +18,6 @@ futures = "0.3.31"
 indexmap = "2.10.0"
 rayon = "1.10.0"
 rstest = "0.25.0"
-schemars = "1.0.4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.140", features = ["preserve_order"] } 
 tokio = { version = "1.46.1", features = ["full"] }

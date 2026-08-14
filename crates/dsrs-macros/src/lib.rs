@@ -340,7 +340,6 @@ struct ParsedConstraint {
 struct ParsedSignature {
     input_fields: Vec<ParsedField>,
     output_fields: Vec<ParsedField>,
-    all_fields: Vec<ParsedField>,
     instruction: String,
 }
 
@@ -387,7 +386,6 @@ fn parse_signature_fields(
 ) -> syn::Result<ParsedSignature> {
     let mut input_fields = Vec::new();
     let mut output_fields = Vec::new();
-    let mut all_fields = Vec::new();
 
     for field in fields {
         let parsed = parse_single_field(field)?;
@@ -405,7 +403,6 @@ fn parse_signature_fields(
             ));
         }
 
-        all_fields.push(parsed.clone());
         if parsed.is_input {
             input_fields.push(parsed);
         } else {
@@ -431,7 +428,6 @@ fn parse_signature_fields(
     Ok(ParsedSignature {
         input_fields,
         output_fields,
-        all_fields,
         instruction: collect_doc_comment(attrs),
     })
 }
@@ -961,7 +957,6 @@ fn generate_helper_structs(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("{}Output", name);
-    let all_name = format_ident!("{}All", name);
 
     let helper_generics = unconstrained_generics(generics);
     let (helper_impl_generics, helper_ty_generics, _helper_where_clause) =
@@ -1005,25 +1000,6 @@ fn generate_helper_structs(
         output_new_fields.push(marker.init.clone());
     }
 
-    let mut all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
-    let all_marker = generic_marker_field(generics, &parsed.all_fields);
-    if let Some(marker) = &all_marker {
-        all_fields.push(marker.field.clone());
-    }
-    let all_new_args: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(constructor_arg_tokens)
-        .collect();
-    let mut all_new_fields: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(constructor_init_tokens)
-        .collect();
-    if let Some(marker) = &all_marker {
-        all_new_fields.push(marker.init.clone());
-    }
-
     let facet = quote! { #runtime::__macro_support::facet };
     let serde = quote! { #runtime::__macro_support::serde };
     let serde_crate = format!(
@@ -1063,20 +1039,6 @@ fn generate_helper_structs(
             }
         }
 
-        #[derive(Debug, Clone, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
-        #[facet(crate = #facet)]
-        #[serde(crate = #serde_crate)]
-        pub struct #all_name #helper_generics {
-            #(#all_fields),*
-        }
-
-        impl #helper_impl_generics #all_name #helper_ty_generics {
-            pub fn new(#(#all_new_args),*) -> Self {
-                Self {
-                    #(#all_new_fields),*
-                }
-            }
-        }
     })
 }
 
