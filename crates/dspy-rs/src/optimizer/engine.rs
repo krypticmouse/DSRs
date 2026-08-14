@@ -35,10 +35,12 @@
 //! [`EngineConfig::concurrency`]). This is correct today because a module is
 //! immutable (`&M`) for the duration of one candidate's fan-out.
 //! Candidate-level parallelism — evaluating many candidates over one skeleton
-//! simultaneously — requires overlays applied at render time (the IR `Overlay`
-//! of vision §5.2) or module cloning; that seam is deliberately left open here:
-//! when render-time overlays land, only [`EvalEngine::evaluate`] changes, not
-//! its callers.
+//! simultaneously — requires overlays applied at render time, and that is the
+//! IR lane's path:
+//! [`ProgramEvalEngine`](crate::optimizer::program_engine::ProgramEvalEngine)
+//! evaluates N `ir::Overlay` candidates over one shared `Arc<Program>` through
+//! the interpreter in a single fan-out (no apply/restore at all). The module
+//! lane here keeps its serialized apply/restore model unchanged.
 //!
 //! # Cache keying
 //!
