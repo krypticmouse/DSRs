@@ -1006,3 +1006,152 @@ async fn overlay_can_swap_the_model_ref() {
     assert_eq!(out["answer"], "from m2");
     assert!(client2.last_request().is_some());
 }
+
+// ---------------------------------------------------------------------------
+// The RFC §4.3 worked example, end to end
+// ---------------------------------------------------------------------------
+
+/// CoT draft → tool-using agent loop → typed hole, all three leaf kinds in
+/// one program, run through the interpreter.
+#[tokio::test]
+async fn worked_example_runs_end_to_end() {
+    let mut b = ProgramBuilder::new("qa");
+    b.cap("net:search");
+    let fast = b.model("fast", config());
+    let deep = b.model("deep", config());
+
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .output("sources", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let draft = b.sig(
+        SignatureDef::build("Draft")
+            .instruction("Draft a thorough, factual answer.")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .instruction("Verify the draft against sources; collect URLs.")
+            .input("question", T::String)
+            .input("draft", T::String)
+            .output("evidence", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let cite = b.sig(
+        SignatureDef::build("CiteCheck")
+            .input("draft", T::String)
+            .input("evidence", T::List(Box::new(T::String)))
+            .output("answer", T::String)
+            .output("sources", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool(
+        "search",
+        "Web search; returns result snippets with URLs",
+        search_sig,
+        &["net:search"],
+    );
+
+    let drafter = ir::cot("drafter", draft)
+        .model(deep)
+        .bind("question", ir::input("question"));
+    let researcher = ir::agent("researcher", research)
+        .model(fast)
+        .bind("question", ir::input("question"))
+        .bind("draft", ir::out("drafter", "answer"))
+        .tools([search])
+        .max_turns(6);
+    let checker = ir::hole(
+        "checker",
+        cite,
+        r#"(a) => ({
+            answer: a.draft,
+            sources: a.evidence.filter(e => e.startsWith("http")),
+        })"#,
+        &[],
+    )
+    .bind("draft", ir::out("drafter", "answer"))
+    .bind("evidence", ir::out("researcher", "evidence"));
+
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([drafter, researcher, checker])
+                .out("answer", ir::out("checker", "answer"))
+                .out("sources", ir::out("checker", "sources")),
+        )
+        .unwrap();
+
+    // deep drives the CoT drafter; fast drives the agent loop.
+    let (deep_lm, _) = canned_lm(vec![text(fields(&[
+        ("reasoning", "The capital question is factual."),
+        ("answer", "Paris is the capital of France."),
+    ]))])
+    .await;
+    let (fast_lm, _) = canned_lm(vec![
+        tool_call("search", json!({"query": "capital of France"})),
+        text(fields(&[(
+            "evidence",
+            r#"["http://wiki/paris", "unsourced claim"]"#,
+        )])),
+    ])
+    .await;
+
+    let env = RuntimeEnv::new()
+        .bind_model("deep", deep_lm)
+        .bind_model("fast", fast_lm)
+        .bind_host_tool("search", Arc::new(SearchTool))
+        .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
+        .grant("net:search");
+    let interp = Interpreter::load(program, env).await.unwrap();
+
+    let (result, trace) = capture(|| {
+        interp.run(
+            obj(&[("question", json!("capital of France?"))]),
+            None,
+            Budget::unlimited(),
+        )
+    })
+    .await;
+    let output = result.unwrap();
+    assert_eq!(output["answer"], "Paris is the capital of France.");
+    assert_eq!(output["sources"], json!(["http://wiki/paris"]));
+
+    // Three leaves, three spans, in dataflow order.
+    assert_eq!(trace.components, vec!["drafter", "researcher", "checker"]);
+    let drafter_span = trace.for_component("drafter").next().unwrap();
+    assert_eq!(
+        drafter_span.output.as_ref().unwrap()["reasoning"],
+        "The capital question is factual."
+    );
+    let researcher_span = trace.for_component("researcher").next().unwrap();
+    assert!(
+        researcher_span
+            .events
+            .iter()
+            .any(|event| matches!(event, SpanEvent::ToolRun { name, .. } if name == "search"))
+    );
+    // The agent saw the drafter's answer as its bound input.
+    assert_eq!(
+        researcher_span.input.as_ref().unwrap()["draft"],
+        "Paris is the capital of France."
+    );
+    let checker_span = trace.for_component("checker").next().unwrap();
+    assert_eq!(trace.model(checker_span).model, "sandbox:quickjs");
+}
