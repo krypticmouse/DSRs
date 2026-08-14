@@ -92,7 +92,7 @@ impl From<PredictState> for StateUpdate {
 /// Contains demos (as flat JSON rows) and the instruction override.
 /// Produced by optimizers when they tune a predictor; persist a whole module's
 /// worth of these with [`ModuleState`](crate::ModuleState).
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PredictState {
     /// Demo rows as flat JSON objects: field name → value, with input and
     /// output fields merged into one object. This is the serde boundary for

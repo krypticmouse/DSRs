@@ -25,6 +25,8 @@ pub use sig::{
 };
 
 #[cfg(feature = "ir")]
+pub mod bridge;
+#[cfg(feature = "ir")]
 pub mod builder;
 #[cfg(feature = "ir")]
 pub mod graph;
@@ -35,6 +37,8 @@ pub mod params;
 #[cfg(feature = "ir")]
 pub mod validate;
 
+#[cfg(feature = "ir")]
+pub use bridge::with_overlay;
 #[cfg(feature = "ir")]
 pub use builder::{
     AsNodeName, BuildError, NodeSpec, Port, ProgramBuilder, agent, carried, cot, fork, hole, input,

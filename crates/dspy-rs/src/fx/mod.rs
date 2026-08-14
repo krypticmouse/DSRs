@@ -45,6 +45,13 @@ use tokio::task_local;
 use crate::core::{DynPredictor, ModuleState, PredictState};
 use crate::{Facet, LmError, Module, Predict, PredictError, Predicted, Schema, Signature};
 
+/// Runs a future with an [`ir::Overlay`](crate::ir::Overlay) as the ambient
+/// candidate — the overlay is unbound against the program into [`Params`] and
+/// scoped exactly like [`with_params`]. See
+/// [`ir::bridge`](crate::ir::bridge).
+#[cfg(feature = "ir")]
+pub use crate::ir::bridge::with_overlay;
+
 task_local! {
     static CURRENT_PARAMS: Arc<Params>;
 }
@@ -119,6 +126,14 @@ impl Params {
 
     fn entry(&self, name: &str) -> Option<(u64, &PredictState)> {
         self.entries.get(name).map(|(hash, state)| (*hash, state))
+    }
+
+    /// All named states, for the IR bridge (`Params::bind`).
+    #[cfg(feature = "ir")]
+    pub(crate) fn iter_states(&self) -> impl Iterator<Item = (&str, &PredictState)> {
+        self.entries
+            .iter()
+            .map(|(name, (_, state))| (name.as_str(), state))
     }
 }
 

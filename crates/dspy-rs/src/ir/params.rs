@@ -215,6 +215,11 @@ pub enum OverlayError {
     },
     #[error("unknown param path `{path}`")]
     UnknownPath { path: String },
+    /// A flat demo row (fx/`ModuleState` form) carries a field the owning
+    /// leaf's signature does not declare, so it cannot be split into a
+    /// [`DemoRow`]'s input/output maps.
+    #[error("demo row for `{path}` has field `{field}` not present in the leaf signature")]
+    DemoField { path: String, field: String },
 }
 
 /// A candidate = dense data overlay over a fixed skeleton. Clone is a vec
