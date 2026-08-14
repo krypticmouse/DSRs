@@ -30,12 +30,15 @@
 //! | [`GEPA`] | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 
+pub mod bootstrap;
 pub mod copro;
 pub mod engine;
 pub mod gepa;
+pub(crate) mod harvest;
 pub mod mipro;
 pub mod pareto;
 
+pub use bootstrap::*;
 pub use copro::*;
 pub use engine::*;
 pub use gepa::*;
