@@ -783,10 +783,6 @@ where
             .unwrap_or_else(|| S::instruction().to_string())
     }
 
-    fn instruction_override(&self) -> Option<String> {
-        self.instruction_override.clone()
-    }
-
     fn demos_as_examples(&self) -> Vec<RawExample> {
         self.demos
             .iter()
@@ -891,7 +887,11 @@ mod tests {
             .expect("typed demo should convert to raw demo");
         let mut predictor = Predict::<PredictConversionSig>::new();
 
-        DynPredictor::apply_update(&mut predictor, StateUpdate::demos(vec![raw]))
+        let update = StateUpdate {
+            instruction: None,
+            demos: Some(vec![raw]),
+        };
+        DynPredictor::apply_update(&mut predictor, update)
             .expect("predictor should accept raw demos");
 
         let demos = DynPredictor::demos_as_examples(&predictor);

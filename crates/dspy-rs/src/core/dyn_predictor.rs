@@ -24,14 +24,6 @@ pub(crate) trait DynPredictor: Send + Sync {
     /// Returns the current instruction (override or default from the signature).
     fn instruction(&self) -> String;
 
-    /// Returns the raw instruction override (`None` when the signature default is active).
-    ///
-    /// Save it before an instruction-only [`apply_update`](DynPredictor::apply_update)
-    /// and apply it back afterwards for cheap candidate evaluation — no demo
-    /// serialization round-trip like [`dump_state`](DynPredictor::dump_state)/
-    /// [`load_state`](DynPredictor::load_state).
-    fn instruction_override(&self) -> Option<String>;
-
     /// Returns current demos as type-erased [`Example`]s.
     fn demos_as_examples(&self) -> Vec<RawExample>;
 
@@ -82,24 +74,6 @@ pub(crate) struct StateUpdate {
     pub instruction: Option<Option<String>>,
     /// `Some(demos)` replaces the demo set.
     pub demos: Option<Vec<RawExample>>,
-}
-
-impl StateUpdate {
-    /// Instruction-only update — demos are left untouched.
-    pub fn instruction(instruction: Option<String>) -> Self {
-        Self {
-            instruction: Some(instruction),
-            demos: None,
-        }
-    }
-
-    /// Demos-only update — the instruction override is left untouched.
-    pub fn demos(demos: Vec<RawExample>) -> Self {
-        Self {
-            instruction: None,
-            demos: Some(demos),
-        }
-    }
 }
 
 impl From<PredictState> for StateUpdate {
