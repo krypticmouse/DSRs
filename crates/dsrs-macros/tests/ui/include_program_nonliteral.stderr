@@ -1,0 +1,5 @@
+error: expected a string literal path to a `.dsrs` file, e.g. include_program!("programs/qa.dsrs")
+ --> tests/ui/include_program_nonliteral.rs:3:31
+  |
+3 | dsrs_macros::include_program!(PATH);
+  |                               ^^^^

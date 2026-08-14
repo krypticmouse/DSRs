@@ -9,9 +9,57 @@ use syn::{
     visit::Visit,
 };
 
+mod dsrs_syntax;
+mod include_program;
 mod runtime_path;
 
 use runtime_path::resolve_dspy_rs_path;
+
+/// Embeds a `.dsrs` program artifact at build time (RFC 0002 §6.1).
+///
+/// ```ignore
+/// dspy_rs::include_program!("programs/qa.dsrs");
+/// let program: &'static dspy_rs::ir::Program = qa::program();
+/// ```
+///
+/// Expands in-place to a module named after the file stem (`qa.dsrs` → `mod
+/// qa`, `-` mapped to `_`) containing:
+///
+/// - `SOURCE: &str` — the embedded text (`include_str!`, so rustc rebuilds on
+///   file change);
+/// - `program() -> &'static Program` — parse+validate on first access,
+///   panicking on semantic errors;
+/// - `try_program()` — the non-panicking form;
+/// - a generated `#[cfg(test)]` test that forces full validation under
+///   `cargo test`.
+///
+/// The path resolves relative to `CARGO_MANIFEST_DIR` (the sqlx rule), with
+/// the invoking file's directory as a fallback base; absolute paths are used
+/// as-is.
+///
+/// # Validation layering (read this before trusting the build gate)
+///
+/// The full `.dsrs` parser lives in `dspy-rs`, which depends on this macro
+/// crate — it cannot be called from here without a dependency cycle. The
+/// macro therefore validates **syntax only** at build time: the `dsrs 1`
+/// pragma, the top-level keyword vocabulary and declaration shapes, balanced
+/// delimiters, strings/numbers/code fences — a standalone check against the
+/// same surface grammar (see `docs/dsrs-format.md`). Types, dataflow,
+/// capability subsets, and everything else semantic are checked by the real
+/// parser at first use of `program()`/`try_program()` — and at CI time by the
+/// generated test, which is the sqlx-offline analogue: run `cargo test` and a
+/// semantically invalid artifact fails the suite even if never executed.
+#[proc_macro]
+pub fn include_program(input: TokenStream) -> TokenStream {
+    let source_dir = proc_macro::Span::call_site()
+        .local_file()
+        .and_then(|f| f.parent().map(std::path::Path::to_path_buf));
+    let input = parse_macro_input!(input as include_program::Input);
+    match include_program::expand(input, source_dir) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
 #[proc_macro_derive(
     Signature,

@@ -1,0 +1,12 @@
+dsrs 1
+program broken
+
+widget Main {
+  in question: string
+  out answer: string
+}
+
+main: Main = seq {
+  a = predict Main (question = $.question)
+  out { answer = a.answer }
+}
