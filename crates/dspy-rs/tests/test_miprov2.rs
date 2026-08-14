@@ -1,4 +1,5 @@
-use dspy_rs::{MIPROv2, PromptCandidate, PromptingTips, Signature, Trace};
+use dspy_rs::optimizer::mipro::Trace;
+use dspy_rs::{MIPROv2, PromptCandidate, PromptingTips, Signature};
 use rstest::*;
 
 #[derive(Signature, Clone, Debug)]

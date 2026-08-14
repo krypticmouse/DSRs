@@ -20,6 +20,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
+use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
 use crate::{Cache, Prediction, ResponseCache};
 
@@ -27,14 +28,18 @@ use crate::{Cache, Prediction, ResponseCache};
 pub struct LMResponse {
     /// Assistant message chosen by the provider.
     pub output: Message,
-    /// Token usage reported by the provider for this call.
+    /// Token usage reported by the provider for this call (aggregate).
     pub usage: LmUsage,
     /// Chat history including the freshly appended assistant response.
     pub chat: Chat,
-    /// Tool calls made by the provider.
+    /// Tool calls made by the provider. Deprecated by `events`.
     pub tool_calls: Vec<ToolCall>,
-    /// Tool executions made by the provider.
+    /// Tool executions made by the provider. Deprecated by `events`.
     pub tool_executions: Vec<String>,
+    /// Ordered per-round-trip record: one `Exchange` per provider call with
+    /// that round-trip's own usage, `ToolRun` entries interleaved in execution
+    /// order. Cache-served responses synthesize a single `Exchange`.
+    pub events: Vec<SpanEvent>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +256,38 @@ struct ToolLoopResult {
     chat_history: Vec<rig::message::Message>,
     tool_calls: Vec<ToolCall>,
     tool_executions: Vec<String>,
+    events: Vec<SpanEvent>,
+}
+
+/// One executed tool call with the details the trace format records.
+struct ToolRunRecord {
+    call: ToolCall,
+    result: String,
+    duration_us: u64,
+    /// Failure reported back to the model as text (e.g. tool not found).
+    error: Option<String>,
+}
+
+impl ToolRunRecord {
+    fn to_event(&self) -> SpanEvent {
+        SpanEvent::ToolRun {
+            id: self.call.id.clone(),
+            name: self.call.function.name.clone(),
+            args: self.call.function.arguments.clone(),
+            result: self.result.clone(),
+            duration_us: self.duration_us,
+            error: self.error.clone(),
+        }
+    }
+}
+
+/// Converts grouped rig assistant content into a single [`Message`] for event
+/// recording, preserving reasoning and tool-call blocks.
+fn assistant_message_from_content(content: &rig::OneOrMany<AssistantContent>) -> Message {
+    Message::from(rig::message::Message::Assistant {
+        id: None,
+        content: content.clone(),
+    })
 }
 
 /// What the model actually wants to do, extracted from a potentially multi-block response.
@@ -350,24 +387,18 @@ impl LM {
     /// history plus every generation parameter that changes the completion.
     /// Demos and instructions live inside the messages, so they are covered
     /// automatically. Hashing streams through the `Debug` representation — no
-    /// intermediate JSON tree or string is materialized.
+    /// intermediate JSON tree or string is materialized. Uses the same stable
+    /// hasher as the trace format's `request_hash`.
     fn cache_key_for(&self, messages: &Chat) -> u64 {
+        use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
 
-        struct FmtHasher<'a>(&'a mut std::hash::DefaultHasher);
-        impl std::fmt::Write for FmtHasher<'_> {
-            fn write_str(&mut self, s: &str) -> std::fmt::Result {
-                self.0.write(s.as_bytes());
-                Ok(())
-            }
-        }
-
-        let mut hasher = std::hash::DefaultHasher::new();
+        let mut hasher = StableHasher::new();
         hasher.write(self.config.model.as_bytes());
         hasher.write(&self.config.temperature.to_bits().to_le_bytes());
         hasher.write(&self.config.max_tokens.to_le_bytes());
         use std::fmt::Write as _;
-        let _ = write!(FmtHasher(&mut hasher), "{messages:?}");
+        let _ = write!(HashWriter(&mut hasher), "{messages:?}");
         hasher.finish()
     }
 
@@ -462,29 +493,39 @@ impl LM {
         tools_by_name: &HashMap<String, Arc<dyn ToolDyn>>,
         calls: &[ToolCall],
         context: &str,
-    ) -> Result<Vec<(ToolCall, String)>> {
+    ) -> Result<Vec<ToolRunRecord>> {
         let executions = calls.iter().map(|tc| {
             let tool = tools_by_name.get(&tc.function.name).cloned();
             async move {
-                let result = match tool {
-                    Some(tool) => tool
-                        .call(tc.function.arguments.to_string())
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!(
-                                "tool `{}` execution failed ({}): {:?}",
-                                tc.function.name,
-                                context,
-                                err
-                            )
-                        })?,
+                let started = std::time::Instant::now();
+                let (result, error) = match tool {
+                    Some(tool) => {
+                        let result = tool
+                            .call(tc.function.arguments.to_string())
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!(
+                                    "tool `{}` execution failed ({}): {:?}",
+                                    tc.function.name,
+                                    context,
+                                    err
+                                )
+                            })?;
+                        (result, None)
+                    }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        format!("Tool '{}' not found", tc.function.name)
+                        let message = format!("Tool '{}' not found", tc.function.name);
+                        (message.clone(), Some(message))
                     }
                 };
                 trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
-                Ok::<_, anyhow::Error>((tc.clone(), result))
+                Ok::<_, anyhow::Error>(ToolRunRecord {
+                    call: tc.clone(),
+                    result,
+                    duration_us: started.elapsed().as_micros() as u64,
+                    error,
+                })
             }
         });
 
@@ -492,24 +533,25 @@ impl LM {
     }
 
     /// Push tool results into chat history as a single User message.
-    fn push_tool_results(
-        chat_history: &mut Vec<rig::message::Message>,
-        results: &[(ToolCall, String)],
-    ) {
+    fn push_tool_results(chat_history: &mut Vec<rig::message::Message>, results: &[ToolRunRecord]) {
         use rig::OneOrMany;
         use rig::message::UserContent;
 
         let tool_result_contents: Vec<UserContent> = results
             .iter()
-            .map(|(tc, result)| {
+            .map(|record| {
+                let tc = &record.call;
                 if let Some(call_id) = &tc.call_id {
                     UserContent::tool_result_with_call_id(
                         tc.id.clone(),
                         call_id.clone(),
-                        OneOrMany::one(result.clone().into()),
+                        OneOrMany::one(record.result.clone().into()),
                     )
                 } else {
-                    UserContent::tool_result(tc.id.clone(), OneOrMany::one(result.clone().into()))
+                    UserContent::tool_result(
+                        tc.id.clone(),
+                        OneOrMany::one(record.result.clone().into()),
+                    )
                 }
             })
             .collect();
@@ -536,10 +578,12 @@ impl LM {
             max_iterations = self.config.max_tool_iterations as usize
         )
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_loop(
         &self,
         initial_calls: &[ToolCall],
         initial_assistant_content: rig::OneOrMany<AssistantContent>,
+        initial_usage: LmUsage,
         tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
@@ -548,13 +592,18 @@ impl LM {
         let max_iterations = self.config.max_tool_iterations as usize;
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
+        let mut events = vec![SpanEvent::Exchange {
+            message: assistant_message_from_content(&initial_assistant_content),
+            usage: initial_usage,
+        }];
 
         // Execute the initial tool call batch
         debug!(count = initial_calls.len(), "executing initial tool calls");
         let results = Self::execute_tool_batch(&tools.by_name, initial_calls, "initial").await?;
-        for (tc, result) in &results {
-            all_tool_calls.push(tc.clone());
-            all_tool_executions.push(result.clone());
+        for record in &results {
+            all_tool_calls.push(record.call.clone());
+            all_tool_executions.push(record.result.clone());
+            events.push(record.to_event());
         }
 
         // Add initial assistant turn to history, preserving ALL content blocks
@@ -579,6 +628,7 @@ impl LM {
                 })
                 .await?;
 
+            let round_usage = LmUsage::from(response.usage);
             accumulated_usage.prompt_tokens += response.usage.input_tokens;
             accumulated_usage.completion_tokens += response.usage.output_tokens;
             accumulated_usage.total_tokens += response.usage.total_tokens;
@@ -595,11 +645,17 @@ impl LM {
             match classify_choice(response.choice) {
                 ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
+                    let message = Message::assistant(&text);
+                    events.push(SpanEvent::Exchange {
+                        message: message.clone(),
+                        usage: round_usage,
+                    });
                     return Ok(ToolLoopResult {
-                        message: Message::assistant(&text),
+                        message,
                         chat_history,
                         tool_calls: all_tool_calls,
                         tool_executions: all_tool_executions,
+                        events,
                     });
                 }
                 ChoiceAction::ToolCalls {
@@ -607,12 +663,17 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    events.push(SpanEvent::Exchange {
+                        message: assistant_message_from_content(&full_content),
+                        usage: round_usage,
+                    });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
                     let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
-                    for (tc, result) in &results {
-                        all_tool_calls.push(tc.clone());
-                        all_tool_executions.push(result.clone());
+                    for record in &results {
+                        all_tool_calls.push(record.call.clone());
+                        all_tool_executions.push(record.result.clone());
+                        events.push(record.to_event());
                     }
 
                     // Preserve full content (reasoning + tool calls) in history
@@ -689,11 +750,15 @@ impl LM {
             let mut chat = messages;
             chat.push_message(output.clone());
             return Ok(LMResponse {
-                output,
+                output: output.clone(),
                 usage: entry.prediction.lm_usage,
                 chat,
                 tool_calls: Vec::new(),
                 tool_executions: Vec::new(),
+                events: vec![SpanEvent::Exchange {
+                    message: output,
+                    usage: entry.prediction.lm_usage,
+                }],
             });
         }
 
@@ -729,7 +794,8 @@ impl LM {
             "lm completion received"
         );
 
-        let mut accumulated_usage = LmUsage::from(response.usage);
+        let first_usage = LmUsage::from(response.usage);
+        let mut accumulated_usage = first_usage;
 
         // Scan ALL content blocks in the response — don't just look at .first().
         // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
@@ -737,9 +803,17 @@ impl LM {
         let mut returned_tool_calls = Vec::new();
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
+        let mut events: Vec<SpanEvent> = Vec::new();
         let classified = classify_choice(response.choice);
         let first_choice = match classified {
-            ChoiceAction::Text(text) => Message::assistant(&text),
+            ChoiceAction::Text(text) => {
+                let message = Message::assistant(&text);
+                events.push(SpanEvent::Exchange {
+                    message: message.clone(),
+                    usage: first_usage,
+                });
+                message
+            }
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -750,6 +824,7 @@ impl LM {
                     .execute_tool_loop(
                         &calls,
                         *full_content,
+                        first_usage,
                         tools,
                         chat_history,
                         system_prompt.clone(),
@@ -767,12 +842,17 @@ impl LM {
                 let names: Vec<_> = calls.iter().map(|tc| tc.function.name.as_str()).collect();
                 warn!(?names, "tools requested but no tools available");
                 let msg = format!("Tool calls requested: {:?}, but no tools available", names);
-                assistant_content_for_history = Some(rig::OneOrMany::many(
+                let content = rig::OneOrMany::many(
                     calls
                         .into_iter()
                         .map(AssistantContent::ToolCall)
                         .collect::<Vec<_>>(),
-                )?);
+                )?;
+                events.push(SpanEvent::Exchange {
+                    message: assistant_message_from_content(&content),
+                    usage: first_usage,
+                });
+                assistant_content_for_history = Some(content);
                 append_output_after_history = true;
                 Message::assistant(&msg)
             }
@@ -781,6 +861,10 @@ impl LM {
                 assistant_text,
                 full_content,
             } => {
+                events.push(SpanEvent::Exchange {
+                    message: assistant_message_from_content(&full_content),
+                    usage: first_usage,
+                });
                 returned_tool_calls = calls;
                 assistant_content_for_history = Some(*full_content);
                 Message::assistant(assistant_text.unwrap_or_default())
@@ -844,8 +928,12 @@ impl LM {
                 .map(|result| result.tool_calls.clone())
                 .unwrap_or(returned_tool_calls),
             tool_executions: tool_loop_result
-                .map(|result| result.tool_executions)
+                .as_ref()
+                .map(|result| result.tool_executions.clone())
                 .unwrap_or_default(),
+            events: tool_loop_result
+                .map(|result| result.events)
+                .unwrap_or(events),
         })
     }
 
@@ -1149,5 +1237,31 @@ mod tests {
         assert!(response.chat.messages[1].has_tool_calls());
         assert!(response.chat.messages[2].has_tool_results());
         assert_eq!(response.chat.messages[3].role, Role::Assistant);
+
+        // Ordered per-round-trip record: tool-call exchange, tool run, final text.
+        assert_eq!(response.events.len(), 3);
+        assert!(
+            matches!(&response.events[0], SpanEvent::Exchange { message, .. } if message.has_tool_calls())
+        );
+        // rig's ToolDyn::call JSON-encodes the output, hence contains not equals.
+        assert!(
+            matches!(&response.events[1], SpanEvent::ToolRun { name, result, .. } if name == "counter" && result.contains("counted"))
+        );
+        assert!(
+            matches!(&response.events[2], SpanEvent::Exchange { message, .. } if message.content() == "done")
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_text_call_records_single_exchange_event() {
+        let model = TestCompletionModel::new([make_text("hello")]);
+        let lm = test_lm_with_model(model);
+
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let response = lm.call(chat, vec![]).await.expect("call should succeed");
+
+        assert!(
+            matches!(response.events.as_slice(), [SpanEvent::Exchange { message, .. }] if message.content() == "hello")
+        );
     }
 }

@@ -219,14 +219,24 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
-        // Serialize the input for the trace node only when a trace scope is active.
+        // Serialize the input for trace recording only when a scope is active.
         let input_data = if crate::trace::is_tracing() {
             raw_example_from_input::<S>(&input).ok()
         } else {
             None
         };
+        let capture_input = if crate::trace::is_capturing() {
+            json_map_from_input::<S>(&input).ok()
+        } else {
+            None
+        };
         let chat = self.build_chat(&input)?;
-        let (predicted, _) = self.call_and_parse_with_input(chat, input_data).await?;
+        // The chat is prefix + one live user message; everything before the
+        // final message is the interned span prefix.
+        let prefix_len = chat.len().saturating_sub(1);
+        let (predicted, _) = self
+            .call_and_parse_with_input(chat, input_data, capture_input, prefix_len)
+            .await?;
         Ok(predicted)
     }
 
@@ -308,6 +318,23 @@ impl<S: Signature> Predict<S> {
         Ok(messages)
     }
 
+    /// The component name recorded on trace spans: the assigned `trace_name`
+    /// (fx slot name / [`PredictBuilder::named`]) or, for unnamed predictors,
+    /// the signature type name.
+    fn component_name(&self) -> &str {
+        match self.trace_name.as_deref() {
+            Some(name) => name,
+            None => {
+                tracing::warn!(
+                    signature = std::any::type_name::<S>(),
+                    "dsrs.unnamed_component: span recorded under signature name; \
+                     assign a name via PredictBuilder::named or fx::predict"
+                );
+                std::any::type_name::<S>()
+            }
+        }
+    }
+
     /// Returns the cached [`ToolSet`], fetching tool definitions on first use.
     async fn cached_toolset(&self) -> Option<Arc<ToolSet>> {
         if self.tools.is_empty() {
@@ -342,17 +369,20 @@ impl<S: Signature> Predict<S> {
         S::Output: Schema,
     {
         trace!(message_count = chat.len(), "chat-level call");
-        self.call_and_parse_with_input(chat, None).await
+        self.call_and_parse_with_input(chat, None, None, 0).await
     }
 
-    /// [`call_and_parse`](Predict::call_and_parse) with the typed input captured for
-    /// trace recording. `input_data` is only recorded when a [`trace()`](crate::trace::trace)
-    /// scope is active; pass `None` when the input is unavailable (e.g. multi-turn
-    /// continuations).
+    /// [`call_and_parse`](Predict::call_and_parse) with the typed input captured
+    /// for trace recording. `input_data`/`capture_input` are only recorded when a
+    /// trace scope is active; pass `None` when the input is unavailable (e.g.
+    /// multi-turn continuations). `prefix_len` is the number of leading chat
+    /// messages that are the cached system+demos prefix (0 for caller-owned chats).
     async fn call_and_parse_with_input(
         &self,
         chat: Chat,
         input_data: Option<RawExample>,
+        capture_input: Option<Map<String, Value>>,
+        prefix_len: usize,
     ) -> Result<(Predicted<S::Output>, Chat), PredictError>
     where
         S::Input: Schema,
@@ -385,6 +415,16 @@ impl<S: Signature> Predict<S> {
             }
         };
 
+        // Open the span before the LM call: a call that dies mid-flight still
+        // leaves (component, seq, prompt, input) in the trace.
+        let guard = crate::trace::begin_span(crate::trace::SpanRequest {
+            component: self.component_name(),
+            prefix: (prefix_len > 0).then(|| &chat.messages[..prefix_len]),
+            suffix: &chat.messages[prefix_len..],
+            input: capture_input,
+            model: &lm.config,
+        });
+
         let toolset = self.cached_toolset().await;
         let empty_toolset = ToolSet::default();
         let toolset_ref = toolset.as_deref().unwrap_or(&empty_toolset);
@@ -394,6 +434,18 @@ impl<S: Signature> Predict<S> {
         {
             Ok(response) => response,
             Err(err) => {
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events: Vec::new(),
+                        raw_output: None,
+                        output: None,
+                        usage: LmUsage::default(),
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Lm,
+                            message: err.to_string(),
+                        }),
+                    });
+                }
                 return Err(PredictError::Lm {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
@@ -417,6 +469,7 @@ impl<S: Signature> Predict<S> {
             chat,
             tool_calls,
             tool_executions,
+            events,
         } = response;
 
         let chat_adapter = ChatAdapter;
@@ -433,6 +486,20 @@ impl<S: Signature> Predict<S> {
                     raw_response_len = raw_response.len(),
                     "typed parse failed"
                 );
+                // Parse failures keep raw_output in the span — the model's
+                // unparseable prose is prime reflection material.
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events,
+                        raw_output: Some(raw_response.clone()),
+                        output: None,
+                        usage: lm_usage,
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Parse,
+                            message: err.to_string(),
+                        }),
+                    });
+                }
                 return Err(PredictError::Parse {
                     source: err,
                     raw_response,
@@ -440,6 +507,16 @@ impl<S: Signature> Predict<S> {
                 });
             }
         };
+
+        if let Some(guard) = guard {
+            guard.finish(crate::trace::SpanOutcome {
+                events,
+                raw_output: Some(raw_response.clone()),
+                output: json_map_from_output::<S>(&typed_output).ok(),
+                usage: lm_usage,
+                error: None,
+            });
+        }
 
         let checks_total = field_metas
             .values()
@@ -679,6 +756,26 @@ where
     data.extend(output_map);
 
     Ok(RawExample::new(data, input_keys, output_keys))
+}
+
+fn json_map_from_input<S: Signature>(input: &S::Input) -> Result<Map<String, Value>>
+where
+    S::Input: Schema,
+{
+    match serde_json::to_value(input)? {
+        Value::Object(map) => Ok(map),
+        _ => Err(anyhow::anyhow!("expected object for signature input")),
+    }
+}
+
+fn json_map_from_output<S: Signature>(output: &S::Output) -> Result<Map<String, Value>>
+where
+    S::Output: Schema,
+{
+    match serde_json::to_value(output)? {
+        Value::Object(map) => Ok(map),
+        _ => Err(anyhow::anyhow!("expected object for signature output")),
+    }
 }
 
 fn raw_example_from_input<S: Signature>(input: &S::Input) -> Result<RawExample>
