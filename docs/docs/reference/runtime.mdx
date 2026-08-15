@@ -1,0 +1,99 @@
+---
+title: "Runtime"
+description: "Reference for RuntimeEnv, Interpreter load and run, Budget, ambient overlays, and every LoadError and RunError variant"
+icon: "gears"
+---
+
+The runtime is what turns a `Program` into something that executes: the host supplies bindings through a `RuntimeEnv`, `Interpreter::load` checks everything up front, and `Interpreter::run` evaluates the program on an input map. This page lists the full surface.
+
+## `RuntimeEnv`
+
+What the host supplies at load: live models, host tool and hole bindings, the sandbox, and the capability grants. Secrets never travel in the artifact; model clients are bound here from host-held keys and env vars.
+
+| Method | What it does |
+|---|---|
+| `RuntimeEnv::new()` | An empty environment. |
+| `bind_model(name, lm)` | Pre-binds a live model by declared model name (for example `"fast"`). Models not bound here are constructed from their artifact config at load. |
+| `bind_host_tool(name, tool)` | Binds a host tool implementation (a `rig` dyn tool) by tool name. Consulted once at load. |
+| `bind_host_hole(name, f)` | Binds a native implementation for an extern hole by leaf name. The function receives the hole's resolved input map and returns a JSON value coerced against the hole's output signature. |
+| `with_sandbox(executor)` | Sets the sandbox that executes holes and sandboxed tools (QuickJS in v1). Required if and only if the program carries sandboxed code. |
+| `grant(cap)` | Grants one capability. The program's `caps` must be a subset of the grants or the load is refused. |
+| `with_code_mode(config)` | Behind the `code-mode` feature (on by default). When set, every `AgentLoop` presents its non-stop tools as one sandboxed `run_js` tool instead of N JSON tools; the model writes JavaScript that calls them as globals. This is a host presentation choice, not program semantics: the same artifact runs identically either way. |
+
+## `Interpreter::load`
+
+Loading front-loads every check; nothing is lazy and nothing waits for call time. The checks run in this order:
+
+1. `Program::validate` (the structural graph rules).
+2. `program.caps` must be a subset of `env.grants` (no ambient authority).
+3. Every model must be bindable: pre-bound by name, or client-constructible from its config.
+4. Every `ToolKind::Host` tool name must be bound.
+5. Every sandboxed tool and hole is registered through the full sandbox lifecycle (parse, compile, register). A hole that does not compile fails the load, not the call.
+
+With code mode enabled there is one extra load-time refusal: two non-stop tool names in one loop that mangle to the same JS identifier.
+
+### `LoadError` variants
+
+| Variant | Plain words |
+|---|---|
+| `Invalid` | The program failed validation. |
+| `CapsExceedGrants` | The program asks for capabilities the host did not grant; carries the missing set. |
+| `Model` | A model could not be bound; carries the model name and the reason. |
+| `HostToolUnbound` | A host tool name has no binding in the environment. |
+| `HostHoleUnbound` | An extern hole's leaf name has no binding in the environment. |
+| `SandboxMissing` | The program carries sandboxed code but the environment has no sandbox executor. |
+| `Register` | A piece of sandboxed code failed to register; carries the location and the underlying error. |
+
+## `Interpreter::run`
+
+Evaluates the program on an input map, reading parameters through an optional overlay (never mutating the program) and metering spend against a budget.
+
+```rust
+let out: JsonMap = interp.run(input, overlay, budget).await?;
+```
+
+- `input` is a JSON object of the program's input fields. It is checked against the program's external signature: a missing required field or a type mismatch is `RunError::Input`.
+- `overlay` is `Option<Arc<Overlay>>`. When present, its `base` must equal the program's hash or the run fails with `RunError::Overlay` before anything executes.
+- `budget` caps spend for this run.
+
+## `Budget`
+
+Run-level spend limits; `None` means unlimited. `Budget::default()` and `Budget::unlimited()` are the same: no limits.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `max_lm_calls` | `Option<u32>` | Maximum LM calls for the run. Hard-gated before each call. |
+| `max_tokens` | `Option<u64>` | Token ceiling. Soft: checked against accumulated usage, since usage is only known after a call. |
+| `deadline` | `Option<Instant>` | Wall-clock cutoff. Hard-gated before each call. |
+
+An `AgentLoop`'s per-node budget chains a child meter under the run meter, so node spend also counts against the run.
+
+### `RunError` variants
+
+| Variant | Plain words |
+|---|---|
+| `Lm` | The provider call failed at a leaf. |
+| `Parse` | The response arrived but did not parse as the signature outputs; carries the raw text. |
+| `Tool` | A tool execution failed; carries the tool name and message. |
+| `Hole` | A sandboxed hole failed to execute. |
+| `CapabilityDenied` | Code asked for a capability the run does not permit. |
+| `Budget` | The budget ran out at a leaf. |
+| `Route` | A route port produced a value no arm (and no `else`) matches. |
+| `Cancelled` | The run was cancelled. |
+| `Overlay` | The overlay was minted against a different program hash. |
+| `Input` | The run input was rejected against the program signature. |
+| `Internal` | An interpreter invariant was violated. |
+| `Replay` | A strict replay scope refused this call. |
+
+`RunError::retryable()` is true only for `Lm`, `Parse`, `Tool`, and `Hole`; those are the errors `Retry` and `Refine` may intercept. `Budget` and `CapabilityDenied` are never retried.
+
+## Ambient overlays
+
+These two functions let `#[module]` executable functions pick up a candidate without threading it through every call.
+
+- `with_ambient_overlay(overlay, fut)` runs a future with an `Arc<Overlay>` as the ambient candidate for every `#[module]` function called on that task. Scoping is task-local: spawned subtasks do not inherit it, and nesting replaces the outer scope. The overlay's `base` is checked by `Interpreter::run` against each module's program, not here, so one scope can span calls into several modules and only the matching one accepts it.
+- `current_overlay()` returns the ambient overlay (`Option<Arc<Overlay>>`) if a `with_ambient_overlay` scope is active on this task. `#[module]`-generated functions read it immediately before `Interpreter::run`.
+
+## `default_lm`
+
+The globally configured LM, used when a module does not name a model. `default_lm()` returns `Option<Arc<LM>>`: the model set through `configure(...)` in the global settings, or `None` when nothing was configured. Generated `#[module]` environments use it to bind the `default` model ref at load.

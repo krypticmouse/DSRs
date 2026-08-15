@@ -40,5 +40,5 @@ target/
 thoughts/
 
 # Reference copies of upstream source
-reference/
+/reference/
 .claude/worktrees/

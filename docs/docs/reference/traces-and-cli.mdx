@@ -1,0 +1,107 @@
+---
+title: "Traces and the CLI"
+description: "Reference for trace capture, replay modes and errors, and the dsrs command-line tool"
+icon: "terminal"
+---
+
+Traces record what a run did; replay serves runs back from a recording; the `dsrs` CLI checks, formats, and serves `.dsrs` artifacts. This page lists all three surfaces.
+
+## Capture
+
+`capture` records every `Predict` call on the current task into a `Trace` while the scope is active.
+
+```rust
+let (result, trace) = dspy_rs::trace::capture(|| module.call(input)).await;
+```
+
+- `capture(f)` runs the closure and returns its result plus the recorded `Trace`.
+- `capture_with_meta(meta, f)` is the same with caller-provided rollout metadata (`TraceMeta`: rollout input, candidate hash, free-form tags). A missing `trace_id` or start time is minted at scope start.
+
+Scoping is task-local: spawned subtasks do not inherit the scope, and nested scopes are exclusive (the innermost records). With no scope active the cost is one task-local probe per call. Traces serialize to JSONL via `Trace::to_jsonl` and `Trace::from_jsonl`.
+
+## What a span records
+
+One span is one `Predict` invocation. At a high level it records:
+
+- **Who ran**: the component name (the same name the params system uses, so spans join back to tunable slots) plus a per-component sequence number; `(component, seq)` is unique per trace and is what replay keys on.
+- **What went in**: the rendered prompt (an interned system-and-demos prefix plus the live suffix), the typed input fields as JSON, and the redacted model config.
+- **What happened inside**: ordered events, one `Exchange` per provider round-trip and one `ToolRun` per tool execution.
+- **What came out**: the raw assistant text, the parsed output fields, aggregated token usage, and any error (kinds: `lm`, `parse`, `tool`, `cancelled`).
+- **A request fingerprint**: `request_hash`, a stable hash over the redacted model config plus the full rendered prompt. This is the replay key and the determinism check.
+- **Timing and completeness**: start time, duration, and a `complete` flag (false when the span was truncated or redacted; replay refuses incomplete spans).
+
+## Replay
+
+`replay` serves `Predict` calls from a recorded trace instead of a live provider: each call's `request_hash` is compared against the next recorded span for its component, and on a match the recorded output is served with zero API calls and no tool execution.
+
+```rust
+let (out, report) = dspy_rs::trace::replay(&trace, ReplayMode::Strict, || pipeline(input)).await;
+```
+
+### Modes
+
+| `ReplayMode` | Plain words |
+|---|---|
+| `Strict` | Every call must match its recording; any mismatch is a typed error. For fixtures and CI (`report.live` stays 0). |
+| `UntilDivergence` | Serve while hashes match; the first mismatching call and every call after it go to the live LM. For counterfactual replay: a mutated parameter changes only the prompts it affects, so the unchanged prefix replays free and only the changed suffix spends tokens. Once diverged, the session stays live even if a later hash happens to match again. |
+
+### `ReplayReport` fields
+
+| Field | Meaning |
+|---|---|
+| `served` | Calls served from the recording (zero provider calls). |
+| `live` | Calls that went to the live LM (always 0 in `Strict` mode). |
+| `diverged_at` | The recorded span at which divergence was first detected, when the mismatch could be pinned to one. |
+| `divergence` | The first mismatch, verbatim: the error `Strict` mode surfaced, or the reason `UntilDivergence` switched live. |
+
+### Replay error kinds
+
+| `ReplayError` | Plain words |
+|---|---|
+| `Divergence` | The live request's hash differs from the recorded span's; the prompt or model config changed relative to the recording. |
+| `Incomplete` | The recorded span is unusable: truncated or redacted, or it has no parsed output because the recorded call failed. |
+| `Exhausted` | The trace has no recorded span for this component and sequence; the live run makes more calls than the recording. |
+| `OutputDecode` | The recorded span matched but its stored output no longer deserializes into the signature's output type (schema drift since recording). |
+
+Replay scoping mirrors capture: task-local, not inherited by spawned subtasks, innermost scope wins. Compose replay outside with capture inside to record a counterfactual rollout while serving its unchanged prefix from the base trace.
+
+## The `dsrs` CLI
+
+The `dsrs` binary is the `.dsrs` toolchain: check, fmt, serve.
+
+### `dsrs check <program>`
+
+Parses and validates a `.dsrs` artifact, running the full pipeline (lex and parse with positions, lowering, validation, hash sealing), exactly what `Interpreter::load` would accept. On success it prints one line reporting the program name, its hash, the node, signature, model, and tool counts, and the caps set when non-empty. On failure the parser's error (with `line N, column M` positions and the file path) goes to stderr and the exit code is non-zero.
+
+### `dsrs fmt <program> [--write]`
+
+Prints (or rewrites) the canonical form of an artifact. Formatting is parse then print, never token shuffling, so an artifact that does not parse does not format.
+
+| Flag | Effect |
+|---|---|
+| (none) | Prints the canonical text to stdout. |
+| `--write` | Rewrites the file in place, only when the bytes differ. Reports "formatted" or "already canonical" on stderr. |
+
+### `dsrs serve <program> [flags]`
+
+Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider env vars; a QuickJS sandbox is added when none was supplied.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host <addr>` | `127.0.0.1` | Bind address. |
+| `--port <n>` | `8080` | Bind port (0 binds an ephemeral port). |
+| `--overlay <path>` | none | Overlay JSON in the named form (`{"<param path>": <value>, ...}`), applied read-through on every run. |
+| `--allow <CAP>` | none | Capability grant, repeatable: `--allow net:search --allow fs:read`. Load is refused (with the missing set printed) when the program's caps exceed the grants. |
+
+Host tools cannot be served: a program declaring a host tool needs an embedding host that supplies the binding (`include_program!` plus your own code, or a sandboxed `js` tool instead). The load surfaces that refusal with a hint.
+
+**HTTP endpoints**:
+
+| Endpoint | What it returns |
+|---|---|
+| `POST /run` | Body is a JSON object of input fields; the response is `{"output": ...}`. With `?trace=1` (or `?trace=true`) the run executes inside a capture scope and the response adds `"trace_jsonl"`, the exact trace artifact text with `param_ids` attached. |
+| `GET /schema` | The program's external interface: the main signature and the type table in their serde forms. |
+| `GET /program` | The canonical `.dsrs` text. |
+| `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
+
+Error responses are always `{"error": ...}` with the interpreter's own message: input-surface rejections are 400, everything else (LM failures, parse failures, budget, routing) is 500.
