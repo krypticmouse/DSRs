@@ -44,6 +44,49 @@ Here's the part to internalize: **the program was never mutated.** Print `frontd
 
 Tracing paper, typed.
 
+<svg viewBox="0 0 760 420" role="img" aria-label="Three translucent tracing-paper overlays fanned above the base map, each changing one grid-referenced dial; the base program is never marked" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <rect x="90" y="210" width="580" height="180" rx="8" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <g stroke="currentColor" strokeOpacity="0.12" strokeWidth="1">
+    <line x1="90" y1="255" x2="670" y2="255" />
+    <line x1="90" y1="300" x2="670" y2="300" />
+    <line x1="90" y1="345" x2="670" y2="345" />
+    <line x1="235" y1="210" x2="235" y2="390" />
+    <line x1="380" y1="210" x2="380" y2="390" />
+    <line x1="525" y1="210" x2="525" y2="390" />
+  </g>
+  <text x="112" y="238" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk  (base, hash 9f3a...)</text>
+  <circle cx="180" cy="322" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="180" y="352" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">sum</text>
+  <circle cx="330" cy="322" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="330" y="352" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
+  <line x1="193" y1="322" x2="317" y2="322" stroke="#ed6c13" strokeWidth="1.5" />
+  <rect x="422" y="310" width="188" height="24" rx="5" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" strokeDasharray="4 3" />
+  <text x="516" y="326" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.85" textAnchor="middle">drafter.instruction</text>
+  <line x1="343" y1="318" x2="420" y2="320" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <g transform="rotate(-6 260 110)">
+    <rect x="120" y="40" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="140" y="66" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.7">overlay c41</text>
+    <path d="M 150 96 C 190 86, 240 104, 300 92" fill="none" stroke="#ed6c13" strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
+    <text x="150" y="130" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">warmth 0.91</text>
+  </g>
+  <g transform="rotate(1 400 100)">
+    <rect x="240" y="26" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="260" y="52" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.75">overlay c58</text>
+    <path d="M 270 84 C 320 72, 380 94, 440 80" fill="none" stroke="#ed6c13" strokeOpacity="0.7" strokeWidth="2" strokeLinecap="round" />
+    <text x="270" y="118" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">warmth 0.82, brevity 0.78</text>
+  </g>
+  <g transform="rotate(7 540 120)">
+    <rect x="370" y="48" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="390" y="74" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.7">overlay c62</text>
+    <path d="M 400 106 C 450 96, 500 114, 560 100" fill="none" stroke="#ed6c13" strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
+    <text x="400" y="140" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">brevity 0.93</text>
+  </g>
+  <line x1="500" y1="172" x2="512" y2="306" stroke="#ed6c13" strokeOpacity="0.5" strokeWidth="1.5" strokeDasharray="3 4" />
+  <text x="560" y="196" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65">each sheet rewrites</text>
+  <text x="560" y="211" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65">the same named dial</text>
+  <text x="380" y="412" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">ten candidates are ten cheap sheets; the base map is never marked</text>
+</svg>
+
 ## Hiring the machine
 
 Now re-read your Chapter 11 hand-loop with the pieces on the table. *Propose* a candidate: that's building an overlay. *Evaluate* it: that's Chapter 11's metric over Chapter 11's dataset, with Chapter 10's replay keeping the unchanged steps free. *Select*: compare numbers, keep the winner. The loop is fully mechanized except the proposing.
@@ -54,7 +97,7 @@ An **optimizer** is a candidate-proposing strategy plugged into that loop. `comp
 use dspy_rs::{COPRO, Optimizer};
 
 let copro = COPRO::builder().breadth(8).depth(3).build();
-copro.compile::<Triage, _, _>(&mut desk, trainset, &TriageAccuracy).await?;
+copro.compile::<Triage, _, _>(&mut triage, trainset, &TriageAccuracy).await?;
 ```
 
 Same trainset. Same metric. You wrote no new concepts to reach this line; you assembled Act III.

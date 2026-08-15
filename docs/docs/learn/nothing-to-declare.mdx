@@ -33,10 +33,46 @@ dsrs serve frontdesk.dsrs --allow kb:read
 ```
 
 ```text
-error: program requires capability `orders:read`, but the host does not allow it
+program caps exceed host grants: missing ["orders:read"]
 ```
 
 Up front. By name. Before one token is spent. Compare that with every system you've met where the missing permission announces itself halfway through handling real traffic.
+
+<svg viewBox="0 0 760 400" role="img" aria-label="The border crossing: the program's declared manifest meets the host's grant list at a checkpoint; inset, the sandbox room contains only granted capabilities, with no door to pick" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <g transform="rotate(-2 140 130)">
+    <rect x="40" y="50" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <text x="60" y="80" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the declaration</text>
+    <text x="60" y="98" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">everything in the suitcase,</text>
+    <text x="60" y="113" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">on the form, up front</text>
+    <text x="60" y="145" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">caps &#123;</text>
+    <text x="76" y="163" fontFamily="ui-monospace, monospace" fontSize="11" fill="#ed6c13">kb:read</text>
+    <text x="76" y="181" fontFamily="ui-monospace, monospace" fontSize="11" fill="#ed6c13">orders:read</text>
+    <text x="60" y="199" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">&#125;</text>
+  </g>
+  <g transform="rotate(2 620 130)">
+    <rect x="520" y="50" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <text x="540" y="80" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the grants</text>
+    <text x="540" y="98" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">the host has the final word</text>
+    <text x="540" y="145" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">--allow kb:read</text>
+    <text x="540" y="163" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">--allow orders:read</text>
+  </g>
+  <rect x="330" y="60" width="100" height="120" rx="8" fill="#ed6c13" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <rect x="352" y="84" width="56" height="34" rx="4" fill="none" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="380" y="106" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fontWeight="600" fill="#ed6c13" textAnchor="middle">load</text>
+  <line x1="342" y1="150" x2="418" y2="150" stroke="currentColor" strokeOpacity="0.7" strokeWidth="4" strokeLinecap="round" />
+  <circle cx="342" cy="150" r="5" fill="currentColor" fillOpacity="0.7" />
+  <text x="380" y="204" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">needs &#8838; grants, checked</text>
+  <text x="380" y="219" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">before a single step runs</text>
+  <line x1="248" y1="120" x2="322" y2="120" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" />
+  <line x1="512" y1="120" x2="438" y2="120" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" />
+  <rect x="230" y="260" width="300" height="110" rx="8" fill="currentColor" fillOpacity="0.07" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2.5" />
+  <text x="380" y="288" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor" textAnchor="middle">the sandbox room</text>
+  <rect x="268" y="304" width="92" height="22" rx="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="314" y="319" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" textAnchor="middle">kb:read</text>
+  <rect x="400" y="304" width="92" height="22" rx="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="446" y="319" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" textAnchor="middle">orders:read</text>
+  <text x="380" y="352" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">an ungranted capability is not a locked door: there is no door</text>
+</svg>
 
 ## The empty room
 

@@ -64,7 +64,7 @@ async fn frontdesk(ticket: String) -> Result<DeskOut, dspy_rs::ir::RunError> {
 }
 ```
 
-Run the angry ticket:
+Run the angry ticket (the runnable version of this milestone, `examples/23-frontdesk-agent.rs`, keeps the drafter on the `default` model, so the plain call needs no handle binding):
 
 ```text
 $ cargo run

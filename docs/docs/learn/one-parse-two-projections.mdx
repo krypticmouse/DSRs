@@ -12,6 +12,43 @@ When you write `async fn`, you write one function and the compiler reads it into
 
 DSRs applies the same move to harnesses. One parse. Two projections.
 
+<svg viewBox="0 0 760 380" role="img" aria-label="One parse, two projections: the function body enters the module macro like light through a prism and splits into the runnable function and the program artifact" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="pr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <rect x="30" y="110" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="46" y="138" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">async fn frontdesk</text>
+  <line x1="46" y1="156" x2="200" y2="156" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="172" x2="188" y2="172" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="188" x2="170" y2="188" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="204" x2="196" y2="204" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="46" y1="224" x2="120" y2="224" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <text x="46" y="252" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">your function, written once</text>
+  <line x1="232" y1="190" x2="330" y2="190" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2.5" />
+  <path d="M 340 140 L 340 240 L 415 190 Z" fill="#ed6c13" fillOpacity="0.12" stroke="#ed6c13" strokeWidth="2" />
+  <text x="375" y="296" fontFamily="ui-monospace, monospace" fontSize="12" fontWeight="600" fill="#ed6c13" textAnchor="middle">#[module]</text>
+  <text x="375" y="313" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6" textAnchor="middle">one parse, at build time</text>
+  <path d="M 408 168 C 460 130, 490 110, 520 96" fill="none" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#pr-arrow)" />
+  <path d="M 408 212 C 460 250, 490 270, 520 284" fill="none" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#pr-arrow)" />
+  <rect x="530" y="40" width="200" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <path d="M 560 78 L 560 112 L 590 95 Z" fill="currentColor" fillOpacity="0.7" />
+  <text x="610" y="88" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the function</text>
+  <text x="610" y="106" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">callable, awaited,</text>
+  <text x="610" y="121" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">exactly as written</text>
+  <rect x="530" y="230" width="200" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <circle cx="565" cy="280" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <circle cx="600" cy="262" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <circle cx="600" cy="298" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <line x1="573" y1="275" x2="592" y2="266" stroke="#ed6c13" strokeWidth="1.5" />
+  <line x1="573" y1="285" x2="592" y2="294" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="622" y="278" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the program</text>
+  <text x="622" y="296" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">printable, diffable,</text>
+  <text x="622" y="311" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">servable data</text>
+  <text x="375" y="30" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6" textAnchor="middle">two projections of one source: drift is not unlikely, it is impossible</text>
+</svg>
+
 ## Steps: the smallest legible unit
 
 To make a whole function legible, start by making its calls legible. A **step** is one model call declared as a bodyless function:
@@ -57,7 +94,7 @@ pub struct DeskOut {
 async fn frontdesk(ticket: String) -> Result<DeskOut, dspy_rs::ir::RunError> {
     // scrub email addresses before anything leaves the building
     let clean: String = {
-        let t: String = ticket.clone();
+        let t: String = ticket; // the type anchor for the incoming value
         t.split_whitespace()
             .map(|w| if w.contains('@') { "[email]" } else { w })
             .collect::<Vec<&str>>()
@@ -74,14 +111,16 @@ async fn frontdesk(ticket: String) -> Result<DeskOut, dspy_rs::ir::RunError> {
 }
 ```
 
-Read it as Rust and it's boring: a privacy scrub you'd have written anyway, two awaited calls, a struct at the end. It runs exactly the way it reads:
+Read it as Rust and it's boring: a privacy scrub you'd have written anyway, two awaited calls, a struct at the end. It runs the way it reads:
 
 ```rust
 let out = frontdesk(herman_ticket).await?;
 println!("{}", out.reply);
 ```
 
-That's projection one, the function. Nothing new. Now the part the whole book has been walking toward:
+One honest catch before you run it: `@strong` is a promise, and the runner is the one who keeps it. Steps with no `model = ...` ride the `default` model from your `configure(...)` line automatically. A named handle has no such fallback, by design: bind it at load (`frontdesk::env().bind_model("strong", strong)`, run through `Interpreter::load`, exactly what this chapter's runnable example `examples/22-frontdesk-module.rs` does) or the load refuses, by name. Deferred is not defaulted.
+
+That's projection one, the function. Now the part the whole book has been walking toward:
 
 ```rust
 println!("{}", frontdesk::program().to_dsrs());
@@ -96,8 +135,8 @@ program frontdesk
 // model and signature declarations trimmed
 
 main: Main = seq {
-  clean   = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
-  sum     = predict summarize (ticket = clean.clean)
+  clean = hole clean_hole (ticket = $.ticket) caps [] extern "a90e86e4381f68a9"
+  sum = predict summarize @default (ticket = clean.clean)
   drafter = cot draft @strong (ticket = clean.clean, summary = sum.summarize)
   out { summary = sum.summarize, reply = drafter.draft }
 }
@@ -120,7 +159,7 @@ A recording shows the path that ran. The branch not taken that day simply does n
 Now go back to the map, because if you read it carefully, one line should be bothering you.
 
 ```text
-clean = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
+clean = hole clean_hole (ticket = $.ticket) caps [] extern "a90e86e4381f68a9"
 ```
 
 `sum` is a `predict`. `drafter` is a `cot`. But your privacy scrub, the honest little block of `split_whitespace` you wrote at the top of the function, printed as something called a `hole`, carrying no code at all, just a typed border and a sixteen-digit fingerprint stamped `extern`.

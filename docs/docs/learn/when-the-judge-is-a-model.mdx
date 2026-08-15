@@ -46,14 +46,14 @@ impl TypedMetric<DraftReply, FrontDesk> for ReplyQuality {
         &self,
         example: &Example<DraftReply>,
         prediction: &Predicted<DraftReplyOutput>,
-        _trace: &Trace,
+        _trace: Option<&Trace>,
     ) -> anyhow::Result<Eval> {
         let verdict = self.judge.call(JudgeReplyInput {
             ticket: example.input.ticket.clone(),
             reply: prediction.reply.clone(),
         }).await?;
 
-        Ok(Eval::score(verdict.score).with_feedback(verdict.critique.to_string()))
+        Ok(Eval::with_feedback(verdict.score, verdict.critique.clone()))
     }
 }
 ```

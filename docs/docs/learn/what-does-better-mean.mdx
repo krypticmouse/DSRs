@@ -40,7 +40,7 @@ And there's `Example<S>` again, keeping the promise it made in Chapter 3: the sa
 Now the second object. What does "right" mean for triage? Mercifully crisp: the predicted category either matches the label or it doesn't.
 
 ```rust
-use dspy_rs::{Eval, Example, Predicted, TypedMetric};
+use dspy_rs::{Eval, Example, Predict, Predicted, Trace, TypedMetric};
 
 struct TriageAccuracy;
 
@@ -49,7 +49,7 @@ impl TypedMetric<Triage, Predict<Triage>> for TriageAccuracy {
         &self,
         example: &Example<Triage>,
         prediction: &Predicted<TriageOutput>,
-        _trace: &Trace,
+        _trace: Option<&Trace>,
     ) -> anyhow::Result<Eval> {
         let hit = example.output.category == prediction.category;
         Ok(Eval::score(if hit { 1.0 } else { 0.0 }))
@@ -59,7 +59,7 @@ impl TypedMetric<Triage, Predict<Triage>> for TriageAccuracy {
 
 (Give `Category` a `PartialEq` derive; enums earn their keep again.)
 
-Notice two things about the shape of this trait, both of which are promissory notes. An `Eval` carries a score *and* an optional `feedback` string; you're not using feedback yet, but a metric that can *explain* a failure in words is worth vastly more than one that can only frown, and something in [Chapter 13](/docs/learn/when-the-judge-is-a-model) reads those words. And the third argument hands you the full trace of the run being scored, the Chapter 10 expedition log, so a metric can judge not just the answer but *how the pipeline got there*. Ignore both today. They're loaded weapons on the wall.
+Notice two things about the shape of this trait, both of which are promissory notes. An `Eval` carries a score *and* an optional `feedback` string; you're not using feedback yet, but a metric that can *explain* a failure in words is worth vastly more than one that can only frown, and something in [Chapter 13](/docs/learn/when-the-judge-is-a-model) reads those words. And the third argument hands you the full trace of the run being scored, the Chapter 10 expedition log (wrapped in an `Option`; the evaluation loop always passes one), so a metric can judge not just the answer but *how the pipeline got there*. Ignore both today. They're loaded weapons on the wall.
 
 ## The number
 

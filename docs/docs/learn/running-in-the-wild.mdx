@@ -19,7 +19,7 @@ Your company already has observability: Grafana, Jaeger, Honeycomb, something wi
 So traces project. The same expedition log you replayed in Chapter 10 exports as OpenTelemetry spans:
 
 ```rust
-let otlp = trace.to_otlp_json(true); // include_content: prompts and outputs ride along
+let otlp = trace.to_otlp_json("frontdesk", true); // service name; include_content: prompts and outputs ride along
 ```
 
 Each run becomes a root `dsrs.rollout` span with child spans per step, carrying `gen_ai.*` semantic attributes, model, token counts, timing, and `dsrs.*` attributes like the step's *parameter path*. That last one matters more than it looks: when Thursday's incident is "replies got weird after Tuesday's deploy," the span doesn't just tell you latency spiked. It tells you *which named dial* the weird step reads from, and `/healthz` tells you which program hash is serving. Observability that speaks the same addresses your optimizer tunes.
@@ -33,7 +33,7 @@ You mined traces once already: Chapter 12's BootstrapFewShot took twenty recorde
 And for the day your improvement loop wants to go deeper than prompts, each trace also projects into reinforcement-learning form:
 
 ```rust
-let rollout = trace.to_rl_rollout(); // prompt/completion transitions plus the score
+let rollout = trace.to_rl_rollout().expect("eval recorded"); // prompt/completion transitions plus the score
 ```
 
 `RlRollout` is the standard shape weight-tuning pipelines eat: transitions with prompts, completions, and your metric's score attached. You may never use it. But notice *why* it's nearly free: because every run was already data, projecting it into a training row is a view, not a project.

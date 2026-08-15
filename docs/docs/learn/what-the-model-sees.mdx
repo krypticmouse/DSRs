@@ -41,7 +41,8 @@ Your input fields are:
 Your output fields are:
 1. `category` (Category)
 
-All interactions will be structured in the following way:
+All interactions will be structured in the following way,
+with the appropriate values filled in.
 
 [[ ## ticket ## ]]
 ticket
@@ -49,8 +50,7 @@ ticket
 [[ ## category ## ]]
 Output field `category` should be of type: Category
 
-Category
-----
+one of:
 - Bug
 - Billing
 - HowTo
@@ -59,8 +59,8 @@ Category
 [[ ## completed ## ]]
 
 Respond with the corresponding output fields, starting with
-`[[ ## category ## ]]`, and then ending with the marker for
-`[[ ## completed ## ]]`.
+the field `[[ ## category ## ]]`, and then ending with the
+marker for `[[ ## completed ## ]]`.
 
 In adhering to this structure, your objective is:
         Classify a support ticket for the Sourdough app.
@@ -68,7 +68,7 @@ In adhering to this structure, your objective is:
 
 Take a minute with this, because everything you declared in Act I is visible in it.
 
-Your field docstring from Chapter 1 became line 1. Your enum became that `Category` block, four legal values, spelled out; this is why `kinda mad` was never going to parse. Those `[[ ## field ## ]]` fences are the **marker protocol**, a convention DSRs inherits from DSPy: the model may think in prose all it wants, but each output field lives between its markers, which is what makes the response mechanically recoverable without forbidding the model from being a language model.
+Your field docstring from Chapter 1 became line 1. Your enum became that `one of` block, four legal values, spelled out; this is why `kinda mad` was never going to parse. Those `[[ ## field ## ]]` fences are the **marker protocol**, a convention DSRs inherits from DSPy: the model may think in prose all it wants, but each output field lives between its markers, which is what makes the response mechanically recoverable without forbidding the model from being a language model.
 
 And the punchline placement: your instruction, the docstring you wrote, arrives *last*, as "your objective." The structural scaffolding opens the prompt; your intent closes it, right where models pay the most attention. You spent three chapters designing types, and the adapter spent them compiling your types into all of this.
 

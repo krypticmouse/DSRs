@@ -72,6 +72,46 @@ served 2 free, 1 live
 
 Replay followed the log while your run still matched it: the scrub and the research agent replayed free, served from the recording. At `draft`, your new instruction made the call *different*, so that call, and anything after it, went live. You paid for exactly one step: the one you changed.
 
+<svg viewBox="0 0 760 300" role="img" aria-label="Until-divergence replay: footprints follow the recorded route for free, peel off at the detected divergence point, and the meter runs only from there" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="dv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <line x1="60" y1="150" x2="60" y2="118" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <path d="M 60 118 L 92 126 L 60 134 Z" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="52" y="180" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7">recorded run</text>
+  <path d="M 60 150 C 160 130, 260 165, 380 150 C 470 139, 560 155, 700 145" fill="none" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" strokeDasharray="4 7" />
+  <circle cx="180" cy="147" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+  <text x="180" y="151" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.8" textAnchor="middle">scrub</text>
+  <circle cx="300" cy="156" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+  <text x="300" y="160" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.8" textAnchor="middle">research</text>
+  <circle cx="470" cy="143" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" strokeDasharray="3 3" />
+  <text x="470" y="147" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.6" textAnchor="middle">draft</text>
+  <g fill="currentColor" fillOpacity="0.55">
+    <ellipse cx="110" cy="142" rx="4" ry="6" transform="rotate(12 110 142)" />
+    <ellipse cx="132" cy="152" rx="4" ry="6" transform="rotate(8 132 152)" />
+    <ellipse cx="222" cy="146" rx="4" ry="6" transform="rotate(10 222 146)" />
+    <ellipse cx="246" cy="156" rx="4" ry="6" transform="rotate(6 246 156)" />
+    <ellipse cx="340" cy="152" rx="4" ry="6" transform="rotate(8 340 152)" />
+  </g>
+  <circle cx="380" cy="150" r="17" fill="none" stroke="#ed6c13" strokeWidth="2.5" />
+  <circle cx="380" cy="150" r="5" fill="#ed6c13" />
+  <text x="380" y="105" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fontWeight="600" fill="#ed6c13" textAnchor="middle">fingerprint mismatch</text>
+  <text x="380" y="121" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">detected, never declared</text>
+  <path d="M 380 150 C 440 175, 520 205, 620 215" fill="none" stroke="#ed6c13" strokeWidth="2.5" markerEnd="url(#dv-arrow)" />
+  <g fill="#ed6c13" fillOpacity="0.8">
+    <ellipse cx="440" cy="175" rx="4" ry="6" transform="rotate(28 440 175)" />
+    <ellipse cx="470" cy="189" rx="4" ry="6" transform="rotate(22 470 189)" />
+    <ellipse cx="530" cy="204" rx="4" ry="6" transform="rotate(16 530 204)" />
+  </g>
+  <text x="630" y="240" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="#ed6c13" fontWeight="600" textAnchor="middle">live from here</text>
+  <path d="M 66 232 L 66 244 L 360 244 L 360 232" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="213" y="266" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.75" textAnchor="middle">served from the log: free</text>
+  <path d="M 400 232 L 400 244 L 660 244 L 660 232" fill="none" stroke="#ed6c13" strokeOpacity="0.8" strokeWidth="1.5" />
+  <text x="530" y="266" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="#ed6c13" textAnchor="middle">metered: you pay only from the turn you took</text>
+</svg>
+
 Walk the logged route for free; the meter starts where you leave the trail. Ten variations of the drafter's instruction now cost ten drafts, not ten full expeditions, and the research agent's tool calls don't re-fire either: served steps never re-run their tools. Cheap tries compound. More tries is how programs get better.
 
 ## Detected, never declared

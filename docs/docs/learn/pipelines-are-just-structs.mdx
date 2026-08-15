@@ -45,7 +45,10 @@ impl Module for FrontDesk {
 That's the whole composition story. The `forward` body is ordinary Rust: call a step, use its output to build the next input, return the result. Want a branch? Write `if`. Want two extracts in parallel? `tokio::join!`. There's no framework vocabulary to learn because the framework's opinion is that Rust already had one.
 
 ```rust
-let desk = FrontDesk::new();
+let desk = FrontDesk {
+    extract: Predict::new(),
+    drafter: ChainOfThought::new(),
+};
 let out = desk.call(ExtractFactsInput { ticket: herman_ticket }).await?;
 println!("{}", out.reply);
 ```

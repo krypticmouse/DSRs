@@ -49,7 +49,7 @@ You just hand-edited a program. Never trust a hand-edited program, including you
 
 ```bash
 $ dsrs check frontdesk.dsrs
-ok: program `frontdesk` (9f3a...) - 6 nodes, 4 sigs, 2 models, 2 tools
+ok: program `frontdesk` (9f3ac2d17be04a51) - 6 nodes, 4 sigs, 2 models, 2 tools, caps { kb:read orders:read }
 $ dsrs fmt frontdesk.dsrs --write
 ```
 
@@ -91,6 +91,50 @@ The file is parsed and validated *while your crate compiles*, and the macro gene
 And for the struct lane, the same promotion exists at a smaller grain: `ModuleState` saves a tuned module's predictor state, instructions, demos, to JSON, and loads it back at startup. Same philosophy, different vehicle: the improvement travels as data, never as a code edit. Details in the [State reference](/docs/reference/state).
 
 ## The loop, closed
+
+<svg viewBox="0 0 760 340" role="img" aria-label="The map leaves home: the .dsrs file travels from the laptop through the dsrs check checkpoint to a serving host, and include_program brings it home again" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="jr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+    <marker id="jr-arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" fillOpacity="0.55" />
+    </marker>
+  </defs>
+  <rect x="50" y="90" width="130" height="80" rx="6" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <rect x="36" y="170" width="158" height="10" rx="5" fill="currentColor" fillOpacity="0.35" />
+  <circle cx="115" cy="130" r="16" fill="#ed6c13" fillOpacity="0.12" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="115" y="135" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.85" textAnchor="middle">bake</text>
+  <text x="115" y="205" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">home: tuned and baked</text>
+  <g transform="rotate(3 300 96)">
+    <rect x="262" y="60" width="76" height="72" rx="4" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+    <path d="M 338 60 L 322 60 L 338 76 Z" fill="currentColor" fillOpacity="0.2" />
+    <text x="300" y="92" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.9" textAnchor="middle">frontdesk</text>
+    <text x="300" y="106" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.9" textAnchor="middle">.dsrs</text>
+    <text x="300" y="122" fontFamily="ui-monospace, monospace" fontSize="8" fill="currentColor" fillOpacity="0.55" textAnchor="middle">lineage inside</text>
+  </g>
+  <rect x="400" y="66" width="96" height="94" rx="8" fill="#ed6c13" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <line x1="448" y1="82" x2="448" y2="118" stroke="#ed6c13" strokeWidth="2" />
+  <path d="M 448 82 L 476 90 L 448 98 Z" fill="#ed6c13" />
+  <text x="448" y="140" fontFamily="ui-monospace, monospace" fontSize="10.5" fontWeight="600" fill="#ed6c13" textAnchor="middle">dsrs check</text>
+  <text x="448" y="186" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">parse, types, ports,</text>
+  <text x="448" y="201" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">caps: customs for files</text>
+  <rect x="580" y="60" width="130" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <line x1="596" y1="88" x2="694" y2="88" stroke="currentColor" strokeOpacity="0.4" strokeWidth="2" />
+  <line x1="596" y1="114" x2="694" y2="114" stroke="currentColor" strokeOpacity="0.4" strokeWidth="2" />
+  <circle cx="608" cy="74" r="3" fill="#ed6c13" />
+  <circle cx="608" cy="101" r="3" fill="currentColor" fillOpacity="0.5" />
+  <text x="645" y="146" fontFamily="ui-monospace, monospace" fontSize="10.5" fontWeight="600" fill="currentColor" textAnchor="middle">dsrs serve</text>
+  <text x="645" y="162" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">:8080/run</text>
+  <text x="645" y="205" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">any host that can read</text>
+  <text x="645" y="220" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">the map can make the journey</text>
+  <line x1="196" y1="112" x2="252" y2="102" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <line x1="348" y1="102" x2="392" y2="110" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <line x1="504" y1="112" x2="572" y2="112" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <path d="M 620 250 C 500 300, 260 300, 140 250" fill="none" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" strokeDasharray="6 5" markerEnd="url(#jr-arrow-dim)" />
+  <text x="380" y="308" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8" textAnchor="middle">include_program!("frontdesk.dsrs")</text>
+  <text x="380" y="325" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">the map comes home, checked at the border of your build</text>
+</svg>
 
 Trace the journey once, end to end, because thirteen chapters happen in this paragraph. You wrote a plain Rust function. It projected into a map. An optimizer laid tracing paper on the map, guided by a judge reading real replies from real recorded runs. The winner baked into a file with its pedigree stamped inside. The file passed customs and became an endpoint, and could just as well compile back into the next binary. At no point did "improve the program" ever mean "edit the source."
 

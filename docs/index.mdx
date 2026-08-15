@@ -33,6 +33,46 @@ DSRs is built on one bet: **every harness should also have a map**. A single pag
 
 The map is not the territory. Unless the map is generated from the territory.
 
+<svg viewBox="0 0 760 430" role="img" aria-label="The same harness twice: below, the territory (code that runs); above, the map generated from it on every build" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="pg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <rect x="40" y="270" width="680" height="130" rx="10" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" />
+  <text x="60" y="298" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the territory</text>
+  <text x="60" y="316" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">code that runs: real, effectful, opaque</text>
+  <circle cx="300" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <circle cx="420" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <circle cx="540" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <line x1="317" y1="335" x2="403" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <line x1="437" y1="335" x2="523" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <line x1="292" y1="372" x2="308" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
+  <line x1="408" y1="372" x2="432" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
+  <line x1="530" y1="372" x2="550" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
+  <path d="M 380 262 C 380 232, 380 222, 380 196" fill="none" stroke="#ed6c13" strokeWidth="2.5" markerEnd="url(#pg-arrow)" />
+  <text x="396" y="234" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="#ed6c13">generated on every build</text>
+  <text x="396" y="250" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">so it cannot drift, and cannot lie</text>
+  <g transform="rotate(-2 380 105)">
+    <rect x="200" y="28" width="360" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <path d="M 560 28 L 536 28 L 560 52 Z" fill="currentColor" fillOpacity="0.15" />
+    <text x="220" y="56" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk</text>
+    <circle cx="270" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <circle cx="360" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <circle cx="450" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <line x1="281" y1="100" x2="349" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
+    <line x1="371" y1="100" x2="439" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
+    <text x="270" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">triage</text>
+    <text x="360" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
+    <text x="450" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">out</text>
+    <line x1="220" y1="152" x2="470" y2="152" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+    <line x1="220" y1="166" x2="400" y2="166" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  </g>
+  <text x="580" y="70" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the map</text>
+  <text x="580" y="88" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">one page you can hold,</text>
+  <text x="580" y="104" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">diff, serve, and improve</text>
+</svg>
+
 This is what a DSRs program looks like when it's written down. No Rust yet, just the map:
 
 ```text

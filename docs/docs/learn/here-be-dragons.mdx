@@ -9,10 +9,44 @@ Old maps had a convention for the regions no surveyor had reached: *hic sunt dra
 Your `frontdesk` map ended Chapter 6 with a dragon on it:
 
 ```text
-clean = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
+clean = hole clean_hole (ticket = $.ticket) caps [] extern "a90e86e4381f68a9"
 ```
 
 Every real program has one of these. A custom filter, a scoring rule, a line of glue that only makes sense in your codebase. Most frameworks handle this moment in one of two dishonest ways: forbid your logic, or silently lose track of it. DSRs does neither. It surveys the coastline and marks the interior.
+
+<svg viewBox="0 0 760 400" role="img" aria-label="A map with a here-be-dragons region: the coastline is precisely typed while the interior stays private; a JS dragon travels inside the map, a native dragon is chained to the binary outside it" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <rect x="30" y="30" width="460" height="340" rx="8" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="52" y="60" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk</text>
+  <circle cx="100" cy="120" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="100" y="150" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.7" textAnchor="middle">sum</text>
+  <circle cx="100" cy="230" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="100" y="260" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
+  <line x1="100" y1="133" x2="100" y2="217" stroke="#ed6c13" strokeWidth="1.5" />
+  <path d="M 220 100 C 260 78, 330 82, 380 100 C 430 118, 448 170, 430 220 C 412 268, 350 292, 295 280 C 240 268, 200 230, 205 175 C 208 142, 200 112, 220 100 Z" fill="currentColor" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <rect x="180" y="160" width="96" height="18" rx="4" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="228" y="173" fontFamily="ui-monospace, monospace" fontSize="10" fill="#fff" textAnchor="middle">in ticket: string</text>
+  <rect x="386" y="228" width="96" height="18" rx="4" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="434" y="241" fontFamily="ui-monospace, monospace" fontSize="10" fill="#fff" textAnchor="middle">out clean: string</text>
+  <path d="M 280 160 C 320 150, 340 170, 330 195 C 322 215, 290 218, 285 240 C 282 255, 300 262, 318 258" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="3" strokeLinecap="round" />
+  <path d="M 300 152 L 306 140 L 314 152 M 322 158 L 330 148 L 336 160" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="2" strokeLinecap="round" />
+  <circle cx="279" cy="162" r="2.5" fill="currentColor" fillOpacity="0.8" />
+  <text x="318" y="205" fontFamily="ui-serif, serif" fontSize="11" fontStyle="italic" fill="currentColor" fillOpacity="0.65" textAnchor="middle">here be dragons</text>
+  <rect x="288" y="288" width="60" height="17" rx="4" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1" />
+  <text x="318" y="300" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.75" textAnchor="middle">js``` ... ```</text>
+  <text x="318" y="322" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">sandboxed: travels inside the map</text>
+  <path d="M 590 120 C 630 110, 650 130, 640 155 C 632 175, 600 178, 595 200 C 592 215, 610 222, 628 218" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="3" strokeLinecap="round" />
+  <path d="M 610 112 L 616 100 L 624 112 M 632 118 L 640 108 L 646 120" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="2" strokeLinecap="round" />
+  <circle cx="589" cy="122" r="2.5" fill="currentColor" fillOpacity="0.8" />
+  <rect x="560" y="270" width="150" height="70" rx="8" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="635" y="298" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor" textAnchor="middle">your binary</text>
+  <text x="635" y="318" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">extern "a90e86e4381f68a9"</text>
+  <circle cx="618" cy="232" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <circle cx="622" cy="245" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <circle cx="626" cy="258" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <text x="635" y="360" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">native: anchored to one binary</text>
+  <text x="520" y="60" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">exact borders,</text>
+  <text x="520" y="76" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">private interior</text>
+</svg>
 
 ## A dragon with a surveyed coastline
 
@@ -29,7 +63,11 @@ for hole in frontdesk::OPACITY {
 ```
 
 ```text
-clean (host): { let t : String = ticket . clone () ; t . split_whitespace () ... }
+clean (host): {
+    let t : String = ticket;
+    t.split_whitespace().map(| w | if w.contains('@') { "[email]" } else
+    { w }).collect :: < Vec < & str > > ().join(" ")
+}
 ```
 
 Name, kind, the actual source excerpt, and why it couldn't be lowered. If your policy is "no dragons, period", say so and the build enforces it:
