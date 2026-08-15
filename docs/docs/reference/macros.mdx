@@ -1,6 +1,6 @@
 ---
 title: "Macros"
-description: "Reference for every DSRs proc macro: Signature derive, predict, cot, agent, tool, module, and include_program"
+description: "Reference for every DSRs proc macro: Signature derive, Schema, predict, cot, agent, tool, module, and include_program"
 icon: "wand-magic-sparkles"
 ---
 
@@ -19,7 +19,7 @@ It only supports structs with named fields. Every field must carry `#[input]` or
 | `#[input]` / `#[input(desc = "...")]` | any field | Marks the field as an input. `desc` overrides the doc-comment description. |
 | `#[output]` / `#[output(desc = "...")]` | any field | Marks the field as an output. `desc` overrides the doc-comment description. |
 | `#[alias = "name"]` or `#[alias("name")]` | input or output | The name the LM sees, instead of the Rust field name. Two fields may not share one LM name after aliasing. |
-| `#[format = "json"]` | inputs only | Renders the input value in a structured format. Allowed values: `"json"`, `"yaml"`, `"toon"`. Once per field. |
+| `#[format = "json"]` or `#[format("json")]` | inputs only | Renders the input value in a structured format. Allowed values: `"json"`, `"yaml"`, `"toon"`. Once per field. |
 | `#[render(jinja = "...")]` | inputs only | Renders the input through a Jinja template. The template syntax is validated at compile time. Cannot be combined with `#[format]`. |
 | `#[check("expr", label = "name")]` | outputs | A soft constraint on the value. The label is required. |
 | `#[assert("expr")]` | outputs | A hard constraint on the value. A label is optional: `#[assert("expr", label = "name")]`. |
@@ -34,6 +34,28 @@ These produce compile errors, with a hint in each message: bare function types, 
 ### What it generates
 
 For a struct `Name`, the derive emits `NameInput` and `NameOutput` helper structs (each with a `new(...)` constructor), field metadata tables, and the `Signature` trait impl (instruction, input and output shapes, field metadata).
+
+## `#[Schema]`
+
+Marks a nested struct or enum as usable inside `#[derive(Signature)]` fields.
+
+```rust
+#[derive(Debug, Clone)]
+#[Schema]
+/// A citation reference.
+pub struct Citation {
+    /// Document identifier.
+    pub doc_id: String,
+    /// Relevant quote.
+    pub quote: String,
+}
+```
+
+The attribute takes no arguments. It expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` plus the crate-path attributes, which is all a type needs to satisfy the blanket `Schema` trait impl. Doc comments on the type and its fields become descriptions in the rendered prompt schema.
+
+On enums, the attribute injects `#[repr(u8)]` when no explicit `#[repr(...)]` is present (facet requires a representation; Signature enums are unit-only value enums).
+
+**Compat**: `#[BamlType]` is a deprecated alias from the old vendored BAML integration; it expands to exactly the same derives as `#[Schema]`.
 
 ## `#[predict]`
 
@@ -115,7 +137,7 @@ Compiles an ordinary async Rust function body into an IR `Program`. One parse, t
 **Accepted body shape** (straight-line only):
 
 - `let x = step(args).await?;` where `step` is a `#[predict]`, `#[cot]`, or `#[agent]` function. Arguments must be ports: function parameters, prior `binding.field` accesses, or literals (`.clone()` and `&` wrappers are stripped).
-- `let y: SimpleType = <any Rust expr>;` becomes a typed extern (host) hole. The type ascription is required and must be simple: `String`, `i64`/`i32`, `f64`/`f32`, `bool`, `Vec<...>`, `Option<...>`. Port-shaped subexpressions become the hole's inputs; the rest runs as native code bound by name at load; the artifact records it as `extern "<hash>"`.
+- `let y: SimpleType = <any Rust expr>;` becomes a typed extern (host) hole. The type ascription is required and must be simple: `String`, `bool`, an integer width from `i8` through `i64` or `u8` through `u32`, `f32`/`f64`, or `Vec<...>`/`Option<...>` of those. Port-shaped subexpressions become the hole's inputs; the rest runs as native code bound by name at load; the artifact records it as `extern "<hash>"`.
 - A tail expression `Ok(Struct { field: port, ... })` giving the program's output bindings.
 
 The function must be `async`, cannot be generic, and must return `Result<Out, Err>` where `Err: From<dspy_rs::ir::RunError>`.
@@ -151,3 +173,9 @@ The macro expands in place to a module named after the file stem (`qa.dsrs` beco
 The path resolves relative to `CARGO_MANIFEST_DIR`, with the invoking file's directory as a fallback base; absolute paths are used as-is.
 
 **Validation layering**: the macro checks syntax only at build time (the `dsrs 1` pragma, keyword vocabulary, declaration shapes, balanced delimiters, strings, numbers, code fences). Types, dataflow, capability subsets, and all other semantics are checked by the real parser at first use of `program()` or `try_program()`, and at CI time by the generated test: run `cargo test` and a semantically invalid artifact fails the suite even if never executed.
+
+## See also
+
+- [Signatures and types](/docs/reference/signatures-and-types)
+- [Program and nodes](/docs/reference/program-and-nodes)
+- [Write steps](/docs/guides/write-steps)

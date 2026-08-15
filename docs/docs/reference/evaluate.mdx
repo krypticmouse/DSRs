@@ -1,5 +1,100 @@
 ---
-title: "WIP"
+title: "Evaluation"
+description: "TypedMetric, Eval, the trainset evaluation loop, and feedback helper functions"
+icon: "gauge-high"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+The `evaluate` module defines how you tell an optimizer what "good" means: a metric trait, a result type, a concurrent evaluation loop, and helper functions that build rich textual feedback.
+
+## TypedMetric
+
+`TypedMetric<S, M>` is the metric trait. It is generic over `S: Signature` and `M: Module<Input = S::Input>`, so the metric sees fully typed data: the example with its typed input and expected output, and the prediction as the module actually produced it (for example `WithReasoning<QAOutput>` from `ChainOfThought`).
+
+```rust
+pub trait TypedMetric<S, M>: Send + Sync {
+    async fn evaluate(
+        &self,
+        example: &Example<S>,
+        prediction: &Predicted<M::Output>,
+        trace: Option<&Trace>,
+    ) -> Result<Eval>;
+}
+```
+
+| Argument | Meaning |
+|---|---|
+| `example` | The `Example<S>` under evaluation, with fields `input: S::Input` and `output: S::Output` (the ground truth) |
+| `prediction` | The module's `Predicted<M::Output>` |
+| `trace` | The rollout's execution [`Trace`](/docs/reference/traces) when the caller captured one. The evaluation loop always passes `Some`; direct callers may pass `None`. Slice it per component with `trace.for_component("retriever")` |
+
+Return `Eval::score(f64)` for a numerical score, `Eval::with_feedback(f64, text)` to also explain why. Scores are 0.0 to 1.0 by convention.
+
+## Eval and Rollout
+
+`Eval` is defined in the trace module and re-exported by `evaluate`.
+
+| Type | Definition | Notes |
+|---|---|---|
+| `Eval` | `{ score: f64, feedback: Option<String> }` | Constructors: `Eval::score(score)` and `Eval::with_feedback(score, feedback)` |
+| `Rollout` | `(Eval, Trace)` | One evaluated rollout: the metric result plus the execution trace that produced it, with `Trace::outcome` filled in (serialized output, the `Eval`, duration) |
+
+The public evaluation entry points return `Vec<Eval>`; the traced `Rollout` path is what optimizers consume internally.
+
+## Evaluation functions
+
+| Item | Signature | Behavior |
+|---|---|---|
+| `evaluate_trainset` | `async fn(module: &M, trainset: &[Example<S>], metric: &MT) -> Result<Vec<Eval>>` | Runs the module on every example and scores each with the metric. Results come back in trainset order. Any `Module::call` or `TypedMetric::evaluate` failure propagates immediately; for fault-tolerant batching use `forward_all` instead |
+| `evaluate_trainset_with_concurrency` | `async fn(module, trainset, metric, max_concurrency: usize) -> Result<Vec<Eval>>` | Same loop with an explicit concurrency level. `max_concurrency` LM calls run in flight at once (clamped to at least 1). Use `1` for strictly sequential evaluation on rate-limited providers |
+| `DEFAULT_EVAL_CONCURRENCY` | `const usize = 16` | Concurrency used by `evaluate_trainset` |
+| `average_score` | `fn(evals: &[Eval]) -> f64` | Arithmetic mean of scores; returns `0.0` for an empty slice |
+
+Each example runs inside a trace capture scope and the metric receives that rollout's `Trace`. Metric evaluation itself happens outside the scope, so LM-as-judge metrics do not pollute the execution trace.
+
+```rust
+let evals = evaluate_trainset(&module, &trainset, &metric).await?;
+println!("Average: {:.3}", average_score(&evals));
+```
+
+## Feedback helpers
+
+Helper functions in `evaluate::feedback_helpers` construct `Eval`s with structured textual feedback for common domains. All return `Eval`.
+
+| Function | Signature | Purpose |
+|---|---|---|
+| `retrieval_feedback` | `(retrieved: &[impl AsRef<str>], expected: &[impl AsRef<str>], context_docs: Option<&[impl AsRef<str>]>)` | Document retrieval. Score is F1; feedback lists correctly retrieved, missed, and incorrectly retrieved documents with precision, recall, and F1. Precision is `0.0` when `retrieved` is empty; recall is `1.0` when `expected` is empty |
+| `code_pipeline_feedback` | `(stages: &[(CodeStage, StageResult)], final_score: f64)` | Code generation pipelines. Feedback reports each stage in order and stops at the first failure; the score is the caller-supplied `final_score` |
+| `multi_objective_feedback` | `(objectives: &HashMap<String, (f64, String)>, weights: Option<&HashMap<String, f64>>)` | Multi-objective evaluation. Score is the weighted average (default weight `1.0` per objective); feedback lists each objective, sorted by name, plus the aggregate |
+| `string_similarity_feedback` | `(predicted: &str, expected: &str)` | String comparison. `1.0` for an exact trimmed match, `0.95` for a case-insensitive match, otherwise word-level F1 with missing and extra words listed |
+| `classification_feedback` | `(predicted_class: &str, expected_class: &str, confidence: Option<f64>)` | Classification. `1.0` on exact class match, `0.0` otherwise; feedback names the expected and predicted classes and the confidence when given |
+
+Supporting enums for `code_pipeline_feedback`:
+
+| Enum | Variants |
+|---|---|
+| `CodeStage` | `Parse`, `Compile`, `Execute`, `Test` |
+| `StageResult` | `Success`, `Failure { error: String }` |
+
+## Metrics and optimizers
+
+Optimizers call the evaluation loop internally; the metric you hand them determines what they can do with the results.
+
+| Metric style | Constructor | Sufficient for |
+|---|---|---|
+| Score-only | `Eval::score(f64)` | `COPRO`, `MIPROv2`, and any optimizer that ranks candidates by `average_score` |
+| Score plus feedback | `Eval::with_feedback(f64, text)` | Required by `GEPA`, which feeds the textual feedback into its reflection step to guide evolutionary search |
+
+The feedback helpers above exist mainly to serve GEPA: a metric that explains why a rollout scored low gives the reflection model something concrete to fix. See [Optimizers](/docs/reference/optimizers) for the optimizer-side contract and [What does "better" mean?](/docs/learn/what-does-better-mean) for how scores drive candidate selection.
+
+## See also
+
+- [Optimizers](/docs/reference/optimizers)
+- [Traces](/docs/reference/traces)
+- [Data](/docs/reference/data)
+- [GEPA](/docs/optimizers/gepa)
+- [GEPA with an LLM judge](/docs/optimizers/gepa-llm-judge)
+- [What does "better" mean?](/docs/learn/what-does-better-mean)
+- [Example: evaluate on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs)
+- [Example: optimize on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs)
+- [Example: GEPA sentiment](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/09-gepa-sentiment.rs)
+- [Example: GEPA LLM judge](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/10-gepa-llm-judge.rs)

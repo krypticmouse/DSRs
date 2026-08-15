@@ -4,7 +4,7 @@ description: 'Turn signatures into prompts and parse LM responses'
 icon: 'arrows-turn-to-dots'
 ---
 
-An adapter sits between your [signature](/docs/building-blocks/signature) and the LM. It formats typed inputs into prompts and parses LM responses back into typed outputs.
+An adapter sits between your [signature](/docs/reference/signatures-and-types) and the LM. It formats typed inputs into prompts and parses LM responses back into typed outputs.
 
 ## What adapters do
 
@@ -69,7 +69,7 @@ This protocol (inspired by DSPy) allows mixing natural language with structured 
 
 ### Type schemas
 
-For complex types, the adapter renders full schemas using BAML's schema format:
+For complex types, the adapter renders full schemas with `typesys::render`: `type_name` produces the short inline label, and `schema_block` expands class field layouts and enum value lists:
 
 ```
 [[ ## analysis ## ]]
@@ -95,23 +95,26 @@ Type names are simplified for readability:
 - `class`/`enum` prefixes removed
 - `" | "` → `" or "` (more natural)
 
-### Robust parsing with jsonish
+### Tolerant parsing with typesys::coerce
 
-Response parsing uses BAML's `jsonish` parser, which handles:
+Response parsing uses `typesys::coerce`, a tolerant coercer that turns raw LM field text into typed values, guided by the expected field type. It handles:
 
-- **Malformed JSON** - Missing quotes, trailing commas
-- **Markdown fences** - Extracts JSON from ```json blocks
-- **Type coercion** - `"42"` → `42`, `"true"` → `true`
-- **Partial recovery** - Returns what it can parse + all errors
+- **Markdown fences** - Strips ```json fences before parsing
+- **Lists from prose** - Parses bulleted or numbered lists into arrays
+- **Type coercion** - `"42"` → `42`, `"yes"` → `true` (loose bool and number spellings)
+- **Surrounding text** - Ignores extra prose around a JSON object or array
+- **Partial recovery** - Per-field failures aggregate; you get every error plus what did parse
 
 ```rust
-// Internally:
-jsonish::from_str(output_format, &type_ir, &raw_text, true)
+// Internally, per output field:
+typesys::coerce(raw_text, field_type, &output_schema.types)
 ```
+
+Each non-fatal fix (a stripped fence, a coerced scalar) is recorded as a `Flag` on the returned `Coerced` value.
 
 ### Constraint evaluation
 
-After parsing, the adapter runs [constraints](/docs/building-blocks/constraints):
+After parsing, the adapter runs [constraints](/docs/reference/signatures-and-types):
 
 - `#[check]` results → stored in metadata
 - `#[assert]` failures → returns `ParseError::AssertFailed`
@@ -123,13 +126,13 @@ Parse errors aggregate - you get all problems, not just the first:
 ```rust
 ParseError::Multiple {
     errors: vec![...],  // all field errors
-    partial: Some(BamlValue::Map(...)),  // what did parse
+    partial: Some(serde_json::Value::Object(...)),  // what did parse
 }
 ```
 
 ## Using the adapter directly
 
-Usually you don't touch the adapter - `Predict` handles it. But for debugging:
+Usually you do not touch the adapter - `Predict` handles it. But for debugging:
 
 ```rust
 use dspy_rs::ChatAdapter;
@@ -182,7 +185,7 @@ struct Search {
 `ChatAdapter` configures MiniJinja with strict undefined behavior.
 Available filters include:
 - MiniJinja built-ins
-- BAML parity helpers (`regex_match`, `sum`)
+- `regex_match` and `sum` helpers
 - `truncate` for length-limited string rendering
 
 If template rendering fails at runtime (for example, missing variables), `ChatAdapter` panics.
@@ -190,7 +193,7 @@ Compiled templates are cached process-wide by template string.
 
 ## Real example: Insurance claim extraction
 
-Here's what a prompt looks like for a complex nested type (from [`examples/16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)):
+This is what a prompt looks like for a complex nested type (from [`examples/16-insurance-claim-prompt.rs`](https://github.com/darinkishore/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)):
 
 ```rust
 #[derive(Signature, Clone, Debug)]
@@ -210,7 +213,8 @@ pub struct InsuranceClaimInfo {
 type NaiveDate = String;  // dates as YYYY-MM-DD strings
 
 /// Basic claim information (metadata about the claim intake).
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub struct ClaimHeader {
     /// Claim ID in format `CLM-XXXXXX`, where `X` is a digit.
     pub claim_id: Option<String>,
@@ -225,7 +229,8 @@ pub struct ClaimHeader {
 }
 
 /// Channel used to report a claim.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub enum ClaimChannel {
     Email,
     Phone,
@@ -234,7 +239,8 @@ pub enum ClaimChannel {
 }
 
 /// Policy information if available.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub struct PolicyDetails {
     /// Policy number in format `POL-XXXXXXXXX`, where `X` is a digit.
     pub policy_number: Option<String>,
@@ -249,7 +255,8 @@ pub struct PolicyDetails {
 }
 
 /// Type of insurance coverage.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub enum CoverageType {
     Property,
     Auto,
@@ -260,7 +267,8 @@ pub enum CoverageType {
 }
 
 /// An insured object involved in the claim (vehicle, building, person, etc.).
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub struct InsuredObject {
     /// Unique identifier for insured object.
     ///
@@ -283,7 +291,8 @@ pub struct InsuredObject {
 }
 
 /// Type of insured object.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub enum InsuredObjectType {
     Vehicle,
     Building,
@@ -292,7 +301,8 @@ pub enum InsuredObjectType {
 }
 
 /// Structured incident details.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub struct IncidentDescription {
     /// Specific standardized incident type.
     pub incident_type: IncidentType,
@@ -305,7 +315,8 @@ pub struct IncidentDescription {
 }
 
 /// Specific standardized incident type.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub enum IncidentType {
     RearEndCollision,
     SideImpactCollision,
@@ -325,7 +336,8 @@ pub enum IncidentType {
 }
 
 /// Standardized location type where incident occurred.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub enum LocationType {
     Intersection,
     Highway,
@@ -339,7 +351,8 @@ pub enum LocationType {
 }
 
 /// Top-level insurance claim object aggregating all extracted fields.
-#[derive(Debug, Clone, PartialEq, Eq, BamlType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[Schema]
 pub struct InsuranceClaim {
     /// Basic claim information.
     pub header: ClaimHeader,
@@ -506,5 +519,11 @@ Notice how:
 ## Design notes
 
 - **DSPy inspiration:** Marker protocol from DSPy's ChatAdapter
-- **BAML inspiration:** Schema rendering and jsonish parsing from BAML
-- **Separation of concerns:** Adapter doesn't know about LMs - just formatting/parsing
+- **BAML heritage:** Schema rendering and tolerant parsing were originally built on the vendored BAML stack (`jsonish` and its schema renderer). The in-house `typesys` module (`typesys::render`, `typesys::coerce`) replaced that stack while keeping the same prompt-facing schema style.
+- **Separation of concerns:** Adapter does not know about LMs - just formatting/parsing
+
+## See also
+
+- [Signatures and types](/docs/reference/signatures-and-types)
+- [Predict](/docs/reference/predict)
+- [Language models](/docs/reference/lm)

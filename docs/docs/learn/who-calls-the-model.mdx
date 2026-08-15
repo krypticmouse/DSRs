@@ -1,5 +1,157 @@
 ---
-title: "WIP"
+title: "So Who Calls the Model?"
+description: "Chapter 3, in which signatures stay pure, predictors carry the baggage, and two models split the work"
+icon: "phone"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+At the end of the last chapter you had three wishes. Show the model solved examples. Let it think before it commits. Put cheap work on a cheap model. And a suspicious little type standing right where all three wishes point:
+
+```rust
+let extract = Predict::<ExtractFacts>::new();
+```
+
+Time to actually read that line. `ExtractFacts` is your signature: pure data, a contract, no behavior. `Predict` is the thing that *executes* contracts: it formats the prompt, sends it, parses the reply. Which raises the design question this chapter answers: when you want to change *how* the call happens, without changing *what* it promises, where does that configuration go?
+
+Into the caller. Signatures stay pure. Predictors carry the baggage.
+
+## Wish one: show, don't tell
+
+There's a ticket shape that keeps fooling your triage: "I was charged twice after the update crashed." Is that Billing or a Bug? You could grow the instruction another sentence, and another, and by Friday it's a legal document. Or you could do what you'd do with a new human hire: show them two solved tickets.
+
+```rust
+use dspy_rs::Example;
+
+let triage = Predict::<Triage>::builder()
+    .demo(Example::<Triage>::new(
+        TriageInput {
+            ticket: "The update crashed mid-payment and I got charged twice.".into(),
+        },
+        TriageOutput { category: Category::Billing },
+    ))
+    .demo(Example::<Triage>::new(
+        TriageInput {
+            ticket: "App crashes every time I open the feeding log.".into(),
+        },
+        TriageOutput { category: Category::Bug },
+    ))
+    .build();
+```
+
+These are **demos**: typed input/output pairs that ride along in the prompt as worked examples. Meet `Example<S>` properly, because it will follow you through this whole book: one typed input plus the output you'd accept for it. Today, two of them teach a predictor. In [Chapter 11](/docs/learn/what-does-better-mean), sixty of them become a dataset. Same type, growing responsibilities.
+
+Notice what did *not* change: `Triage` the signature. The contract is untouched. Two predictors with different demos are two behaviors honoring one promise.
+
+## Wish two: think first
+
+Drafting a reply is not extraction. It's judgment: what to acknowledge, what to explain, what not to promise. When a model answers judgment questions cold, quality gets random. You want it to reason its way in before committing.
+
+Here's the trick, and it's a signature trick, not a prompt trick: a step that reasons is just a step whose output has one extra field in front.
+
+```rust
+use dspy_rs::ChainOfThought;
+
+/// Write a warm, concrete reply to a Sourdough support ticket.
+/// Never promise a refund. Sign off as "The Sourdough Team".
+#[derive(Signature, Clone, Debug)]
+struct DraftReply {
+    /// The customer's ticket
+    #[input]
+    ticket: String,
+    /// One-sentence summary from triage
+    #[input]
+    summary: String,
+    #[input]
+    mood: Mood,
+
+    /// The reply to send
+    #[output]
+    reply: String,
+}
+
+let drafter = ChainOfThought::<DraftReply>::new();
+```
+
+`ChainOfThought<S>` isn't a new machine. It is literally a `Predict` over your signature *augmented* with a prepended `reasoning` output. Same contract, plus "show your work." The result derefs to your output as usual, and the work is right there when you want to read it:
+
+```rust
+let draft = drafter.call(input).await?;
+println!("reasoning: {}", draft.reasoning);
+println!("reply:\n{}", draft.reply);
+```
+
+```text
+reasoning: The customer fears data loss and is frustrated; reassure first,
+then explain that starter history is stored locally and survives updates...
+reply:
+Hi there, first: Herman is safe...
+```
+
+Swapping `Predict` for `ChainOfThought` changed the strategy. The signature never heard about it.
+
+## Wish three: the right model for the job
+
+Extraction is cheap pattern work. Reply-writing is the voice of your company. Paying flagship prices for triage is burning money; drafting with the budget model is burning trust.
+
+You've been setting one global model with `configure(...)` since Chapter 1. That stays, as the default. But a predictor can carry its own:
+
+```rust
+use dspy_rs::LM;
+
+let fast = LM::builder()
+    .model("openai:gpt-4o-mini".to_string())
+    .build()
+    .await?;
+
+let strong = LM::builder()
+    .model("openai:gpt-4o".to_string())
+    .temperature(0.7)
+    .build()
+    .await?;
+
+let triage = Predict::<Triage>::builder()
+    .demo(/* ... */)
+    .lm(fast)
+    .build();
+
+let drafter = ChainOfThought::<DraftReply>::builder()
+    .lm(strong)
+    .build();
+```
+
+The provider prefix routes the call: `openai:`, `anthropic:`, `gemini:`, `groq:`, `ollama:` and friends all work, so "cheap model" and "strong model" don't even have to share a company.
+
+And when you want to know what a call actually cost, the answer rides home on the result. That `Predicted<O>` wrapper you've been dereferencing since Chapter 1 carries the receipts:
+
+```rust
+let usage = &draft.metadata().lm_usage;
+println!("{} in / {} out", usage.prompt_tokens, usage.completion_tokens);
+```
+
+Output fields by deref, everything else by `.metadata()`: token usage, the raw response text, per-field parse details, your constraint verdicts from Chapter 2.
+
+## The shape of what you just built
+
+Step back. The front desk now has two workers:
+
+```text
+ticket ──> triage (Predict, 2 demos, fast model) ──> facts
+facts  ──> drafter (ChainOfThought, strong model) ──> reply
+```
+
+One contract each, one caller each, and every "how" decision, demos, strategy, model, temperature, lives in the caller where it can vary. Keep a finger on this page: in [Chapter 12](/docs/learn/tracing-paper), when an optimizer starts proposing better demos and better instructions, *predictor state is exactly the surface it edits*. You've been building the optimizer's control panel since page one without knowing it.
+
+## The ceiling
+
+Now for some honest discomfort.
+
+For three chapters you've been trusting machinery you have never seen. You declare structs; prompts happen. Models answer; enums appear. Demos "ride along in the prompt", says this very page, and you nodded. *Where* in the prompt? Formatted how? When the model returned that `Mood` enum, what exactly did it read that made `Furious` a legal answer and `kinda mad` not?
+
+You're an engineer. You don't trust a layer you've never opened, and you shouldn't. Time to print the actual prompt.
+
+<Card title="Chapter 4: What Did the Model Actually See?" icon="arrow-right" href="/docs/learn/what-the-model-sees" horizontal>
+  An interlude, in which we open the hood exactly once, read a real prompt end to end, and watch a mangled reply get rescued.
+</Card>
+
+---
+
+**Skip the story:** the lookup pages for this chapter are [Predict](/docs/reference/predict) (builder surface, `Predicted`, `CallMetadata`, every error variant), [Modules](/docs/reference/modules) (ChainOfThought, ReAct, augmentation), and [LM](/docs/reference/lm) (builder fields, providers, caching).

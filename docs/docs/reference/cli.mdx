@@ -1,5 +1,56 @@
 ---
-title: "WIP"
+title: "CLI"
+description: "Reference for the dsrs binary: check, fmt, and the HTTP serving host for .dsrs programs"
+icon: "terminal"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+The `dsrs` binary is the `.dsrs` toolchain: check, fmt, serve. It ships as the `dsrs-cli` crate; every subcommand is a plain library function (`dsrs_cli::check`, `dsrs_cli::fmt`, `dsrs_cli::serve`), and the binary itself is argument parsing plus process exit codes. All subcommands exit 0 on success and non-zero on failure.
+
+## `dsrs check <program>`
+
+Parses and validates a `.dsrs` artifact via `Program::load_dsrs`, running the full pipeline: lex and parse with positions, lowering, `Program::validate`, hash sealing. This is exactly what `Interpreter::load` would accept, which makes `check` a pre-commit gate for a human and a regeneration signal for a model loop.
+
+On success it prints one line to stdout: `ok: program` with the program name, its 16-hex hash, the node, signature, model, and tool counts, and the caps set when non-empty. On failure the parser's error goes to stderr with the artifact path and a `line N, column M: expected ...` position, and the exit code is non-zero.
+
+## `dsrs fmt <program> [--write]`
+
+Prints (or rewrites) the canonical form of an artifact. The canonical form is `Program::to_dsrs`, the same text that seals `program_hash` and that `bake` writes. Formatting is parse then print, never token shuffling, so an artifact that does not parse does not format.
+
+| Flag | Effect |
+|---|---|
+| (none) | Prints the canonical text to stdout. |
+| `--write` | Rewrites the file in place, only when the bytes differ. Reports ``formatted `<path>` `` or `` `<path>` already canonical`` on stderr. |
+
+## `dsrs serve <program> [flags]`
+
+Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host <addr>` | `127.0.0.1` | Bind address. |
+| `--port <n>` | `8080` | Bind port (0 binds an ephemeral port). |
+| `--overlay <path>` | none | Overlay JSON in the named form (`{"<param path>": <value>, ...}`), applied read-through on every run. |
+| `--allow <CAP>` | none | Capability grant, repeatable: `--allow net:search --allow fs:read`. Load is refused (with the missing set printed) when the program's caps exceed the grants. |
+
+<Warning>
+Host tools cannot be served: a program declaring a host tool needs an embedding host that supplies the binding (`include_program!` plus your own code, or a sandboxed `js` tool instead). The load surfaces that refusal with a hint rather than a bare unbound-tool error.
+</Warning>
+
+### HTTP endpoints
+
+| Endpoint | What it returns |
+|---|---|
+| `POST /run` | Body is a JSON object of input fields; the response is `{"output": ...}`. With `?trace=1` (or `?trace=true`) the run executes inside a capture scope and the response adds `"trace_jsonl"`, the exact trace artifact text with `param_ids` attached. |
+| `GET /schema` | The program's external interface: `{"program", "program_hash", "signature", "types"}`, the main signature and the type table in their serde forms. |
+| `GET /program` | The canonical `.dsrs` text, as `text/plain; charset=utf-8`. |
+| `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
+
+Error responses are always `{"error": ...}` with the interpreter's own message: a non-object request body and input-surface rejections are 400, everything else (LM failures, parse failures, budget, routing) is 500.
+
+## See also
+
+- [The .dsrs file](/docs/reference/dsrs-file): the artifact format the toolchain operates on.
+- [Program and nodes](/docs/reference/program-and-nodes): what `check` validates and `fmt` prints.
+- [Runtime](/docs/reference/runtime): `Interpreter`, `RuntimeEnv`, capability grants, and overlays.
+- [Traces](/docs/reference/traces): the trace artifact `POST /run?trace=1` returns.
+- [Print and serve](/docs/guides/print-and-serve): the guide-track walk through baking and serving a program.

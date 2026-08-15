@@ -6,7 +6,7 @@ icon: 'arrow-down-a-z'
 
 The Language Model (`LM`) struct is a configurable client for calling LLM providers, with built-in caching and history tracking.
 
-This page explains what an LM is in DSRs, how it’s structured in Rust terms, and how it cooperates with other building blocks.
+This page explains what an LM is in DSRs, how it is structured in Rust terms, and how it cooperates with other building blocks.
 
 ## What is an LM?
 
@@ -23,14 +23,19 @@ It handles three core responsibilities:
 
 ### Structure
 
-`LM` is built using the builder pattern and holds:
+`LM` is built using the builder pattern. The builder collects an `LMConfig`, the serializable data half, and `build()` initializes the live client. The config holds:
   - `model` - Model identifier (e.g., "gpt-4o-mini" or "openai:gpt-4o-mini")
   - `api_key` - Provider API credentials (optional for local servers)
   - `base_url` - API endpoint URL (optional, inferred from model provider)
   - `temperature` - Sampling temperature (default: 0.7)
   - `max_tokens` - Maximum completion tokens (default: 512)
-  - `cache` - Enable response caching (default: true)
-  - `client` - Internal HTTP client (initialized during build)
+  - `max_tool_iterations` - Upper bound on tool-loop round trips (default: 10)
+  - `max_retries` - Additional attempts after a transient failure (default: 2)
+  - `retry_base_delay_ms` - Base delay for exponential retry backoff (default: 250)
+  - `cache` - Enable response caching (default: false)
+
+The live `LM` adds:
+  - `client` - Internal provider client (initialized during build)
   - `cache_handler` - Optional response cache (initialized during build if enabled)
 
 Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
@@ -38,7 +43,7 @@ Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`
 
 ## Where it fits
 
-You rarely call `LM` directly—It's the lowest-level DSRs primitive. Instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM. This keeps business logic (your task) separate from transport (the model client).
+You rarely call `LM` directly: it is the lowest-level DSRs primitive. Instead, a `Predictor` uses an `Adapter` to format a `Signature` and call the LM. This keeps business logic (your task) separate from transport (the model client).
 
 
 ## Construction and configuration
@@ -159,11 +164,11 @@ fn main() -> anyhow::Result<()> {
 let history = lm.inspect_history(3).await;
 for entry in history {
     println!("Prompt: {}", entry.prompt);
-    println!("Prediction: {:?}", entry.prediction.data);
+    println!("Raw output: {:?}", entry.raw_output);
 }
 ```
 
-> `inspect_history` requires caching to be enabled on the LM; otherwise no history is recorded.
+> `inspect_history` requires caching to be enabled (`.cache(true)`); it panics on an LM built without caching. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/reference/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
 
 ## Configuration options
 
@@ -176,6 +181,9 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
 | `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
 | `max_tokens` | `u32`           | `512`                | Upper bound on completion tokens                                               |
+| `max_tool_iterations` | `u32`  | `10`                 | Upper bound on tool-loop round trips per call                                  |
+| `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
+| `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
 | `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
 
 ### Example with custom settings
@@ -248,3 +256,21 @@ let lm = LM::builder()
 ```
 
 All provider integrations are powered by [Rig](https://github.com/0xPlaygrounds/rig), which handles the provider-specific API details.
+
+## Tool sets and Code Mode
+
+`LM::call` accepts tools directly, but repeated calls with a fixed set of tools should build a `ToolSet` once and reuse it via `LM::call_with_toolset`. A `ToolSet` pre-fetches every tool definition and indexes the executors by name.
+
+| Constructor | Signature | Purpose |
+|---|---|---|
+| `ToolSet::build` | `async fn build(tools: &[Arc<dyn ToolDyn>]) -> ToolSet` | Fetches every tool definition once and indexes executors by name; duplicate names keep the first tool |
+| `ToolSet::from_definitions` | `fn from_definitions(definitions: Vec<ToolDefinition>) -> ToolSet` | Definitions only, no executors; for caller-managed loops that execute tools themselves |
+| `ToolSet::code_mode` | `async fn code_mode(tools: Vec<Arc<dyn ToolDyn>>, config: SandboxConfig) -> Result<ToolSet>` | Collapses the tools into a single sandboxed `run_js` tool; requires the `code-mode` feature |
+
+With `ToolSet::code_mode`, instead of emitting one JSON tool call per step, the model writes JavaScript against the tools as a JS API and composes their results in one execution. The returned set drops into any tool loop (`LM::call_with_toolset`, `Predict`) exactly like a normal `ToolSet`. It errors if two tool names mangle to the same JS identifier. See [Code Mode](/docs/reference/code-mode) for the full sandbox surface.
+
+## See also
+
+- [Predict](/docs/reference/predict)
+- [Code Mode](/docs/reference/code-mode)
+- [Utils](/docs/reference/utils)

@@ -1,5 +1,99 @@
 ---
-title: "WIP"
+title: "Here Be Dragons"
+description: "Chapter 7, in which the uncharted regions get surveyed coastlines, and one dragon learns to travel"
+icon: "dragon"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+Old maps had a convention for the regions no surveyor had reached: *hic sunt dracones*. Here be dragons. It looks like an admission of failure, but it's the opposite. It's cartographic honesty. The mapmaker is telling you exactly where the map's knowledge ends, so you can trust every inch that isn't marked.
+
+Your `frontdesk` map ended Chapter 6 with a dragon on it:
+
+```text
+clean = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
+```
+
+Every real program has one of these. A custom filter, a scoring rule, a line of glue that only makes sense in your codebase. Most frameworks handle this moment in one of two dishonest ways: forbid your logic, or silently lose track of it. DSRs does neither. It surveys the coastline and marks the interior.
+
+## A dragon with a surveyed coastline
+
+Look at what the map *does* know about `clean`. Its input: `$.ticket`, a string. Its output: a string called `clean`. Its name. A fingerprint of its code. The only thing missing is the interior, the `split_whitespace` business, which is exactly the part no framework could meaningfully describe as data anyway.
+
+A typed border around an unknown interior is a real contract. You don't know the circuitry inside a blender, but you know what goes in the jar and what pours out, and that's enough to plan an entire recipe around it. The rest of your program can be checked, printed, and improved *around* the hole, because the hole's edges are exact.
+
+And nothing became opaque in silence. Every module confesses its dragons in a constant called `OPACITY`:
+
+```rust
+for hole in frontdesk::OPACITY {
+    println!("{} ({}): {}", hole.name, hole.kind, hole.excerpt);
+}
+```
+
+```text
+clean (host): { let t : String = ticket . clone () ; t . split_whitespace () ... }
+```
+
+Name, kind, the actual source excerpt, and why it couldn't be lowered. If your policy is "no dragons, period", say so and the build enforces it:
+
+```rust
+#[module(deny_holes)]
+async fn frontdesk(/* ... */) // any un-lowerable line is now a compile error
+```
+
+## Why this dragon can't travel
+
+Now the question Chapter 6 left hanging: what does `extern` actually mean?
+
+It means *the code is not in the file*. Your scrub is compiled Rust; you cannot put machine code in a text artifact. So the map records a fingerprint, and the deal becomes: whoever loads this file must *supply* an implementation for `clean`, and it must be the right one. The fingerprint isn't decoration; a host binds its native holes by name, and the hash lets it verify it holds the same code the map was drawn against, not merely something with a matching name.
+
+Run the file next to your own binary: works, the binary has the code. Ship `frontdesk.dsrs` to a colleague, or to a server that didn't link your crate: loading fails, immediately and legibly, with a "host hole unbound" error. Your map is honest even about where it can't go.
+
+For plenty of programs, that's fine; the map lives next to its binary forever. But the Prologue promised you a map that *leaves home*. One native hole, and portability stops at your front door.
+
+## Teaching the dragon to travel
+
+There's a second species of dragon. A **sandboxed hole** carries its implementation *inside the file*, as JavaScript, executed in a sandbox by whatever host loads it. Same typed coastline, but the interior travels with the map.
+
+Your scrub is a perfect candidate: it's string-mangling, not systems programming. Port it into the artifact:
+
+````text
+clean = hole Scrub (ticket = $.ticket) caps [] js```
+(a) => ({
+  clean: a.ticket
+    .split(/\s+/)
+    .map((w) => (w.includes("@") ? "[email]" : w))
+    .join(" "),
+})
+```
+````
+
+Read the trade you just made. Before: Rust speed, zero portability, `extern` plus a fingerprint. After: a few lines of JavaScript riding in the artifact, runnable by *any* host, in a sandbox whose walls the file itself declares. The map is now fully portable. The file is the whole program.
+
+The honest rule, one more time, since it's now load-bearing: **a file with only steps and sandboxed holes runs anywhere; a file with a native hole runs only beside the binary that defined it.** The file tells you which kind you're holding. No surprises at deploy time.
+
+## The economics of dragons
+
+Before you get fond of holes, know their price. A hole is a blind spot. An optimizer can rewrite an instruction because an instruction is data with an address. It cannot rewrite the inside of a hole, because there's nothing there to read. Every hole subtracts a little from the surface that [Act IV](/docs/learn/tracing-paper) will be able to improve.
+
+So the craft guidance writes itself: dragons are legitimate, big dragons are expensive. Fewer and smaller. Every line you move out of a hole and into a visible step is a line an optimizer can tune and any host can run. Keep the interiors small enough that what's left in the dark is genuinely the part with nothing to say.
+
+## The ceiling
+
+Take stock, because the front desk is getting genuinely good. Typed contracts. A pipeline that's also a map. A portable privacy scrub. Herman's owner gets a warm, competent reply.
+
+Then a new ticket arrives:
+
+> "Where is my order?? I paid for the ceramic starter jar TWO WEEKS ago. Order #4127."
+
+And your beautiful desk writes: *"Thanks for reaching out! We understand how frustrating shipping delays can be..."*
+
+It doesn't know where the order is. It *can't* know. Everything you've built so far talks; nothing looks anything up. The model has your instructions, your demos, your types, and no hands. Order #4127 is sitting in a database three function calls away, and the desk can only sympathize at it.
+
+Time to give the model hands. Carefully.
+
+<Card title="Chapter 8: Give the Model Hands" icon="arrow-right" href="/docs/learn/give-the-model-hands" horizontal>
+  In which the desk gets tools, an agent learns to stop, and six round trips collapse into one script.
+</Card>
+
+---
+
+**Skip the story:** the lookup pages for this chapter are [Use holes](/docs/guides/use-holes) (the recipe, allowed types, the type-anchor trick) and [The .dsrs file](/docs/reference/dsrs-file) (both hole forms in the grammar).

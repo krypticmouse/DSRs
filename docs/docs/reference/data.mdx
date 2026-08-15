@@ -1,5 +1,144 @@
 ---
-title: "WIP"
+title: "Data"
+description: "Example<S>, DataLoader, TypedLoadOptions, RowRecord, and DataLoadError"
+icon: "database"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+The `data` module is the ingestion path for training and evaluation data. Every loader returns `Vec<Example<S>>` directly, so loaded rows flow straight into [`evaluate_trainset`](/docs/reference/evaluate) and [`Optimizer::compile`](/docs/reference/optimizers) with no manual conversion step. There is no untyped row type in the public contract: custom mappers work with `RowRecord` at the load boundary.
+
+```rust
+use dspy_rs::{DataLoader, Example, TypedLoadOptions, UnknownFieldPolicy};
+```
+
+## Example
+
+`Example<S>` is the typed input/expected-output pair for a signature `S`. It derives `Clone`, `Debug`, and `Facet`.
+
+```rust
+pub struct Example<S: Signature> {
+    pub input: S::Input,
+    pub output: S::Output,
+}
+```
+
+Construct with `Example::new(input, output)`:
+
+```rust
+let row = Example::<QA>::new(
+    QAInput { question: "What is 2+2?".into() },
+    QAOutput { answer: "4".into() },
+);
+```
+
+| Role | Where it appears |
+|---|---|
+| Trainset row | `evaluate_trainset(&module, &[Example<S>], &metric)` and `optimizer.compile(&mut module, Vec<Example<S>>, &metric)` |
+| Few-shot demo | `Predict::builder().demo(Example::new(...))` and `PredictBuilder::with_demos(...)`; demos render as user/assistant exchanges in the prompt |
+| Metric argument | `TypedMetric::evaluate` receives `&Example<S>` as ground truth |
+
+Because the pair is typed by `S`, a demo or trainset row for one signature cannot be passed to a predictor of another.
+
+## DataLoader
+
+`DataLoader` is a unit struct whose associated functions load JSON, CSV, Parquet, and HuggingFace sources. All loaders return `anyhow::Result<Vec<Example<S>>>`. Schema-driven loaders require `S::Input: Schema` and `S::Output: Schema` and use `S::schema()` to determine required fields.
+
+| Method | Parameters | Source notes |
+|---|---|---|
+| `load_json::<S>` | `(path, lines: bool, opts)` | JSON array/object, or JSONL when `lines = true`. `path` may be a local file or an HTTP(S) URL |
+| `load_csv::<S>` | `(path, delimiter: char, has_headers: bool, opts)` | Local file or HTTP(S) URL. Without headers, fields surface as `column_{idx}` |
+| `load_parquet::<S>` | `(path, opts)` | Local Parquet file only |
+| `load_hf::<S>` | `(dataset_name, subset, split, verbose: bool, opts)` | HuggingFace Hub dataset repo. `subset` and `split` are substring filters on artifact filenames. Supports `.parquet`, `.json`, `.jsonl`, and `.csv` artifacts |
+| `load_hf_from_parquet::<S>` | `(parquet_files: Vec<PathBuf>, opts)` | Local Parquet set; deterministic/offline stand-in for `load_hf`. No mapper variant |
+
+Each of `load_json`, `load_csv`, `load_parquet`, and `load_hf` has a `_with` mapper overload (`load_json_with`, `load_csv_with`, `load_parquet_with`, `load_hf_with`) that takes the same parameters plus a closure `Fn(&RowRecord) -> anyhow::Result<Example<S>>`. Mapper overloads bypass schema-driven conversion entirely: `opts` is accepted for API parity but is not applied, so `field_map` and `unknown_fields` have no effect on `_with` calls.
+
+## TypedLoadOptions
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `field_map` | `HashMap<String, String>` | empty | Remaps signature fields to source columns. Key: signature field name (the `S::schema()` Rust name). Value: source field/column name |
+| `unknown_fields` | `UnknownFieldPolicy` | `Ignore` | Policy for extra source fields |
+
+```rust
+let mut field_map = HashMap::new();
+field_map.insert("question".to_string(), "prompt".to_string());
+
+let trainset = DataLoader::load_csv::<QA>(
+    "data/custom.csv", ',', true,
+    TypedLoadOptions { field_map, unknown_fields: UnknownFieldPolicy::Ignore },
+)?;
+```
+
+`UnknownFieldPolicy` variants:
+
+| Variant | Behavior |
+|---|---|
+| `Ignore` (default) | Extra source fields not consumed by the signature are dropped |
+| `Error` | Any unconsumed source field fails the load with `DataLoadError::UnknownField { row, field }` |
+
+The schema-driven path also applies tolerant scalar coercion before strict serde deserialization: a `"4"` cell fills a `String` field as `"4"` and an `i64` field as `4`; string cells convert to declared `Int`, `Float`, and `Bool` (`"true"`/`"false"`, case-insensitive) fields when they parse cleanly. Values that do not convert pass through unchanged so serde surfaces a precise `TypeMismatch`.
+
+## RowRecord
+
+`RowRecord` is the public raw-row type passed to `_with` mapper closures.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `row_index` | `usize` | 1-based row index in the loaded stream after filtering empty rows |
+| `values` | `HashMap<String, serde_json::Value>` | Parsed key-value payload for the row |
+
+`RowRecord::get::<T>(key)` deserializes a typed value from a field, where `T: DeserializeOwned + 'static`. It returns `DataLoadError::MissingField` when the key is absent and `DataLoadError::TypeMismatch` on deserialization failure. `String` reads coerce scalar JSON numbers and booleans into strings for ergonomic CSV mapping.
+
+```rust
+let trainset = DataLoader::load_json_with::<QA, _>(
+    "data/train.jsonl", true, TypedLoadOptions::default(),
+    |row| Ok(Example::new(
+        QAInput { question: row.get::<String>("prompt")? },
+        QAOutput { answer: row.get::<String>("gold")? },
+    )),
+)?;
+```
+
+Mapper closure errors are wrapped as `DataLoadError::Mapper` with the failing row index.
+
+## DataLoadError
+
+`DataLoadError` implements `std::error::Error` via `thiserror`. Public loaders return `anyhow::Result`, with `DataLoadError` as the wrapped source.
+
+| Variant | Payload | Meaning |
+|---|---|---|
+| `Io` | `anyhow::Error` | Source read or download failure |
+| `Csv` | `anyhow::Error` | CSV parser failure |
+| `Json` | `anyhow::Error` | JSON/JSONL parser failure |
+| `Parquet` | `anyhow::Error` | Parquet parser failure |
+| `Hf` | `anyhow::Error` | HuggingFace Hub listing or file retrieval failure |
+| `MissingField` | `{ row: usize, field: String }` | Required signature field absent from a row |
+| `UnknownField` | `{ row: usize, field: String }` | Extra source field under `UnknownFieldPolicy::Error` |
+| `TypeMismatch` | `{ row, field, message }` | Field existed but could not convert to the required type |
+| `Mapper` | `{ row: usize, message: String }` | Custom mapper closure returned an error |
+
+The module also exposes `is_url(path: &str) -> bool`, the helper the loaders use to decide between filesystem and HTTP(S) fetching.
+
+## Versioning
+
+Data loading is versioned under `data::v1`. The module tree is `data::v1::dataloader` and `data::v1::utils`; `data/mod.rs` re-exports `v1::*`, so unversioned paths (`dspy_rs::data::DataLoader`) and versioned paths (`dspy_rs::data::v1::dataloader::DataLoader`) both resolve to the same items. The crate root flattens further: `dspy_rs::DataLoader` is the conventional import. Unversioned paths always track the current version.
+
+### Migration note
+
+The pre-v1 raw loaders were removed. Use the typed `load_*` / `load_*_with` APIs instead of:
+
+- `load_json(path, input_keys, output_keys)`
+- `load_csv(path, delimiter, has_headers, input_keys, output_keys)`
+- `load_parquet(path, input_keys, output_keys)`
+- `load_hf(dataset_name, subset, split, input_keys, output_keys, verbose)`
+- `save_json(...)` and `save_csv(...)`
+
+## See also
+
+- [Signatures and types](/docs/reference/signatures-and-types) for `Signature`, `Schema`, and the generated `Input`/`Output` structs
+- [Predict](/docs/reference/predict) for demos on the leaf module
+- [Evaluation](/docs/reference/evaluate) for `evaluate_trainset` and `TypedMetric`
+- [Optimizers](/docs/reference/optimizers) for `Optimizer::compile` over a trainset
+- [Example: evaluate on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs)
+- [Example: optimize on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs)
+- [Example: MIPROv2 optimization](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs)

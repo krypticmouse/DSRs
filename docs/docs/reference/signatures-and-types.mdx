@@ -1,5 +1,172 @@
 ---
-title: "WIP"
+title: 'Signatures and Types'
+description: 'Reference for #[derive(Signature)], #[Schema] custom types, the typesys pipeline, and output constraints'
+icon: 'pen-ruler'
 ---
 
-{/* WIP-FIELD-GUIDE */}
+A signature is the typed contract for one LM call: input fields, output fields, and an instruction. The in-house `typesys` module implements the type system behind it in four parts: `schema` (the `FieldType`/`OutputSchema` model, derived from facet `Shape` metadata), `render` (the schema text the model sees), `coerce` (tolerant parsing of model output), and `constraint` (`#[check]`/`#[assert]` evaluation).
+
+## `#[derive(Signature)]`
+
+```rust
+use dspy_rs::Signature;
+
+/// Answer questions accurately and concisely.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    /// The question to answer
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+```
+
+The derive generates `QAInput` and `QAOutput` structs (each with a `new` constructor) and implements the `Signature` trait: `instruction()`, `input_shape()`, `output_shape()`, and per-field metadata. The struct doc comment becomes the instruction; field doc comments become field descriptions in the prompt. `SignatureSchema::of::<S>()` returns the cached field-level schema.
+
+### Field attributes
+
+| Attribute | Applies to | Effect |
+|---|---|---|
+| `#[input]` / `#[input(desc = "...")]` | any field | Marks an input. `desc` overrides the doc comment. |
+| `#[output]` / `#[output(desc = "...")]` | any field | Marks an output. `desc` overrides the doc comment. |
+| `#[alias = "name"]` | input or output | LM-facing rename. Rust code keeps the original name. Aliased names must stay unique per side. |
+| `#[format("json")]` | input only, once | Serialization hint. Accepted values: `json`, `yaml`, `toon`. `yaml` and `toon` currently fall back to JSON. |
+| `#[render(jinja = "...")]` | input only, once | Custom Jinja rendering. Template must be a string literal; syntax is validated at compile time. Cannot combine with `#[format]`. |
+| `#[flatten]` | input or output | Hoists the fields of a nested struct into the signature. Cannot combine with any other field attribute. |
+| `#[check("expr", label = "l")]` | output | Soft constraint. Label required. Repeatable. |
+| `#[assert("expr")]` | output | Hard constraint. Label optional. Repeatable. |
+
+Every field requires exactly one of `#[input]` or `#[output]`, and the signature requires at least one of each.
+
+`#[render(jinja = ...)]` templates see `this` (the field value), `input` (the full input object with alias overlays), `field` (`name`, `rust_name`, `type`), and `vars` (currently empty). Available filters: minijinja builtins plus `regex_match`, `sum`, and `truncate`.
+
+### Supported field types
+
+| Category | Types | Rendered as |
+|---|---|---|
+| Strings | `String`, `Cow<str>`, `char` | `string` |
+| Booleans | `bool` | `bool` |
+| Integers | `i8` through `i64`, `isize`, `u8`, `u16`, `u32` | `int` |
+| Floats | `f32`, `f64` | `float` |
+| Optionals | `Option<T>` | `T or null` |
+| Lists | `Vec<T>`, `[T; N]`, `HashSet<T>`, `BTreeSet<T>` | `T[]` |
+| Maps | `HashMap<String, V>`, `BTreeMap<String, V>` | `map<string, V>` |
+| Smart pointers | `Box<T>`, `Arc<T>`, `Rc<T>` | transparent |
+| Custom | `#[Schema]` structs and unit enums | rendered type name |
+
+### Rejected shapes (compile errors)
+
+| Shape | Reason |
+|---|---|
+| Tuple types, tuple/unit structs | Named fields required |
+| Trait objects, bare `fn` types | No concrete schema |
+| `serde_json::Value` | Use a concrete typed value |
+| Non-`String` map keys | Use `HashMap<String, V>` or `BTreeMap<String, V>` |
+| `u64`, `usize`, `i128`, `u128` | Exceed JSON number precision; use `i64`/`isize`/`u32` or smaller |
+| Duplicate LM names after aliasing | Names must be unique per side |
+
+## `#[Schema]` on custom types
+
+`#[Schema]` marks a struct or enum as usable inside signature fields. It accepts no arguments. It expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` with crate-path attributes, which satisfies the blanket `Schema` trait impl; enums additionally receive `#[repr(u8)]` when no explicit `repr` is present.
+
+<Note>
+`#[BamlType]` survives as a backwards-compatible alias with identical expansion. The old vendored BAML stack, including its `#[baml(...)]` attribute grammar (`alias`, `rename_all`, `skip`, `default`, `name`, `int_repr`, `map_key_repr`, `tag`), was removed. The schema layer now reads facet metadata instead.
+</Note>
+
+What the schema builder honors on `#[Schema]` types:
+
+| Source | Effect |
+|---|---|
+| Doc comments on the type, fields, and variants | Rendered as `//` comment lines in the schema block |
+| `#[facet(rename = "...")]` on a field or variant | LM sees the rendered name; the parser accepts both the rendered and the Rust name |
+| `#[facet(rename_all = "...")]` on the container | Rules: `camelCase`, `snake_case`, `PascalCase`, `SCREAMING_SNAKE_CASE`, `kebab-case`, `SCREAMING-KEBAB-CASE`, `lowercase`, `UPPERCASE` |
+| `#[facet(skip)]` on a field | Omitted from the model-facing schema; pair with a serde skip or default so the struct still deserializes |
+| `#[facet(default)]` on a field | Rendered as optional; a missing value parses as null |
+
+Enums must be unit-only. Variant matching at parse time is case-insensitive and strips quotes. Data-carrying enums are rejected: schema construction panics with `data-carrying enums are not supported; use a struct`. The old BAML tagged-union surface (`#[baml(tag = "type")]`) no longer exists; model union-shaped data as a struct with optional fields.
+
+## The typesys pipeline
+
+Order per call: render the schema into the prompt, coerce the response text per field, evaluate constraints, then deserialize into the output struct via serde.
+
+### render
+
+`typesys::type_name` produces the inline label shown in field descriptions and the `should be of type:` line (see the table above; unions render as `A or B`, literals as `"value"`). `typesys::schema_block` produces the expanded block for structured types: classes render as `{ field: type, ... }` with doc comments, enums as a `one of:` value list, lists of classes as a bracketed block. Primitives return their label so the adapter skips a redundant block.
+
+### coerce
+
+`typesys::coerce(raw, field_type, types)` returns a `Coerced { value, flags }`. Non-fatal observations are recorded as `Flag` values: `StrippedCodeFence`, `ParsedListFromText`, `CoercedFromString`, `ExtraTextIgnored`.
+
+| Target | Accepted input |
+|---|---|
+| string | Raw text; trailing newlines trimmed |
+| int | Plain integers; fractions (`8/10` rounds); thousands separators (`1,000`); bare decimals round to nearest |
+| float | Direct parse; stray non-numeric characters stripped |
+| bool | `true`/`false`; also `yes`/`y`/`1` and `no`/`n`/`0` |
+| optional | Empty text, `null`, `none`, `nil`, `~` parse as null |
+| list | JSON arrays (code fences stripped); bulleted (`-`, `*`, `+`), numbered (`1.`, `1)`), or one-per-line items; comma-separated fallback for single lines |
+| map, class | First balanced JSON object in the text, surrounding prose ignored; class keys accepted by rendered or Rust name; missing optional fields become null |
+| enum | Variant by rendered or Rust name, case-insensitive |
+
+Per-field results land in `CallMetadata::field_meta`, an `IndexMap<String, FieldMeta>` where `FieldMeta` carries `raw_text`, `flags`, and `checks`.
+
+## Constraints
+
+| | `#[check]` | `#[assert]` |
+|---|---|---|
+| Label | Required | Optional |
+| On failure | Recorded; the call succeeds | The call fails |
+| Result location | `FieldMeta::checks` (`ConstraintResult { label, expression, passed }`) | `PredictError::Parse` wrapping `ParseError::AssertFailed { field, label, expression, value }` |
+
+### Expression language
+
+Expressions are minijinja expressions evaluated with the parsed field value bound as `this`. Derive-emitted expressions compile once per process.
+
+| Works | Example |
+|---|---|
+| Comparisons | `this >= 0.0 and this <= 1.0`, `this == "expected"` |
+| Boolean logic | `and`, `or`, `not`; `&&` and `\|\|` are normalized to `and`/`or` by the derive |
+| Length | `this\|length > 0` |
+| Membership and substring | `"https://" in this`, `"a" in this` |
+| Indexing | `this[0] == "first"` |
+| Filters and tests | `this\|lower == "positive"`, `this\|trim\|length > 0`, `this is defined` |
+
+<Warning>
+Python-style method calls do not evaluate: `this.len()`, `this.startswith(...)`, and `this.contains(...)` always come out false. A failed evaluation counts as not passing, so an assert written that way fails every call. Use `this|length` and `in` instead.
+</Warning>
+
+### Inspecting results
+
+```rust
+let result = predict.call(input).await?;
+for check in result.metadata().field_checks("confidence") {
+    if !check.passed {
+        println!("check `{}` failed: {}", check.label, check.expression);
+    }
+}
+let any_failed = result.metadata().has_failed_checks();
+```
+
+### Compile-time enforcement
+
+A `#[check]` without a label is a compile error:
+
+```text
+error: #[check] requires a label: #[check("expr", label = "name")]
+ --> tests/ui/check_missing_label.rs:9:5
+  |
+9 |     #[check("this > 0")]
+  |     ^^^^^^^^^^^^^^^^^^^^
+```
+
+## See also
+
+- [Macros](/docs/reference/macros) for `#[predict]`, `#[cot]`, and the derive family
+- [Predict](/docs/reference/predict) for calling signatures and `Predicted` output
+- [Adapters](/docs/reference/adapters) for prompt formatting and the parse pipeline
+- [The contract is the prompt](/docs/learn/the-contract-is-the-prompt)
+- Example: [01-simple.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs)
+- Example: [16-insurance-claim-prompt.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs)
+- Example: [90-smoke-slice1-typed-predict.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/90-smoke-slice1-typed-predict.rs)

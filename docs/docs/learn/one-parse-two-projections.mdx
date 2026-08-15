@@ -1,5 +1,140 @@
 ---
-title: "WIP"
+title: "One Parse, Two Projections"
+description: "Chapter 6, in which one attribute makes your function legible, and a map falls out of the build"
+icon: "clone"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+Chapter 5 ended in silence. Your pipeline runs beautifully and cannot say one word about itself, because a compiled function body is machine code, and machine code is for the processor, not for reading. Asking a running program to describe itself is asking it to read a book that was already shredded.
+
+So if you want the description, you have to make it *before* the shredding. And Rust has pulled this exact trick on you before.
+
+When you write `async fn`, you write one function and the compiler reads it into two things: the code that executes, and a state machine that describes its suspension points. You never maintain the state machine. You never even see it. It cannot drift from your code, because it *is* your code, projected differently.
+
+DSRs applies the same move to harnesses. One parse. Two projections.
+
+## Steps: the smallest legible unit
+
+To make a whole function legible, start by making its calls legible. A **step** is one model call declared as a bodyless function:
+
+```rust
+use dspy_rs::{cot, predict};
+
+/// One sentence a busy human reads instead of the ticket.
+#[predict]
+fn summarize(ticket: String) -> String;
+
+/// Write a warm, concrete reply to this Sourdough support ticket.
+/// Never promise a refund. Sign off as "The Sourdough Team".
+#[cot(model = "@strong")]
+fn draft(ticket: String, summary: String) -> String;
+```
+
+No body, because the model is the body. The mapping is the signature idea from Act I wearing lighter clothes:
+
+| You write | It becomes |
+|---|---|
+| The doc comment | The instruction |
+| Each parameter | An input field, same name and type |
+| The return type | One output field, named after the function |
+
+So `draft` produces `out.draft`, and `#[cot]` gives it a `reasoning` field on the side, exactly the ChainOfThought move from Chapter 3. The `model = "@strong"` is a *named handle*, not a hardcoded model id: which model `strong` really is gets decided by whoever runs the program. Remember that decoupling; it matters when the program starts traveling.
+
+## The module
+
+Now write the front desk as what it always was, a plain async function, and put one attribute on it:
+
+```rust
+use dspy_rs::module;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct DeskOut {
+    pub summary: String,
+    pub reply: String,
+}
+
+#[module]
+async fn frontdesk(ticket: String) -> Result<DeskOut, dspy_rs::ir::RunError> {
+    // scrub email addresses before anything leaves the building
+    let clean: String = {
+        let t: String = ticket.clone();
+        t.split_whitespace()
+            .map(|w| if w.contains('@') { "[email]" } else { w })
+            .collect::<Vec<&str>>()
+            .join(" ")
+    };
+
+    let sum = summarize(clean.clone()).await?;
+    let drafter = draft(clean.clone(), sum.summarize.clone()).await?;
+
+    Ok(DeskOut {
+        summary: sum.summarize,
+        reply: drafter.draft,
+    })
+}
+```
+
+Read it as Rust and it's boring: a privacy scrub you'd have written anyway, two awaited calls, a struct at the end. It runs exactly the way it reads:
+
+```rust
+let out = frontdesk(herman_ticket).await?;
+println!("{}", out.reply);
+```
+
+That's projection one, the function. Nothing new. Now the part the whole book has been walking toward:
+
+```rust
+println!("{}", frontdesk::program().to_dsrs());
+```
+
+## The map
+
+```text
+dsrs 1
+program frontdesk
+
+// model and signature declarations trimmed
+
+main: Main = seq {
+  clean   = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
+  sum     = predict summarize (ticket = clean.clean)
+  drafter = cot draft @strong (ticket = clean.clean, summary = sum.summarize)
+  out { summary = sum.summarize, reply = drafter.draft }
+}
+```
+
+Stop and take this in, because this is the Prologue's teaser, earned. You did not write this file. The macro read your function *once*, at build time, and projected it twice: the executable you just called, and this. Every step is here, named after your `let` bindings (`sum`, `drafter`), so the map speaks in your vocabulary. Every wire is here: `sum.summarize` flowing into `draft`'s `summary` input is your line of Rust, `sum.summarize.clone()`, written as a connection. Your instructions ride in the trimmed signature block. The `@strong` handle survived intact.
+
+And because both projections come from one read, drift is not unlikely. It is *impossible*. A blueprint copied from a finished house may miss a wall. A blueprint the house was built from cannot.
+
+This text form is canonical, and that has teeth: hash the canonical text and you have the program's identity. Diff two versions and the change that broke Tuesday is a line. Check it into git next to the source it can never disagree with.
+
+## The road not taken
+
+It's worth knowing what DSRs did *not* do here, because the alternative sounds so reasonable. Why parse source at build time? Just run the program once, watch it, and write down the shape you saw. DSRs tried that. The approach is dead, and it earned its death.
+
+A recording shows the path that ran. The branch not taken that day simply does not exist in the recording. Two steps that ran concurrently flatten into a sequence. What you get is not your program; it's one lucky walk through it, the sheet-music problem in reverse: a live recording is a beautiful thing, but you cannot hand a recording to a new band and call it the score. Structure comes from source, where every branch is visible whether it ran or not. Recordings still matter enormously, but for a different job, and [Act III](/docs/learn/the-expedition-log) is entirely about that job.
+
+## The line you didn't write
+
+Now go back to the map, because if you read it carefully, one line should be bothering you.
+
+```text
+clean = hole clean (ticket = $.ticket) caps [] extern "a1b2c3d4e5f60718"
+```
+
+`sum` is a `predict`. `drafter` is a `cot`. But your privacy scrub, the honest little block of `split_whitespace` you wrote at the top of the function, printed as something called a `hole`, carrying no code at all, just a typed border and a sixteen-digit fingerprint stamped `extern`.
+
+The macro is being honest with you. It could read your *steps* into the map, but a hole is where it hit plain Rust it cannot describe as data, so it drew a boundary around it, recorded the name, the types, and the fingerprint, and moved on. The map is complete about *that it cannot see inside*.
+
+Which raises questions with real consequences. If the code isn't in the file, what happens when someone else loads this map and execution reaches `clean`? What exactly does `extern` demand from whoever runs it? And that empty `caps []`, sitting there like a customs form with nothing declared?
+
+Part of your function just fell off the map. Time to go meet what lives in the blank space.
+
+<Card title="Chapter 7: Here Be Dragons" icon="arrow-right" href="/docs/learn/here-be-dragons" horizontal>
+  In which the uncharted regions get surveyed coastlines, and one dragon learns to travel.
+</Card>
+
+---
+
+**Skip the story:** the lookup pages for this chapter are [Macros](/docs/reference/macros) (`#[module]`, `#[predict]`, `#[cot]`, accepted body shapes), [The .dsrs file](/docs/reference/dsrs-file) (the full grammar you just read a sample of), and [Program & nodes](/docs/reference/program-and-nodes) (what the map is made of in memory).

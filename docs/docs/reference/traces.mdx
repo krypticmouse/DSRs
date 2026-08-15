@@ -1,10 +1,10 @@
 ---
-title: "Traces and the CLI"
-description: "Reference for trace capture, replay modes and errors, and the dsrs command-line tool"
-icon: "terminal"
+title: "Traces"
+description: "Reference for trace capture, span anatomy, replay modes and errors, and the OpenTelemetry and RL export projections"
+icon: "wave-pulse"
 ---
 
-Traces record what a run did; replay serves runs back from a recording; the `dsrs` CLI checks, formats, and serves `.dsrs` artifacts. This page lists all three surfaces.
+Traces record what a run did; replay serves runs back from a recording; exports project a finished trace onto external observability and training conventions. The `dsrs` CLI that checks, formats, and serves `.dsrs` artifacts has its own page: [CLI](/docs/reference/cli).
 
 ## Capture
 
@@ -65,43 +65,86 @@ let (out, report) = dspy_rs::trace::replay(&trace, ReplayMode::Strict, || pipeli
 
 Replay scoping mirrors capture: task-local, not inherited by spawned subtasks, innermost scope wins. Compose replay outside with capture inside to record a counterfactual rollout while serving its unchanged prefix from the base trace.
 
-## The `dsrs` CLI
+## Exports
 
-The `dsrs` binary is the `.dsrs` toolchain: check, fmt, serve.
+Exports are pure serialization-side projections of a finished `Trace`: no new capture machinery, no external dependencies. Both live under `dspy_rs::trace`.
 
-### `dsrs check <program>`
+<Note>
+Exports serialize traces after a run finishes. For live, human-readable console output while a program runs, call `init_tracing` (documented on [Utils](/docs/reference/utils)): it installs a process-global pretty `tracing` subscriber (respecting `RUST_LOG`, defaulting to `dspy_rs=debug`) and is independent of trace capture.
+</Note>
 
-Parses and validates a `.dsrs` artifact, running the full pipeline (lex and parse with positions, lowering, validation, hash sealing), exactly what `Interpreter::load` would accept. On success it prints one line reporting the program name, its hash, the node, signature, model, and tool counts, and the caps set when non-empty. On failure the parser's error (with `line N, column M` positions and the file path) goes to stderr and the exit code is non-zero.
+### OpenTelemetry
 
-### `dsrs fmt <program> [--write]`
+`Trace::to_otel_spans(include_content: bool)` maps a trace onto OpenTelemetry GenAI semantic conventions as plain serializable structs in the OTLP/JSON wire shape (proto3 JSON mapping: camelCase keys, 64-bit integers as decimal strings, ids as lowercase hex), with no OpenTelemetry dependency. `Trace::to_otlp_json(service_name, include_content)` wraps those spans in a complete `resourceSpans` envelope that any OTLP/HTTP collector (Jaeger, Tempo, otel-collector) accepts at `POST /v1/traces` as-is.
 
-Prints (or rewrites) the canonical form of an artifact. Formatting is parse then print, never token shuffling, so an artifact that does not parse does not format.
-
-| Flag | Effect |
+| Trace format | OTel |
 |---|---|
-| (none) | Prints the canonical text to stdout. |
-| `--write` | Rewrites the file in place, only when the bytes differ. Reports "formatted" or "already canonical" on stderr. |
+| `meta.trace_id` | Trace id: used verbatim when already 32 lowercase hex (the capture scope mints exactly this shape), otherwise stable-hashed into one. |
+| The rollout | Root span `dsrs.rollout`, kind `INTERNAL`, carrying `dsrs.trace_id`, `dsrs.candidate_hash` (when set), and one `dsrs.tag.{key}` attribute per meta tag. |
+| `Span` | One span per `Predict` invocation, name = component name, kind = `CLIENT`, parented to its recorded parent span, else the root. |
+| `started_at_us` / `duration_us` | Start and end timestamps in nanoseconds. |
+| Interned model config | `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`. |
+| `usage.prompt_tokens` / `usage.completion_tokens` | `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`. |
+| Rendered prompt (content opt-in) | One `gen_ai.prompt` event per prompt message (`gen_ai.prompt.role`, `gen_ai.prompt.content`). |
+| `raw_output` (content opt-in) | One `gen_ai.completion` event (`gen_ai.completion.content`). |
+| `SpanEvent::ToolRun` | Child span `tool:{name}`, kind `INTERNAL`, with `gen_ai.tool.name` and `gen_ai.tool.call.id`; arguments and result attributes are content opt-in. |
+| `span.error` | Status `ERROR` with message `{kind}: {message}`. |
+| `component` / `seq` / `request_hash` | `dsrs.component`, `dsrs.seq`, `dsrs.request_hash` attributes (plus `dsrs.candidate_hash` when set). |
 
-### `dsrs serve <program> [flags]`
+Prompt, completion, and tool payloads are opt-in via `include_content`, mirroring OTel's GenAI content-capture switch: with `include_content: false` the spans carry identity, usage, and timing attributes only, so they stay exportable to shared collectors without leaking prompt text.
 
-Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider env vars; a QuickJS sandbox is added when none was supplied.
+The emitted types, all `Serialize` structs:
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--host <addr>` | `127.0.0.1` | Bind address. |
-| `--port <n>` | `8080` | Bind port (0 binds an ephemeral port). |
-| `--overlay <path>` | none | Overlay JSON in the named form (`{"<param path>": <value>, ...}`), applied read-through on every run. |
-| `--allow <CAP>` | none | Capability grant, repeatable: `--allow net:search --allow fs:read`. Load is refused (with the missing set printed) when the program's caps exceed the grants. |
-
-Host tools cannot be served: a program declaring a host tool needs an embedding host that supplies the binding (`include_program!` plus your own code, or a sandboxed `js` tool instead). The load surfaces that refusal with a hint.
-
-**HTTP endpoints**:
-
-| Endpoint | What it returns |
+| Type | Shape |
 |---|---|
-| `POST /run` | Body is a JSON object of input fields; the response is `{"output": ...}`. With `?trace=1` (or `?trace=true`) the run executes inside a capture scope and the response adds `"trace_jsonl"`, the exact trace artifact text with `param_ids` attached. |
-| `GET /schema` | The program's external interface: the main signature and the type table in their serde forms. |
-| `GET /program` | The canonical `.dsrs` text. |
-| `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
+| `OtelSpan` | `trace_id` (32 hex chars), `span_id` (16 hex chars), optional `parent_span_id`, `name`, `kind`, `start_time_unix_nano` and `end_time_unix_nano` (decimal strings), `attributes`, `events`, optional `status`. |
+| `OtelKeyValue` | `key` plus an `OtelValue`. |
+| `OtelValue` | The `AnyValue` oneof arms this export emits: `StringValue`, `IntValue` (a decimal string, per proto3 JSON), `DoubleValue`. |
+| `OtelEvent` | `time_unix_nano`, `name`, `attributes`. |
+| `OtelStatus` | `code`, `message` (omitted when empty). |
 
-Error responses are always `{"error": ...}` with the interpreter's own message: input-surface rejections are 400, everything else (LM failures, parse failures, budget, routing) is 500.
+The OTLP enum constants are exported as plain integers: `SPAN_KIND_INTERNAL = 1`, `SPAN_KIND_CLIENT = 3`, `STATUS_CODE_ERROR = 2`.
+
+<Note>
+`ToolRun` events record only their duration, so tool child spans start at their parent span's start time: durations are exact, offsets within the parent are not.
+</Note>
+
+### RL dataset
+
+`Trace::to_rl_rollout()` projects the trace onto the Agent Lightning / verifiers rollout convention: one rollout as message lists plus a reward plus per-subcall transitions. It returns `None` when no eval was recorded (`trace.outcome.eval` unset); a rollout without a reward is not trainable. Because spans keep full `Message` structure (tool-call blocks, reasoning blocks), the projection needs no lossy text munging.
+
+```rust
+let (result, mut trace) = capture(|| pipeline(input)).await;
+trace.outcome = Some(TraceOutcome { eval: Some(metric_eval), ..Default::default() });
+let rollout = trace.to_rl_rollout().expect("eval recorded");
+writeln!(dataset, "{}", rollout.to_json_line()?)?;
+```
+
+`RlRollout` serializes to a single JSON object; `RlRollout::to_json_line()` produces the one-line JSONL record RL trainers consume.
+
+| `RlRollout` field | Meaning |
+|---|---|
+| `trace_id` | The trace id. |
+| `reward` | The rollout-level reward: `trace.outcome.eval.score`. |
+| `transitions` | One `RlTransition` per surviving span, in trace order. |
+| `metadata` | The free-form run tags (`trace.meta.tags`). |
+
+| `RlTransition` field | Meaning |
+|---|---|
+| `component` | The optimizable unit this subcall belongs to; the per-agent credit assignment key. |
+| `seq` | 0-based invocation index of the component within the rollout. |
+| `messages` | The full rendered prompt as messages (interned prefix plus live suffix), provider-agnostic roles. |
+| `completion` | Everything the policy emitted for this subcall, rebuilt from the span's events: each `Exchange`'s assistant message verbatim, with `ToolRun`s as intervening tool-result context. |
+| `usage` | The span's aggregated `LmUsage` (prompt, completion, and total tokens). |
+| `model` | The model identifier from the span's interned config. |
+
+Spans whose policy emitted nothing (provider failures, cancelled spans: no `Exchange` event) are omitted; they contribute no completion to train on. Parse-failure spans keep their transition: the emitted text exists even though it did not parse.
+
+## See also
+
+- [The expedition log](/docs/learn/the-expedition-log): the concept walk through capture and replay.
+- [CLI](/docs/reference/cli): `dsrs serve` returns the capture-scope trace artifact from `POST /run?trace=1`.
+- [Utils](/docs/reference/utils): `init_tracing` for live pretty console output.
+- [Optimizers](/docs/reference/optimizers): traces as the evidence base for reflective optimization.
+- Example: [12-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/12-tracing.rs), scoped trace capture for a composed module.
+- Example: [17-pretty-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/17-pretty-tracing.rs), `init_tracing` output against an offline LM.
