@@ -41,6 +41,17 @@
             ]
           },
           {
+            "group": "Core Ideas",
+            "pages": [
+              "docs/concepts/harness-as-data",
+              "docs/concepts/three-lanes",
+              "docs/concepts/compilation",
+              "docs/concepts/holes",
+              "docs/concepts/traces-and-replay",
+              "docs/concepts/capabilities"
+            ]
+          },
+          {
             "group": "Optimizers",
             "pages": [
               "docs/optimizers/copro",
@@ -58,6 +69,45 @@
             "group": "Overview",
             "pages": [
               "docs/tutorials/overview"
+            ]
+          },
+          {
+            "group": "Programs as Data",
+            "pages": [
+              "docs/tutorials/your-first-module",
+              "docs/tutorials/agent-with-tools",
+              "docs/tutorials/record-and-replay",
+              "docs/tutorials/tune-a-module"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "How-to Guides",
+            "pages": [
+              "docs/guides/write-steps",
+              "docs/guides/add-tools",
+              "docs/guides/use-holes",
+              "docs/guides/print-and-serve",
+              "docs/guides/bake-a-candidate"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Reference",
+            "pages": [
+              "docs/reference/macros",
+              "docs/reference/dsrs-file",
+              "docs/reference/program-and-nodes",
+              "docs/reference/runtime",
+              "docs/reference/traces-and-cli"
             ]
           }
         ]

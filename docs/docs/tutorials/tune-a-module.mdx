@@ -1,0 +1,137 @@
+---
+title: "Tune a Module"
+description: "Change the instructions inside a running pipeline without editing its code"
+icon: "sliders"
+---
+
+Every instruction and example in your pipeline is a named dial. You can turn a dial without changing your code, try the new setting on real calls, and keep it if it works. In this tutorial you will rename nothing, recompile nothing, and still make a step behave differently.
+
+This uses the `qa` module from [Your First Module](/docs/tutorials/your-first-module). Here it is again, compact:
+
+```rust
+use dspy_rs::{module, predict};
+
+/// Answer the question.
+#[predict]
+fn draft(question: String) -> String;
+
+/// Rate the text from 1-10.
+#[predict]
+fn rate(text: String) -> String;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct QaOut {
+    pub answer: String,
+    pub upper: String,
+}
+
+#[module]
+async fn qa(question: String) -> Result<QaOut, dspy_rs::ir::RunError> {
+    let drafter = draft(question.clone()).await?;
+    let upper: String = {
+        let d: String = drafter.draft;
+        d.to_uppercase()
+    };
+    let checker = rate(upper.clone()).await?;
+    Ok(QaOut {
+        answer: checker.rate,
+        upper,
+    })
+}
+```
+
+<Steps>
+<Step title="Find the dials">
+
+Ask the module for its program, the data description of your pipeline, and print it:
+
+```rust
+let program = qa::program();
+println!("{}", program.to_dsrs());
+```
+
+Look at the printed text. Each step is named after the `let` binding in your function body. The first step is `drafter`, because you wrote `let drafter = draft(...)`. Its instruction dial is called `drafter.instruction`, and right now it holds the doc comment you wrote: "Answer the question."
+
+You can check that a dial exists by name:
+
+```rust
+assert!(program.param_id("drafter.instruction").is_some());
+```
+
+</Step>
+
+<Step title="Make an overlay with a new setting">
+
+An overlay is a small set of new dial values that sits on top of the program. The program itself is not changed. Think of tracing paper laid over a drawing: you sketch changes on the paper, and the original stays clean.
+
+```rust
+use dspy_rs::ir::{Instruction, Overlay};
+
+let mut overlay = Overlay::new(program);
+let slot = program
+    .slot_of::<Instruction>("drafter.instruction")
+    .expect("drafter.instruction is an instruction dial");
+overlay.set_instruction(slot, "Answer the question in exactly one word.");
+```
+
+`slot_of` looks up the dial by name and checks its kind, so you cannot write an instruction into a dial that holds something else. The overlay now carries one change: a new instruction for the `drafter` step.
+
+</Step>
+
+<Step title="Run with the overlay">
+
+Wrap the call in `with_ambient_overlay`. Every `#[module]` call inside the wrapper reads the overlay's values instead of the defaults.
+
+```rust
+use std::sync::Arc;
+use dspy_rs::ir::with_ambient_overlay;
+
+let overlay = Arc::new(overlay);
+
+let out = with_ambient_overlay(
+    Arc::clone(&overlay),
+    qa("what is the capital of France?".to_string()),
+)
+.await?;
+println!("{}", out.upper);
+```
+
+Run it and compare with a plain `qa(...)` call. Under the overlay, the draft step now answers in one word, so `out.upper` is short. Outside the wrapper, nothing changed: print `qa::program().to_dsrs()` again and you will still see "Answer the question." The overlay only applies inside the scope you gave it.
+
+This is the whole trick. You can try many candidate instructions, side by side, against the same code.
+
+</Step>
+
+<Step title="Bake the winner">
+
+When you find a setting you want to keep, fold the overlay into a new program with `bake`. Baking turns the overlay's values into the new defaults and stamps a note about where they came from.
+
+```rust
+use dspy_rs::ir::Lineage;
+
+let baked = program.bake(
+    &overlay,
+    Lineage {
+        optimizer: "hand-tuned".into(),
+        trainset: "none".into(),
+        budget: "3 tries / $0.01".into(),
+        parent: None,
+        date: "2026-08-14".into(),
+        overlay: None,
+    },
+)?;
+
+std::fs::write("qa_tuned.dsrs", baked.to_dsrs())?;
+```
+
+The `Lineage` note is a record for future readers: what produced this version, on what data, at what cost. `bake` fills in the `parent` and `overlay` fields itself, linking the new program back to the one it came from.
+
+You now have `qa_tuned.dsrs`, a text file holding your tuned pipeline. The original code and program are untouched, and the improvement is saved for keeps.
+
+</Step>
+</Steps>
+
+## The idea to take away
+
+Code says what the pipeline does. Dials say how each step is asked to do it. Keeping them apart means you can tune, test, and ship better instructions without a single code change, and every tuned version is a plain text file with its history written inside.

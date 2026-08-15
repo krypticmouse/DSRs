@@ -1,0 +1,39 @@
+---
+title: 'Capabilities'
+description: 'How DSRs decides what a program is allowed to touch'
+icon: 'key'
+---
+
+A DSRs program is not just text for a model. It can carry code, as [holes](/docs/concepts/holes), and it can call tools. Code and tools touch the world: the network, files, services. So there has to be a clear line about what a program may touch, drawn before it runs, not discovered after.
+
+That line is drawn with **capabilities**. A capability is a named permission, like `net:search`. Nothing more mysterious than that: a short name for one kind of access.
+
+## Three statements, one check
+
+The system works because three different parties each state their side, and the statements are checked against each other.
+
+**The program states its ceiling.** Right in the program file, a harness declares everything it might ever need. This is not what it will do on a given run. It is the most it could ever do. Think of a customs declaration: everything in the suitcase is on the form, before anyone opens the bag.
+
+**Each tool and hole states what it uses.** Every tool and every hole declares its own needs, and those needs can never exceed the program's ceiling. A program whose ceiling says only `net:search` cannot contain a tool that writes files. This is checked when the program is loaded, so a violation is a load error, not a runtime surprise.
+
+**The host states what it grants.** The host that runs the program has the final word. It says what it actually allows. Loading refuses if the program wants more than the host allows. The refusal happens up front, before a single step runs, with a clear message about which permission was the problem.
+
+## Nothing to sneak past
+
+Here is the part that makes the model strong rather than just polite.
+
+Inside the sandbox, a permission that was never granted simply does not exist. It is not a locked door that clever code might pick. There is no door. If the host did not grant network access, then sandboxed code has no network function to call, no matter what it tries. You cannot use what was never put in the room with you.
+
+This is why the checks can be trusted. Deny lists fail because someone forgets an entry. Here there is nothing to forget: the sandbox starts empty, and only granted capabilities are placed inside it.
+
+## Why your own modules self-allow
+
+There is one honest asymmetry, and it is worth understanding rather than memorizing.
+
+A `#[module]` you wrote in Rust self-allows its declared ceiling when you run it directly, because you wrote that code yourself: the native parts are already in your binary, compiled from your own source, so there is nothing meaningful for a gate to withhold from you. But the moment the same program travels as a file, the trust resets. A host serving a `.dsrs` file re-checks everything against its own grants, because now the program is a guest, and guests get exactly what the house allows.
+
+The same declaration serves both worlds. On your machine it is documentation and a ceiling for the sandboxed parts. On someone else's server it is a contract that is actually enforced.
+
+## Why this lives in the program
+
+Capabilities are written into the program artifact itself, next to the steps and instructions, for the same reason everything else is, as explained in [The Harness as Data](/docs/concepts/harness-as-data). Because the declaration is data, you can read a program's full reach before running it, diff it when it changes, and let a reviewer approve it like any other line in a file. A program that never declared network access can never quietly grow it. The file would change, and the change would show.

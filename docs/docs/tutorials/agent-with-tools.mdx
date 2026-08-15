@@ -1,0 +1,119 @@
+---
+title: "Agent With Tools"
+description: "Give the model a real Rust function it can call, and let it decide when to use it"
+icon: "wrench"
+---
+
+An agent is a model that can call tools in a loop. It reads the question, decides whether it needs a tool, calls it, looks at the result, and repeats until it has an answer. In this tutorial you will write one tool, wire it into an agent, and run the whole thing inside a module.
+
+This builds on [Your First Module](/docs/tutorials/your-first-module). Set up the same project and API key first.
+
+<Steps>
+<Step title="Write a tool">
+
+A tool is a plain Rust function marked with `#[tool]`. Unlike a `#[predict]` step, a tool has a body, because the body is the real implementation. The model does not run your code. It only asks for the tool by name, and DSRs runs the body for it.
+
+```rust
+use dspy_rs::tool;
+
+/// Uppercase text.
+#[tool(caps("demo:shout"))]
+fn shout(text: String) -> String {
+    text.to_uppercase()
+}
+```
+
+Two things to notice:
+
+- The doc comment is what the model reads about the tool. Write it like a short label on a button: it tells the model what pressing it will do.
+- `caps("demo:shout")` declares a capability. A capability is a permission label. The tool says "I need permission to do this", and later the module that uses it must agree. This keeps a tool from quietly doing more than you expected.
+
+The function stays normal Rust. You can still call `shout("hi".to_string())` yourself and get `"HI"`.
+
+</Step>
+
+<Step title="Declare the agent">
+
+An agent step looks like a `#[predict]` step: a function with no body. The difference is that it lists the tools the model may use, and how many turns of the loop it gets.
+
+```rust
+use dspy_rs::agent;
+
+/// Research the question. Use the shout tool when volume is needed.
+#[agent(tools(shout), max_turns = 3)]
+fn research(question: String) -> String;
+```
+
+- `tools(shout)` hands the model the `shout` tool.
+- `max_turns = 3` caps the loop at three rounds. The model can call tools, read results, and think again, but only three times. Then it must answer.
+
+The doc comment is the instruction, same as before. The output field will be named `research`, after the function.
+
+</Step>
+
+<Step title="Use the agent inside a module">
+
+Now put the agent in a module, exactly like a normal step. One new thing: the module must grant the permission the tool asked for.
+
+```rust
+use dspy_rs::module;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct AOut {
+    pub answer: String,
+}
+
+#[module(caps("demo:shout"))]
+async fn agentic(question: String) -> Result<AOut, dspy_rs::ir::RunError> {
+    let researcher = research(question).await?;
+    Ok(AOut {
+        answer: researcher.research,
+    })
+}
+```
+
+`caps("demo:shout")` on the module matches the `caps("demo:shout")` on the tool. If the module did not grant it, the tool could not run. Permissions flow down, never appear from nowhere.
+
+</Step>
+
+<Step title="Run it">
+
+Configure a model and call the module:
+
+```rust
+use dspy_rs::{configure, LM};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    configure(
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await?,
+    );
+
+    let out = agentic("how loud can you say hi?".to_string()).await?;
+    println!("{}", out.answer);
+
+    Ok(())
+}
+```
+
+While this runs, the model may decide to call `shout`, see the uppercased result, and fold it into its answer. You did not script that. You only gave it the tool and a turn limit.
+
+One more thing: the agent function also works on its own, outside any module.
+
+```rust
+let predicted = research("how loud?".to_string()).await?;
+println!("{}", predicted.research);
+```
+
+Same function, same tools, no module needed. Use the standalone form when you want a quick agent call, and the module form when the agent is one step in a larger pipeline.
+
+</Step>
+</Steps>
+
+## Next
+
+Learn how to record a run and replay it for free in [Record and Replay](/docs/tutorials/record-and-replay).

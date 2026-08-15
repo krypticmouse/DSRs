@@ -1,0 +1,46 @@
+---
+title: 'Compilation'
+description: 'What compile means in DSRs, and why it happens while your code is built'
+icon: 'gears'
+---
+
+In DSRs, to **compile** a program means to turn it into a raw form that can be executed or served as is. The raw form is the program artifact itself: the data picture described in [The Harness as Data](/docs/concepts/harness-as-data). Hand that artifact to a host, and the host can run it. Nothing else is needed.
+
+This page explains a choice that may seem strange at first: DSRs has no `module.compile()` you call at runtime. Here is why.
+
+## Why there is no runtime compile
+
+Once Rust code is built, the body of a function is machine code. Machine code is for the processor, not for reading. No tool at runtime can look at a compiled function and recover the steps, the branches, and the wiring you wrote. The information is simply gone.
+
+So asking a running program to describe itself is asking it to read a book that was already shredded. If you want the description, you have to make it before the shredding.
+
+## Compile at build time, from one read
+
+That is exactly what the `#[module]` attribute does. While your code is being built, the macro reads your function once. From that single read it produces two projections:
+
+- the runnable function, the thing you call, and
+- the data description, the program artifact.
+
+Both come from the same source at the same moment. This is the important part: because there is one read, the two can never drift apart. There is no second description that could go stale. You never edit the function and forget to update the picture, because you never wrote the picture. It is made from the function, every build, automatically.
+
+A blueprint copied from a finished house may miss a wall. A blueprint the house was built from cannot. `#[module]` makes the code and the blueprint come from one drawing.
+
+## The road not taken: recording a run
+
+There was an older idea, and DSRs tried it: run the program once, watch what happens, and write down the shape you saw. It sounds reasonable, but it has a flaw that cannot be patched.
+
+A recording only shows the path that ran. A branch that was not taken that day simply does not exist in the recording. Two steps that ran in parallel look like they ran one after the other. The picture you get is not your program. It is one lucky walk through it. For that reason the recording approach was removed, and DSRs reads structure from your source code instead, where every branch is visible whether it ran or not.
+
+Recordings still matter, just for a different job. A recording of one run is a [trace](/docs/concepts/traces-and-replay), and it is great for debugging and replay. It is only wrong as a source of program structure.
+
+## The reverse direction
+
+Compilation in DSRs runs both ways. Rust becomes a `.dsrs` artifact, as above. And a `.dsrs` artifact can be embedded back into a Rust build:
+
+```rust
+let program = dsrs::include_program!("qa.dsrs");
+```
+
+The artifact is checked while your project builds, so a broken file fails your build, not your production traffic. This closes the loop. An LLM or an optimizer can produce a program as data, and you can ship that program inside an ordinary Rust binary.
+
+One caveat travels with all of this. The parts of your function that are plain custom logic cannot be described as data, so they ride along as [holes](/docs/concepts/holes). And an artifact only runs where its declared [capabilities](/docs/concepts/capabilities) are allowed.

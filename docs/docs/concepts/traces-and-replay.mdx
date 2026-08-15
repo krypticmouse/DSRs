@@ -1,0 +1,39 @@
+---
+title: 'Traces and Replay'
+description: 'Why DSRs records every run, and how replay makes changes cheap to try'
+icon: 'clock-rotate-left'
+---
+
+A **trace** is a full recording of one run of your program. Every model call is written down: what was sent, what came back, in what order. If [The Harness as Data](/docs/concepts/harness-as-data) says your program should be a thing you can hold, a trace says the same about each run of it.
+
+An airplane's flight recorder is the right picture. It does not fly the plane. It just remembers everything, so that later you can know exactly what happened, second by second.
+
+## Why record
+
+Three reasons, each worth the price on its own.
+
+**Debugging.** When a pipeline gives a bad answer, the question is always the same: what did the model actually see? Not what you think your code sent. What was truly sent. A trace answers that exactly, for every step, with nothing left to memory or guesswork.
+
+**Testing.** Model calls are slow, cost money, and give different answers on different days. A trace is a set of canned answers for one whole run. Your tests can replay the recording instead of calling the model. They run fast, cost nothing, and pass or fail for real reasons.
+
+**Improvement.** An optimizer needs to see what went wrong before it can fix anything. Traces are what it reads. Each recorded step can be traced back to the named part of the program that produced it, so the optimizer can connect a bad outcome to the exact instruction or example that needs to change.
+
+## Replay
+
+Replay runs your program against a recording. It comes in two modes, for two different jobs.
+
+**Strict mode** proves nothing changed. Every call must match the recording exactly, or the replay fails with a clear error. This is what fixtures and CI use. If a strict replay passes, your program still behaves exactly as it did when the recording was made, and it proved that without a single live model call.
+
+**Until-divergence mode** is for trying changes. It replays the run from the recording for as long as the calls still match. The moment a call differs from the recording, that call and everything after it go to the live model. The unchanged start of the run is free. You only pay for the part you changed.
+
+This makes small experiments cheap in a way that compounds. Suppose your pipeline has eight steps and you tweak the instruction of step six. Steps one through five are identical to the recording, so they replay for free. Only steps six through eight cost money. Trying ten variations of step six costs a fraction of ten full runs. Cheap tries mean more tries, and more tries is how programs get better.
+
+## The fingerprint
+
+One plain sentence explains how replay tells "same" from "different": every call gets a fingerprint of exactly what was about to be sent, so replay can tell a same call from a changed call.
+
+The fingerprint covers the full rendered prompt and the model settings. If you change anything that the model would actually see, the fingerprint changes, and replay notices at exactly that call. If you change nothing, the fingerprints match and the recording is served. Divergence is detected, never declared. You do not tell replay what you changed. It finds out on its own, at the precise step where your change first matters.
+
+One honest limit: a served call never re-runs its tools, but once a replay goes live, the live calls do touch the real world. Replaying a program with side effects safely needs an environment you can reset.
+
+Traces close the loop that the rest of DSRs opens. The program is data you can edit, as [Compilation](/docs/concepts/compilation) explains. The run is data you can replay. Together they make the improvement cycle fast, cheap, and safe.

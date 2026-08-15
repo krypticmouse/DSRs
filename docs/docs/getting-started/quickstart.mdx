@@ -34,7 +34,7 @@ cargo add dspy-rs tokio anyhow
 Tell DSRs which model to use. This sets a global default that all predictors will use:
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM};
+use dspy_rs::{configure, init_tracing, LM};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -45,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,  // handles prompt formatting and response parsing
     );
 
     Ok(())
@@ -109,7 +108,7 @@ The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields
 ## Complete example
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
+use dspy_rs::{configure, init_tracing, LM, Predict, Signature};
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -130,7 +129,6 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,
     );
 
     let predict = Predict::<QA>::new();

@@ -1,0 +1,114 @@
+---
+title: 'Print and Serve'
+description: 'Export a program as a .dsrs file, check it, and serve it over HTTP'
+icon: 'server'
+---
+
+A `#[module]` is more than a function. It is also a program you can print as text, save as a `.dsrs` file, and run somewhere else. This page shows the full path: print, check, format, serve, and embed.
+
+## Goal
+
+Get the program out of your code and run it elsewhere.
+
+## Step 1: Print the program
+
+Every module exposes `program()`. Call `to_dsrs()` on it to get the canonical text, then save it:
+
+```rust
+let text = qa::program().to_dsrs();
+std::fs::write("qa.dsrs", text)?;
+```
+
+One note before serving: a file printed from a `#[module]` holds a placeholder model line like `model default = "unbound:default"`, because the real model was bound in your code. Open the file and point each model line at a real model, for example:
+
+```
+model default = "openai:gpt-4o-mini"
+```
+
+## Step 2: Check it
+
+`dsrs check` parses and validates the file. Errors come with line and column positions, so it works as a pre-commit gate:
+
+```bash
+dsrs check qa.dsrs
+# ok: program `qa` (3f9c...) - 4 nodes, 4 sigs, 1 models, 0 tools
+```
+
+## Step 3: Format it
+
+`dsrs fmt` prints the one canonical form of the file. With `--write` it rewrites the file in place:
+
+```bash
+dsrs fmt qa.dsrs           # print the canonical form to stdout
+dsrs fmt qa.dsrs --write   # rewrite the file in place
+```
+
+A file that does not parse does not format; fix `check` errors first.
+
+## Step 4: Serve it
+
+`dsrs serve` runs the program behind a small HTTP server:
+
+```bash
+dsrs serve qa.dsrs --port 8080
+```
+
+The real flags:
+
+- `--host` (default `127.0.0.1`) and `--port` (default `8080`).
+- `--allow CAP`, repeatable: grants a capability, for example `--allow net:search --allow fs:read`.
+- `--overlay file.json`: applies a saved candidate on every run (a JSON object of `{"<param path>": <value>}` entries).
+
+Model API keys come from the usual provider environment variables (for example `OPENAI_API_KEY`).
+
+Call it:
+
+```bash
+curl -s localhost:8080/run \
+  -H 'content-type: application/json' \
+  -d '{"question": "What is DSRs?"}'
+# {"output": {"answer": "...", "upper": "..."}}
+```
+
+The endpoints:
+
+- `POST /run` takes a JSON object of input fields and returns `{"output": ...}`. Add `?trace=1` to also get a full trace of the run.
+- `GET /schema` returns the program's interface (its inputs, outputs, and types).
+- `GET /program` returns the canonical `.dsrs` text.
+- `GET /healthz` returns status, program name, and program hash.
+
+## Capabilities: needs versus allows
+
+The program states what it needs in its `caps { ... }` block. The host states what it allows with `--allow`. Serving refuses to start when the program asks for more than the host allows, and it prints the missing set. This is on purpose: a program can never quietly get more access than you granted.
+
+Two more refusals to know about:
+
+- A program with [host holes](/docs/guides/use-holes) cannot be served by `dsrs serve`, because the Rust code lives in the binary that defined it. Embed the program instead (next section).
+- Same story for host tools: the server has no implementation to bind. Sandboxed JavaScript tools serve fine, because their code travels inside the file.
+
+## Embed a .dsrs file in a Rust build
+
+`include_program!` compiles a `.dsrs` file into your binary:
+
+```rust
+dspy_rs::include_program!("programs/qa.dsrs");
+
+let program: &'static dspy_rs::ir::Program = qa::program();
+```
+
+The macro creates a module named after the file stem (`qa.dsrs` becomes `mod qa`). The path is resolved relative to your crate's `Cargo.toml` directory. You get:
+
+- `qa::SOURCE`: the embedded text.
+- `qa::program()`: the parsed, validated program (panics on a bad file).
+- `qa::try_program()`: the same, but returns a `Result`.
+- A generated test, so `cargo test` fails if the file ever becomes invalid.
+
+This is the path for programs with host tools or host holes: embed the file, bind your implementations, and serve from your own binary.
+
+## Common mistakes
+
+**Serving a file with an unbound placeholder model.** Edit the `model` lines to real models first.
+
+**Forgetting `--allow`.** If the file declares `caps { net:search }`, serving without `--allow net:search` refuses at startup. That is the design working, not a bug.
+
+**Editing the file by hand and skipping `dsrs check`.** Always check after hand edits. The parser's error messages carry positions and are meant to be followed.

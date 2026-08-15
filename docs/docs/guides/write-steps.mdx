@@ -1,0 +1,108 @@
+---
+title: 'Write Steps'
+description: 'Declare LM calls as plain function signatures with #[predict] and #[cot]'
+icon: 'stairs'
+---
+
+A step is one call to the language model with a clear job: some inputs go in, one output comes out. In DSRs you declare a step as a function with no body. The function is the contract. The framework writes the prompt and parses the answer for you.
+
+## Goal
+
+Declare a step you can call like a normal async function.
+
+## Recipe
+
+1. Write a function with no body. End it with `;`.
+2. Put the task description in a doc comment.
+3. Add `#[predict]` on top.
+
+```rust
+use dspy_rs::predict;
+
+/// Answer the question.
+#[predict]
+fn draft(question: String) -> String;
+```
+
+That is the whole step. Call it like a function:
+
+```rust
+let out = draft("What is DSRs?".to_string()).await?;
+println!("{}", out.draft);
+```
+
+## How the pieces map
+
+| You write | It becomes |
+|---|---|
+| The doc comment | The instruction the model reads |
+| Each parameter | An input field, same name and type |
+| The return type | One output field, named after the function |
+
+So `fn draft(question: String) -> String` gives the model an input called `question` and asks for an output called `draft`. That is why you read the result as `out.draft`.
+
+A step can take several inputs:
+
+```rust
+/// Judge whether the answer is correct.
+#[predict]
+fn judge(question: String, answer: String) -> bool;
+```
+
+## Chain of thought
+
+Use `#[cot]` when you want the model to write out its thinking before it answers. This often helps on harder tasks. The result carries an extra `reasoning` field.
+
+```rust
+use dspy_rs::cot;
+
+/// Summarize the text.
+#[cot]
+fn summarize(text: String) -> String;
+
+let out = summarize(long_text).await?;
+println!("{}", out.reasoning);   // the model's thinking
+println!("{}", out.summarize);   // the answer
+```
+
+## Pin a step to a named model
+
+By default a step uses the model you set with `configure`. To run one step on a different model, name it with `model = "@name"`:
+
+```rust
+/// Summarize deeply.
+#[cot(model = "@deep")]
+fn summarize(text: String) -> String;
+```
+
+The name is a handle, not a real model id. The host decides later what `deep` really is. Inside a [module](/docs/guides/use-holes), the runtime binds models by name; in a printed `.dsrs` file, the model line names the real provider and model.
+
+## The name is the handle
+
+The function name follows the step everywhere:
+
+- Tuning: `fx::Params::set_instruction("draft", ...)` overrides the instruction of `draft`.
+- Traces: spans record the step by this name, so you can find it later.
+- Signatures: the generated signature lives in a module with the same name (`draft::Sig`).
+
+One small twist: when you call a step inside a `#[module]` body, the trace uses the name of the `let` binding for that call. So `let drafter = draft(...).await?;` shows up as `drafter`.
+
+## Common mistakes
+
+**Adding `async`.** The generated function is already async. Writing `async fn` is a compile error with a clear message: remove `async`.
+
+```rust
+// Wrong
+#[predict]
+async fn draft(question: String) -> String;
+
+// Right
+#[predict]
+fn draft(question: String) -> String;
+```
+
+**Adding a body.** A step has no body. The framework builds the behavior from the signature. If you want to write the body yourself, you want a [tool](/docs/guides/add-tools), not a step.
+
+**Forgetting the return type.** The return type is the output field. Without it there is nothing for the model to produce, so it is a compile error.
+
+**No inputs.** A step needs at least one input parameter.

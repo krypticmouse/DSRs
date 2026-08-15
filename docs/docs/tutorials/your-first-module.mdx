@@ -1,0 +1,198 @@
+---
+title: "Your First Module"
+description: "Write one plain Rust function and get a working pipeline plus a portable description of it"
+icon: "blocks"
+---
+
+In this tutorial you will build a small pipeline in about 30 lines of Rust. A pipeline here just means a few model calls chained together. You will write it as an ordinary function, run it, and then see the surprise at the end: the same function can also describe itself as data.
+
+<Steps>
+<Step title="Set up the project">
+
+Add the dependencies to your `Cargo.toml`:
+
+```toml
+[dependencies]
+dspy-rs = "0.7"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+```
+
+Set your API key in the environment:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+```
+
+</Step>
+
+<Step title="Declare the steps">
+
+A step is one call to the model. You declare a step with `#[predict]` on a function that has no body. It has no body because the model is the body.
+
+```rust
+use dspy_rs::predict;
+
+/// Answer the question.
+#[predict]
+fn draft(question: String) -> String;
+
+/// Rate the text from 1-10.
+#[predict]
+fn rate(text: String) -> String;
+```
+
+Three things to notice:
+
+- The doc comment is the instruction. It is the text the model reads to know what to do.
+- The parameters are the inputs. The model sees each one by name.
+- The return type is the output. The output field is named after the function, so `draft` produces a field called `draft`.
+
+Nothing runs yet. You have only described two steps.
+
+</Step>
+
+<Step title="Combine them into a module">
+
+A module is a normal async function that calls your steps in order. Mark it with `#[module]`. First define a struct for the final result:
+
+```rust
+use dspy_rs::module;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct QaOut {
+    pub answer: String,
+    pub upper: String,
+}
+
+#[module]
+async fn qa(question: String) -> Result<QaOut, dspy_rs::ir::RunError> {
+    let drafter = draft(question.clone()).await?;
+    let upper: String = {
+        let d: String = drafter.draft;
+        d.to_uppercase()
+    };
+    let checker = rate(upper.clone()).await?;
+    Ok(QaOut {
+        answer: checker.rate,
+        upper,
+    })
+}
+```
+
+Read the body line by line:
+
+- `draft(question.clone()).await?` runs the first step. The result is in `drafter.draft`, because the output field is named after the function.
+- The `upper` block is plain Rust. No model call. You can mix ordinary code between steps like this.
+- `rate(upper.clone()).await?` runs the second step on the uppercased text.
+- `Ok(QaOut { ... })` picks which values become the final output.
+
+The `#[dspy_rs::Schema]` attribute on `QaOut` lets DSRs understand the shape of your output struct.
+
+</Step>
+
+<Step title="Configure a model and run it">
+
+Tell DSRs which model to use, then call `qa` like any other function:
+
+```rust
+use dspy_rs::{configure, LM};
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    configure(
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await?,
+    );
+
+    let out = qa("greet the world".to_string()).await?;
+    println!("rating: {}", out.answer);
+    println!("shouted draft: {}", out.upper);
+
+    Ok(())
+}
+```
+
+Run it with `cargo run`. The model drafts an answer, your Rust code uppercases it, and the model rates the result. That is a working two step pipeline.
+
+</Step>
+
+<Step title="The payoff: your function is also data">
+
+Here is the big idea. You wrote one function, and you got two things.
+
+The first thing is what you just used: a runnable function.
+
+The second thing is a complete description of your pipeline as data. Ask for it with `program()`:
+
+```rust
+let program = qa::program();
+println!("{}", program.to_dsrs());
+```
+
+`to_dsrs()` prints the whole pipeline as readable text: every step, every instruction, every connection between them. You can save that text to a file, share it, diff it in code review, or load it somewhere else.
+
+Why does this matter? Because the description is not something you wrote by hand next to the code. It is generated from the same function body, so it can never drift out of sync with what the code does. Later tutorials use this to record runs, replay them for free, and tune instructions without touching your source.
+
+</Step>
+</Steps>
+
+## Complete example
+
+```rust
+use dspy_rs::{configure, module, predict, LM};
+
+/// Answer the question.
+#[predict]
+fn draft(question: String) -> String;
+
+/// Rate the text from 1-10.
+#[predict]
+fn rate(text: String) -> String;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct QaOut {
+    pub answer: String,
+    pub upper: String,
+}
+
+#[module]
+async fn qa(question: String) -> Result<QaOut, dspy_rs::ir::RunError> {
+    let drafter = draft(question.clone()).await?;
+    let upper: String = {
+        let d: String = drafter.draft;
+        d.to_uppercase()
+    };
+    let checker = rate(upper.clone()).await?;
+    Ok(QaOut {
+        answer: checker.rate,
+        upper,
+    })
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    configure(
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build()
+            .await?,
+    );
+
+    let out = qa("greet the world".to_string()).await?;
+    println!("rating: {}", out.answer);
+    println!("shouted draft: {}", out.upper);
+
+    println!("{}", qa::program().to_dsrs());
+
+    Ok(())
+}
+```
+
+## Next
+
+Give your pipeline the ability to call tools in [Agent With Tools](/docs/tutorials/agent-with-tools).
