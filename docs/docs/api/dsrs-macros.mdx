@@ -1,0 +1,24 @@
+---
+title: "dsrs_macros"
+description: "Public API of the dsrs-macros crate"
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dsrs-macros v0.7.2` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+## Proc macros
+
+| Item | Description |
+|---|---|
+| [`agent`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.agent.html) | (attribute) Declares an LLM+tool loop as a bodyless fn (RFC 0003 M-2) — the agent sibling of `macro@predict`. |
+| [`Augmentation`](https://docs.rs/dsrs-macros/latest/dsrs_macros/) | (derive)  |
+| [`BamlType`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.BamlType.html) | (attribute) Backwards-compatible alias for `macro@Schema`. |
+| [`cot`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.cot.html) | (attribute) `macro@predict` with chain-of-thought: the LM produces a `reasoning` field before the output, and the generated function returns `Predicted<WithReasoning<... |
+| [`include_program`](https://docs.rs/dsrs-macros/latest/dsrs_macros/macro.include_program.html) | (macro) Embeds a `.dsrs` program artifact at build time (RFC 0002 §6.1). |
+| [`module`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.module.html) | (attribute) Compiles an ordinary async fn body into an IR `Program` (RFC 0003 M-3). |
+| [`predict`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.predict.html) | (attribute) Declares an LM call as a bodyless function — the function *is* the signature. |
+| [`Schema`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.Schema.html) | (attribute) Marks a nested struct/enum as usable inside `#derive(Signature)` fields. |
+| [`Signature`](https://docs.rs/dsrs-macros/latest/dsrs_macros/) | (derive)  |
+| [`tool`](https://docs.rs/dsrs-macros/latest/dsrs_macros/attr.tool.html) | (attribute) Declares a host tool: an ordinary (optionally async) fn whose body IS the implementation (RFC 0003 M-2). |

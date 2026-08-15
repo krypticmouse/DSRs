@@ -1,0 +1,36 @@
+---
+title: "API Reference"
+description: "Auto-generated index of every public item in the DSRs crates, linked to full rustdoc"
+icon: "book"
+---
+
+This tab is an auto-generated index of the public API: every public struct, enum, trait, function, macro, and re-export across the DSRs crates, with its doc summary. It is produced from rustdoc JSON, the compiler's own view of the code, so it cannot drift from the source.
+
+Every item links to its page on docs.rs, which carries the full signatures, methods, trait implementations, and long-form documentation:
+
+<CardGroup cols={3}>
+<Card title="dspy-rs" icon="box-open" href="https://docs.rs/dspy-rs">
+The main crate: signatures, predictors, modules, IR, traces, optimizers
+</Card>
+<Card title="dsrs-tools" icon="screwdriver-wrench" href="https://docs.rs/dsrs-tools">
+Sandboxed tool execution and Code Mode
+</Card>
+<Card title="dsrs-macros" icon="wand-magic-sparkles" href="https://docs.rs/dsrs-macros">
+The proc-macro crate behind the derive and attribute surface
+</Card>
+</CardGroup>
+
+For explanations and usage, the [component pages](/docs/components/signatures) are the right place; this tab answers "what exists and where does it live."
+
+## Regenerating
+
+The pages are rebuilt from the working tree, not fetched from a registry, so they track your branch. From the repository root:
+
+```bash
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p dspy-rs --lib --all-features -- -Z unstable-options --output-format json
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-tools --lib -- -Z unstable-options --output-format json
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs_macros --lib -- -Z unstable-options --output-format json
+python3 docs/scripts/gen_api.py
+```
+
+Each generated page carries the crate version and commit it was built from. Run the four commands after any public-API change; CI can run them and fail on a dirty diff to keep this tab honest.

@@ -1,0 +1,153 @@
+---
+title: "dspy_rs::typesys"
+description: "In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_types`, `internal_baml_jinja`, `jsonish`)."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_types`,
+`internal_baml_jinja`, `jsonish`).
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`ClassDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.ClassDef.html) | Re-export of `schema::ClassDef`. |
+| [`coerce`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/fn.coerce.html) | Re-export of `coerce::coerce`. |
+| [`Coerced`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/struct.Coerced.html) | Re-export of `coerce::Coerced`. |
+| [`Constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.Constraint.html) | Re-export of `constraint::Constraint`. |
+| [`ConstraintKind`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/enum.ConstraintKind.html) | Re-export of `constraint::ConstraintKind`. |
+| [`ConstraintLevel`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/type.ConstraintLevel.html) | Re-export of `constraint::ConstraintLevel`. |
+| [`ConstraintOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ConstraintOutcome.html) | Re-export of `constraint::ConstraintOutcome`. |
+| [`EnumDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumDef.html) | Re-export of `schema::EnumDef`. |
+| [`EnumValueDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumValueDef.html) | Re-export of `schema::EnumValueDef`. |
+| [`evaluate_constraints`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraints.html) | Re-export of `constraint::evaluate_constraints`. |
+| [`evaluate_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_expression.html) | Re-export of `constraint::evaluate_expression`. |
+| [`field_type_from_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.field_type_from_shape.html) | Re-export of `schema::field_type_from_shape`. |
+| [`FieldDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.FieldDef.html) | Re-export of `schema::FieldDef`. |
+| [`FieldType`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/enum.FieldType.html) | Re-export of `schema::FieldType`. |
+| [`Flag`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/enum.Flag.html) | Re-export of `coerce::Flag`. |
+| [`internal_name_for_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.internal_name_for_shape.html) | Re-export of `schema::internal_name_for_shape`. |
+| [`OutputSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.OutputSchema.html) | Re-export of `schema::OutputSchema`. |
+| [`ResponseCheck`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ResponseCheck.html) | Re-export of `constraint::ResponseCheck`. |
+| [`schema_block`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.schema_block.html) | Re-export of `render::schema_block`. |
+| [`Schema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/trait.Schema.html) | Re-export of `schema::Schema`. |
+| [`type_name`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.type_name.html) | Re-export of `render::type_name`. |
+| [`TypeTable`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.TypeTable.html) | Re-export of `schema::TypeTable`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`coerce`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/index.html) | Tolerant coercion of raw LM field text into `serde_json::Value`, guided by `FieldType`. |
+| [`constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/index.html) | In-house constraint model + evaluation, replacing BAML's `Constraint` / `run_user_checks`. |
+| [`render`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/index.html) | Prompt rendering for the in-house type model, replacing BAML's jinja `OutputFormatContent::render` and the adapter's backtick-token pipeline. |
+| [`schema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/index.html) | In-house type model that replaces BAML's `TypeIR` / `OutputFormatContent`. |
+
+## Functions
+
+| Item | Description |
+|---|---|
+| [`format_value`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/fn.format_value.html) | Renders a value for an input field, honoring an explicit `#format(...)` hint. |
+
+## `typesys::coerce`
+
+Tolerant coercion of raw LM field text into `serde_json::Value`, guided by `FieldType`.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Coerced`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/struct.Coerced.html) | The result of coercing raw text into a typed value. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`Flag`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/enum.Flag.html) | A non-fatal observation made while coercing a value (e.g. a code fence was stripped). |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`coerce`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/fn.coerce.html) | Coerces `raw` into a `serde_json::Value` matching `field_type`. |
+
+## `typesys::constraint`
+
+In-house constraint model + evaluation, replacing BAML's `Constraint` / `run_user_checks`.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.Constraint.html) | A single `#check`/`#assert` constraint attached to a field. |
+| [`ConstraintOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ConstraintOutcome.html) | The outcome of evaluating a constraint against a value. |
+| [`ResponseCheck`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ResponseCheck.html) | A reported check result, mirroring the old `ResponseCheck` shape used by GEPA/optimizers. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ConstraintKind`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/enum.ConstraintKind.html) | Whether a constraint is a soft `check` (reported) or a hard `assert` (fails the call). |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`evaluate_constraint_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraint_expression.html) | Evaluates a `'static` constraint expression against `value`, compiling it at most once per process. |
+| [`evaluate_constraints`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraints.html) | Evaluates every constraint against `value`, binding it as `this` in a jinja expression. |
+| [`evaluate_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_expression.html) | Evaluates a runtime (non-`'static`) constraint expression against `value`, binding it as `this`. |
+
+### Type aliases
+
+| Item | Description |
+|---|---|
+| [`ConstraintLevel`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/type.ConstraintLevel.html) | Back-compat alias for the old public name. |
+
+## `typesys::render`
+
+Prompt rendering for the in-house type model, replacing BAML's jinja `OutputFormatContent::render` and the adapter's backtick-token pipeline.
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`schema_block`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.schema_block.html) | Renders the expanded schema block for a field type. |
+| [`type_name`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.type_name.html) | Renders the short, inline type label for a field. |
+
+## `typesys::schema`
+
+In-house type model that replaces BAML's `TypeIR` / `OutputFormatContent`.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ClassDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.ClassDef.html) | A struct definition reachable from a signature's output type. |
+| [`EnumDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumDef.html) | A unit-enum definition reachable from a signature's output type. |
+| [`EnumValueDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumValueDef.html) | A single value of a unit enum. |
+| [`FieldDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.FieldDef.html) | A single field inside a `ClassDef`. |
+| [`OutputSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.OutputSchema.html) | The full type description for a value: the root `FieldType` plus the `TypeTable` of every class/enum definition it references. Replaces BAML's `OutputFormatContent`. |
+| [`TypeTable`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.TypeTable.html) | Owned registry of the class/enum definitions reachable from a signature (RFC 0002 §1.3). |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`FieldType`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/enum.FieldType.html) | Structural type of a signature/nested field, mirroring the subset of BAML's `TypeIR` that DSRs actually uses. |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`Schema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/trait.Schema.html) | Runtime trait exposing the type model + serde-backed value conversion for a type. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`field_type_from_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.field_type_from_shape.html) | Builds just the `FieldType` for a shape, discarding the class/enum registry. |
+| [`internal_name_for_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.internal_name_for_shape.html) | Computes the internal name for a shape: module path + type identifier when available. |

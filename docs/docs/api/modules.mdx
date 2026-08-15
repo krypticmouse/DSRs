@@ -1,0 +1,53 @@
+---
+title: "dspy_rs::modules"
+description: "Public API of the modules module"
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`ChainOfThought`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/type.ChainOfThought.html) | Re-export of `chain_of_thought::ChainOfThought`. |
+| [`ChainOfThoughtOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/type.ChainOfThoughtOutput.html) | Re-export of `chain_of_thought::ChainOfThoughtOutput`. |
+| [`ReAct`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/struct.ReAct.html) | Re-export of `react::ReAct`. |
+| [`Reasoning`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/struct.Reasoning.html) | Re-export of `chain_of_thought::Reasoning`. |
+| [`WithReasoning`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/struct.WithReasoning.html) | Re-export of `chain_of_thought::WithReasoning`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`chain_of_thought`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/index.html) |  |
+| [`react`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/index.html) |  |
+
+## `modules::chain_of_thought`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Reasoning`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/struct.Reasoning.html) | Augmentation that prepends a `reasoning: String` field to a signature's output. |
+| [`WithReasoning`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/struct.WithReasoning.html) |  |
+
+### Type aliases
+
+| Item | Description |
+|---|---|
+| [`ChainOfThought`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/type.ChainOfThought.html) | Asks the LM to reason step-by-step before producing the answer. |
+| [`ChainOfThoughtOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/chain_of_thought/type.ChainOfThoughtOutput.html) | Convenience alias for `ChainOfThought`'s output type. |
+
+## `modules::react`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ReAct`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/struct.ReAct.html) |  |
+| [`ReActActionStepOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/struct.ReActActionStepOutput.html) |  |
+| [`ReActBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/struct.ReActBuilder.html) |  |
+| [`ReActExtractStepOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/modules/react/struct.ReActExtractStepOutput.html) |  |

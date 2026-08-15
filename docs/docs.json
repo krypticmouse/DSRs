@@ -73,6 +73,43 @@
             ]
           }
         ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "docs/api/index"
+            ]
+          },
+          {
+            "group": "dspy-rs",
+            "pages": [
+              "docs/api/dspy-rs",
+              "docs/api/adapter",
+              "docs/api/augmentation",
+              "docs/api/core",
+              "docs/api/data",
+              "docs/api/evaluate",
+              "docs/api/fx",
+              "docs/api/ir",
+              "docs/api/modules",
+              "docs/api/optimizer",
+              "docs/api/predictors",
+              "docs/api/trace",
+              "docs/api/typesys",
+              "docs/api/utils"
+            ]
+          },
+          {
+            "group": "Companion crates",
+            "pages": [
+              "docs/api/dsrs-tools",
+              "docs/api/dsrs-macros"
+            ]
+          }
+        ]
       }
     ]
   },

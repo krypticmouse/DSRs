@@ -1,0 +1,103 @@
+---
+title: "dspy_rs (crate root)"
+description: "Everything importable directly from dspy_rs"
+icon: "box-open"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+The crate root re-exports the surface most programs use, so `use dspy_rs::{Predict, Signature, configure}` works without module paths. Items are listed here once with their home module linked; the module pages list everything else.
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| `adapter::chat::*` | Glob re-export. |
+| `augmentation::*` | Glob re-export. |
+| [`begin_span`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.begin_span.html) | Re-export of `trace::begin_span`. |
+| [`Capability`](https://docs.rs/dspy-rs/latest/dsrs_tools/capability/struct.Capability.html) | Re-export of `dsrs_tools::Capability`. |
+| [`capture_with_meta`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.capture_with_meta.html) | Re-export of `trace::capture_with_meta`. |
+| [`capture`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/index.html) | Re-export of `trace::capture`. |
+| [`capture`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.capture.html) | Re-export of `trace::capture`. |
+| [`CodeModeTool`](https://docs.rs/dspy-rs/latest/dsrs_tools/code_mode/struct.CodeModeTool.html) | Re-export of `dsrs_tools::CodeModeTool`. |
+| [`CompId`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.CompId.html) | Re-export of `trace::CompId`. |
+| [`Constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.Constraint.html) | Re-export of `typesys::Constraint`. |
+| [`ConstraintLevel`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/type.ConstraintLevel.html) | Re-export of `typesys::ConstraintLevel`. |
+| [`ConstraintOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ConstraintOutcome.html) | Re-export of `typesys::ConstraintOutcome`. |
+| `core::*` | Glob re-export. |
+| `data::dataloader::*` | Glob re-export. |
+| `data::utils::*` | Glob re-export. |
+| `dsrs_macros::*` | Glob re-export. |
+| [`Eval`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.Eval.html) | Re-export of `trace::Eval`. |
+| `evaluate::*` | Glob re-export. |
+| [`evaluate_constraints`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraints.html) | Re-export of `typesys::evaluate_constraints`. |
+| [`Facet`](https://docs.rs/dspy-rs/latest/facet_core/trait.Facet.html) | Re-export of `facet::Facet`. |
+| [`Facet`](https://docs.rs/dspy-rs/latest/facet_macros/derive.Facet.html) | Re-export of `facet::Facet`. |
+| [`FieldType`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/enum.FieldType.html) | Re-export of `typesys::FieldType`. |
+| [`Flag`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/enum.Flag.html) | Re-export of `typesys::Flag`. |
+| [`is_capturing`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.is_capturing.html) | Re-export of `trace::is_capturing`. |
+| [`is_replaying`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/fn.is_replaying.html) | Re-export of `trace::is_replaying`. |
+| [`JsonMap`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/type.JsonMap.html) | Re-export of `trace::JsonMap`. |
+| [`ModelEntry`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.ModelEntry.html) | Re-export of `trace::ModelEntry`. |
+| [`ModelId`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.ModelId.html) | Re-export of `trace::ModelId`. |
+| `modules::*` | Glob re-export. |
+| `optimizer::*` | Glob re-export. |
+| [`OtelEvent`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelEvent.html) | Re-export of `trace::OtelEvent`. |
+| [`OtelKeyValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelKeyValue.html) | Re-export of `trace::OtelKeyValue`. |
+| [`OtelSpan`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelSpan.html) | Re-export of `trace::OtelSpan`. |
+| [`OtelStatus`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelStatus.html) | Re-export of `trace::OtelStatus`. |
+| [`OtelValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/enum.OtelValue.html) | Re-export of `trace::OtelValue`. |
+| [`OutputSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.OutputSchema.html) | Re-export of `typesys::OutputSchema`. |
+| `predictors::*` | Glob re-export. |
+| [`PrefixEntry`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.PrefixEntry.html) | Re-export of `trace::PrefixEntry`. |
+| [`PrefixId`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.PrefixId.html) | Re-export of `trace::PrefixId`. |
+| [`replay`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/index.html) | Re-export of `trace::replay`. |
+| [`replay`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/fn.replay.html) | Re-export of `trace::replay`. |
+| [`ReplayError`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/enum.ReplayError.html) | Re-export of `trace::ReplayError`. |
+| [`ReplayMode`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/enum.ReplayMode.html) | Re-export of `trace::ReplayMode`. |
+| [`ReplayReport`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/struct.ReplayReport.html) | Re-export of `trace::ReplayReport`. |
+| [`ResponseCheck`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ResponseCheck.html) | Re-export of `typesys::ResponseCheck`. |
+| [`RlRollout`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlRollout.html) | Re-export of `trace::RlRollout`. |
+| [`RlTransition`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlTransition.html) | Re-export of `trace::RlTransition`. |
+| [`RUN_JS_TOOL_NAME`](https://docs.rs/dspy-rs/latest/dsrs_tools/code_mode/constant.RUN_JS_TOOL_NAME.html) | Re-export of `dsrs_tools::RUN_JS_TOOL_NAME`. |
+| [`SandboxConfig`](https://docs.rs/dspy-rs/latest/dsrs_tools/quickjs/struct.SandboxConfig.html) | Re-export of `dsrs_tools::SandboxConfig`. |
+| [`Schema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/trait.Schema.html) | Re-export of `typesys::Schema`. |
+| [`Shape`](https://docs.rs/dspy-rs/latest/facet_core/types/shape/struct.Shape.html) | Re-export of `facet::Shape`. |
+| [`Span`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.Span.html) | Re-export of `trace::Span`. |
+| [`SpanError`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.SpanError.html) | Re-export of `trace::SpanError`. |
+| [`SpanErrorKind`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/enum.SpanErrorKind.html) | Re-export of `trace::SpanErrorKind`. |
+| [`SpanEvent`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/enum.SpanEvent.html) | Re-export of `trace::SpanEvent`. |
+| [`SpanGuard`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/struct.SpanGuard.html) | Re-export of `trace::SpanGuard`. |
+| [`SpanId`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.SpanId.html) | Re-export of `trace::SpanId`. |
+| [`SpanOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/struct.SpanOutcome.html) | Re-export of `trace::SpanOutcome`. |
+| [`SpanRequest`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/struct.SpanRequest.html) | Re-export of `trace::SpanRequest`. |
+| [`Trace`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.Trace.html) | Re-export of `trace::Trace`. |
+| [`TraceMeta`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.TraceMeta.html) | Re-export of `trace::TraceMeta`. |
+| [`TraceOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.TraceOutcome.html) | Re-export of `trace::TraceOutcome`. |
+| `utils::*` | Glob re-export. |
+
+## Macros
+
+| Item | Description |
+|---|---|
+| [`sign`](https://docs.rs/dspy-rs/latest/dspy_rs/macro.sign.html) |  |
+
+## Modules
+
+| Module | Description |
+|---|---|
+| [`adapter`](/docs/api/adapter) | Prompt formatting and LM response parsing. |
+| [`augmentation`](/docs/api/augmentation) |  |
+| [`core`](/docs/api/core) | The foundational abstractions everything else is built on. |
+| [`data`](/docs/api/data) | Data loading, versioned under `v1`. |
+| [`evaluate`](/docs/api/evaluate) | Evaluation and metrics for measuring module performance. |
+| [`fx`](/docs/api/fx) | Functional DSRs (experimental): harnesses as plain async functions. |
+| [`ir`](/docs/api/ir) | The intermediate representation (RFC 0002). |
+| [`modules`](/docs/api/modules) |  |
+| [`optimizer`](/docs/api/optimizer) | Automatic prompt optimization. |
+| [`predictors`](/docs/api/predictors) |  |
+| [`trace`](/docs/api/trace) | Execution trace capture (RFC 0001). |
+| [`typesys`](/docs/api/typesys) | In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_types`, `internal_baml_jinja`, `jsonish`). |
+| [`utils`](/docs/api/utils) | LM response caching. |

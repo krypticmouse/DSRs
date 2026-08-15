@@ -1,0 +1,172 @@
+---
+title: "dspy_rs::core"
+description: "The foundational abstractions everything else is built on."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+The foundational abstractions everything else is built on.
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`CallMetadata`](https://docs.rs/dspy-rs/latest/dspy_rs/core/predicted/struct.CallMetadata.html) | Re-export of `predicted::CallMetadata`. |
+| [`ConstraintResult`](https://docs.rs/dspy-rs/latest/dspy_rs/core/predicted/struct.ConstraintResult.html) | Re-export of `predicted::ConstraintResult`. |
+| [`ConversionError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.ConversionError.html) | Re-export of `errors::ConversionError`. |
+| [`ErrorClass`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.ErrorClass.html) | Re-export of `errors::ErrorClass`. |
+| [`FieldMeta`](https://docs.rs/dspy-rs/latest/dspy_rs/core/predicted/struct.FieldMeta.html) | Re-export of `predicted::FieldMeta`. |
+| [`FieldMetadataSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.FieldMetadataSpec.html) | Re-export of `schema::FieldMetadataSpec`. |
+| [`FieldPath`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.FieldPath.html) | Re-export of `schema::FieldPath`. |
+| [`FieldSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.FieldSchema.html) | Re-export of `schema::FieldSchema`. |
+| [`InputRenderSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/enum.InputRenderSpec.html) | Re-export of `schema::InputRenderSpec`. |
+| [`JsonishError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/struct.JsonishError.html) | Re-export of `errors::JsonishError`. |
+| `lm::*` | Glob re-export. |
+| [`LmError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.LmError.html) | Re-export of `errors::LmError`. |
+| `module::*` | Glob re-export. |
+| `module_ext::*` | Glob re-export. |
+| [`ModuleState`](https://docs.rs/dspy-rs/latest/dspy_rs/core/state/struct.ModuleState.html) | Re-export of `state::ModuleState`. |
+| [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.ParseError.html) | Re-export of `errors::ParseError`. |
+| [`Predicted`](https://docs.rs/dspy-rs/latest/dspy_rs/core/predicted/struct.Predicted.html) | Re-export of `predicted::Predicted`. |
+| [`PredictError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.PredictError.html) | Re-export of `errors::PredictError`. |
+| [`PredictState`](https://docs.rs/dspy-rs/latest/dspy_rs/core/dyn_predictor/struct.PredictState.html) | Re-export of `dyn_predictor::PredictState`. |
+| `settings::*` | Glob re-export. |
+| `signature::*` | Glob re-export. |
+| [`SignatureSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.SignatureSchema.html) | Re-export of `schema::SignatureSchema`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`lm`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/index.html) |  |
+| [`module`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/index.html) |  |
+| [`settings`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/index.html) |  |
+| [`signature`](https://docs.rs/dspy-rs/latest/dspy_rs/core/signature/index.html) |  |
+
+## `core::lm`
+
+### Re-exports
+
+| Item | Description |
+|---|---|
+| `chat::*` | Glob re-export. |
+| `client_registry::*` | Glob re-export. |
+| `usage::*` | Glob re-export. |
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`LM`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/struct.LM.html) | The live half: an `LMConfig` plus the initialized provider client and response cache. Constructed via `LM::builder()` or `LM::from_config`. |
+| [`LMConfig`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/struct.LMConfig.html) | The data half of an LM: every generation parameter, no live state. |
+| [`LMConfigBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/struct.LMConfigBuilder.html) | Use builder syntax to set the inputs and finish with `__internal_build()`). |
+| [`LMResponse`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/struct.LMResponse.html) |  |
+| [`ToolSet`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/struct.ToolSet.html) | Pre-fetched tool definitions plus name-indexed executors. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ToolLoopMode`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/enum.ToolLoopMode.html) |  |
+
+## `core::lm::chat`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Chat`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/chat/struct.Chat.html) |  |
+| [`Message`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/chat/struct.Message.html) |  |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ContentBlock`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/chat/enum.ContentBlock.html) |  |
+| [`Role`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/chat/enum.Role.html) |  |
+
+## `core::lm::client_registry`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`TestCompletionModel`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/client_registry/struct.TestCompletionModel.html) |  |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`LMClient`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/client_registry/enum.LMClient.html) |  |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`CompletionProvider`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/client_registry/trait.CompletionProvider.html) |  |
+
+## `core::lm::usage`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`LmUsage`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/usage/struct.LmUsage.html) |  |
+
+## `core::module`
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`Module`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/trait.Module.html) | Strategy-swapping interface for prompting modules. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`forward_all`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/fn.forward_all.html) | Runs a module on many inputs concurrently. |
+
+## `core::settings`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Settings`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/struct.Settings.html) |  |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`configure`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/fn.configure.html) |  |
+| [`get_lm`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/fn.get_lm.html) |  |
+
+### Statics
+
+| Item | Description |
+|---|---|
+| [`GLOBAL_SETTINGS`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/static.GLOBAL_SETTINGS.html) |  |
+
+## `core::signature`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ConstraintSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/core/signature/struct.ConstraintSpec.html) | A compile-time constraint declared on a signature field via `#check(...)` or `#assert(...)`. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ConstraintKind`](https://docs.rs/dspy-rs/latest/dspy_rs/core/signature/enum.ConstraintKind.html) | Whether a constraint is a soft check (reported but not fatal) or a hard assert (fails the call). |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`Signature`](https://docs.rs/dspy-rs/latest/dspy_rs/core/signature/trait.Signature.html) | Declares the input/output fields and instruction for a prompting task. |
