@@ -112,3 +112,8 @@ This is the path for programs with host tools or host holes: embed the file, bin
 **Forgetting `--allow`.** If the file declares `caps { net:search }`, serving without `--allow net:search` refuses at startup. That is the design working, not a bug.
 
 **Editing the file by hand and skipping `dsrs check`.** Always check after hand edits. The parser's error messages carry positions and are meant to be followed.
+
+## See also
+
+- [CLI reference](/docs/reference/cli): every flag of `dsrs check`, `dsrs fmt`, and `dsrs serve`, plus the serving host's endpoints
+- [`.dsrs` file reference](/docs/reference/dsrs-file): the full text format

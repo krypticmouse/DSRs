@@ -47,16 +47,17 @@ Better Task LM prompt
 
 ```rust
 #[derive(Signature, Clone, Debug)]
-/// Solve math word problems step by step.
 struct MathWordProblem {
+    /// Solve the problem step by step.
+
     #[input]
-    pub problem: String,
+    problem: String,
 
     #[output]
-    pub reasoning: String,  // We want to optimize this too
+    reasoning: String,  // We want to optimize this too
 
     #[output]
-    pub answer: String,
+    answer: String,
 }
 ```
 
@@ -64,23 +65,23 @@ struct MathWordProblem {
 
 ```rust
 #[derive(Signature, Clone, Debug)]
-/// You are an expert math teacher evaluating student work.
 struct MathJudge {
-    
-    #[input]
-    pub problem: String,
-    
-    #[input]
-    pub expected_answer: String,
-    
-    #[input]
-    pub student_answer: String,
-    
-    #[input]
-    pub student_reasoning: String,
-    
-    #[output(desc = "Detailed evaluation of the work")]
-    pub evaluation: String,  // This becomes the feedback
+    /// Evaluate student reasoning and answer quality.
+
+    #[input(desc = "The original problem")]
+    problem: String,
+
+    #[input(desc = "Expected answer")]
+    expected_answer: String,
+
+    #[input(desc = "Student answer")]
+    student_answer: String,
+
+    #[input(desc = "Student reasoning")]
+    student_reasoning: String,
+
+    #[output(desc = "Evaluation of the solution quality")]
+    evaluation: String,  // This becomes the feedback
 }
 ```
 
@@ -106,8 +107,9 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
         example: &Example<MathWordProblem>,
-        prediction: &Predicted<<MathSolver as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        prediction: &Predicted<MathWordProblemOutput>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
         let problem = example.input.problem.clone();
         let expected = example.output.answer.clone();
 
@@ -128,22 +130,20 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
         let (score, evaluation_text) = match judge_output {
             Ok(evaluation) => {
                 let evaluation_text = evaluation.evaluation.clone();
-                let evaluation_lc = evaluation_text.to_lowercase();
-                let good_reasoning =
-                    evaluation_lc.contains("sound reasoning")
-                    || evaluation_lc.contains("correct approach")
-                    || evaluation_lc.contains("clear");
-                let partial_reasoning =
-                    evaluation_lc.contains("partially")
-                    || evaluation_lc.contains("good start")
-                    || evaluation_lc.contains("minor arithmetic")
-                    || evaluation_lc.contains("close");
-
-                let score = match (exact_match, good_reasoning, partial_reasoning) {
-                    (true, true, _) => 1.0,
-                    (true, false, _) => 0.7,
-                    (false, true, _) | (false, _, true) => 0.3,
-                    (false, false, false) => 0.0,
+                let score = if exact_match {
+                    if evaluation_text.to_lowercase().contains("clear")
+                        || evaluation_text.to_lowercase().contains("correct")
+                    {
+                        1.0
+                    } else {
+                        0.7
+                    }
+                } else if evaluation_text.to_lowercase().contains("partially")
+                    || evaluation_text.to_lowercase().contains("good start")
+                {
+                    0.3
+                } else {
+                    0.0
                 };
                 (score, evaluation_text)
             }
@@ -151,24 +151,22 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
                 let fallback = format!(
                     "judge call failed: {err}; expected={expected}; predicted={student_answer}"
                 );
-                ((exact_match as u8 as f32), fallback)
+                ((exact_match as u8 as f64), fallback)
             }
         };
 
-        let feedback = FeedbackMetric::new(
+        Ok(Eval::with_feedback(
             score,
             format!(
                 "problem={problem}\nexpected={expected}\npredicted={student_answer}\njudge={evaluation_text}"
             ),
-        );
-
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        ))
     }
 }
 ```
 
-`GEPA` itself does not own a special `feedback_metric` hook anymore.
-The feedback function lives in your `TypedMetric` implementation, and GEPA enforces that every evaluation returns `MetricOutcome::with_feedback(...)`.
+`GEPA` itself does not own a special `feedback_metric` hook.
+The feedback function lives in your `TypedMetric` implementation, and GEPA enforces that every evaluation returns `Eval::with_feedback(...)`.
 That keeps the optimizer generic while preserving full judge-driven behavior.
 
 ## Key Benefits
@@ -215,9 +213,9 @@ Budget accordingly:
 
 ```rust
 GEPA::builder()
-    .num_iterations(3)           // Fewer iterations
-    .minibatch_size(3)           // Smaller batches
-    .max_lm_calls(Some(100))  // Explicit limit
+    .num_iterations(3)     // Fewer iterations
+    .minibatch_size(3)     // Smaller batches
+    .max_lm_calls(100)     // Explicit limit
     .build()
 ```
 
@@ -238,7 +236,8 @@ impl TypedMetric<MySignature, MyModule> for HybridMetric {
         &self,
         example: &Example<MySignature>,
         prediction: &Predicted<<MyModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
         let mut score = 1.0;
         let mut feedback_parts = vec![];
 
@@ -262,8 +261,7 @@ impl TypedMetric<MySignature, MyModule> for HybridMetric {
             feedback_parts.push(judge_feedback);
         }
 
-        let feedback = FeedbackMetric::new(score, feedback_parts.join("\n"));
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        Ok(Eval::with_feedback(score, feedback_parts.join("\n")))
     }
 }
 ```

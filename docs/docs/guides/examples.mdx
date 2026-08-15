@@ -1,5 +1,55 @@
 ---
-title: "WIP"
+title: 'Examples'
+description: 'Runnable examples in the repository, from a first typed call to full optimizer runs'
+icon: 'flask'
 ---
 
-{/* WIP-FIELD-GUIDE */}
+Every example in this index is a complete, runnable program in [`crates/dspy-rs/examples/`](https://github.com/krypticmouse/DSRs/tree/main/crates/dspy-rs/examples). Most need an `OPENAI_API_KEY`; a few run fully offline against the in-process test client and say so in their header comment. Run any of them with:
+
+```bash
+cargo run --example 01-simple
+```
+
+Some examples need a feature flag (noted in the file header), for example `--features dataloaders` for the HotpotQA ones.
+
+## The examples
+
+| Example | What it shows | Key APIs |
+|---------|---------------|----------|
+| [01-simple.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs) | Typed signatures, chain-of-thought via a `reasoning` field, and module composition | `Signature`, `Predict`, `Module` |
+| [02-module-iteration-and-updation.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs) | Optimizing a module end to end with the typed optimizer API | `COPRO`, `Optimizer::compile`, `TypedMetric` |
+| [03-evaluate-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs) | Evaluating a typed QA predictor on a HotpotQA sample | `DataLoader`, `evaluate_trainset`, `Eval` |
+| [04-optimize-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs) | COPRO optimization of a QA module on HotpotQA, then saving the result | `COPRO`, `ModuleState`, `average_score` |
+| [05-heterogenous-examples.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/05-heterogenous-examples.rs) | Feeding a typed predictor from messy JSON rows; extra fields ignored, missing ones loud | serde boundary, generated input structs |
+| [06-other-providers-batch.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/06-other-providers-batch.rs) | Batch inference across multiple providers via `provider:model` strings | `forward_all`, `LM::builder` |
+| [07-inspect-history.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/07-inspect-history.rs) | Inspecting the LM's message history after a call | `get_lm`, LM history |
+| [08-optimize-mipro.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs) | MIPROv2 optimization with HuggingFace data loading and a baseline comparison | `MIPROv2`, `DataLoader` |
+| [09-gepa-sentiment.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/09-gepa-sentiment.rs) | GEPA with explicit textual feedback and a reflection LM | `GEPA`, `Eval::with_feedback`, `prompt_model` |
+| [10-gepa-llm-judge.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/10-gepa-llm-judge.rs) | GEPA where a second LM judges outputs and its verdicts become the feedback | `GEPA`, judge `Predict`, `TypedMetric` |
+| [11-custom-client.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/11-custom-client.rs) | Plugging in a custom provider client (Azure) | `LMClient::from_custom` |
+| [12-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/12-tracing.rs) | Scoped trace capture: one span per predictor call, sliceable by component | `trace::capture`, `Trace::for_component` |
+| [13-save-load-state.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/13-save-load-state.rs) | Persisting optimized instructions and demos, then reloading them (offline) | `ModuleState::save` / `load` |
+| [14-functional.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/14-functional.rs) | The functional lane: pipelines as plain async functions, params injected ambiently (offline) | `fx::predict`, `fx::Params`, `fx::with_params` |
+| [15-tools.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/15-tools.rs) | Giving a typed predictor tools to call during generation | tool definitions, `Predict` |
+| [16-insurance-claim-prompt.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs) | Printing the exact system prompt a nested extraction signature renders to | `ChatAdapter`, nested `Signature` types |
+| [17-pretty-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/17-pretty-tracing.rs) | Human-readable tracing output against an offline canned LM | `init_tracing`, `TestCompletionModel` |
+
+## The Front Desk examples
+
+These nine accompany [the Field Guide](/docs/learn/you-never-write-the-prompt): each one is a chapter milestone of the book's running example, kept compiling by CI so the book's code can never quietly rot.
+
+| Example | Field Guide chapter | What it shows |
+|---------|---------------------|---------------|
+| [18-code-mode.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/18-code-mode.rs) | [Ch. 8](/docs/learn/give-the-model-hands) | Two tools collapsed into the `run_js` meta-tool via `ToolSet::code_mode` |
+| [19-react.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/19-react.rs) | [Ch. 8](/docs/learn/give-the-model-hands) | `ReAct` with a closure tool and a step cap, trajectory read from metadata |
+| [20-frontdesk-contract.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/20-frontdesk-contract.rs) | [Ch. 1-4](/docs/learn/you-never-write-the-prompt) | Enums, nested types, constraints, demos, per-predictor models, the printed prompt |
+| [21-frontdesk-pipeline.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/21-frontdesk-pipeline.rs) | [Ch. 5](/docs/learn/pipelines-are-just-structs) | The pipeline as a struct with a `Module` impl, plus the `fx` variant |
+| [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs) | [Ch. 6-7](/docs/learn/one-parse-two-projections) | `#[module]` with a hole; prints the real `.dsrs` artifact and `OPACITY` (offline) |
+| [23-frontdesk-agent.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/23-frontdesk-agent.rs) | [Ch. 8-9](/docs/learn/give-the-model-hands) | `#[tool]` + `#[agent]` + module `caps(...)` wiring (prints the caps block offline) |
+| [24-frontdesk-replay.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/24-frontdesk-replay.rs) | [Ch. 10](/docs/learn/the-expedition-log) | Capture to JSONL, strict replay with zero live calls, until-divergence under an overlay |
+| [25-frontdesk-evaluate.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/25-frontdesk-evaluate.rs) | [Ch. 11](/docs/learn/what-does-better-mean) | A labeled trainset, a `TypedMetric`, `evaluate_trainset` + `average_score` |
+| [26-frontdesk-tune.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/26-frontdesk-tune.rs) | [Ch. 12-14](/docs/learn/tracing-paper) | Overlay by param path, ambient overlay run, `bake` with lineage (offline path included) |
+
+<Note>
+The `9x-` files ([90](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/90-smoke-slice1-typed-predict.rs) through [94](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs), plus the `97`-`99` benches) are CI surfaces: smoke slices that exercise typed predict, chain of thought, module authoring, ReAct, and the optimizer interface, and a few performance benchmarks. They are kept deliberately boring and stable; read them as compatibility contracts rather than tutorials.
+</Note>

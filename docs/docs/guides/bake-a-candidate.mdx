@@ -85,3 +85,8 @@ The same rule has a second effect worth knowing: baking changes the program's ha
 **Reusing an old overlay after baking.** It will be refused because the base hash changed. Build a fresh overlay against the baked program.
 
 **Filling in `parent` or `overlay` yourself.** `bake` overwrites both with the real hashes. Anything you put there is discarded.
+
+## See also
+
+- [Optimizer engine reference](/docs/reference/optimizer-engine): where candidates and overlays come from during optimization, and how checkpointing saves them
+- [Print and serve](/docs/guides/print-and-serve): shipping the baked file

@@ -4,31 +4,26 @@ description: 'LLM-guided prompt generation with best practices'
 icon: 'wand-magic-sparkles'
 ---
 
-MIPROv2 (Multi-prompt Instruction Proposal Optimizer v2) is an optimizer that uses LLMs to generate and refine prompts automatically. It differs from COPRO by using an LLM to understand the program and apply prompting best practices, rather than just iterating on existing instructions.
+import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
+
+MIPROv2 (Multi-prompt Instruction PRoposal Optimizer v2) is a trace-guided instruction and demo optimizer. It differs from COPRO by running your program first, then using the captured execution traces plus a library of prompting best practices to generate candidate instructions, rather than searching blind. It also bootstraps few-shot demos from successful runs.
 
 ## How it Works
 
-### Stage 1: Trace Generation
+MIPROv2 works in four phases:
 
-```rust
-async fn generate_traces<S, M>(
-    &self,
-    module: &M,
-    examples: &[Example<S>],
-) -> Result<Vec<Trace>>
-```
+### Phase 1: Trace Collection
 
-- Runs the existing program with training examples
-- Captures input/output pairs along with evaluation scores
-- Creates a dataset of execution traces that show current behavior
+One traced teacher pass over the trainset. Every example runs through your module under trace capture, collecting whole-program scores plus per-`Predict` input/output spans.
 
-### Stage 2: Candidate Prompt Generation
+### Phase 2: Demo Bootstrapping
 
-This stage has two sub-steps:
+Successful spans from rollouts scoring at least `min_demo_score` become few-shot demos on the predictor that produced them (top `max_bootstrapped_demos` by score, deduplicated on inputs). Demos are installed before instruction search, so candidates are scored against the module as it will actually run.
 
-First, an LLM analyzes the signature and traces to generate a program description. Then it uses that description along with prompting tips to generate candidate instructions.
+### Phase 3: Candidate Generation
 
-The prompting tips library includes:
+Uses the traces and a rotation of prompting tips to generate `num_candidates` instruction variants per predictor. The prompting tips library includes:
+
 - Use clear, specific language
 - Consider chain-of-thought for complex tasks
 - Specify output formats
@@ -36,9 +31,9 @@ The prompting tips library includes:
 - Handle edge cases explicitly
 - Request structured outputs when needed
 
-### Stage 3: Evaluation and Selection
+### Phase 4: Trial Evaluation
 
-- Evaluates each candidate on a minibatch of examples
+- Evaluates up to `num_trials` candidates per predictor on one sampled minibatch
 - Computes performance scores
 - Selects the best performing candidate
 - Applies it to the module
@@ -48,18 +43,15 @@ The prompting tips library includes:
 Default settings:
 ```rust
 let optimizer = MIPROv2::builder()
-    .num_candidates(10)
-    .minibatch_size(25)
-    .temperature(1.0)
-    .track_stats(true)
+    .num_candidates(10)          // Instruction variants per predictor
+    .num_trials(20)              // Max candidates evaluated per predictor
+    .minibatch_size(25)          // Examples per candidate evaluation
+    .max_bootstrapped_demos(4)   // Demos installed per predictor
+    .min_demo_score(0.0)         // Score gate for demo-eligible traces
     .build();
 ```
 
-You can adjust:
-- Number of candidates to generate
-- Minibatch size for evaluation
-- Temperature for generation diversity
-- Whether to display progress stats
+You can also set `eval_concurrency` (concurrent LM calls during evaluation, default 16) and `seed` (fixes minibatch sampling for reproducible runs). The full field table is in the [optimizers reference](/docs/reference/optimizers#miprov2).
 
 ## Usage Example
 
@@ -80,28 +72,22 @@ let metric = ExactMatchMetric;
 optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
+The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/reference/evaluate) for the trait.
+
 ### Typed Data Loading
 
-Use the shared data ingress guide: [`DataLoader`](/docs/data/dataloader).
+Use the shared data ingress reference: [`DataLoader`](/docs/reference/data).
 
 ## Comparison: COPRO vs MIPROv2 vs GEPA
 
-| Feature | COPRO | MIPROv2 | GEPA |
-|---------|-------|---------|------|
-| **Approach** | Iterative refinement | LLM-guided generation | Reflective evolution |
-| **Feedback** | Score only | Score only | Score + Text |
-| **Selection** | Best candidate | Batch evaluation | Pareto frontier |
-| **LLM calls** | Moderate | High | Medium-High |
-| **Speed** | Faster | Slower | Medium |
-| **Diversity** | Low | Medium | High |
-| **Best for** | Quick iteration | Best results | Complex tasks |
+<OptimizerComparison />
 
 ### When to Use MIPROv2
 
 - You have decent training data (15+ examples recommended)
 - Quality matters more than speed
-- Task benefits from prompting best practices
-- Need LLM-generated program understanding
+- Task benefits from prompting best practices and few-shot demos
+- Need trace-informed candidate generation
 
 ### When to Use COPRO
 
@@ -121,23 +107,27 @@ Use the shared data ingress guide: [`DataLoader`](/docs/data/dataloader).
 The code follows standard Rust practices:
 - No unsafe blocks
 - Results for error handling with context via anyhow
-- Strong types (Trace, PromptCandidate, PromptingTips)
+- Strong types (`PromptCandidate`, `PromptingTips`)
 - Builder pattern for configuration
 - Async throughout, no blocking calls
 
-Key types:
-- `Trace` - Input/output pair with evaluation score
-- `PromptCandidate` - Instruction text with score
-- `PromptingTips` - Library of best practices
+Key public types and methods:
+- `PromptCandidate` - an instruction with its evaluated `score: f64`
+- `PromptingTips` - the library of best practices (`default_tips()`, `format_for_prompt()`)
+- `MIPROv2::select_best_traces`, `create_prompt_candidates`, `format_schema_fields`
+
+The report type is `()`: MIPROv2 mutates the module in place and returns nothing.
+
+Cost is roughly `num_predictors × (trainset_size + num_trials × minibatch_size)` LM calls, minus rollout-cache hits.
 
 ## Testing
 
 Run tests:
 ```bash
-cargo test test_miprov2
+cargo test --test test_miprov2
 ```
 
-There are 29 test cases covering trace generation, candidate selection, configuration, and edge cases.
+The suite covers trace selection, candidate generation, configuration, and edge cases.
 
 ## Example
 

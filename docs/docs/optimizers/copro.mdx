@@ -4,37 +4,40 @@ description: 'Fast iterative prompt refinement'
 icon: 'rotate'
 ---
 
-COPRO (Collaborative Prompt Optimizer) is a simple but effective optimizer that iteratively refines prompts through generation and evaluation cycles.
+import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
+
+COPRO (Collaborative Prompt Optimization) is a simple but effective optimizer that iteratively refines instructions through generation and evaluation cycles.
 
 ## How it Works
 
 COPRO uses a straightforward approach:
 
-1. **Generate candidates**: Create multiple prompt variations using an LLM
+1. **Generate candidates**: Create `breadth` candidate instructions per predictor
 2. **Evaluate**: Test each candidate on your training data
-3. **Refine**: Use the best candidates to generate improved versions
-4. **Repeat**: Continue for a fixed number of depth iterations
+3. **Refine**: Use the best candidate as the seed for the next round
+4. **Repeat**: Continue for `depth` rounds
+
+The base instruction always competes in every round, so COPRO never installs a candidate that is worse than what you started with.
 
 ## Configuration
 
 ```rust
 let copro = COPRO::builder()
-    .breadth(10)              // Number of candidates per iteration
-    .depth(3)                 // Number of refinement iterations
-    .init_temperature(1.4)    // Temperature for generation
-    .track_stats(false)       // Track optimization statistics
+    .breadth(10)              // Candidates per round (must be > 1)
+    .depth(3)                 // Number of refinement rounds
     .build();
 ```
+
+Other fields: `prompt_model` (separate LM for generating candidate instructions), `eval_concurrency` (concurrent LM calls during evaluation, default 16), `track_stats`, and `init_temperature` (currently unused, reserved for candidate diversity control). The full field table is in the [optimizers reference](/docs/reference/optimizers#copro).
 
 ## Usage Example
 
 ```rust
 use anyhow::Result;
 use bon::Builder;
-use facet;
 use dspy_rs::{
-    COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric, configure, init_tracing,
+    COPRO, Eval, Example, LM, Module, Optimizer, Predict, PredictError,
+    Predicted, Signature, Trace, TypedMetric, configure, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -65,10 +68,15 @@ impl Module for MyModule {
 struct ExactMatchMetric;
 
 impl TypedMetric<QA, MyModule> for ExactMatchMetric {
-    async fn evaluate(&self, example: &Example<QA>, prediction: &Predicted<QAOutput>) -> Result<MetricOutcome> {
+    async fn evaluate(
+        &self,
+        example: &Example<QA>,
+        prediction: &Predicted<QAOutput>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
         let expected = example.output.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        Ok(Eval::score((expected == actual) as u8 as f64))
     }
 }
 
@@ -79,12 +87,11 @@ async fn main() -> Result<()> {
     // API key automatically read from OPENAI_API_KEY env var
     configure(
         LM::builder()
-            .model("gpt-4o-mini".to_string())
+            .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,
     );
-    
+
     let mut module = MyModule::builder().build();
     let trainset = vec![
         Example::new(
@@ -104,22 +111,22 @@ async fn main() -> Result<()> {
             },
         ),
     ];
-    
+
     let copro = COPRO::builder()
         .breadth(10)
         .depth(3)
         .build();
     let metric = ExactMatchMetric;
-    
-copro.compile::<QA, _, _>(&mut module, trainset, &metric).await?;
-    
+
+    copro.compile(&mut module, trainset, &metric).await?;
+
     Ok(())
 }
 ```
 
 ### Typed Data Loading
 
-Use the shared data ingress guide: [`DataLoader`](/docs/data/dataloader).
+Use the shared data ingress reference: [`DataLoader`](/docs/reference/data).
 
 ## When to Use COPRO
 
@@ -136,45 +143,34 @@ Use the shared data ingress guide: [`DataLoader`](/docs/data/dataloader).
 
 ## Comparison with Other Optimizers
 
-| Feature | COPRO | MIPROv2 | GEPA |
-|---------|-------|---------|------|
-| **Speed** | Fast | Slow | Medium |
-| **Quality** | Good | Better | Best |
-| **Feedback** | Score | Score | Score + Text |
-| **Diversity** | Low | Medium | High |
-| **Setup** | Simple | Moderate | Moderate |
+<OptimizerComparison />
 
 ## Configuration Details
 
 ### Breadth
-Number of candidate prompts generated at each iteration. Higher breadth means more exploration but more compute.
+Number of candidate instructions generated at each round, per predictor. Higher breadth means more exploration but proportionally more LM calls. Must be greater than 1; `compile` errors otherwise.
 
 Recommended: 5-15
 
 ### Depth
-Number of refinement iterations. Each iteration builds on the best candidates from the previous one.
+Number of refinement rounds. Each round builds on the best candidate from the previous one, with diminishing returns beyond about 5.
 
 Recommended: 2-5
 
-### Temperature
-Controls randomness in prompt generation. Higher temperature means more diverse candidates.
-
-Recommended: 1.0-1.5
+### Prompt Model
+An optional separate LM used to generate candidate instructions. Falls back to the global LM set with `configure` when unset.
 
 ### Track Stats
-When enabled, COPRO tracks detailed statistics about all evaluated candidates and their scores over time.
+A per-round statistics flag. COPRO's report type is `()`, so nothing is returned either way; leave it at the default.
 
 ## Implementation Notes
 
-COPRO maintains:
-- All evaluated candidates with their scores
-- Best candidates from each iteration
-- History of improvements over iterations
+COPRO is a thin strategy over the shared evaluation engine: each candidate instruction is an overlay evaluated through a cached, bounded-concurrency fan-out, and each round's winner is installed through the same mutation seam every optimizer uses. Repeated candidates are deduplicated by content hash and served from the rollout cache, so re-evaluating an instruction it has already seen costs nothing. See the [optimizer engine reference](/docs/reference/optimizer-engine) for the machinery.
 
-The algorithm avoids re-evaluating candidates it has already seen by caching results.
+Cost is approximately `breadth × depth × num_predictors × trainset_size` LM calls, minus cache hits.
 
 ## Examples
 
 <Card title="COPRO Examples" icon="code" href="https://github.com/krypticmouse/DSRs/tree/main/crates/dspy-rs/examples">
-  See examples 03-evaluate-hotpotqa.rs and 04-optimize-hotpotqa.rs
+  See examples 02-module-iteration-and-updation.rs and 04-optimize-hotpotqa.rs
 </Card>

@@ -1,0 +1,9 @@
+| Optimizer | Strategy | Needs feedback? | Cost |
+|-----------|----------|-----------------|------|
+| `BootstrapFewShot` | One-shot demo harvesting from a teacher pass | No | Low (2 × trainset) |
+| `COPRO` | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
+| `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
+| `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
+| `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+
+GEPA is the only optimizer that requires textual feedback from the metric (`Eval::with_feedback`). The others use numerical scores alone. Full configuration tables for all five live in the [optimizers reference](/docs/reference/optimizers).
