@@ -59,7 +59,7 @@ Set `OPENAI_API_KEY` in your environment. For other providers, use the appropria
 
 <Step title="Define a signature">
 
-A [signature](/docs/building-blocks/signature) declares your task's inputs and outputs:
+A [signature](/docs/reference/signatures-and-types) declares your task's inputs and outputs:
 
 ```rust
 use dspy_rs::Signature;
@@ -85,7 +85,7 @@ The doc comments become:
 
 <Step title="Call the LM">
 
-Create a [predictor](/docs/building-blocks/predictors) and call it:
+Create a [predictor](/docs/reference/predict) and call it:
 
 ```rust
 use dspy_rs::Predict;
@@ -145,18 +145,20 @@ async fn main() -> anyhow::Result<()> {
 
 ## Next steps
 
+Working code in hand, you have a fork in the road. The [Field Guide](/docs/learn/you-never-write-the-prompt) is the full story: it grows this exact pattern into a multi-step, tool-using, optimized, served program, one chapter at a time. The cards below are the lookup pages if you would rather move fast.
+
 <CardGroup cols={2}>
-<Card title="Signatures" icon="pen-to-square" href="/docs/building-blocks/signature">
-Define task contracts with typed inputs/outputs
+<Card title="Read the book" icon="map" href="/docs/learn/you-never-write-the-prompt">
+Chapter 1 starts where this page ends
 </Card>
-<Card title="Custom Types" icon="shapes" href="/docs/building-blocks/types">
-Use your own structs and enums in signatures
+<Card title="Signatures & types" icon="pen-to-square" href="/docs/reference/signatures-and-types">
+Every attribute, every supported type, constraints
 </Card>
-<Card title="Predictors" icon="robot" href="/docs/building-blocks/predictors">
-Call LMs with typed signatures, add demos
+<Card title="Predict" icon="robot" href="/docs/reference/predict">
+Builder surface, demos, metadata, errors
 </Card>
-<Card title="Modules" icon="circle-nodes" href="/docs/building-blocks/module">
-Compose multi-step pipelines
+<Card title="Modules" icon="circle-nodes" href="/docs/reference/modules">
+ChainOfThought, ReAct, composition
 </Card>
 </CardGroup>
 
@@ -164,17 +166,17 @@ Compose multi-step pipelines
 
 ### Input formatting and rendering
 
-Use `#[format("json" | "yaml" | "toon")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
-See the full attribute reference in [Signatures](/docs/building-blocks/signature) and runtime behavior in [Adapter](/docs/building-blocks/adapter).
+Use `#[format("json")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
+See the full attribute reference in [Signatures & types](/docs/reference/signatures-and-types) and runtime behavior in [Adapters](/docs/reference/adapters).
 
 ### Custom types
 
-When you need more than primitives, add [`#[BamlType]`](/docs/building-blocks/types):
+When you need more than primitives, add [`#[Schema]`](/docs/reference/signatures-and-types):
 
 ```rust
-use dspy_rs::{Signature, BamlType};
+use dspy_rs::{Signature, Schema};
 
-#[BamlType]
+#[Schema]
 #[derive(Clone, Debug)]
 enum Sentiment {
     Positive,
@@ -213,7 +215,7 @@ let predict = Predict::<QA>::builder()
 
 ### Constraints
 
-Validate outputs with [`#[check]` and `#[assert]`](/docs/building-blocks/constraints):
+Validate outputs with [`#[check]` and `#[assert]`](/docs/reference/signatures-and-types):
 
 ```rust
 #[derive(Signature, Clone, Debug)]
@@ -229,7 +231,7 @@ struct Rating {
 
 ### Multi-step pipelines
 
-Chain [predictors](/docs/building-blocks/predictors) for complex workflows:
+Chain [predictors](/docs/reference/predict) for complex workflows:
 
 ```rust
 struct SummarizeAndRate {
@@ -248,4 +250,4 @@ impl SummarizeAndRate {
 }
 ```
 
-See [Modules](/docs/building-blocks/module) for how to make this optimizer-compatible.
+See [Modules](/docs/reference/modules) for how to make this optimizer-compatible.

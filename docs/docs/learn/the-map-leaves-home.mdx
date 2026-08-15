@@ -1,5 +1,113 @@
 ---
-title: "WIP"
+title: "The Map Leaves Home"
+description: "Chapter 14, in which the winner gets baked, checked at customs, served from a file, and welcomed back into the binary"
+icon: "paper-plane"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+Every act of this book has been building toward a short walk: the one your program takes from your laptop to somewhere that isn't your laptop. Act V is that walk. It has four steps, bake, check, serve, return, and by the end of it your tuned Front Desk is an HTTP endpoint that a helpdesk webhook can actually call.
+
+## Bake: ink the winner
+
+Chapter 13 left the best desk you've ever had living as tracing paper: overlays addressed to a base program. Tracing paper is for *trying*. Shipping wants a single, self-contained map with the winning values inked in. That's `bake`:
+
+```rust
+use dspy_rs::ir::Lineage;
+
+let program = frontdesk::program();
+
+let baked = program.bake(
+    &winning_overlay,
+    Lineage {
+        optimizer: "gepa-0.3".into(),
+        trainset: "tickets@v2 (60)".into(),
+        budget: "6 generations / 140 rollouts".into(),
+        parent: None,  // bake fills this in
+        date: "2026-08-14".into(),
+        overlay: None, // this too
+    },
+)?;
+
+std::fs::write("frontdesk.dsrs", baked.to_dsrs())?;
+```
+
+Baking folds the overlay's values in as the new defaults and stamps a `lineage` block into the file: which optimizer produced this version, on what data, at what cost, on what date. `bake` fills in `parent` and `overlay` itself, with the *hashes* of the base program and the promoted candidate, so every shipped map carries its own pedigree, machine-checkable, in the file.
+
+Two safety rails live here, both consequences of the hash discipline from Chapter 6. An overlay refuses to bake onto any program but the one it was minted against, so last sprint's tuning can't be promoted onto this sprint's pipeline by accident. And baking *changes the program's hash*, so stale overlays are refused afterward; every tuning round starts from a clean, known base.
+
+One hand-edit before travel: a file printed from a `#[module]` carries a placeholder model line (`model default = "unbound:default"`), because on your machine the model was bound in code. The map is leaving your code behind, so name the real model:
+
+```text
+model default = "openai:gpt-4o-mini"
+model strong  = "openai:gpt-4o"
+```
+
+That `@strong` handle from Chapter 6 finally pays off: the *file* decides what "strong" means at its destination, not your source code.
+
+## Check: customs for files
+
+You just hand-edited a program. Never trust a hand-edited program, including your own:
+
+```bash
+$ dsrs check frontdesk.dsrs
+ok: program `frontdesk` (9f3a...) - 6 nodes, 4 sigs, 2 models, 2 tools
+$ dsrs fmt frontdesk.dsrs --write
+```
+
+`check` runs the full validation pipeline, parse, types, ports, capability subsets, with line-and-column errors when something's wrong. `fmt` rewrites to the one canonical form, the same canonical text the program's hash is computed from. Wire `check` into pre-commit and a broken map can't even enter the repo.
+
+## Serve: any host can make the journey
+
+Now the sentence this book has owed you since the Prologue:
+
+```bash
+$ dsrs serve frontdesk.dsrs --port 8080 --allow kb:read --allow orders:read
+```
+
+That's a generic host, `dsrs serve`, running your pipeline *from the text file*. No recompile. No copy of your source. The Chapter 9 border check runs at startup: declare more than the host `--allow`s and it refuses to boot, naming the missing capability. Then:
+
+```bash
+$ curl -s localhost:8080/run \
+    -H 'content-type: application/json' \
+    -d '{"ticket": "Order #4127 still not here. It has been TWO WEEKS."}'
+{"output": {"summary": "...", "reply": "Hi! Good news first: order #4127 shipped..."}}
+```
+
+The desk is an endpoint. `GET /schema` describes its typed interface to callers, `GET /program` returns the canonical text (the endpoint *is* self-documenting, because the program is data), `/run?trace=1` returns the full expedition log along with the answer, and `/healthz` reports the program hash, so your monitoring can literally verify *which map* is deployed.
+
+One honest refusal, and you know exactly why: your original module had a *native* hole, and Chapter 7 was clear about that species. If the file still carries `extern` holes or host tools, `dsrs serve` declines, the Rust lives in your binary, not the file. You ported the scrub to a JS hole in Chapter 7, so Front Desk serves clean. Had you kept it native, you'd use the return path instead:
+
+## Return: the map comes home
+
+Because compilation runs both directions. A `.dsrs` file, from your optimizer, your teammate, or (someday) a model that wrote one, can be embedded back into a Rust build:
+
+```rust
+dspy_rs::include_program!("programs/frontdesk.dsrs");
+
+let program: &'static dspy_rs::ir::Program = frontdesk::program();
+```
+
+The file is parsed and validated *while your crate compiles*, and the macro generates a test so `cargo test` fails if the artifact ever rots. A broken map breaks your build, not your production traffic. This is also the shipping path for programs with native holes and host tools: embed the file, bind your implementations, serve from your own binary.
+
+And for the struct lane, the same promotion exists at a smaller grain: `ModuleState` saves a tuned module's predictor state, instructions, demos, to JSON, and loads it back at startup. Same philosophy, different vehicle: the improvement travels as data, never as a code edit. Details in the [State reference](/docs/reference/state).
+
+## The loop, closed
+
+Trace the journey once, end to end, because thirteen chapters happen in this paragraph. You wrote a plain Rust function. It projected into a map. An optimizer laid tracing paper on the map, guided by a judge reading real replies from real recorded runs. The winner baked into a file with its pedigree stamped inside. The file passed customs and became an endpoint, and could just as well compile back into the next binary. At no point did "improve the program" ever mean "edit the source."
+
+The map is not the territory. But this map was *generated from* the territory, tuned against its logs, and shipped as itself. That's the whole thesis, running on port 8080.
+
+## The ceiling
+
+It's live. Real customers. Herman's owner writes back to say thanks.
+
+And the served desk is doing something you've stopped thinking about: `?trace=1` or not, every run appends to the expedition log. Hundreds of traces a day now. Real tickets, real tool calls, real replies, some great, some that would make your judge wince, all of it accumulating on a server, *unread*.
+
+You've seen what this system can do with twenty recorded runs. It's about to have ten thousand.
+
+<Card title="Chapter 15: Running in the Wild" icon="arrow-right" href="/docs/learn/running-in-the-wild" horizontal>
+  The coda: observability for the desk in production, and the flywheel where traffic feeds the map that serves the traffic.
+</Card>
+
+---
+
+**Skip the story:** the lookup pages for this chapter are [Bake a candidate](/docs/guides/bake-a-candidate), [Print and serve](/docs/guides/print-and-serve), [CLI](/docs/reference/cli) (check, fmt, serve flags, endpoints), and [State](/docs/reference/state).

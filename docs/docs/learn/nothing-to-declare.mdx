@@ -1,5 +1,77 @@
 ---
-title: "WIP"
+title: "Nothing To Declare?"
+description: "Chapter 9, in which every program fills out a customs form, and the empty room has no door to pick"
+icon: "passport"
 ---
 
-{/* WIP-FIELD-GUIDE */}
+Chapter 8 ended with a fair accusation: you gave a language model your order database and a JavaScript interpreter, and you're planning to sleep tonight. The defense you're about to mount is a border-control system, and like all good border control, its power comes from *when* it happens: before anything crosses, not after.
+
+The pieces have been in front of you for three chapters. `caps("orders:read")` on a tool. `caps(...)` on the module. That `caps []` printed on your hole. Time to say what the system actually is.
+
+A **capability** is a named permission. `orders:read`. `net:search`. `fs:read`. Nothing more mysterious than that: a short label for one kind of access to the world. The interesting part isn't the labels. It's who has to say them, and when.
+
+## Three statements, one check
+
+The system works because three different parties each state their side, in writing, and the statements are checked against each other before a single step runs.
+
+**The program states its ceiling.** Right in the artifact, up top, your front desk declares the most it could ever touch:
+
+```text
+caps { kb:read orders:read }
+```
+
+Not what it will do on a given run. The *most it could ever do*. It's a customs declaration: everything in the suitcase goes on the form, before anyone opens the bag. And because the Prologue's whole bet was that programs are data, this declaration is a diffable line in a reviewable file. A program that never declared network access can never quietly grow it; the file would change, and the change would show in review like any other line.
+
+**Every tool and hole states its needs.** `faq_search` declared `kb:read`. `order_lookup` declared `orders:read`. Your scrub hole declared `caps []`, needs nothing, touches nothing, and now you know why the printer stamped that on it. Each piece's needs must fit under the program's ceiling, and this is checked at *load*: a ceiling that says only `kb:read` cannot contain a file-writing tool, and the violation is a load error, not a 3am incident.
+
+**The host states its grants.** Whoever runs the program has the final word. Your binary, a teammate's laptop, a server loading `frontdesk.dsrs`: each grants what it actually allows, and loading *refuses* if the program wants more.
+
+Watch the refusal happen. Serve the file but grant only the FAQ:
+
+```bash
+dsrs serve frontdesk.dsrs --allow kb:read
+```
+
+```text
+error: program requires capability `orders:read`, but the host does not allow it
+```
+
+Up front. By name. Before one token is spent. Compare that with every system you've met where the missing permission announces itself halfway through handling real traffic.
+
+## The empty room
+
+Now for the deep part, the reason this holds against a *clever* adversary and not just a polite one.
+
+Think about how permissions usually fail. A deny list forgets an entry. A check gets bypassed by a code path nobody audited. Security-as-vigilance fails the day vigilance blinks.
+
+The DSRs sandbox inverts this. When a sandboxed hole or a Code Mode script starts, its room contains *only* what the host granted. A permission that wasn't granted isn't a locked door inside the sandbox. **There is no door.** No network function exists to call. Ungrant `orders:read` and the sandbox simply contains no `order_lookup`; the most creative script in the world cannot invoke a function that was never placed in the room with it.
+
+That's why Chapter 8's dread has a real answer. The model writing JavaScript in your sandbox is not being *trusted*. It's being *contained*, by construction: the sandbox starts empty, and only grants get placed inside. Deny lists require perfect memory. Empty rooms don't.
+
+## The honest asymmetry
+
+One question probably nagged you back in Chapter 8: when you ran `frontdesk` on your own machine, nobody asked you to `--allow` anything. Was the border unstaffed?
+
+No, and the reason is worth understanding rather than memorizing. When you run your own `#[module]` directly, the native parts are *already in your binary*, compiled from your own source. A gate between you and code you wrote yourself withholds nothing meaningful, so the module self-allows its declared ceiling, and the declaration serves as documentation plus the fence around any sandboxed parts.
+
+The moment the same program travels as a file, trust resets to zero. A host loading `frontdesk.dsrs` re-checks everything against its own grants, because now the program is a guest, and guests get exactly what the house allows. Same declaration, two enforcement postures, both honest about who wrote what.
+
+## The desk is safe. Is it good?
+
+Sleep restored. The model has hands, the hands have permissions, the permissions have a paper trail. By any *security* measure, Front Desk is ready for traffic.
+
+So you start using it for real, and a different kind of discomfort creeps in within a day.
+
+You reread a reply and think: decent, but shouldn't it have mentioned the FAQ article? You tweak the drafter's instruction. Is it better now? You read three more replies. Maybe? You tweak again. Run it again. Each "let me just try" is a live model call on real tickets: cents per experiment, minutes per iteration. And after ten tweaks you genuinely cannot say whether today's desk beats Monday's, because "the replies feel warmer" is not evidence, and you changed four things since the version you half-remember liking.
+
+Your curiosity has a per-token price, and your memory is not a benchmark. What you need is a way to re-run yesterday, exactly, for free.
+
+Which is the moment the quietest line in this book, sitting in your `main` since Chapter 1, finally gets to explain what it's been doing.
+
+<Card title="Chapter 10: The Expedition Log" icon="arrow-right" href="/docs/learn/the-expedition-log" horizontal>
+  Act III opens: every run was being written down. Replay the log, pay only where you left the trail.
+</Card>
+
+---
+
+**Skip the story:** the lookup pages for this chapter are [Runtime](/docs/reference/runtime) (RuntimeEnv, grants, load errors) and [The .dsrs file](/docs/reference/dsrs-file) (the caps grammar).
