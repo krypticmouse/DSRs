@@ -1,0 +1,236 @@
+---
+title: "Code Mode"
+description: "Reference for the run_js meta-tool, the QuickJS sandbox, ToolSource, Capability, and every ExecError and RegisterError variant"
+icon: "code"
+---
+
+Plain JSON tool calling pays one model round trip per call: the model emits a single tool invocation, the host executes it, and the result goes back to the model before it can decide the next step. A task that needs several tool results spends a full LM turn of latency and tokens on each one, and every intermediate result flows through the model's context even when only the final value matters.
+
+Code Mode replaces JSON tool calling with code execution. Instead of advertising N tool schemas and paying one model round trip per call, the model sees a single meta-tool named `run_js`. Its description lists your tools as a JavaScript API; the model writes a script that calls them as plain global functions, composes their results, and returns one value. One script replaces many round trips.
+
+Everything on this page lives in the `dsrs-tools` crate. The `dspy-rs` crate re-exports `Capability`, `CodeModeTool`, `RUN_JS_TOOL_NAME`, and `SandboxConfig` behind the `code-mode` cargo feature, which is on by default. The rest of the surface (executor, sources, errors) is imported from `dsrs_tools` directly. `dsrs_tools` also re-exports `rig::tool::ToolDyn` and `rig::tool::ToolError` (as `RigToolError`) so downstream crates do not need a version-matched `rig` dependency.
+
+## Two-tier design
+
+| Tier | Status | Engine | Properties |
+|---|---|---|---|
+| 1 | Implemented | QuickJS (quickjs-ng via `rquickjs`), in process | Fresh runtime and context per call (lifecycle on the order of 100 microseconds), per-call memory limit, interrupt-driven wall-clock deadline, no ambient authority: no filesystem, network, environment, or module loader. Host access happens only through injected `Capability` functions. |
+| 2 | Planned | Wasmtime components | Pooled instantiation, epoch interruption, typed WIT interfaces, for tools that graduate from ephemeral to durable. |
+
+The `Executor` trait is the seam between the tiers: subprocess, microVM, and remote executors can implement the same contract.
+
+## `ToolSource` and the tool lifecycle
+
+`ToolSource` is the raw material for an ephemeral tool, before validation.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `String` | Unique tool name, `[A-Za-z0-9_-]{1,64}`. |
+| `description` | `String` | Natural-language description shown to the model. |
+| `params` | `serde_json::Value` | JSON Schema for the arguments (an object schema). |
+| `js_source` | `String` | JavaScript source per the contract below. |
+| `self_test` | `Option<String>` | Optional self-test program. A tool with a failing self-test is never registered. |
+
+| Method | Signature | What it does |
+|---|---|---|
+| `new` | `(name, description, params, js_source) -> Self` | Constructor; `self_test` starts as `None`. |
+| `with_self_test` | `(self, self_test) -> Self` | Attaches a self-test program. |
+| `validate_shape` | `(&self) -> Result<(), RegisterError>` | Cheap synchronous checks on the name and params schema. |
+| `required_params` | `(&self) -> Vec<String>` | Names listed in the schema's `required` array. |
+
+`js_source` must be a single expression that evaluates to a function taking one argument (the parsed JSON args object) and returning a JSON-serializable value or a promise of one. Helpers go inside an IIFE that returns the tool function. Named `function` declarations are wrapped in parentheses and become expressions; one trailing `;` is tolerated. The self-test runs with the global `tool` bound to the compiled function; it fails if it throws or completes with `false`.
+
+A source only becomes callable after passing every stage of `Executor::register`:
+
+| Stage | Check | Failure |
+|---|---|---|
+| Shape | Name charset and length, params-schema structure, duplicate name. | `InvalidName`, `InvalidSchema`, `Duplicate` |
+| Compile | The source must parse. Bytecode is cached by BLAKE3 content hash. | `Compile` |
+| Instantiate | The module must evaluate to a function, in a sandbox. | `NotAFunction` |
+| Self-test | If present, the test must pass inside the sandbox. | `SelfTest` |
+
+## `Executor`, `ToolInvocation`, `RegisteredTool`
+
+`ToolInvocation` is one call: `{ name: String, args: Value }`, built with `ToolInvocation::new(name, args)`.
+
+`RegisteredTool` is the metadata of a tool that survived the lifecycle:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `name` | `String` | Registered name. |
+| `description` | `String` | Description from the source. |
+| `parameters` | `Value` | Arguments JSON Schema from the source. |
+| `source_hash` | `String` | Hex BLAKE3 hash of the JavaScript source; the bytecode-cache key. |
+| `self_tested` | `bool` | `true` if an explicit self-test passed; `false` means no self-test was provided. |
+
+`Executor` is `Send + Sync` and deliberately narrow:
+
+| Method | Signature | What it does |
+|---|---|---|
+| `validate` | `(&self, &ToolSource) -> Result<(), RegisterError>` | Synchronous structural validation only; no sandbox. |
+| `register` | `async (&self, ToolSource) -> Result<RegisteredTool, RegisterError>` | The full four-stage lifecycle. |
+| `execute` | `async (&self, ToolInvocation) -> Result<Value, ExecError>` | Runs a registered tool with JSON args. |
+| `tool` | `(&self, &str) -> Option<RegisteredTool>` | Metadata for one registered tool. |
+| `tools` | `(&self) -> Vec<RegisteredTool>` | Metadata for every registered tool. |
+| `deregister` | `(&self, &str) -> bool` | Removes a tool; `true` if it was registered. |
+
+## `QuickJsExecutor`
+
+The Tier-1 executor. Cheap to share: wrap it in an `Arc` and clone across tasks. It requires a Tokio runtime for its blocking pool.
+
+| Method | What it does |
+|---|---|
+| `new()` | Default `SandboxConfig`, no capabilities. |
+| `with_config(config)` | Explicit `SandboxConfig`. |
+| `builder()` | Returns a `QuickJsExecutorBuilder`. |
+| `config()` | The active `SandboxConfig`. |
+| `add_capability(cap)` | Injects a host capability; its name becomes a global JS function in every sandbox created afterward. A duplicate name is refused with `RegisterError::InvalidCapability`. |
+| `capability_names()` | Injected capability names, in registration order. |
+| `cache_stats()` | Bytecode-cache counters, as `CacheStats`. |
+| `rig_tool(name)` | On `Arc<Self>`: wraps a registered tool as `Arc<dyn rig::tool::ToolDyn>`; `None` if not registered. |
+| `register_rig(source)` | On `Arc<Self>`, async: `register` plus `rig_tool` in one step. |
+| `execute_blocking(invocation)` | Synchronous execution on the current thread, skipping the blocking pool. Capabilities still need a reachable Tokio runtime. Do not call from inside an async task. |
+
+The builder sets limits and capabilities before construction:
+
+| Builder method | What it sets |
+|---|---|
+| `memory_limit(bytes)` | Max heap per call. |
+| `deadline(duration)` | Wall-clock budget per call. |
+| `max_stack(bytes)` | Max JS stack per call. |
+| `capability(cap)` | Queues a capability, validated at `build`. |
+| `build()` | `Result<QuickJsExecutor, RegisterError>`. |
+
+### `SandboxConfig`
+
+Resource limits applied to every sandbox instance. `Copy`, so it is passed by value everywhere.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `memory_limit` | `usize` | 32 MiB | Max heap for one call, in bytes. Exceeding it kills the call as `MemoryExceeded`. |
+| `deadline` | `Duration` | 500 ms | Wall-clock budget for one call, enforced by the engine's interrupt handler. Time inside a capability counts against the budget but cannot be interrupted mid-call; the deadline re-arms when control returns to JS. |
+| `max_stack` | `usize` | 512 KiB | Max JS stack, in bytes. |
+
+### `CacheStats`
+
+Sources compile once per unique content (BLAKE3-keyed) and the bytecode is shared across calls and tool names. `CacheStats` carries `entries: usize`, `hits: u64`, `misses: u64`.
+
+### `run_script`
+
+The Code Mode execution primitive: a free async function, not a method.
+
+```rust
+pub async fn run_script(
+    source: &str,
+    capabilities: Vec<Capability>,
+    config: SandboxConfig,
+) -> Result<Value, ExecError>
+```
+
+The source runs as the body of an async IIFE in a fresh, fully fenced sandbox: top-level `return` produces the result, `undefined` maps to `null`, and `await` is tolerated but only microtask-resolvable promises settle (there is no event loop; a promise waiting on timers or IO reports `PendingPromise`). Capabilities appear as plain global functions. Errors are attributed to the pseudo-tool name `RUN_JS_TOOL_NAME`; a syntax error surfaces as `ExecError::Js` so a generating model can repair the script.
+
+## Capabilities
+
+A `Capability` is an async Rust function injected into the sandbox as a global JS function: the only doorway out. From JavaScript the call looks synchronous (`const rows = query({q: "..."})`); the executor bridges it onto the host Tokio runtime and blocks the sandbox thread until it resolves. `Err(String)` from the handler surfaces to JS as a catchable exception.
+
+| Constructor | Signature | What it does |
+|---|---|---|
+| `Capability::new` | `(name, description, f)` where `f: Fn(Value) -> Future<Output = Result<Value, String>>` | Capability from an async closure. |
+| `Capability::from_tool` | `async (Arc<dyn ToolDyn>) -> Self` | Wraps an existing DSRs tool. Name and description come from the tool's definition, fetched once at wrap time; the name is mangled per `js_identifier`. |
+| `Capability::from_toolset` | `async (&[Arc<dyn ToolDyn>]) -> Result<Vec<Self>, RegisterError>` | `from_tool` for a whole set; errors if two tool names mangle to the same JS identifier. |
+| `Capability::wrap_tool` | `(js_name, description, tool_name, tool) -> Self` | Lower-level `from_tool`: caller supplies the JS name and description. `tool_name` is the original name, used in error messages. |
+
+Accessors: `name()` and `description()`. `CapabilityHandler` is the public handler alias: `Arc<dyn Fn(Value) -> BoxFuture<'static, Result<Value, String>> + Send + Sync>`.
+
+For wrapped tools, the args object is serialized to JSON, handed to `ToolDyn::call`, and the result string is parsed back to JSON (or returned as a plain string if it is not valid JSON). A tool error becomes a JS exception whose message names the original tool: `` tool `<name>` failed: <error> ``.
+
+Capability names become JS globals, so they must be valid identifiers; the `__dsrs` prefix is reserved by the runtime. `js_identifier(name)` mangles an arbitrary tool name into a valid identifier, in order:
+
+1. Every character outside `[A-Za-z0-9_$]` becomes `_` (`my-tool.v2` becomes `my_tool_v2`).
+2. A leading digit gets a `_` prepended (`2fast` becomes `_2fast`).
+3. An empty name becomes `_tool`.
+4. A result starting with `__dsrs` gets one more leading `_`.
+
+The mapping is not injective: distinct names can mangle to the same identifier, so every batch wrapper refuses collisions at registration or load time instead of silently shadowing a tool.
+
+## The `run_js` surface
+
+`RUN_JS_TOOL_NAME` is the constant `"run_js"`. `run_js_parameters()` returns its argument schema: one required string property, `code`, described as an async function body that must `return` a JSON-serializable value.
+
+`ToolApi` is one entry of the JS API listing shown to the model:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `js_name` | `String` | The global the tool is callable under (per `js_identifier`). |
+| `description` | `String` | Tool description. |
+| `parameters` | `Value` | Arguments JSON Schema. |
+
+`code_mode_description(apis: &[ToolApi]) -> String` generates the default `run_js` description: the execution contract (async function body, global functions, one arguments object each, failed calls throw, no filesystem or network or imports) plus a token-compact listing such as `- search(args): Find documents. args: {query: string, limit?: integer}` and a short example. It is deliberately a plain function: in the IR this description is an optimizable `ToolDesc` parameter, and this function supplies its default value.
+
+`CodeModeTool` packages the whole surface as one `rig::tool::ToolDyn`:
+
+| Method | Signature | What it does |
+|---|---|---|
+| `new` | `async (Vec<Arc<dyn ToolDyn>>, SandboxConfig) -> Result<Self, RegisterError>` | Fetches each tool definition once, mangles names, refuses identifier collisions, wraps every tool as a capability, and generates the description. |
+| `with_description` | `(self, description) -> Self` | Replaces the auto-generated description (the optimizable-description seam). |
+| `description` | `(&self) -> &str` | Current description. |
+| `config` | `(&self) -> SandboxConfig` | Sandbox config scripts run under. |
+
+Its `ToolDyn` implementation advertises itself as `run_js` with `run_js_parameters()`. The call contract: model-repairable failures (script errors, tool failures, deadline and memory kills, bad arguments) are returned as `Ok` with the typed error serialized to JSON, so an outer tool loop feeds them back to the model instead of aborting. Only `ExecError::Internal` surfaces as `Err`.
+
+`SandboxTool` is the other `ToolDyn` bridge: one validated ephemeral tool (not the collapsed surface) exposed under its registered name. Obtain one via `QuickJsExecutor::rig_tool` or `register_rig`; construct directly with `SandboxTool::new(executor, meta)` and read metadata with `meta()`. Every call round-trips through the owning `Executor`, so limits, capabilities, and the bytecode cache apply. Empty argument strings are treated as `{}`. Unlike `CodeModeTool`, it surfaces every failure as `Err(ToolError::ToolCallError)` carrying the structured error JSON.
+
+## Errors
+
+Both enums serialize to tagged JSON, and both have a `to_llm_json()` method that produces the string fed back to the model for self-repair. That JSON shape is part of the contract: the tag tells a generating loop which artifact to regenerate. `ExecError` tags on `kind`, `RegisterError` tags on `stage`, both in `snake_case`. Example: `{"kind":"timeout","name":"add","deadline_ms":500}`.
+
+### `ExecError`
+
+Raised while executing an already-registered tool or a `run_js` script.
+
+| Variant | `kind` | Fields | Meaning |
+|---|---|---|---|
+| `NotFound` | `not_found` | `name` | No tool with this name is registered. |
+| `Timeout` | `timeout` | `name`, `deadline_ms` | The call ran past its wall-clock deadline and was killed by the interrupt handler. |
+| `MemoryExceeded` | `memory_exceeded` | `name`, `limit_bytes` | The call exceeded the sandbox memory limit and was killed. |
+| `Js` | `js` | `name`, `message` | The JavaScript threw an uncaught exception (including syntax errors in `run_script`). |
+| `InvalidArgs` | `invalid_args` | `name`, `reason` | Arguments were rejected before the sandbox was entered (not an object, or missing required keys). |
+| `Capability` | `capability` | `name`, `capability`, `message` | An injected host capability returned an error and the script let it propagate. |
+| `PendingPromise` | `pending_promise` | `name` | A returned promise never settled: the sandbox has no event loop, only microtasks. |
+| `Internal` | `internal` | `message` | The executor itself failed (thread pool, serialization). Not model-repairable. |
+
+### `RegisterError`
+
+Raised during the validate-then-register lifecycle.
+
+| Variant | `stage` | Fields | Meaning |
+|---|---|---|---|
+| `InvalidName` | `invalid_name` | `name`, `reason` | Name is empty, longer than 64 characters, or outside `[A-Za-z0-9_-]`. |
+| `Duplicate` | `duplicate` | `name` | A tool with this name is already registered. |
+| `InvalidSchema` | `invalid_schema` | `reason` | The params JSON Schema is structurally invalid. |
+| `InvalidCapability` | `invalid_capability` | `name`, `reason` | The capability name is not a valid JS identifier, is reserved, is a duplicate, or two tool names mangle to the same identifier. |
+| `Compile` | `compile` | `message` | The JavaScript source failed to parse. |
+| `NotAFunction` | `not_a_function` | `evaluated_type` | The source compiled but did not evaluate to a function; the type is reported in `typeof` vocabulary. |
+| `SelfTest` | `self_test` | `message` | The self-test threw or completed with `false`. |
+| `Execution` | `execution` | wraps an `ExecError` | The sandbox itself failed during validation (timeout or memory kill during module evaluation or self-test). The serialized JSON carries both the `stage` tag and the inner `kind` tag. |
+
+## Integration: the two lanes
+
+The sandbox exposes exactly the injected capability globals and nothing else; which tools become capabilities is decided per lane.
+
+**Module lane.** `ToolSet::code_mode(tools, config)` (async, behind the `code-mode` feature) collapses a `Vec<Arc<dyn ToolDyn>>` into a `ToolSet` containing a single `CodeModeTool`. Drop it into any tool loop, `LM::call_with_toolset` or `Predict`, exactly like a normal `ToolSet`. It errors if two tool names mangle to the same JS identifier. See [LM](/docs/components/lm).
+
+**IR lane.** `RuntimeEnv::with_code_mode(config)` enables Code Mode for every `AgentLoop` in a loaded program: the loop's non-stop tools are presented as one `run_js` definition instead of N JSON definitions, while stop tools keep their plain definitions so the loop can still terminate. Host tools are wrapped with `Capability::wrap_tool`; sandboxed tools route through the environment's bound executor under their registered names. The `run_js` description is generated from the overlay-resolved tool descriptions, so optimizable `ToolDesc` parameters keep flowing into the surface the model sees. Identifier collisions are refused at load. This is a `RuntimeEnv` binding option, not a `ToolKind` variant: Code Mode is a host presentation strategy, not program semantics, so the same artifact (same tools, same program hash) runs identically either way. See [Runtime](/docs/components/runtime).
+
+<Note>
+In the IR lane the usual [capability](/docs/components/capabilities) gates still apply on top of the sandbox fence: `program.caps` must be a subset of the environment's grants at load, and a run that reaches for an unpermitted capability fails with `RunError::CapabilityDenied`.
+</Note>
+
+## See also
+
+- [LM](/docs/components/lm): `ToolSet` and the tool loop that `run_js` drops into.
+- [Runtime](/docs/components/runtime): `RuntimeEnv`, `with_sandbox`, `with_code_mode`, and the load-time checks.
+- [Tools and agents](/docs/components/tools-and-agents): writing host and sandboxed tools.
+- [Capabilities](/docs/components/capabilities): the grants that gate what sandboxed code may reach.
+- Runnable example: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/15-tools.rs
+- Sandbox latency microbench: https://github.com/krypticmouse/DSRs/blob/main/crates/dsrs-tools/examples/bench.rs

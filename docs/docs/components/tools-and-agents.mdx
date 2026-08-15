@@ -1,0 +1,140 @@
+---
+title: 'Tools and Agents'
+description: 'Host and sandboxed tools, the #[agent] loop and its options, stop tools, and standalone versus in-module execution'
+icon: 'screwdriver-wrench'
+---
+
+A tool is a function the model may call while it works: you describe what the tool does, the model decides when to use it. An agent is a step that runs the model in a loop with tools; the model thinks, calls tools, reads the results, and answers when it is done. DSRs has two tool kinds: host tools are Rust functions in your binary, and sandboxed tools are JavaScript snippets that travel inside a `.dsrs` program file.
+
+## Host tools
+
+A host tool is a normal Rust function marked `#[tool]`. The body is the implementation:
+
+```rust
+use dspy_rs::tool;
+
+/// Uppercase text.
+#[tool(caps("demo:shout"))]
+fn shout(text: String) -> String {
+    text.to_uppercase()
+}
+```
+
+The doc comment is the tool's description and the main thing the model uses to pick a tool, so write it for the model, like a short label on a button. `caps("...")` is optional and declares what the tool is allowed to touch, for example `net:search` or `fs:read`; the host checks these labels before it runs a program, so nothing gets network or file access silently. See [Capabilities](/docs/components/capabilities) for the full model.
+
+The function stays plain Rust; you can still call `shout("hi".to_string())` yourself in tests. Tools can be async, and they can fail. A fallible tool returns `Result<T, E>` where `E: Display`:
+
+```rust
+/// Fetch a page and return its text.
+#[tool(caps("net:http"))]
+async fn fetch(url: String) -> Result<String, String> {
+    // your implementation
+}
+```
+
+`#[tool]` generates the original function unchanged, plus a module carrying the tool's signature, a `rig` tool wrapper for host binding, and `__dsrs_tool()` metadata consumed by `#[agent]` and `#[module]`. The rules: no generics, no `self`, plain identifier parameters, at least one parameter, an explicit return type. The attribute accepts only `caps("...", ...)`; anything else is a compile error.
+
+## Declaring an agent
+
+An agent is the tool-loop sibling of `#[predict]`: a bodyless function whose doc comment is the instruction, whose parameters are the input fields, and whose return type is a single output field named after the function.
+
+```rust
+use dspy_rs::agent;
+
+/// Research the question. Use the shout tool when volume is needed.
+#[agent(tools(shout), max_turns = 3, budget(tokens = 50_000, on_exhausted = finalize))]
+fn research(question: String) -> String;
+```
+
+The bodyless-fn rules match `#[predict]`: no `async`, no generics, no `self`, plain identifier parameters, at least one parameter, an explicit return type.
+
+### Options
+
+| Option | Form | Meaning |
+|---|---|---|
+| `model` | `model = "@name"` | Model reference for the loop. |
+| `tools` | `tools(a, b)` | The `#[tool]` functions the loop may call, in order. |
+| `stop_tools` | `stop_tools(a)` | Tools whose call ends the loop. Each must also appear in `tools(...)`. |
+| `max_turns` | `max_turns = N` | Turn bound for the lowered loop node (IR default is 8 when omitted). |
+| `until_parse` | `until_parse = bool` | Stop when an assistant turn parses as the signature outputs (IR default is true). |
+| `budget` | `budget(calls = N, tokens = N, deadline_ms = N, on_exhausted = finalize)` | Per-node spend limits. `on_exhausted` is `fail` (the default, the run fails) or `finalize` (one forced final round trip without tools, then parse). |
+| `context` | `context(max_history_turns = N, tool_result_max_bytes = N, playbook = "...")` | Context policy: history window, tool-result truncation, and a free-text playbook. |
+
+## Stop tools
+
+Sometimes the model should end the loop with one explicit call instead of writing a final message. Declare a tool whose inputs match the agent's output fields and list it in `stop_tools(...)`:
+
+```rust
+/// Submit the final answer. Call this exactly once, when you are done.
+#[tool]
+fn submit(research: String) -> String {
+    research
+}
+
+/// Research the question. Call submit when you have the answer.
+#[agent(tools(shout, submit), stop_tools(submit), max_turns = 6)]
+fn research(question: String) -> String;
+```
+
+When the model calls a stop tool, the loop ends right there. The arguments of that call become the step's output, and the tool body does not run. That is why the stop tool's inputs must be named after the agent's outputs (`research` here). A stop tool missing from `tools(...)` is a compile error: "stop tool `name` is not in tools(...)".
+
+## Standalone or inside a module
+
+`#[agent]` generates a standalone `async fn` returning `Result<Predicted<research::SigOutput>, PredictError>`. Called directly, it runs the static-lane tool loop (`Predict` with `ToolLoopMode::Auto`). Inside a `#[module]` body, the same call lowers to a first-class `AgentLoop` node in the program graph, and the loop options (`max_turns`, `budget`, `context`) apply only to this lowered form.
+
+```rust
+use dspy_rs::module;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct AOut {
+    pub answer: String,
+}
+
+#[module(caps("demo:shout"))]
+async fn agentic(question: String) -> Result<AOut, dspy_rs::ir::RunError> {
+    let researcher = research(question).await?;
+    Ok(AOut {
+        answer: researcher.research,
+    })
+}
+```
+
+The module's `caps(...)` ceiling must cover what its tools declare; `caps("demo:shout")` on the module matches `caps("demo:shout")` on the tool, and a tool whose needs exceed the ceiling is a load error. Use the standalone form for a quick agent call, and the module form when the agent is one step in a larger pipeline.
+
+## Sandboxed tools
+
+A sandboxed tool is not Rust. It is a small piece of JavaScript stored inside the `.dsrs` text file itself, executed in a sandbox, so it cannot reach the network or the disk unless the file declares a capability and the host grants it. In a `.dsrs` file it looks like this:
+
+````
+tool shout "Uppercase the text" {
+  in  text: string
+  out shout: string
+} js```
+(args) => ({ shout: args.text.toUpperCase() })
+```
+````
+
+Because the code is inside the file, the program is fully portable: anyone who can run the file gets the tool too. Host tools are the opposite: the file only names them, and the binary that serves the program must supply the implementation. See [The .dsrs file](/docs/components/dsrs-file) for the full text format.
+
+## Related surfaces
+
+`ReAct<S>` is the struct-lane equivalent of `#[agent]`: a thought, action, observation loop over a set of tools that extracts a typed answer, built and configured as a Rust struct rather than declared as a bodyless function. See [Modules](/docs/components/modules).
+
+Code Mode is the many-tools-to-one-script alternative. Instead of advertising N tool schemas and paying one round trip per call, the model sees a single `run_js` meta-tool whose description lists your tools as a JavaScript API; it writes one script that calls them as plain functions and returns one value. See [Code Mode](/docs/components/code-mode).
+
+## Common mistakes
+
+**Forgetting the body on a host tool.** `#[tool]` needs a real function with a body. A bodyless function is a step, not a tool.
+
+**A stop tool with the wrong input names.** The stop tool's arguments become the agent's output. If the names do not match the agent's output fields, the output cannot be filled in.
+
+**Skipping the doc comment.** The doc comment is the tool's description. It is the main thing the model uses to pick a tool, so write it for the model, not for other programmers.
+
+## See also
+
+- [Capabilities](/docs/components/capabilities) for tool needs, program ceilings, and host grants
+- [Code Mode](/docs/components/code-mode) for presenting many tools as one script surface
+- [Modules](/docs/components/modules) for `ReAct<S>` and the other struct-lane strategies
+- [The module macro](/docs/components/module-macro) for the body rules that lower agent calls
+- [The .dsrs file](/docs/components/dsrs-file) for sandboxed tool syntax in the artifact

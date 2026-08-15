@@ -1,0 +1,290 @@
+---
+title: "The .dsrs file"
+description: "Reference for the .dsrs program text format: declarations, node forms, ports, and the hard rules"
+icon: "file-code"
+---
+
+A `.dsrs` file is the canonical text form of a program: its declarations first, then exactly one `main`. The program hash is computed from this canonical text, minus the lineage block, so the file is the program's identity, and any two loads of the same text agree on it. This page lists every declaration and node form with a short example of each.
+
+General rules: `//` starts a comment. Whitespace is insignificant except inside `` js``` ``` `` code fences. Strings are JSON strings. Reserved words cannot be used as names: `dsrs program caps model sig class enum tool lineage main in out predict cot agent hole seq fork join route retry refine loop else js demos string int float bool map true false null while carry`.
+
+## File skeleton
+
+Declarations may appear in any order; `main` comes last.
+
+````
+dsrs 1
+program qa
+
+caps { net:search }
+
+model fast = "openai:gpt-4o-mini" { temperature 0.2 }
+
+sig Main {
+  in  question: string
+  out answer: string
+}
+
+main: Main = seq {
+  ...
+  out { answer = ... }
+}
+````
+
+## Declarations
+
+### `dsrs 1`
+
+The format pragma. It must be the first line of every file.
+
+### `program`
+
+Names the program.
+
+```
+program qa
+```
+
+### `caps`
+
+The program's capability ceiling: the full set of capabilities anything in the file may use. Omit the block when the program needs none. Capability names are namespaced with a colon.
+
+```
+caps { net:search fs:read }
+```
+
+### `model`
+
+Declares a model that nodes reference as `@name`. The options block is optional; all keys inside it are optional: `base_url "..."`, `temperature N`, `max_tokens N`, `max_tool_iterations N`, `max_retries N`, `retry_base_delay_ms N`, `cache true|false`.
+
+```
+model fast = "openai:gpt-4o-mini"
+model core = "openai:gpt-4o-mini" { temperature 0.2 max_tokens 1024 cache true }
+```
+
+### `sig`
+
+An LM-call interface: the fields going in and coming out, with an optional instruction string first. `alias` renames a field for the LM; `check` and `assert` attach constraints (a `check` always needs a label).
+
+```
+sig Draft {
+  "Draft a thorough, factual answer."
+  in  question: string
+  out answer: string check("this|length > 0", "non-empty")
+}
+```
+
+**Types**: `string`, `int`, `float`, `bool`; `Name` (a declared class or enum); `"lit"` (a literal string type); `T[]` (list); `T?` (optional); `map<T>` (string-keyed map); `A | B` (union); `(A | B)[]` (grouped union in a list).
+
+### `class`
+
+A struct type, referenced by name in signatures. Fields may carry doc strings and constraints.
+
+```
+class Profile {
+  "A user profile."
+  name: string "display name"
+  age: int? check("this|int >= 0", "non-negative")
+  tags: string[]?
+  meta: map<string>
+  kind: "gold" | "basic"
+}
+```
+
+### `enum`
+
+A unit enum. Variants may carry doc strings.
+
+```
+enum Severity {
+  Low "minor"
+  High
+}
+```
+
+### `tool`
+
+A tool a loop may call: a name, a description, an optional `caps [...]` list, and an in/out interface. A **host** tool has no code block; the runtime binds its implementation by name at load. A **sandboxed** tool carries its JavaScript in the artifact as a `` js``` ``` `` fence.
+
+````
+tool fetch "Fetch a URL" caps [net:fetch] {
+  in  url: string
+  out body: string
+}
+
+tool shout "Uppercase" {
+  in  text: string
+  out loud: string
+} js```
+(a) => ({ loud: a.text.toUpperCase() })
+```
+````
+
+### `lineage`
+
+Optional provenance for optimized artifacts: which optimizer produced this program, on what data, at what cost. `parent` and `overlay` are stamped by `Program::bake`. The lineage block is excluded from the program hash.
+
+```
+lineage {
+  optimizer "gepa-0.3"
+  trainset "tickets@v1"
+  budget "100 rollouts"
+  parent "00000000deadbeef"
+  date "2026-08-14"
+}
+```
+
+## `main` and node forms
+
+`main` is the program body: always a `seq` typed by the program's main signature.
+
+```
+main: Main = seq { ... }
+```
+
+Every step inside a `seq` is `name = <expr>`; names are program-unique, and a node may only reference nodes named earlier. The seq exports fields with a final `out { ... }` step, and `main`'s seq must export every `out` field of its signature. `@model` may be omitted when exactly one model is declared. Leaf nodes (`predict`, `cot`, `agent`, `hole`) always need a `name =`; containers in arm or child positions may be anonymous.
+
+### `predict`
+
+One LM call over a signature. The optional block sets the instruction and demos.
+
+```
+drafter = predict Draft @fast (question = $.question) { instruction "..." demos [...] }
+```
+
+### `cot`
+
+A predict with a prepended `reasoning` output.
+
+```
+drafter = cot Draft @deep (question = $.question)
+```
+
+### `agent`
+
+An LM plus tool loop. The block is required.
+
+```
+researcher = agent Research @fast (question = $.question) {
+  tools [fetch shout]
+  stop_tools [shout]
+  max_turns 6
+  until_parse false
+  budget { calls 5 tokens 40000 deadline_ms 60000 on_exhausted finalize }
+  context { max_history_turns 4 tool_result_max_bytes 2048 playbook "Be brief." }
+  instruction "..."
+  demos [{"input":{"ticket":"x"},"output":{"reply":"y"}}]
+}
+```
+
+### `hole`
+
+Typed opaque code: the type system sees a normal node, the implementation is either sandboxed JavaScript carried in the artifact or a native function the host binds by name. Every hole declares `caps [...]` (empty when it needs none), then either a `` js``` ``` `` fence or `extern "<hash>"`.
+
+Sandboxed form:
+
+````
+checker = hole CiteCheck (draft = drafter.answer) caps [] js```
+(a) => ({ answer: a.draft })
+```
+````
+
+Extern (host) form. The hash is the stable content hash of the host implementation and must be exactly 16 hex digits:
+
+```
+checker = hole CiteCheck (draft = drafter.answer) caps [] extern "3fa9c2d417b0e6a1"
+```
+
+### `seq`
+
+A nested scope with its own exported fields.
+
+```
+inner = seq { step = predict Reply (ticket = $.ticket)  out { reply = step.reply } }
+```
+
+### `fork` / `join`
+
+Concurrent branches that cannot see each other, joined into one set of exported fields.
+
+```
+forked = fork {
+  a = predict Summarize (ticket = $.ticket)
+  b = predict Reply (ticket = $.ticket)
+} join { summary = a.summary, reply = b.reply }
+```
+
+### `route` / `else`
+
+Branches on an enum-typed (or literal-union) port. Arms must export identical fields; `else` is required unless the arms cover every variant.
+
+```
+router = route classifier.severity {
+  Low -> low = predict Reply (ticket = $.ticket)
+  else -> high = predict Escalate (ticket = $.ticket)
+}
+```
+
+### `retry`
+
+Re-runs a child on retryable failure, with optional backoff and parse-error feedback.
+
+```
+audited = retry (attempts 3 backoff_ms 100 feedback true) auditor = predict Audit (reply = router.reply)
+```
+
+### `refine`
+
+A body plus a judge: the body re-runs with the judge's feedback until the score passes the threshold or the rounds run out. The judge's signature must output `score: float` and `feedback: string`; `feedback_field` names the string input of the body that receives the feedback.
+
+```
+refined = refine (threshold 0.8 max_rounds 3 feedback_field feedback) {
+  body = drafter = predict Draft (ticket = $.ticket, feedback = "start")
+  judge = grader = predict Judge (reply = drafter.reply)
+}
+```
+
+### `loop`
+
+A bounded loop. `^field` reads the previous iteration's carried value; `while` (optional) continues while a bool port is true; `carry` rebinds next-iteration inputs (each carried field must shadow a scope input); `join` names the loop's exported fields.
+
+```
+looped = loop (max_iters 3) {
+  improver = predict Improve (ticket = ^ticket)
+  while improver.keep_going
+  carry { ticket = improver.better }
+  join { improved = improver.better }
+}
+```
+
+## Ports
+
+The right side of every binding is a port:
+
+| Form | Meaning |
+|---|---|
+| `$.field` | The enclosing scope's input (the program input at top level). |
+| `node.field` | An output of an earlier-named node. |
+| `^field` | The previous loop iteration's carried value (loop bodies only). |
+| JSON literal | `"text"`, `42`, `1.5`, `true`, `null`, arrays, objects. |
+
+Every `in` field of a leaf's signature must be bound exactly once. Types must match; the allowed widenings are `int` to `float`, `T` to `T?`, and `T` to a union containing `T`.
+
+## Hard rules
+
+Violations of any of these are compile errors:
+
+1. `dsrs 1` first; `main: <Sig> = seq { ... }` last.
+2. Node names are program-unique; only earlier nodes are referenceable.
+3. Every hole and tool `caps [...]` must be a subset of the program `caps { ... }`.
+4. `route` needs `else` unless its arms cover every enum variant; arms export identical fields.
+5. All loops carry explicit bounds (`max_iters`, `max_turns`, `attempts`, `max_rounds`).
+6. Signatures need at least one `in` and one `out` field; `check` needs a label.
+7. Class, enum, sig, tool, and model names must be declared before `main` uses them.
+
+## See also
+
+- [Program and nodes](/docs/components/program-and-nodes): the in-memory `Program` this text lowers to, and the hash rules
+- [CLI](/docs/components/cli): `dsrs check`, `dsrs fmt`, and serving a `.dsrs` file over HTTP
+- [Runtime](/docs/components/runtime): loading and running a program, including `include_program!`
+- [Capabilities](/docs/components/capabilities): the `caps` ceiling and host grants

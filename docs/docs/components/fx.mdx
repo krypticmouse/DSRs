@@ -1,0 +1,100 @@
+---
+title: 'Functional DSRs (fx)'
+description: 'Author harnesses as plain async functions with named predict call sites and injected Params'
+icon: 'flask'
+---
+
+In the functional lane, a harness is a plain async function. Optimizable parameters live outside the function in a `Params` value, in the spirit of JAX: pure functions over inputs, with a params pytree injected ambiently per call tree. Predictors are addressed by name instead of struct field path, and the same names appear as trace span components.
+
+<Note>
+The `fx` lane is experimental. The struct world (`Predict<S>` fields plus `Module::forward`) remains fully supported; `fx` is an additional authoring style layered on the same machinery, and the two styles share the trace format and the `ModuleState` persistence format.
+</Note>
+
+```rust
+use dspy_rs::fx;
+
+async fn pipeline(question: String) -> Result<Predicted<RefineOutput>, PredictError> {
+    let draft = fx::predict::<Draft>("drafter", DraftInput { question }).await?;
+    fx::predict::<Refine>("refiner", RefineInput { draft: draft.answer.clone() }).await
+}
+```
+
+## `fx::predict`
+
+`fx::predict::<S>(name, input)` is the atomic LM call of the lane: one signature, one named parameter slot, one prediction.
+
+```rust
+pub async fn predict<S>(name: &str, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
+where
+    S: Signature,
+    S::Input: Schema,
+    S::Output: Schema,
+```
+
+Configuration (instruction override plus demos) comes from the ambient `Params`; with no scope active, the signature defaults apply. The LM resolves exactly as struct-based `Predict` calls do, through the globally configured LM. Under a `capture()` scope the span records `name` as its component, so traces from functional harnesses are addressable by the same names an optimizer would mutate.
+
+Internally, resolved predictors are cached by `(signature type, name, config hash)`, so a hit reuses a fully warmed `Predict` instead of rebuilding per call. The cache is capped at 1024 entries and cleared when full. If a `Params` entry does not fit the signature, `predict` returns a `PredictError` reporting that the params do not fit.
+
+## `Params`
+
+`Params` is the optimizable state of a functional harness: named `PredictState` values keyed by the names passed to `predict`. Evaluating a different candidate means injecting a different `Params` value, never mutating a module in place.
+
+| Method | Behavior |
+|---|---|
+| `new()` | Empty parameter set. |
+| `set(name, state)` | Sets the full `PredictState` (instruction plus demos) for a named predictor. |
+| `set_instruction(name, instruction)` | Overrides just the instruction, preserving any demos already set for that name. |
+| `get(name)` | Returns `Option<&PredictState>` for the name. |
+| `is_empty()` | True when no entries are set. |
+| `to_module_state()` | Converts to `ModuleState`, the persistence format shared with struct-based modules. |
+| `from_module_state(state)` | Builds `Params` from a saved `ModuleState`. |
+
+Because `Params` round-trips losslessly through `ModuleState::save` and `ModuleState::load`, persistence works across both authoring styles.
+
+## `with_params`
+
+```rust
+pub async fn with_params<Fut: Future>(params: Params, fut: Fut) -> Fut::Output
+```
+
+Runs a future with `params` as the ambient parameter set for every `predict` call inside it. The scope is a tokio task-local, mirroring trace capture: only `predict` calls on the same task see the params, spawned subtasks do not inherit them, and nesting replaces the outer scope for the inner future.
+
+This is what enables concurrent candidate evaluation. The harness function takes nothing by `&mut`; each candidate is a `Params` value injected around an otherwise identical call, so different candidates can run on separate tasks at the same time against the same code.
+
+```rust
+let mut params = fx::Params::new();
+params.set_instruction("drafter", "Draft a thorough answer.");
+let out = fx::with_params(params, pipeline("hi".into())).await?;
+```
+
+## `FnModule` and `fx::module`
+
+`fx::module(f)` wraps an async function as a `Module` (returning `FnModule<I, O, F>`), so functional harnesses plug into `evaluate_trainset`, metrics, optimizers, and every other module consumer. The input and output types must implement `Schema` and `Facet`, and the function must return `Result<Predicted<O>, PredictError>`.
+
+```rust
+let module = fx::module(|input: DraftInput| pipeline(input.question));
+evaluate_trainset(&module, &trainset, &metric).await?;
+```
+
+## `with_overlay`
+
+With the `ir` feature enabled, `fx` re-exports `with_overlay` from the IR bridge:
+
+```rust
+pub async fn with_overlay<Fut: Future>(
+    program: &Program,
+    overlay: &Overlay,
+    fut: Fut,
+) -> Result<Fut::Output, OverlayError>
+```
+
+It unbinds an `ir::Overlay` candidate against a `Program` into `Params`, then scopes those params exactly like `with_params`. This lets IR-level candidates drive functional harnesses without translation code at the call site.
+
+## See also
+
+- [State](/docs/components/state)
+- [Evaluation](/docs/components/evaluation)
+- [Optimizers](/docs/components/optimizers)
+- [Traces](/docs/components/traces)
+- [Program and nodes](/docs/components/program-and-nodes)
+- [Example: functional harness](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/14-functional.rs)

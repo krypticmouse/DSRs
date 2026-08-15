@@ -1,0 +1,64 @@
+---
+title: 'Utilities'
+description: 'Response caching, telemetry initialization, and stable hashing'
+icon: 'toolbox'
+---
+
+The `utils` module bundles three small pieces of shared infrastructure: the LM response cache, tracing setup, and the stable hasher used everywhere identity hashes are persisted. Cache and telemetry items are re-exported at the crate root; hash items live under `dspy_rs::utils::hash`.
+
+```rust
+use dspy_rs::init_tracing;
+use dspy_rs::utils::hash::stable_hash_debug;
+
+init_tracing()?;
+let id: u64 = stable_hash_debug(&value);
+```
+
+## `ResponseCache`
+
+A hybrid memory plus disk LM response cache built on [foyer](https://docs.rs/foyer): 256MB in memory and 1GB on disk in a per-process temp directory. It also maintains a sliding window of the 100 most recent entries for `LM::inspect_history`. The cache is created automatically by `LM`; you do not construct it directly. Caching is per LM instance, and entries are not shared across instances.
+
+| Method | Signature | Behavior |
+|---|---|---|
+| `new` | `async fn new() -> Self` | Builds the hybrid cache and its disk tier. |
+| `get_entry` | `async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>>` | Fetches the full cached entry, including raw output. |
+| `insert_entry` | `fn insert_entry(&mut self, key: CacheKey, entry: CacheEntry)` | Synchronous insert, the direct path used by `LM::call`. Also pushes the entry into the history window. |
+| `get_history` | `async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>>` | Returns the `n` most recent entries, newest first. |
+
+### `CacheEntry` and `CacheKey`
+
+`CacheEntry` is a cached prompt-response pair: `prompt` (the formatted prompt sent to the LM), `usage` (token usage recorded for the original uncached call), and `raw_output` (the raw assistant text, so `LM::call` can replay a cached completion through the normal parse path).
+
+`CacheKey` is a `u64`. Keys are produced by `LM`, never built by hand: the LM streams the model name, the temperature bits, `max_tokens`, and the `Debug` representation of the full message history through `StableHasher`, with no intermediate JSON tree or string materialized. Demos and instructions live inside the messages, so they are covered automatically. Hashed keys keep foyer lookups and disk serialization O(1) in prompt size.
+
+## Telemetry
+
+`init_tracing()` installs process-global, pretty tracing output for DSRs.
+
+| Behavior | Detail |
+|---|---|
+| Filter | Uses `RUST_LOG` when present; falls back to `dspy_rs=debug` when `RUST_LOG` is unset or invalid. |
+| Idempotence | Repeated calls are no-ops after the first successful init. |
+| Errors | `TelemetryInitError::InvalidFilter` (bad fallback directive) or `TelemetryInitError::SetGlobalDefault` (a subscriber is already installed globally). |
+
+The module also exports `truncate(value: &str, max_chars: usize) -> &str`, a character-boundary-safe prefix truncation helper. Optimizers such as GEPA and SIMBA use it to bound raw span output when building reflection prompts.
+
+## Stable hashing
+
+`std::hash::DefaultHasher` is not guaranteed stable across Rust releases. Replay fixtures, on-disk trace files, and cache keys must survive toolchain upgrades, so everything that hashes for identity uses FNV-1a 64-bit with a fixed algorithm.
+
+| Item | Purpose |
+|---|---|
+| `StableHasher` | FNV-1a 64-bit `Hasher`: deterministic across platforms and Rust versions. |
+| `HashWriter<'a, H>` | Adapts a `Hasher` into a `std::fmt::Write` sink, so values hash through their `Debug` or `Display` representation without materializing a string. |
+| `stable_hash_debug(&value)` | Hashes a `Debug`-formatted value with the stable hasher, returning `u64`. |
+
+This guarantee is load-bearing in three places: trace `request_hash` values (recorded traces replay against live code in later builds), LM cache keys (`cache_key_for` uses the same hasher as the trace format), and optimizer candidate hashes (the engine hashes canonical JSON with `StableHasher`).
+
+## See also
+
+- [LM](/docs/components/lm)
+- [Traces](/docs/components/traces)
+- [Optimizer engine](/docs/components/optimizer-engine)
+- [Example: inspect history](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/07-inspect-history.rs)
+- [Example: pretty tracing](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/17-pretty-tracing.rs)

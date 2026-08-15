@@ -11,132 +11,65 @@
   "navigation": {
     "tabs": [
       {
-        "tab": "Learn",
+        "tab": "Documentation",
         "groups": [
           {
             "group": "Get Started",
             "pages": [
               "index",
-              "docs/getting-started/quickstart"
-            ]
-          },
-          {
-            "group": "Act I — The Contract",
-            "pages": [
-              "docs/learn/you-never-write-the-prompt",
-              "docs/learn/the-contract-is-the-prompt",
-              "docs/learn/who-calls-the-model",
-              "docs/learn/what-the-model-sees"
-            ]
-          },
-          {
-            "group": "Act II — The Map",
-            "pages": [
-              "docs/learn/pipelines-are-just-structs",
-              "docs/learn/one-parse-two-projections",
-              "docs/learn/here-be-dragons",
-              "docs/learn/give-the-model-hands",
-              "docs/learn/nothing-to-declare"
-            ]
-          },
-          {
-            "group": "Act III — The Log",
-            "pages": [
-              "docs/learn/the-expedition-log",
-              "docs/learn/what-does-better-mean"
-            ]
-          },
-          {
-            "group": "Act IV — The Search",
-            "pages": [
-              "docs/learn/tracing-paper",
-              "docs/learn/when-the-judge-is-a-model"
-            ]
-          },
-          {
-            "group": "Act V — The Journey",
-            "pages": [
-              "docs/learn/the-map-leaves-home",
-              "docs/learn/running-in-the-wild"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Guides",
-        "groups": [
-          {
-            "group": "How-to",
-            "pages": [
-              "docs/guides/write-steps",
-              "docs/guides/add-tools",
-              "docs/guides/use-holes",
-              "docs/guides/print-and-serve",
-              "docs/guides/bake-a-candidate"
-            ]
-          },
-          {
-            "group": "Optimization",
-            "pages": [
-              "docs/optimizers/copro",
-              "docs/optimizers/miprov2",
-              "docs/optimizers/gepa",
-              "docs/optimizers/gepa-llm-judge"
-            ]
-          },
-          {
-            "group": "Examples",
-            "pages": [
+              "docs/getting-started/quickstart",
+              "docs/getting-started/how-dsrs-thinks",
               "docs/guides/examples"
             ]
-          }
-        ]
-      },
-      {
-        "tab": "Reference",
-        "groups": [
+          },
           {
-            "group": "Core API",
+            "group": "Building Blocks",
             "pages": [
-              "docs/reference/macros",
-              "docs/reference/signatures-and-types",
-              "docs/reference/predict",
-              "docs/reference/modules",
-              "docs/reference/adapters",
-              "docs/reference/lm",
-              "docs/reference/data",
-              "docs/reference/state",
-              "docs/reference/fx"
+              "docs/components/signatures",
+              "docs/components/predict",
+              "docs/components/modules",
+              "docs/components/adapters",
+              "docs/components/lm",
+              "docs/components/data",
+              "docs/components/fx"
+            ]
+          },
+          {
+            "group": "Programs as Data",
+            "pages": [
+              "docs/components/module-macro",
+              "docs/components/holes",
+              "docs/components/capabilities",
+              "docs/components/program-and-nodes",
+              "docs/components/dsrs-file",
+              "docs/components/runtime",
+              "docs/components/cli",
+              "docs/components/state"
+            ]
+          },
+          {
+            "group": "Tools & Agents",
+            "pages": [
+              "docs/components/tools-and-agents",
+              "docs/components/code-mode"
             ]
           },
           {
             "group": "Evaluation & Optimization",
             "pages": [
-              "docs/reference/evaluate",
-              "docs/reference/optimizers",
-              "docs/reference/optimizer-engine"
+              "docs/components/traces",
+              "docs/components/evaluation",
+              "docs/components/optimizers",
+              "docs/optimizers/copro",
+              "docs/optimizers/miprov2",
+              "docs/optimizers/gepa",
+              "docs/components/optimizer-engine"
             ]
           },
           {
-            "group": "Tools & Code Mode",
+            "group": "Utilities",
             "pages": [
-              "docs/reference/code-mode"
-            ]
-          },
-          {
-            "group": "Programs & Runtime",
-            "pages": [
-              "docs/reference/dsrs-file",
-              "docs/reference/program-and-nodes",
-              "docs/reference/runtime",
-              "docs/reference/cli"
-            ]
-          },
-          {
-            "group": "Observability & Utilities",
-            "pages": [
-              "docs/reference/traces",
-              "docs/reference/utils"
+              "docs/components/utils"
             ]
           }
         ]
@@ -144,29 +77,69 @@
     ]
   },
   "redirects": [
-    { "source": "/docs/building-blocks/signature", "destination": "/docs/reference/signatures-and-types" },
-    { "source": "/docs/building-blocks/types", "destination": "/docs/reference/signatures-and-types" },
-    { "source": "/docs/building-blocks/constraints", "destination": "/docs/reference/signatures-and-types" },
-    { "source": "/docs/building-blocks/predictors", "destination": "/docs/reference/predict" },
-    { "source": "/docs/building-blocks/adapter", "destination": "/docs/reference/adapters" },
-    { "source": "/docs/building-blocks/lm", "destination": "/docs/reference/lm" },
-    { "source": "/docs/building-blocks/module", "destination": "/docs/reference/modules" },
-    { "source": "/docs/data/dataloader", "destination": "/docs/reference/data" },
-    { "source": "/docs/data/examples", "destination": "/docs/reference/data" },
-    { "source": "/docs/data/prediction", "destination": "/docs/reference/predict" },
-    { "source": "/docs/getting-started/introduction", "destination": "/" },
-    { "source": "/docs/tutorials/overview", "destination": "/docs/learn/one-parse-two-projections" },
-    { "source": "/docs/tutorials/your-first-module", "destination": "/docs/learn/one-parse-two-projections" },
-    { "source": "/docs/tutorials/agent-with-tools", "destination": "/docs/learn/give-the-model-hands" },
-    { "source": "/docs/tutorials/record-and-replay", "destination": "/docs/learn/the-expedition-log" },
-    { "source": "/docs/tutorials/tune-a-module", "destination": "/docs/learn/tracing-paper" },
-    { "source": "/docs/concepts/harness-as-data", "destination": "/docs/learn/one-parse-two-projections" },
-    { "source": "/docs/concepts/three-lanes", "destination": "/docs/learn/pipelines-are-just-structs" },
-    { "source": "/docs/concepts/compilation", "destination": "/docs/learn/one-parse-two-projections" },
-    { "source": "/docs/concepts/holes", "destination": "/docs/learn/here-be-dragons" },
-    { "source": "/docs/concepts/traces-and-replay", "destination": "/docs/learn/the-expedition-log" },
-    { "source": "/docs/concepts/capabilities", "destination": "/docs/learn/nothing-to-declare" },
-    { "source": "/docs/reference/traces-and-cli", "destination": "/docs/reference/traces" },
+    { "source": "/docs/building-blocks/signature", "destination": "/docs/components/signatures" },
+    { "source": "/docs/building-blocks/types", "destination": "/docs/components/signatures" },
+    { "source": "/docs/building-blocks/constraints", "destination": "/docs/components/signatures" },
+    { "source": "/docs/building-blocks/predictors", "destination": "/docs/components/predict" },
+    { "source": "/docs/building-blocks/adapter", "destination": "/docs/components/adapters" },
+    { "source": "/docs/building-blocks/lm", "destination": "/docs/components/lm" },
+    { "source": "/docs/building-blocks/module", "destination": "/docs/components/modules" },
+    { "source": "/docs/data/dataloader", "destination": "/docs/components/data" },
+    { "source": "/docs/data/examples", "destination": "/docs/components/data" },
+    { "source": "/docs/data/prediction", "destination": "/docs/components/predict" },
+    { "source": "/docs/getting-started/introduction", "destination": "/docs/getting-started/how-dsrs-thinks" },
+    { "source": "/docs/tutorials/overview", "destination": "/docs/components/module-macro" },
+    { "source": "/docs/tutorials/your-first-module", "destination": "/docs/components/module-macro" },
+    { "source": "/docs/tutorials/agent-with-tools", "destination": "/docs/components/tools-and-agents" },
+    { "source": "/docs/tutorials/record-and-replay", "destination": "/docs/components/traces" },
+    { "source": "/docs/tutorials/tune-a-module", "destination": "/docs/components/optimizers" },
+    { "source": "/docs/concepts/harness-as-data", "destination": "/docs/getting-started/how-dsrs-thinks" },
+    { "source": "/docs/concepts/three-lanes", "destination": "/docs/getting-started/how-dsrs-thinks" },
+    { "source": "/docs/concepts/compilation", "destination": "/docs/getting-started/how-dsrs-thinks" },
+    { "source": "/docs/concepts/holes", "destination": "/docs/components/holes" },
+    { "source": "/docs/concepts/traces-and-replay", "destination": "/docs/components/traces" },
+    { "source": "/docs/concepts/capabilities", "destination": "/docs/components/capabilities" },
+    { "source": "/docs/reference/macros", "destination": "/docs/components/module-macro" },
+    { "source": "/docs/reference/signatures-and-types", "destination": "/docs/components/signatures" },
+    { "source": "/docs/reference/predict", "destination": "/docs/components/predict" },
+    { "source": "/docs/reference/modules", "destination": "/docs/components/modules" },
+    { "source": "/docs/reference/adapters", "destination": "/docs/components/adapters" },
+    { "source": "/docs/reference/lm", "destination": "/docs/components/lm" },
+    { "source": "/docs/reference/data", "destination": "/docs/components/data" },
+    { "source": "/docs/reference/state", "destination": "/docs/components/state" },
+    { "source": "/docs/reference/fx", "destination": "/docs/components/fx" },
+    { "source": "/docs/reference/evaluate", "destination": "/docs/components/evaluation" },
+    { "source": "/docs/reference/optimizers", "destination": "/docs/components/optimizers" },
+    { "source": "/docs/reference/optimizer-engine", "destination": "/docs/components/optimizer-engine" },
+    { "source": "/docs/reference/code-mode", "destination": "/docs/components/code-mode" },
+    { "source": "/docs/reference/dsrs-file", "destination": "/docs/components/dsrs-file" },
+    { "source": "/docs/reference/program-and-nodes", "destination": "/docs/components/program-and-nodes" },
+    { "source": "/docs/reference/runtime", "destination": "/docs/components/runtime" },
+    { "source": "/docs/reference/cli", "destination": "/docs/components/cli" },
+    { "source": "/docs/reference/traces", "destination": "/docs/components/traces" },
+    { "source": "/docs/reference/traces-and-cli", "destination": "/docs/components/traces" },
+    { "source": "/docs/reference/utils", "destination": "/docs/components/utils" },
+    { "source": "/docs/learn/you-never-write-the-prompt", "destination": "/docs/getting-started/quickstart" },
+    { "source": "/docs/learn/the-contract-is-the-prompt", "destination": "/docs/components/signatures" },
+    { "source": "/docs/learn/who-calls-the-model", "destination": "/docs/components/predict" },
+    { "source": "/docs/learn/what-the-model-sees", "destination": "/docs/components/adapters" },
+    { "source": "/docs/learn/pipelines-are-just-structs", "destination": "/docs/components/modules" },
+    { "source": "/docs/learn/one-parse-two-projections", "destination": "/docs/components/module-macro" },
+    { "source": "/docs/learn/here-be-dragons", "destination": "/docs/components/holes" },
+    { "source": "/docs/learn/give-the-model-hands", "destination": "/docs/components/tools-and-agents" },
+    { "source": "/docs/learn/nothing-to-declare", "destination": "/docs/components/capabilities" },
+    { "source": "/docs/learn/the-expedition-log", "destination": "/docs/components/traces" },
+    { "source": "/docs/learn/what-does-better-mean", "destination": "/docs/components/evaluation" },
+    { "source": "/docs/learn/tracing-paper", "destination": "/docs/components/optimizers" },
+    { "source": "/docs/learn/when-the-judge-is-a-model", "destination": "/docs/optimizers/gepa" },
+    { "source": "/docs/learn/the-map-leaves-home", "destination": "/docs/components/cli" },
+    { "source": "/docs/learn/running-in-the-wild", "destination": "/docs/components/traces" },
+    { "source": "/docs/guides/write-steps", "destination": "/docs/components/module-macro" },
+    { "source": "/docs/guides/add-tools", "destination": "/docs/components/tools-and-agents" },
+    { "source": "/docs/guides/use-holes", "destination": "/docs/components/holes" },
+    { "source": "/docs/guides/print-and-serve", "destination": "/docs/components/cli" },
+    { "source": "/docs/guides/bake-a-candidate", "destination": "/docs/components/program-and-nodes" },
+    { "source": "/docs/optimizers/gepa-llm-judge", "destination": "/docs/optimizers/gepa" },
     { "source": "/community", "destination": "/" }
   ],
   "logo": {

@@ -1,12 +1,12 @@
 ---
-title: "The Model Is Not the Problem"
-description: "DSRs is a Rust library for building LM harnesses you can hold in your hand: print them, diff them, replay them, optimize them, serve them."
-icon: "map"
+title: "DSRs"
+description: "Typed LM programming in Rust: declare contracts instead of writing prompts, hold your pipeline as data, and improve it with optimizers"
+icon: "diagram-project"
 ---
 
 <img
   src="logo/main.png"
-  alt="DSRs - typed LM harness engineering in Rust"
+  alt="DSRs - typed LM programming in Rust"
   style={{
     width: '100%',
     maxWidth: '768px',
@@ -17,125 +17,41 @@ icon: "map"
   }}
 />
 
-Somewhere right now, a pipeline is failing and a language model is getting blamed for it.
+DSRs is a Rust library for building LM-powered applications. You declare each model interaction as a typed contract instead of writing prompts and parsers, compose interactions with ordinary Rust, and get a system where the whole pipeline is also data: printable, diffable, replayable, optimizable, and servable from a single text file.
 
-The accusation rarely sticks. Swap in a stronger model and the pipeline usually fails the same way, just more expensively. Because the model was never the whole system. Around every model call sits the instructions you wrote, the examples you picked, the tools you offered, the order of the steps, the wiring between them. That setup has a name: the **harness**. Given a good enough harness, a capable model can do almost anything. Given a bad one, no model can save you.
+- **Typed contracts.** Inputs, outputs, and instructions are a Rust struct. The library renders the prompt and parses the response into your types; malformed model output becomes a typed error, not a string-parsing bug.
+- **Programs as data.** A `#[module]` function is read once at build time and projected into both a runnable function and a `.dsrs` artifact that cannot drift from the code. The artifact can be checked, diffed, served over HTTP, and embedded back into a build.
+- **Recorded runs.** Every run is captured as a trace. Strict replay turns recordings into free, deterministic tests; until-divergence replay re-runs only the steps a change actually affects.
+- **Optimizers.** COPRO, MIPROv2, GEPA, SIMBA, and BootstrapFewShot tune instructions and few-shot demos against your metric and dataset, without modifying your code.
+- **Tools, agents, and Code Mode.** Models call typed Rust tools in bounded loops, or write one sandboxed JavaScript program that calls all tools in a single round trip. A capability system gates every access at load time.
 
-So the real question isn't "which model?" It's: where does your harness actually *live*?
+## Start here
 
-Look at your current project. The instruction is a string in one file. The examples are a list in another. The retry logic is a decorator someone wrote in a hurry. The pipeline's shape exists nowhere at all, except in your head, and it's leaving when you do. You can't diff any of it. You can't ask "what changed between the version that worked and the version that doesn't?" and get an answer.
-
-## The map and the territory
-
-Code that runs is territory. Real, effectful, and opaque: the only way to know what it does is to run it and watch.
-
-DSRs is built on one bet: **every harness should also have a map**. A single page that shows every step, every instruction, every tool, every connection. And here's the part that matters, because you've been burned by stale diagrams before: in DSRs the map is generated *from* the territory, on every build. It cannot drift. It cannot lie.
-
-The map is not the territory. Unless the map is generated from the territory.
-
-<svg viewBox="0 0 760 430" role="img" aria-label="The same harness twice: below, the territory (code that runs); above, the map generated from it on every build" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
-  <defs>
-    <marker id="pg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
-    </marker>
-  </defs>
-  <rect x="40" y="270" width="680" height="130" rx="10" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" />
-  <text x="60" y="298" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the territory</text>
-  <text x="60" y="316" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">code that runs: real, effectful, opaque</text>
-  <circle cx="300" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
-  <circle cx="420" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
-  <circle cx="540" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
-  <line x1="317" y1="335" x2="403" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
-  <line x1="437" y1="335" x2="523" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
-  <line x1="292" y1="372" x2="308" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
-  <line x1="408" y1="372" x2="432" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
-  <line x1="530" y1="372" x2="550" y2="372" stroke="currentColor" strokeOpacity="0.3" strokeWidth="2" strokeLinecap="round" />
-  <path d="M 380 262 C 380 232, 380 222, 380 196" fill="none" stroke="#ed6c13" strokeWidth="2.5" markerEnd="url(#pg-arrow)" />
-  <text x="396" y="234" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="#ed6c13">generated on every build</text>
-  <text x="396" y="250" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">so it cannot drift, and cannot lie</text>
-  <g transform="rotate(-2 380 105)">
-    <rect x="200" y="28" width="360" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
-    <path d="M 560 28 L 536 28 L 560 52 Z" fill="currentColor" fillOpacity="0.15" />
-    <text x="220" y="56" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk</text>
-    <circle cx="270" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
-    <circle cx="360" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
-    <circle cx="450" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
-    <line x1="281" y1="100" x2="349" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
-    <line x1="371" y1="100" x2="439" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
-    <text x="270" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">triage</text>
-    <text x="360" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
-    <text x="450" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">out</text>
-    <line x1="220" y1="152" x2="470" y2="152" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
-    <line x1="220" y1="166" x2="400" y2="166" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
-  </g>
-  <text x="580" y="70" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the map</text>
-  <text x="580" y="88" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">one page you can hold,</text>
-  <text x="580" y="104" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">diff, serve, and improve</text>
-</svg>
-
-This is what a DSRs program looks like when it's written down. No Rust yet, just the map:
-
-```text
-dsrs 1
-program frontdesk
-
-model fast = "openai:gpt-4o-mini"
-
-sig Main {
-  in  ticket: string
-  out reply: string
-}
-
-// signatures trimmed for the teaser
-
-main: Main = seq {
-  triage  = predict Triage (ticket = $.ticket)
-  drafter = cot Draft @fast (ticket = $.ticket, category = triage.category)
-  out { reply = drafter.reply }
-}
-```
-
-Two model calls, one feeding the other, and every knob in plain sight. That file is not documentation someone wrote about the program. That file *is* the program: you can run it, serve it, check it into git, and diff it against last Tuesday's version. You write ordinary Rust, and this falls out of the build.
-
-## What a map buys you
-
-Once your harness is a thing you can hold, doors start opening:
-
-- **Diff it.** Two versions of a harness are two text files. The change that broke production is a line, not a vibe.
-- **Replay it.** Every run is recorded. Re-run yesterday's traffic against today's harness without paying for the parts that didn't change.
-- **Optimize it.** Every instruction and every example has a named address. An optimizer can lay candidate edits over your program like tracing paper, score them, and hand you the winner. Your code never changes.
-- **Serve it.** `dsrs serve frontdesk.dsrs` and the map is an endpoint.
-- **Let a model write one.** The text form is small on purpose. A harness that fits on a page is a harness an LM can generate, and the same checks that guard yours guard its.
-
-Big claims. The rest of this book earns them one chapter at a time, by building a real thing: **Front Desk**, a support-ticket triage and reply service, grown from a single typed call into an optimized, replayable, served program.
-
-## The route
-
-<Columns cols={2}>
-  <Card title="Act I — The Contract" icon="file-signature" href="/docs/learn/you-never-write-the-prompt">
-    You stop writing prompts. Types take over. One call becomes a contract the model actually honors.
-  </Card>
-  <Card title="Act II — The Map" icon="map" href="/docs/learn/pipelines-are-just-structs">
-    Calls become pipelines, pipelines become programs, and your first map falls out of the build. Dragons included.
-  </Card>
-  <Card title="Act III — The Log" icon="route" href="/docs/learn/the-expedition-log">
-    Every run becomes a record you can replay, and "seems better" becomes a number.
-  </Card>
-  <Card title="Act IV — The Search" icon="wand-magic-sparkles" href="/docs/learn/tracing-paper">
-    Optimizers lay tracing paper over your map and search for a better harness while you sleep.
-  </Card>
-  <Card title="Act V — The Journey" icon="paper-plane" href="/docs/learn/the-map-leaves-home">
-    The map leaves home: baked, checked, served, and feeding its own improvement loop.
-  </Card>
-  <Card title="In a hurry?" icon="rocket" href="/docs/getting-started/quickstart">
-    The five-minute version: install, one typed call, working code. The book will still be here.
-  </Card>
-</Columns>
-
-If you'd rather look things up than read a story, the [Reference](/docs/reference/macros) tab is the complete lookup surface, and [Guides](/docs/guides/write-steps) holds the task-shaped recipes.
-
-Everything above sounds abstract until you watch a struct turn into a prompt. So start smaller than a map. Start with one call, and notice what you didn't have to write.
-
-<Card title="Chapter 1: You Never Write the Prompt" icon="arrow-right" href="/docs/learn/you-never-write-the-prompt" horizontal>
-  In which an inbox starts overflowing, and a Rust enum answers an email.
+<CardGroup cols={2}>
+<Card title="Quickstart" icon="rocket" href="/docs/getting-started/quickstart">
+Install, configure a model, and make a typed call in five minutes
 </Card>
+<Card title="How DSRs thinks" icon="compass" href="/docs/getting-started/how-dsrs-thinks">
+The mental model: contracts, programs as data, and the three authoring lanes
+</Card>
+<Card title="Signatures" icon="pen-ruler" href="/docs/components/signatures">
+The first component: typed contracts for LM calls
+</Card>
+<Card title="Examples" icon="flask" href="/docs/guides/examples">
+Every runnable example in the repository, indexed
+</Card>
+</CardGroup>
+
+## Components
+
+Each component has exactly one page covering what it is, how to use it, and its complete API surface.
+
+| Area | Pages |
+|---|---|
+| Building blocks | [Signatures](/docs/components/signatures), [Predict](/docs/components/predict), [Modules](/docs/components/modules), [Adapters](/docs/components/adapters), [Language models](/docs/components/lm), [Data](/docs/components/data), [fx](/docs/components/fx) |
+| Programs as data | [The module macro](/docs/components/module-macro), [Holes](/docs/components/holes), [Capabilities](/docs/components/capabilities), [Program & nodes](/docs/components/program-and-nodes), [The .dsrs format](/docs/components/dsrs-file), [Runtime](/docs/components/runtime), [CLI](/docs/components/cli), [State](/docs/components/state) |
+| Tools & agents | [Tools & agents](/docs/components/tools-and-agents), [Code Mode](/docs/components/code-mode) |
+| Evaluation & optimization | [Traces](/docs/components/traces), [Evaluation](/docs/components/evaluation), [Optimizers](/docs/components/optimizers), [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), [Optimizer engine](/docs/components/optimizer-engine) |
+| Utilities | [Utilities](/docs/components/utils) |
+
+DSRs is a from-scratch Rust rewrite of the ideas in [DSPy](https://github.com/stanfordnlp/dspy), designed around Rust's type system rather than ported from Python. Source and issues: [krypticmouse/DSRs](https://github.com/krypticmouse/DSRs).

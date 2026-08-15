@@ -1,6 +1,6 @@
 ---
 title: 'MIPROv2'
-description: 'LLM-guided prompt generation with best practices'
+description: 'Trace-guided instruction and demo optimization: config, usage, and when to use it'
 icon: 'wand-magic-sparkles'
 ---
 
@@ -8,19 +8,19 @@ import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
 
 MIPROv2 (Multi-prompt Instruction PRoposal Optimizer v2) is a trace-guided instruction and demo optimizer. It differs from COPRO by running your program first, then using the captured execution traces plus a library of prompting best practices to generate candidate instructions, rather than searching blind. It also bootstraps few-shot demos from successful runs.
 
-## How it Works
+## How it works
 
 MIPROv2 works in four phases:
 
-### Phase 1: Trace Collection
+### Phase 1: Trace collection
 
 One traced teacher pass over the trainset. Every example runs through your module under trace capture, collecting whole-program scores plus per-`Predict` input/output spans.
 
-### Phase 2: Demo Bootstrapping
+### Phase 2: Demo bootstrapping
 
 Successful spans from rollouts scoring at least `min_demo_score` become few-shot demos on the predictor that produced them (top `max_bootstrapped_demos` by score, deduplicated on inputs). Demos are installed before instruction search, so candidates are scored against the module as it will actually run.
 
-### Phase 3: Candidate Generation
+### Phase 3: Candidate generation
 
 Uses the traces and a rotation of prompting tips to generate `num_candidates` instruction variants per predictor. The prompting tips library includes:
 
@@ -31,7 +31,7 @@ Uses the traces and a rotation of prompting tips to generate `num_candidates` in
 - Handle edge cases explicitly
 - Request structured outputs when needed
 
-### Phase 4: Trial Evaluation
+### Phase 4: Trial evaluation
 
 - Evaluates up to `num_trials` candidates per predictor on one sampled minibatch
 - Computes performance scores
@@ -51,9 +51,9 @@ let optimizer = MIPROv2::builder()
     .build();
 ```
 
-You can also set `eval_concurrency` (concurrent LM calls during evaluation, default 16) and `seed` (fixes minibatch sampling for reproducible runs). The full field table is in the [optimizers reference](/docs/reference/optimizers#miprov2).
+You can also set `eval_concurrency` (concurrent LM calls during evaluation, default 16) and `seed` (fixes minibatch sampling for reproducible runs). The full field table is in the [optimizers reference](/docs/components/optimizers#miprov2).
 
-## Usage Example
+## Usage example
 
 ```rust
 use dspy_rs::{MIPROv2, Optimizer};
@@ -72,37 +72,37 @@ let metric = ExactMatchMetric;
 optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
-The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/reference/evaluate) for the trait.
+The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/components/evaluation) for the trait.
 
-### Typed Data Loading
+### Typed data loading
 
-Use the shared data ingress reference: [`DataLoader`](/docs/reference/data).
+Use the shared data ingress reference: [`DataLoader`](/docs/components/data).
 
 ## Comparison: COPRO vs MIPROv2 vs GEPA
 
 <OptimizerComparison />
 
-### When to Use MIPROv2
+### When to use MIPROv2
 
 - You have decent training data (15+ examples recommended)
 - Quality matters more than speed
 - Task benefits from prompting best practices and few-shot demos
 - Need trace-informed candidate generation
 
-### When to Use COPRO
+### When to use COPRO
 
 - You need fast iteration
 - Compute budget is limited
 - Task is straightforward
 
-### When to Use GEPA
+### When to use GEPA
 
 - Complex tasks with subtle failure modes
 - You can provide rich feedback
 - Multi-objective optimization
 - Need diverse solutions
 
-## Implementation Notes
+## Implementation notes
 
 The code follows standard Rust practices:
 - No unsafe blocks

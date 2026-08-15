@@ -34,21 +34,21 @@ Some examples need a feature flag (noted in the file header), for example `--fea
 | [16-insurance-claim-prompt.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/16-insurance-claim-prompt.rs) | Printing the exact system prompt a nested extraction signature renders to | `ChatAdapter`, nested `Signature` types |
 | [17-pretty-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/17-pretty-tracing.rs) | Human-readable tracing output against an offline canned LM | `init_tracing`, `TestCompletionModel` |
 
-## The Front Desk examples
+## The front desk examples
 
-These nine accompany [the Field Guide](/docs/learn/you-never-write-the-prompt): each one is a chapter milestone of the book's running example, kept compiling by CI so the book's code can never quietly rot.
+These nine exercise a small support-desk pipeline end to end. Each maps to a component page and is kept compiling by CI.
 
-| Example | Field Guide chapter | What it shows |
+| Example | Component page | What it shows |
 |---------|---------------------|---------------|
-| [18-code-mode.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/18-code-mode.rs) | [Ch. 8](/docs/learn/give-the-model-hands) | Two tools collapsed into the `run_js` meta-tool via `ToolSet::code_mode` |
-| [19-react.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/19-react.rs) | [Ch. 8](/docs/learn/give-the-model-hands) | `ReAct` with a closure tool and a step cap, trajectory read from metadata |
-| [20-frontdesk-contract.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/20-frontdesk-contract.rs) | [Ch. 1-4](/docs/learn/you-never-write-the-prompt) | Enums, nested types, constraints, demos, per-predictor models, the printed prompt |
-| [21-frontdesk-pipeline.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/21-frontdesk-pipeline.rs) | [Ch. 5](/docs/learn/pipelines-are-just-structs) | The pipeline as a struct with a `Module` impl, plus the `fx` variant |
-| [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs) | [Ch. 6-7](/docs/learn/one-parse-two-projections) | `#[module]` with a hole; prints the real `.dsrs` artifact and `OPACITY` (offline) |
-| [23-frontdesk-agent.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/23-frontdesk-agent.rs) | [Ch. 8-9](/docs/learn/give-the-model-hands) | `#[tool]` + `#[agent]` + module `caps(...)` wiring (prints the caps block offline) |
-| [24-frontdesk-replay.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/24-frontdesk-replay.rs) | [Ch. 10](/docs/learn/the-expedition-log) | Capture to JSONL, strict replay with zero live calls, until-divergence under an overlay |
-| [25-frontdesk-evaluate.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/25-frontdesk-evaluate.rs) | [Ch. 11](/docs/learn/what-does-better-mean) | A labeled trainset, a `TypedMetric`, `evaluate_trainset` + `average_score` |
-| [26-frontdesk-tune.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/26-frontdesk-tune.rs) | [Ch. 12-14](/docs/learn/tracing-paper) | Overlay by param path, ambient overlay run, `bake` with lineage (offline path included) |
+| [18-code-mode.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/18-code-mode.rs) | [Tools & agents](/docs/components/tools-and-agents) | Two tools collapsed into the `run_js` meta-tool via `ToolSet::code_mode` |
+| [19-react.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/19-react.rs) | [Tools & agents](/docs/components/tools-and-agents) | `ReAct` with a closure tool and a step cap, trajectory read from metadata |
+| [20-frontdesk-contract.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/20-frontdesk-contract.rs) | [Signatures](/docs/components/signatures) | Enums, nested types, constraints, demos, per-predictor models, the printed prompt |
+| [21-frontdesk-pipeline.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/21-frontdesk-pipeline.rs) | [Modules](/docs/components/modules) | The pipeline as a struct with a `Module` impl, plus the `fx` variant |
+| [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs) | [Module macro](/docs/components/module-macro) | `#[module]` with a hole; prints the real `.dsrs` artifact and `OPACITY` (offline) |
+| [23-frontdesk-agent.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/23-frontdesk-agent.rs) | [Tools & agents](/docs/components/tools-and-agents) | `#[tool]` + `#[agent]` + module `caps(...)` wiring (prints the caps block offline) |
+| [24-frontdesk-replay.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/24-frontdesk-replay.rs) | [Traces](/docs/components/traces) | Capture to JSONL, strict replay with zero live calls, until-divergence under an overlay |
+| [25-frontdesk-evaluate.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/25-frontdesk-evaluate.rs) | [Evaluation](/docs/components/evaluation) | A labeled trainset, a `TypedMetric`, `evaluate_trainset` + `average_score` |
+| [26-frontdesk-tune.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/26-frontdesk-tune.rs) | [Optimizers](/docs/components/optimizers) | Overlay by param path, ambient overlay run, `bake` with lineage (offline path included) |
 
 <Note>
 The `9x-` files ([90](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/90-smoke-slice1-typed-predict.rs) through [94](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs), plus the `97`-`99` benches) are CI surfaces: smoke slices that exercise typed predict, chain of thought, module authoring, ReAct, and the optimizer interface, and a few performance benchmarks. They are kept deliberately boring and stable; read them as compatibility contracts rather than tutorials.

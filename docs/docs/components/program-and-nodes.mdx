@@ -1,0 +1,180 @@
+---
+title: "Program and nodes"
+description: "Reference for the IR Program, the nine node kinds, tunable parameters, the Overlay API, and baking a candidate"
+icon: "diagram-project"
+---
+
+The `Program` is the in-memory IR every authoring lane produces: a `#[module]` function and a parsed `.dsrs` file both end at this one value. It is the compiled form of a pipeline: everything the interpreter, the optimizer, and the serializer need, in one place. This page lists what a program holds, the nine node kinds, the parameter (overlay) surface, and how a winning candidate is baked into a new program.
+
+```rust
+// Every #[module] exposes its compiled program:
+let program: &'static dspy_rs::ir::Program = qa::program();
+```
+
+## What a Program holds
+
+In plain words: the shape of the pipeline, the signatures, the models, the tools, the tunable values, the allowed capabilities, and a fingerprint hash.
+
+| Field | What it is |
+|---|---|
+| `meta` | Program metadata: format version, name, `program_hash`, and optional `Lineage`. |
+| `nodes` | The node arena: the pipeline shape as a tree of the nine node kinds. |
+| `sigs` | The signature arena: every LM-call interface used by the program. |
+| `params` | The parameter arena: every tunable slot with its current default value. |
+| `models` | Model declarations: the `@ref` name plus its config (never secrets). |
+| `tools` | Tool declarations: name, description slot, interface, caps, and kind (`ToolKind::Host` bound by the runtime, or `ToolKind::Sandboxed` carrying its code in the artifact). |
+| `types` | The class and enum definitions reachable from the signatures. |
+| `syms` | The string interner for node names, field names, and tool names. |
+| `caps` | The program's capability ceiling (a `CapSet` of names like `net:search`). |
+| `root` | The root node, always a `Seq` in v1 (`main`). |
+| `sig` | The program's external interface signature. |
+
+`meta.program_hash` is a stable hash over the canonical printed text minus the lineage block, so JSON and text loads of the same program agree on it. Overlays, traces, and state artifacts reference it.
+
+Nodes form a tree: one parent, one use. Fan-in happens through field references, never shared nodes. Leaf nodes (`Predict`, `AgentLoop`, `Hole`) carry a mandatory, program-unique name; that name is also the trace component name and the parameter path prefix. Containers are anonymous.
+
+## The nine node kinds
+
+| Node | Plain words | Main fields |
+|---|---|---|
+| `Predict` | One LM call, no tools. `cot` is sugar: a Predict over a reasoning-augmented signature. | `name`, `sig`, `instruction`, `demos`, `model`, `binding` |
+| `AgentLoop` | The LM plus tool loop as a first-class unit. | `name`, `sig`, `instruction`, `demos`, `model`, `tools`, `context_policy`, `stop` (max turns, stop tools, until_parse), `budget`, `binding` |
+| `Seq` | Runs children in order and exports named fields. | `body`, `out` |
+| `ForkJoin` | Runs branches concurrently (all succeed or fail fast) and joins their outputs. | `branches`, `join` |
+| `Route` | Picks one arm by an enum-valued port. | `on`, `arms` (variant, node pairs), `default` |
+| `Retry` | Re-runs its child on retryable failure, with backoff and optional parse feedback. | `child`, `max_attempts`, `backoff_ms`, `feedback` |
+| `Refine` | Re-runs its child with judge feedback until a score threshold passes. | `child`, `judge`, `threshold`, `max_rounds`, `feedback_field` |
+| `Loop` | A bounded loop that carries values between iterations. | `body`, `max_iters`, `while`, `carry`, `out` |
+| `Hole` | Typed opaque code: the type system sees a normal node, the implementation is sandboxed JS (`HoleImpl::Sandboxed`, code in the artifact) or a native function bound by name (`HoleImpl::Host`, with a stable content hash). | `name`, `sig`, `imp`, `caps`, `binding` |
+
+Every node's `binding` (or `out`/`join`/`carry`) is a list of field-level wires: a destination field name fed from a port (`Input` for `$.field`, `Out` for `node.field`, `Carried` for `^field`, or a JSON literal).
+
+## Tunable values (params)
+
+Every mutable thing in a program is a named, addressable slot; a candidate is an overlay read through at render time, never a mutation of the program.
+
+### Kinds
+
+| `ParamKind` | Plain words |
+|---|---|
+| `Instruction` | The prompt's task description for a leaf. |
+| `Demos` | Few-shot demonstration rows (input map plus output map each). |
+| `ToolDesc` | A tool's description text. |
+| `ModelRef` | Which declared model a leaf uses. |
+| `ContextPolicy` | The agent context policy: history window, tool-result byte cap, playbook text. |
+| `Code` | Sandboxed JS source (with a stable content hash). Hole and sandboxed-tool implementations are optimizable through this kind. |
+
+### Path naming rule
+
+Slots are addressed by canonical string paths. Node-owned slots use the leaf name as prefix; tool-owned slots use a `tool.` prefix:
+
+- `"<leaf>.instruction"`, `"<leaf>.demos"`, `"<leaf>.model"`, `"<leaf>.context"`, `"<leaf>.code"`
+- `"tool.<name>.desc"`, `"tool.<name>.code"`
+
+For example `"drafter.instruction"` or `"tool.search.desc"`. `Program::param_id(path)` resolves a path to its id; after load everything speaks ids.
+
+## The Overlay API
+
+An `Overlay` is one candidate: a dense set of parameter values layered over a fixed program. The interpreter reads through it at render time, so many candidates can be evaluated concurrently over one shared program.
+
+| Item | What it does |
+|---|---|
+| `Overlay::new(&program)` | An empty overlay minted against the program. Records `program.meta.program_hash` as its `base`. |
+| `base` check | Every apply path (`set`, `Interpreter::run`, `bake`, `from_named`) verifies `overlay.base` equals the program's hash; a mismatch is `OverlayError::BaseMismatch`. This prevents stale candidates from applying to a new skeleton. |
+| `set(&program, id, value)` | Kind-checked set: writing a `Demos` value into an `Instruction` slot is `OverlayError::KindMismatch`. |
+| `set_instruction(slot, text)` | Sets an instruction through a typed `Slot<Instruction>` handle. |
+| `set_demos(slot, rows)` | Sets demo rows through a typed `Slot<Demos>` handle. |
+| `set_code(slot, source)` | Sets JS source through a typed `Slot<CodeK>` handle (hash computed automatically). |
+| `resolve(&program, id)` | The effective value: the overlay entry if set, otherwise the slot's default. |
+| `hash()` | Stable hash over the base plus the set entries in id order. This is the trace's `candidate_hash` and the rollout-cache key. |
+| `to_named(&program)` | The serde boundary: a path-keyed map (`"<path>": ParamValue`). |
+| `from_named(&program, map)` | Rebuilds an overlay from the path-keyed form, verifying every path and kind. Unknown paths are `OverlayError::UnknownPath`. |
+
+Typed slot handles come from `Program::slot_of::<Kind>(path)`, which returns `None` when the path is unknown or the slot has a different kind.
+
+## Baking a candidate
+
+`bake(overlay, note)` promotes a candidate into a new program value: every overlay entry becomes the corresponding slot's default, the lineage is stamped (the caller's note, plus `parent` set to the old program hash and `overlay` set to the overlay hash, both hex), and the program hash is recomputed. The original program is untouched. Failures are `BakeError::Overlay` (stale base or kind mismatch) or `BakeError::Invalid` (the baked program failed validation).
+
+The workflow below turns a winning overlay, from an optimizer or from hand tuning, into a new self-contained `.dsrs` file.
+
+### 1. Build an overlay against the program
+
+An overlay is created for one specific program. Address each value by its parameter path: the leaf name (the `let` binding in your module body), a dot, and the slot name.
+
+```rust
+use dspy_rs::ir::{Instruction, Overlay};
+
+let program = qa::program();
+
+let mut overlay = Overlay::new(program);
+let slot = program
+    .slot_of::<Instruction>("drafter.instruction")
+    .expect("drafter.instruction is an instruction slot");
+overlay.set_instruction(slot, "Answer in one short sentence.");
+```
+
+You can also set demos (worked examples the model sees before your input):
+
+```rust
+use dspy_rs::ir::{Demos, DemoRow};
+
+let demos = program.slot_of::<Demos>("drafter.demos").unwrap();
+
+let mut input = serde_json::Map::new();
+input.insert("question".into(), serde_json::json!("What is 2+2?"));
+let mut output = serde_json::Map::new();
+output.insert("draft".into(), serde_json::json!("4"));
+
+overlay.set_demos(demos, vec![DemoRow { input, output }]);
+```
+
+### 2. Bake
+
+`bake` returns a new program with the overlay's values folded in as the defaults.
+
+```rust
+use dspy_rs::ir::Lineage;
+
+let note = Lineage {
+    optimizer: "hand-tuned".into(),
+    trainset: "my-eval@1".into(),
+    budget: "20 runs".into(),
+    parent: None,   // filled in by bake
+    date: "2026-08-14".into(),
+    overlay: None,  // filled in by bake
+};
+
+let baked = program.bake(&overlay, note)?;
+```
+
+Lineage is a note stored in the file that says where this version came from: which optimizer produced it, on what data, at what cost, and on what date. `bake` fills in `parent` (the hash of the program you baked from) and `overlay` (the hash of the candidate you promoted), so leave those as `None`.
+
+### 3. Print the new version
+
+```rust
+std::fs::write("qa-v2.dsrs", baked.to_dsrs())?;
+```
+
+The new file carries the baked values as its own defaults, plus a `lineage { ... }` block. It runs exactly like the old program plus the overlay, and you can check and serve it with the [CLI](/docs/components/cli) like any other program.
+
+### The base-hash safety rules
+
+An overlay refuses to apply to a different program than it was made for. This is on purpose. Every overlay remembers the hash of its base program, and both `bake` and the runtime check it, so you cannot accidentally promote tuning results from one version of a pipeline onto another.
+
+The same rule has a second effect worth knowing: baking changes the program's hash. Overlays minted against the old program do not apply to the baked one. Candidates are re-minted against the new skeleton by design, so every round of tuning starts from a clean, known base.
+
+### Common mistakes
+
+**Wrong parameter path.** The path is `<binding>.<slot>`, using the `let` binding name from the module body, not the step function name. If your module says `let drafter = draft(...).await?;`, the path is `drafter.instruction`.
+
+**Reusing an old overlay after baking.** It will be refused because the base hash changed. Build a fresh overlay against the baked program.
+
+**Filling in `parent` or `overlay` yourself.** `bake` overwrites both with the real hashes. Anything you put there is discarded.
+
+## See also
+
+- [The .dsrs file](/docs/components/dsrs-file): the canonical text form a program prints to
+- [Runtime](/docs/components/runtime): loading and running a program, and how `Interpreter::run` reads through an overlay
+- [Optimizer engine](/docs/components/optimizer-engine): where candidates and overlays come from during optimization, and how checkpointing saves them
+- [CLI](/docs/components/cli): checking and serving the baked file

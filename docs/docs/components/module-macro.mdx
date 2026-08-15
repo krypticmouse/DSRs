@@ -1,0 +1,248 @@
+---
+title: 'The Module Macro'
+description: 'Author LM calls as bodyless functions and whole pipelines as function bodies: #[predict], #[cot], and #[module]'
+icon: 'function'
+---
+
+The function-authoring lane declares LM calls as bodyless Rust functions and whole pipelines as ordinary function bodies. `#[predict]` and `#[cot]` turn one function signature into one model call; `#[module]` compiles a function body that chains those calls into an IR [Program](/docs/components/program-and-nodes). The macro reads each function once at expansion and emits both the runnable code and its program form, so the two cannot drift.
+
+## Steps
+
+A step is one model call declared as a function with no body. The function is the contract; the framework writes the prompt and parses the answer.
+
+```rust
+use dspy_rs::predict;
+
+/// Answer the question.
+#[predict]
+fn answer(question: String) -> String;
+```
+
+Call it like a normal async function:
+
+```rust
+let out = answer("What is DSRs?".to_string()).await?;
+println!("{}", out.answer);
+```
+
+The mapping is the [signature](/docs/components/signatures) idea applied to a function:
+
+| You write | It becomes |
+|---|---|
+| The doc comment | The instruction the model reads |
+| Each parameter | An input field, same name and type |
+| The return type | One output field, named after the function |
+
+So `fn answer(question: String) -> String` gives the model an input called `question` and asks for an output called `answer`, which is why the result reads as `out.answer`. A step can take several inputs:
+
+```rust
+/// Judge whether the answer is correct.
+#[predict]
+fn judge(question: String, answer: String) -> bool;
+```
+
+Rules, each a compile error when broken: the function is bodyless and ends with `;`; do not write `async` (the generated function is async automatically); no generics, no `self`, parameters must be plain identifiers; at least one input parameter and an explicit return type are required.
+
+### Chain of thought
+
+`#[cot]` is the chain-of-thought variant of `#[predict]`: the model produces a `reasoning` field before the output. Same rules, same options. The result carries the extra field and auto-derefs to the output.
+
+```rust
+use dspy_rs::cot;
+
+/// Summarize the text.
+#[cot]
+fn summarize(text: String) -> String;
+
+let out = summarize(long_text).await?;
+println!("{}", out.reasoning);   // the model's thinking
+println!("{}", out.summarize);   // the answer
+```
+
+### Model handles
+
+Both attributes accept one option, `model = "@name"`, which selects a declared model by reference; the leading `@` is stripped, and anything else in the attribute is a compile error.
+
+```rust
+/// Write a warm, concrete reply to this support ticket.
+#[cot(model = "@strong")]
+fn draft(ticket: String, summary: String) -> String;
+```
+
+The name is a handle, not a hardcoded model id: which model `strong` really is gets decided by whoever runs the program. Steps with no `model = ...` ride the `default` model from your `configure(...)` line automatically. Named handles have no such fallback; see [Named model binding](#named-model-binding).
+
+### The name is the link
+
+The function name follows the step everywhere: [`fx::Params::set_instruction("answer", ...)`](/docs/components/fx) overrides its instruction, trace spans record the same name, and the generated signature lives in a module of the same name (`answer::Sig`). One exception: when a step is called inside a `#[module]` body, the trace and step name is the `let` binding name for that call, so `let drafter = draft(...).await?;` records as `drafter`.
+
+## Modules
+
+`#[module]` compiles an ordinary async Rust function body into an IR `Program`. One parse, two projections: the executable function (typed boundary, runs through the interpreter, reads the ambient overlay) and `name::program()`, the same pipeline as a servable, optimizable, printable artifact.
+
+<svg viewBox="0 0 760 380" role="img" aria-label="One parse, two projections: the function body enters the module macro like light through a prism and splits into the runnable function and the program artifact" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="pr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <rect x="30" y="110" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="46" y="138" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">async fn frontdesk</text>
+  <line x1="46" y1="156" x2="200" y2="156" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="172" x2="188" y2="172" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="188" x2="170" y2="188" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="58" y1="204" x2="196" y2="204" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <line x1="46" y1="224" x2="120" y2="224" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  <text x="46" y="252" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">your function, written once</text>
+  <line x1="232" y1="190" x2="330" y2="190" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2.5" />
+  <path d="M 340 140 L 340 240 L 415 190 Z" fill="#ed6c13" fillOpacity="0.12" stroke="#ed6c13" strokeWidth="2" />
+  <text x="375" y="296" fontFamily="ui-monospace, monospace" fontSize="12" fontWeight="600" fill="#ed6c13" textAnchor="middle">#[module]</text>
+  <text x="375" y="313" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6" textAnchor="middle">one parse, at build time</text>
+  <path d="M 408 168 C 460 130, 490 110, 520 96" fill="none" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#pr-arrow)" />
+  <path d="M 408 212 C 460 250, 490 270, 520 284" fill="none" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#pr-arrow)" />
+  <rect x="530" y="40" width="200" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <path d="M 560 78 L 560 112 L 590 95 Z" fill="currentColor" fillOpacity="0.7" />
+  <text x="610" y="88" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the function</text>
+  <text x="610" y="106" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">callable, awaited,</text>
+  <text x="610" y="121" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">exactly as written</text>
+  <rect x="530" y="230" width="200" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <circle cx="565" cy="280" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <circle cx="600" cy="262" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <circle cx="600" cy="298" r="9" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <line x1="573" y1="275" x2="592" y2="266" stroke="#ed6c13" strokeWidth="1.5" />
+  <line x1="573" y1="285" x2="592" y2="294" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="622" y="278" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the program</text>
+  <text x="622" y="296" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">printable, diffable,</text>
+  <text x="622" y="311" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">servable data</text>
+  <text x="375" y="30" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6" textAnchor="middle">two projections of one source: drift is not unlikely, it is impossible</text>
+</svg>
+
+```rust
+use dspy_rs::module;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct DeskOut {
+    pub summary: String,
+    pub reply: String,
+}
+
+#[module]
+async fn frontdesk(ticket: String) -> Result<DeskOut, dspy_rs::ir::RunError> {
+    // plain Rust: scrub email addresses before anything leaves
+    let clean: String = {
+        let t: String = ticket;
+        t.split_whitespace()
+            .map(|w| if w.contains('@') { "[email]" } else { w })
+            .collect::<Vec<&str>>()
+            .join(" ")
+    };
+
+    let sum = summarize(clean.clone()).await?;
+    let drafter = draft(clean.clone(), sum.summarize.clone()).await?;
+
+    Ok(DeskOut {
+        summary: sum.summarize,
+        reply: drafter.draft,
+    })
+}
+```
+
+It runs the way it reads:
+
+```rust
+let out = frontdesk(ticket).await?;
+println!("{}", out.reply);
+```
+
+The function must be `async`, cannot be generic, and must return `Result<Out, Err>` where `Err: From<dspy_rs::ir::RunError>`. Two options: `caps("...", ...)` declares the program's [capability](/docs/components/capabilities) ceiling, and `deny_holes` makes any non-step expression a compile error instead of a hole.
+
+### Accepted body shapes
+
+The body is straight-line only, built from three shapes:
+
+- `let x = step(args).await?;` where `step` is a `#[predict]`, `#[cot]`, or [`#[agent]`](/docs/components/tools-and-agents) function. Arguments must be ports: function parameters, prior `binding.field` accesses, or literals; `.clone()` and `&` wrappers are stripped.
+- `let y: SimpleType = <any Rust expr>;` for plain Rust. The type ascription is required and must be simple: `String`, `bool`, an integer width from `i8` through `i64` or `u8` through `u32`, `f32`/`f64`, or `Vec<...>`/`Option<...>` of those. The expression becomes a typed extern [hole](/docs/components/holes), a named boundary around code the IR cannot describe as data; the hole page covers how holes bind and travel.
+- A tail expression `Ok(Struct { field: port, ... })` giving the program's output bindings.
+
+### The printed program
+
+```rust
+println!("{}", frontdesk::program().to_dsrs());
+```
+
+The output below was captured from a real run of this pipeline:
+
+```text
+dsrs 1
+program frontdesk
+
+// model and signature declarations trimmed
+
+main: Main = seq {
+  clean = hole clean_hole (ticket = $.ticket) caps [] extern "a90e86e4381f68a9"
+  sum = predict summarize @default (ticket = clean.clean)
+  drafter = cot draft @strong (ticket = clean.clean, summary = sum.summarize)
+  out { summary = sum.summarize, reply = drafter.draft }
+}
+```
+
+Every step appears under its `let` binding name (`sum`, `drafter`), so the program speaks in your vocabulary. Every wire is a line of Rust written as a connection: `sum.summarize` flowing into `draft`'s `summary` input is the `sum.summarize.clone()` argument. The `@strong` handle survives intact, and the privacy scrub prints as `hole clean_hole` with an `extern` fingerprint in place of its code.
+
+This is the build-time design point stated plainly: the macro reads the function once at expansion and emits both the runnable function and the `Program`. The two are projections of one source, so they cannot drift. The printed text is the canonical `.dsrs` form; its grammar and identity rules live in [The .dsrs file](/docs/components/dsrs-file).
+
+## Generated items
+
+For a step `#[predict] fn answer(question: String) -> String;`:
+
+| Item | What it is |
+|---|---|
+| `answer::Sig`, `answer::SigInput`, `answer::SigOutput` | The derived signature and its input and output structs. |
+| `answer::__dsrs_step()` | Step metadata, consumed when the call is lowered inside a `#[module]` body. |
+| `async fn answer(question: String) -> Result<Predicted<answer::SigOutput>, PredictError>` | The callable function. It calls [`fx::predict`](/docs/components/fx) with the function's name as its params slot. |
+
+`#[cot]` generates the same items; its function returns `Result<Predicted<WithReasoning<answer::SigOutput>>, PredictError>`, and `WithReasoning` auto-derefs to the output.
+
+For `#[module] async fn frontdesk(...)`, inside a module named after the function:
+
+| Item | What it is |
+|---|---|
+| `OPACITY` | A constant slice of `HoleReport` entries, one per hole-ized expression (name, kind, source excerpt, reason). |
+| `program()` | The lowered `&'static Program`, linked at first use. Panics on link errors. |
+| `try_program()` | The non-panicking form, returning `Result<&'static Program, &'static ModuleBuildError>`. |
+| `env()` | The [`RuntimeEnv`](/docs/components/runtime) the module needs: its declared caps granted, the `default` model bound from the global settings when configured, `#[tool]` implementations bound, and extracted host holes bound. |
+| generated test | A `#[cfg(test)]` test named `module_program_links_and_validates` that prints every `OPACITY` entry and fails the suite if `try_program()` errors. |
+
+It also emits the executable `async fn` itself, which loads the interpreter once, reads the ambient overlay via `current_overlay()`, and runs with a default budget.
+
+## Named model binding
+
+Steps with no `model = ...` ride the `default` model from your `configure(...)` line automatically. A named handle has no such fallback, by design: bind it at load with `frontdesk::env().bind_model("strong", strong)` and run through `Interpreter::load`, or the load refuses, by name. The runnable example [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs) does exactly this.
+
+## Common mistakes
+
+**Adding `async` to a step.** The generated function is already async. Writing `async fn` on a `#[predict]` or `#[cot]` step is a compile error with a clear message: remove `async`.
+
+```rust
+// Wrong
+#[predict]
+async fn draft(question: String) -> String;
+
+// Right
+#[predict]
+fn draft(question: String) -> String;
+```
+
+**Adding a body to a step.** A step has no body; the framework builds the behavior from the signature. If you want to write the body yourself, you want a [tool](/docs/components/tools-and-agents), not a step.
+
+**Forgetting the return type.** The return type is the output field. Without it there is nothing for the model to produce, so it is a compile error.
+
+**No inputs.** A step needs at least one input parameter.
+
+## See also
+
+- [Signatures](/docs/components/signatures) for the struct form of the same contract
+- [Holes](/docs/components/holes) for what plain Rust inside a module becomes
+- [Program and nodes](/docs/components/program-and-nodes) for what `program()` returns in memory
+- [The .dsrs file](/docs/components/dsrs-file) for the printed text form and its grammar
+- [Runtime](/docs/components/runtime) for `RuntimeEnv`, binding, and `Interpreter::load`
+- Example: [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs)

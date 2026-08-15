@@ -1,16 +1,16 @@
 ---
 title: 'COPRO'
-description: 'Fast iterative prompt refinement'
+description: 'Iterative instruction refinement: config, usage, and when to use it'
 icon: 'rotate'
 ---
 
 import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
 
-COPRO (Collaborative Prompt Optimization) is a simple but effective optimizer that iteratively refines instructions through generation and evaluation cycles.
+COPRO (Collaborative Prompt Optimization) iteratively refines instructions through generation and evaluation cycles.
 
-## How it Works
+## How it works
 
-COPRO uses a straightforward approach:
+COPRO runs a generate-and-evaluate loop:
 
 1. **Generate candidates**: Create `breadth` candidate instructions per predictor
 2. **Evaluate**: Test each candidate on your training data
@@ -28,9 +28,9 @@ let copro = COPRO::builder()
     .build();
 ```
 
-Other fields: `prompt_model` (separate LM for generating candidate instructions), `eval_concurrency` (concurrent LM calls during evaluation, default 16), `track_stats`, and `init_temperature` (currently unused, reserved for candidate diversity control). The full field table is in the [optimizers reference](/docs/reference/optimizers#copro).
+Other fields: `prompt_model` (separate LM for generating candidate instructions), `eval_concurrency` (concurrent LM calls during evaluation, default 16), `track_stats`, and `init_temperature` (currently unused, reserved for candidate diversity control). The full field table is in the [optimizers reference](/docs/components/optimizers#copro).
 
-## Usage Example
+## Usage example
 
 ```rust
 use anyhow::Result;
@@ -124,28 +124,28 @@ async fn main() -> Result<()> {
 }
 ```
 
-### Typed Data Loading
+### Typed data loading
 
-Use the shared data ingress reference: [`DataLoader`](/docs/reference/data).
+Use the shared data ingress reference: [`DataLoader`](/docs/components/data).
 
-## When to Use COPRO
+## When to use COPRO
 
 **Best for:**
 - Quick iteration cycles
 - Simple tasks
 - Limited compute budget
-- When you need results fast
+- Short turnaround requirements
 
 **Avoid when:**
 - You need best possible quality (use MIPROv2 or GEPA)
 - Task has complex failure modes (use GEPA)
 - You want to leverage prompting best practices (use MIPROv2)
 
-## Comparison with Other Optimizers
+## Comparison with other optimizers
 
 <OptimizerComparison />
 
-## Configuration Details
+## Configuration details
 
 ### Breadth
 Number of candidate instructions generated at each round, per predictor. Higher breadth means more exploration but proportionally more LM calls. Must be greater than 1; `compile` errors otherwise.
@@ -157,15 +157,15 @@ Number of refinement rounds. Each round builds on the best candidate from the pr
 
 Recommended: 2-5
 
-### Prompt Model
+### Prompt model
 An optional separate LM used to generate candidate instructions. Falls back to the global LM set with `configure` when unset.
 
-### Track Stats
+### Track stats
 A per-round statistics flag. COPRO's report type is `()`, so nothing is returned either way; leave it at the default.
 
-## Implementation Notes
+## Implementation notes
 
-COPRO is a thin strategy over the shared evaluation engine: each candidate instruction is an overlay evaluated through a cached, bounded-concurrency fan-out, and each round's winner is installed through the same mutation seam every optimizer uses. Repeated candidates are deduplicated by content hash and served from the rollout cache, so re-evaluating an instruction it has already seen costs nothing. See the [optimizer engine reference](/docs/reference/optimizer-engine) for the machinery.
+COPRO is a thin strategy over the shared evaluation engine: each candidate instruction is an overlay evaluated through a cached, bounded-concurrency fan-out, and each round's winner is installed through the same mutation seam every optimizer uses. Repeated candidates are deduplicated by content hash and served from the rollout cache, so re-evaluating an instruction it has already seen costs nothing. See the [optimizer engine reference](/docs/components/optimizer-engine) for the machinery.
 
 Cost is approximately `breadth × depth × num_predictors × trainset_size` LM calls, minus cache hits.
 
