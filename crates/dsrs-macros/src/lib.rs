@@ -10,10 +10,72 @@ use syn::{
 };
 
 mod dsrs_syntax;
+mod example_derive;
 mod include_program;
+mod module_macro;
 mod runtime_path;
+mod step_support;
+mod tool_agent;
 
 use runtime_path::resolve_dspy_rs_path;
+
+/// Declares a host tool: an ordinary (optionally async) fn whose body IS the
+/// implementation (RFC 0003 M-2). Params become the tool's input schema, the
+/// return type its single output field, the doc comment its default
+/// description (an optimizable `ToolDesc` gene once lowered).
+///
+/// ```ignore
+/// /// Web search; returns result snippets with URLs.
+/// #[tool(caps("net:search"))]
+/// async fn search(query: String) -> Vec<String> { … }
+/// ```
+///
+/// Generates `search::__dsrs_tool()` (metadata + a `rig` tool wrapper) for
+/// `#[agent]`/`#[module]` consumption; the fn itself stays callable as plain
+/// Rust. Fallible tools may return `Result<T, E: Display>`.
+#[proc_macro_attribute]
+pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool_agent::expand_tool(attr, item)
+}
+
+/// Declares an LLM+tool loop as a bodyless fn (RFC 0003 M-2) — the agent
+/// sibling of [`macro@predict`].
+///
+/// ```ignore
+/// /// Verify the draft against sources.
+/// #[agent(model = "@fast", tools(search), max_turns = 6)]
+/// fn research(question: String, draft: String) -> Vec<String>;
+/// ```
+///
+/// Options: `model = "@name"`, `tools(a, b)`, `stop_tools(a)`,
+/// `max_turns = N`, `until_parse = bool`,
+/// `budget(calls = N, tokens = N, deadline_ms = N, on_exhausted = finalize)`,
+/// `context(max_history_turns = N, tool_result_max_bytes = N, playbook = "…")`.
+///
+/// Inside `#[module]` bodies this lowers to a first-class `AgentLoop` node.
+/// Called standalone it runs the static-lane tool loop (`Predict` +
+/// `ToolLoopMode::Auto`) — loop options apply to the lowered form only.
+#[proc_macro_attribute]
+pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool_agent::expand_agent(attr, item)
+}
+
+/// Compiles an ordinary async fn body into an IR [`Program`] (RFC 0003 M-3).
+///
+/// One parse, two projections: the executable fn (typed boundary, runs
+/// through the interpreter, reads the ambient overlay) and
+/// `<name>::program()` — the same harness as a servable, optimizable,
+/// printable artifact. Drift between them is impossible by construction.
+///
+/// M-3 supports straight-line bodies: `let x = step(args).await?;`
+/// statements over `#[predict]`/`#[cot]`/`#[agent]` fns, hole-ized
+/// expressions (`let y: SimpleType = <any Rust>;` → typed extern hole), and
+/// an `Ok(Struct { field: port, … })` tail. Attrs: `caps("…")`,
+/// `deny_holes`.
+#[proc_macro_attribute]
+pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
+    module_macro::expand_module(attr, item)
+}
 
 /// Embeds a `.dsrs` program artifact at build time (RFC 0002 §6.1).
 ///
@@ -56,6 +118,43 @@ pub fn include_program(input: TokenStream) -> TokenStream {
         .and_then(|f| f.parent().map(std::path::Path::to_path_buf));
     let input = parse_macro_input!(input as include_program::Input);
     match include_program::expand(input, source_dir) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Derives [`ToInput`]/[`ToOutput`] impls connecting a plain trainset-row
+/// struct to one or more signatures.
+///
+/// Mark input fields with `#[input]` and name the target signature(s) with
+/// `#[example(QA)]`. By default every non-input field becomes an output;
+/// marking any field `#[output]` switches to explicit mode, leaving unmarked
+/// fields as metric-only metadata, and `#[meta]` excludes a single field from
+/// the default partition. When the output set is empty no `ToOutput` impl is
+/// generated — gold fields that don't line up with the signature's Output
+/// struct can stay `#[meta]` and be read by the metric from the row directly.
+/// Conversions match fields by name and are checked at compile time.
+///
+/// ```ignore
+/// #[derive(Example, Clone, serde::Serialize)]
+/// #[example(QA)]
+/// struct HotpotRow {
+///     #[input]
+///     question: String,
+///     #[output]
+///     answer: String,
+///     supporting_facts: Vec<String>, // metric-only
+/// }
+/// ```
+#[proc_macro_derive(Example, attributes(input, output, meta, example))]
+pub fn derive_example(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match example_derive::expand_example(&input, &runtime) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -175,14 +274,10 @@ enum PredictorKind {
 }
 
 fn expand_fn_predictor(attr: TokenStream, item: TokenStream, kind: PredictorKind) -> TokenStream {
-    if !attr.is_empty() {
-        return syn::Error::new(
-            proc_macro2::Span::call_site(),
-            "#[predict]/#[cot] take no arguments (yet)",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let model = match step_support::parse_model_only_attr(attr.into()) {
+        Ok(model) => model,
+        Err(err) => return err.to_compile_error().into(),
+    };
     // `ForeignItemFn` is the syn node for a bodyless fn with attrs + visibility.
     let func = parse_macro_input!(item as syn::ForeignItemFn);
     let runtime = match resolve_dspy_rs_path() {
@@ -190,7 +285,7 @@ fn expand_fn_predictor(attr: TokenStream, item: TokenStream, kind: PredictorKind
         Err(err) => return err.to_compile_error().into(),
     };
 
-    match expand_fn_predictor_inner(&func, &runtime, kind) {
+    match expand_fn_predictor_inner(&func, &runtime, kind, model.as_deref()) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -200,6 +295,7 @@ fn expand_fn_predictor_inner(
     func: &syn::ForeignItemFn,
     runtime: &syn::Path,
     kind: PredictorKind,
+    model: Option<&str>,
 ) -> syn::Result<proc_macro2::TokenStream> {
     let sig = &func.sig;
     if let Some(asyncness) = &sig.asyncness {
@@ -277,6 +373,12 @@ fn expand_fn_predictor_inner(
         ),
     };
 
+    let step_kind = match kind {
+        PredictorKind::Predict => quote! { Predict },
+        PredictorKind::ChainOfThought => quote! { Cot },
+    };
+    let model_tokens = step_support::option_str_tokens(model);
+
     Ok(quote! {
         #vis mod #fn_name {
             #![allow(non_camel_case_types, unused_imports)]
@@ -291,6 +393,20 @@ fn expand_fn_predictor_inner(
                 )*
                 #[output]
                 pub #fn_name: #output_type,
+            }
+
+            /// RFC 0003 M-2: this step as data — what `#[module]` lowering
+            /// consumes. The base (un-augmented) signature; `cot` augments at
+            /// lowering time.
+            pub fn __dsrs_step() -> #runtime::ir::StepDef {
+                #runtime::ir::StepDef {
+                    name: #fn_name_str,
+                    kind: #runtime::ir::StepKind::#step_kind,
+                    sig: #runtime::ir::SignatureDef::of::<Sig>(),
+                    types: #runtime::ir::SignatureDef::types_of::<Sig>(),
+                    model: #model_tokens,
+                    agent: ::core::option::Option::None,
+                }
             }
         }
 

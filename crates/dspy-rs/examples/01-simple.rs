@@ -17,7 +17,7 @@ cargo run --example 01-simple
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    CallMetadata, Example, LM, Module, Predict, PredictError, Predicted, configure, init_tracing,
+    CallMetadata, Demo, LM, Module, Predict, PredictError, Predicted, configure, init_tracing,
 };
 
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
@@ -166,7 +166,7 @@ async fn main() -> Result<()> {
 
     let predict_with_demos = Predict::<QA>::builder()
         .instruction(QA_INSTRUCTION)
-        .demo(Example::new(
+        .demo(Demo::new(
             QAInput {
                 question: "What is 2+2?".to_string(),
             },
@@ -176,7 +176,7 @@ async fn main() -> Result<()> {
                 answer: "4".to_string(),
             },
         ))
-        .demo(Example::new(
+        .demo(Demo::new(
             QAInput {
                 question: "What color is grass?".to_string(),
             },

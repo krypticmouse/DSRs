@@ -41,7 +41,7 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 /// ```
 ///
 /// Configure demos, instruction, and tools through the regular
-/// [`Predict::builder`] — demos are `Example<Augmented<S, Reasoning>>`, so they
+/// [`Predict::builder`] — demos are `Demo<Augmented<S, Reasoning>>`, so they
 /// must include reasoning, showing the LM what good chain-of-thought looks like.
 ///
 /// Swapping `Predict<QA>` → `ChainOfThought<QA>` changes the output type from

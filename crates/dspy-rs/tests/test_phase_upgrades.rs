@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Chat, Example, GEPA, LM, LMClient, MIPROv2, Message, Eval, Module,
-    ModuleState, Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel,
-    TypedMetric, evaluate_trainset,
+    CallMetadata, Chat, Demo, Eval, GEPA, LM, LMClient, MIPROv2, Message, Module, ModuleState,
+    Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
+    evaluate_trainset,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -140,7 +140,7 @@ fn module_state_round_trips_through_json() {
     let mut tuned = OneStep {
         predictor: Predict::<QA>::builder()
             .instruction("tuned instruction")
-            .demo(Example::new(
+            .demo(Demo::new(
                 QAInput {
                     question: "1+1?".to_string(),
                 },
@@ -208,10 +208,10 @@ impl Module for Echo {
 
 struct IndexScore;
 
-impl TypedMetric<QA, Echo> for IndexScore {
+impl TypedMetric<(QAInput, QAOutput), Echo> for IndexScore {
     async fn evaluate(
         &self,
-        _example: &Example<QA>,
+        _example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
@@ -222,9 +222,9 @@ impl TypedMetric<QA, Echo> for IndexScore {
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn concurrent_evaluation_preserves_trainset_order() {
-    let trainset: Vec<Example<QA>> = (0..8)
+    let trainset: Vec<(QAInput, QAOutput)> = (0..8)
         .map(|idx| {
-            Example::new(
+            (
                 QAInput {
                     question: idx.to_string(),
                 },
@@ -247,14 +247,14 @@ async fn concurrent_evaluation_preserves_trainset_order() {
 
 struct FeedbackEcho;
 
-impl TypedMetric<QA, OneStepEcho> for FeedbackEcho {
+impl TypedMetric<(QAInput, QAOutput), OneStepEcho> for FeedbackEcho {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = if prediction.answer == example.output.answer {
+        let score = if prediction.answer == example.1.answer {
             1.0
         } else {
             0.0
@@ -302,7 +302,7 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
     let mut module = OneStepEcho {
         predictor: Predict::<QA>::builder().instruction("seed").build(),
     };
-    let trainset = vec![Example::new(
+    let trainset = vec![(
         QAInput {
             question: "echo".to_string(),
         },
@@ -312,7 +312,7 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
     )];
     // A distinct valset keeps the trainset minibatch out of the engine's
     // rollout cache, so every phase below is a fresh, countable rollout.
-    let valset = vec![Example::new(
+    let valset = vec![(
         QAInput {
             question: "echo-val".to_string(),
         },
@@ -339,14 +339,14 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
 
 struct FeedbackForPredict;
 
-impl TypedMetric<QA, OneStepPredict> for FeedbackForPredict {
+impl TypedMetric<(QAInput, QAOutput), OneStepPredict> for FeedbackForPredict {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = if prediction.answer == example.output.answer {
+        let score = if prediction.answer == example.1.answer {
             1.0
         } else {
             0.0
@@ -389,7 +389,7 @@ async fn gepa_reflection_receives_component_subtrace() {
         .seed(7)
         .build();
 
-    let trainset = vec![Example::new(
+    let trainset = vec![(
         QAInput {
             question: "What is 2+2?".to_string(),
         },
@@ -400,7 +400,7 @@ async fn gepa_reflection_receives_component_subtrace() {
     // A distinct valset keeps the parent's trainset minibatch out of the
     // engine's rollout cache, so its rollout carries a fresh trace for the
     // reflector to read.
-    let valset = vec![Example::new(
+    let valset = vec![(
         QAInput {
             question: "What is 3+1?".to_string(),
         },
@@ -438,14 +438,14 @@ async fn gepa_reflection_receives_component_subtrace() {
 
 struct ExactMatch;
 
-impl TypedMetric<QA, OneStepPredict> for ExactMatch {
+impl TypedMetric<(QAInput, QAOutput), OneStepPredict> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = if prediction.answer == example.output.answer {
+        let score = if prediction.answer == example.1.answer {
             1.0
         } else {
             0.0
@@ -488,7 +488,7 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
         .seed(7)
         .build();
 
-    let trainset = vec![Example::new(
+    let trainset = vec![(
         QAInput {
             question: "What is 2+2?".to_string(),
         },

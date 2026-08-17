@@ -25,19 +25,43 @@ struct QA {
     answer: String,
 }
 
+/// A trainset row is a plain struct shaped like the *dataset*, not the
+/// signature. `#[derive(Example)]` wires it to `QA` by field name:
+/// `#[input]` fields form `QAInput`, `#[output]` fields form `QAOutput`, and
+/// unmarked fields are metric-only gold data the module never sees.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+#[example(QA)]
+struct HotpotRow {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+
+    /// HotpotQA's difficulty label — metric-only: it rides along in the row,
+    /// invisible to the LM, and the metric reads it directly.
+    level: String,
+}
+
 struct ExactMatchMetric;
 
-impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, Predict<QA>> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &HotpotRow,
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let expected = example.output.answer.trim().to_lowercase();
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
-        Ok(Eval::score((expected == actual) as u8 as f64))
+        // The row carries gold fields the module never saw: tag each score
+        // with the question's difficulty so misses can be sliced by level.
+        Ok(Eval::with_feedback(
+            (expected == actual) as u8 as f64,
+            format!("level={}", example.level),
+        ))
     }
 }
 
@@ -50,7 +74,9 @@ async fn main() -> Result<()> {
             .build()
             .await?);
 
-    let examples = DataLoader::load_hf::<QA>(
+    // Loaders are generic over the row struct: extra dataset columns land in
+    // the row's metric-only fields instead of being thrown away.
+    let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",

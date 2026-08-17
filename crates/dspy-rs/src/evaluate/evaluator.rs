@@ -1,10 +1,9 @@
 use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 
-use crate::core::Module;
-use crate::predictors::Example;
+use crate::core::{Module, ToInput};
 use crate::trace::{Trace, TraceMeta, TraceOutcome, capture_with_meta};
-use crate::{Predicted, Signature};
+use crate::Predicted;
 
 pub use crate::trace::Eval;
 
@@ -14,10 +13,11 @@ pub const DEFAULT_EVAL_CONCURRENCY: usize = 16;
 /// How you tell the optimizer what "good" means.
 ///
 /// Implement this to score a module's prediction against a ground-truth example.
-/// The trait is generic over `S` (signature) and `M` (module) so your metric sees
-/// fully typed data: the [`Example<S>`](crate::predictors::Example) with its typed
-/// input and expected output, and the [`Predicted<M::Output>`](crate::Predicted) which
-/// may be augmented (e.g. `WithReasoning<QAOutput>` for `ChainOfThought`).
+/// The trait is generic over `E` (the trainset row — any struct you like) and
+/// `M` (module), so your metric sees fully typed data: the row with *all* its
+/// fields (gold labels, metric-only context the module never sees), and the
+/// [`Predicted<M::Output>`](crate::Predicted) which may be augmented (e.g.
+/// `WithReasoning<QAOutput>` for `ChainOfThought`).
 ///
 /// The third argument is the rollout's execution [`Trace`] when the caller
 /// captured one (the evaluation loop always does; direct callers may pass
@@ -31,35 +31,40 @@ pub const DEFAULT_EVAL_CONCURRENCY: usize = 16;
 /// # Example
 ///
 /// ```ignore
+/// struct HotpotRow { question: String, answer: String, supporting_facts: Vec<String> }
+///
 /// struct ExactMatch;
 ///
-/// impl TypedMetric<QA, Predict<QA>> for ExactMatch {
+/// impl TypedMetric<HotpotRow, Predict<QA>> for ExactMatch {
 ///     async fn evaluate(
 ///         &self,
-///         example: &Example<QA>,
+///         example: &HotpotRow,
 ///         prediction: &Predicted<QAOutput>,
 ///         _trace: Option<&Trace>,
 ///     ) -> Result<Eval> {
-///         let score = if prediction.answer == example.output.answer { 1.0 } else { 0.0 };
+///         let score = if prediction.answer == example.answer { 1.0 } else { 0.0 };
 ///         Ok(Eval::score(score))
 ///     }
 /// }
 /// ```
 #[allow(async_fn_in_trait)]
-pub trait TypedMetric<S, M>: Send + Sync
+pub trait TypedMetric<E, M>: Send + Sync
 where
-    S: Signature,
-    M: Module<Input = S::Input>,
+    M: Module,
 {
     async fn evaluate(
         &self,
-        example: &Example<S>,
+        example: &E,
         prediction: &Predicted<M::Output>,
         trace: Option<&Trace>,
     ) -> Result<Eval>;
 }
 
 /// Runs a module on every example in a trainset and scores each with a metric.
+///
+/// The trainset is a slice of any row type `E` that projects into the module's
+/// input via [`ToInput`] — a `#[derive(Example)]` struct, an
+/// `(S::Input, S::Output)` tuple, or a hand-written impl.
 ///
 /// Returns one [`Eval`] per example, in trainset order. Individual LM call
 /// failures are propagated (not swallowed) — if any call fails, the whole evaluation
@@ -82,16 +87,15 @@ where
 ///
 /// - Any [`Module::call`] failure propagates immediately
 /// - Any [`TypedMetric::evaluate`] failure propagates immediately
-pub async fn evaluate_trainset<S, M, MT>(
+pub async fn evaluate_trainset<E, M, MT>(
     module: &M,
-    trainset: &[Example<S>],
+    trainset: &[E],
     metric: &MT,
 ) -> Result<Vec<Eval>>
 where
-    S: Signature,
-    S::Input: Clone,
-    M: Module<Input = S::Input>,
-    MT: TypedMetric<S, M>,
+    E: ToInput<M::Input> + Sync,
+    M: Module,
+    MT: TypedMetric<E, M>,
 {
     evaluate_trainset_with_concurrency(module, trainset, metric, DEFAULT_EVAL_CONCURRENCY).await
 }
@@ -100,17 +104,16 @@ where
 ///
 /// `max_concurrency` LM calls run in flight at once; results come back in trainset
 /// order. Use `1` for strictly sequential evaluation (e.g. rate-limited providers).
-pub async fn evaluate_trainset_with_concurrency<S, M, MT>(
+pub async fn evaluate_trainset_with_concurrency<E, M, MT>(
     module: &M,
-    trainset: &[Example<S>],
+    trainset: &[E],
     metric: &MT,
     max_concurrency: usize,
 ) -> Result<Vec<Eval>>
 where
-    S: Signature,
-    S::Input: Clone,
-    M: Module<Input = S::Input>,
-    MT: TypedMetric<S, M>,
+    E: ToInput<M::Input> + Sync,
+    M: Module,
+    MT: TypedMetric<E, M>,
 {
     evaluate_examples(module, trainset, metric, max_concurrency).await
 }
@@ -122,23 +125,22 @@ pub type Rollout = (Eval, Trace);
 /// Concurrency core shared by the public entry points and optimizers: runs each
 /// example under a capture scope, scores it with the metric (outside the scope),
 /// and records the eval into the trace outcome.
-pub(crate) async fn evaluate_examples_traced<'a, S, M, MT, I>(
+pub(crate) async fn evaluate_examples_traced<'a, E, M, MT, I>(
     module: &M,
     examples: I,
     metric: &MT,
     max_concurrency: usize,
 ) -> Result<Vec<Rollout>>
 where
-    S: Signature,
-    S::Input: Clone,
-    M: Module<Input = S::Input>,
-    MT: TypedMetric<S, M>,
-    I: IntoIterator<Item = &'a Example<S>>,
+    E: ToInput<M::Input> + Sync + 'a,
+    M: Module,
+    MT: TypedMetric<E, M>,
+    I: IntoIterator<Item = &'a E>,
 {
     stream::iter(examples.into_iter().map(|example| async move {
-        let input = example.input.clone();
+        let input = example.to_input();
         let meta = TraceMeta {
-            input: serde_json::to_value(&example.input)
+            input: serde_json::to_value(&input)
                 .ok()
                 .and_then(|value| match value {
                     serde_json::Value::Object(map) => Some(map),
@@ -169,18 +171,17 @@ where
 }
 
 /// [`evaluate_examples_traced`] projected down to the metric results.
-pub(crate) async fn evaluate_examples<'a, S, M, MT, I>(
+pub(crate) async fn evaluate_examples<'a, E, M, MT, I>(
     module: &M,
     examples: I,
     metric: &MT,
     max_concurrency: usize,
 ) -> Result<Vec<Eval>>
 where
-    S: Signature,
-    S::Input: Clone,
-    M: Module<Input = S::Input>,
-    MT: TypedMetric<S, M>,
-    I: IntoIterator<Item = &'a Example<S>>,
+    E: ToInput<M::Input> + Sync + 'a,
+    M: Module,
+    MT: TypedMetric<E, M>,
+    I: IntoIterator<Item = &'a E>,
 {
     Ok(
         evaluate_examples_traced(module, examples, metric, max_concurrency)

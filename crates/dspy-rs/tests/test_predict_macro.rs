@@ -112,11 +112,11 @@ async fn cot_macro_adds_reasoning_field() {
 
 #[test]
 fn generated_signature_types_are_referenceable() {
-    // The module namespace gives Example/metric code a nameable signature.
+    // The module namespace gives Demo/metric code a nameable signature.
     let input = answer::SigInput {
         question: "q".to_string(),
     };
-    let _example = dspy_rs::Example::<answer::Sig>::new(
+    let _demo = dspy_rs::Demo::<answer::Sig>::new(
         input,
         answer::SigOutput {
             answer: "a".to_string(),

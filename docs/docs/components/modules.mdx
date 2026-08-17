@@ -157,7 +157,7 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 | Construction | `ChainOfThought::<S>::new()` or `ChainOfThought::<S>::builder()` (a `PredictBuilder`, see [Predict](/docs/components/predict)). |
 | Output | `WithReasoning<S::Output>` with fields `reasoning: String` and `inner: S::Output`. |
 | Access | `Deref<Target = S::Output>`: `result.reasoning` is direct, `result.answer` resolves through deref. |
-| Demos | `Example<Augmented<S, Reasoning>>`; demos must include reasoning text. |
+| Demos | `Demo<Augmented<S, Reasoning>>`; demos must include reasoning text. |
 | Calls | Single LM call. Reasoning and answer are produced together, not across turns. |
 
 <Note>

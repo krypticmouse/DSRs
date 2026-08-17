@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Example, Eval, Module, Predicted, PredictError, Signature, TypedMetric,
+    CallMetadata, Eval, Module, Predicted, PredictError, Signature, TypedMetric,
     evaluate_trainset_with_concurrency,
 };
 
@@ -42,15 +42,15 @@ impl Module for SleepEcho {
 
 struct Exact;
 
-impl TypedMetric<EchoQA, SleepEcho> for Exact {
+impl TypedMetric<(EchoQAInput, EchoQAOutput), SleepEcho> for Exact {
     async fn evaluate(
         &self,
-        example: &Example<EchoQA>,
+        example: &(EchoQAInput, EchoQAOutput),
         prediction: &Predicted<EchoQAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
         Ok(Eval::score(
-            (prediction.answer == example.output.answer) as u8 as f64,
+            (prediction.answer == example.1.answer) as u8 as f64,
         ))
     }
 }
@@ -61,9 +61,9 @@ async fn main() -> Result<()> {
     const CONCURRENCY: usize = 16;
     const LATENCY_MS: f64 = 20.0;
 
-    let trainset: Vec<Example<EchoQA>> = (0..N)
+    let trainset: Vec<(EchoQAInput, EchoQAOutput)> = (0..N)
         .map(|i| {
-            Example::new(
+            (
                 EchoQAInput {
                     question: i.to_string(),
                 },

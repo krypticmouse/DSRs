@@ -59,10 +59,9 @@ use anyhow::Result;
 use anyhow::anyhow;
 use std::ops::ControlFlow;
 
-use crate::core::{DynPredictor, visit_named_predictors_mut};
+use crate::core::{DynPredictor, ToInput, visit_named_predictors_mut};
 use crate::evaluate::TypedMetric;
-use crate::predictors::Example;
-use crate::{Facet, Module, Signature};
+use crate::{Facet, Module};
 
 /// Tunes a module's [`Predict`](crate::Predict) leaves for better performance.
 ///
@@ -87,17 +86,16 @@ use crate::{Facet, Module, Signature};
 pub trait Optimizer {
     type Report;
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>;
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>;
 }
 
 /// Returns the dotted-path names of all [`Predict`](crate::Predict) leaves in a

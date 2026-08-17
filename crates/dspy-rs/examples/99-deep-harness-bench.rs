@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use dspy_rs::{
-    Example, LM, LMClient, Eval, Module, Predict, PredictError, Predicted,
+    Demo, LM, LMClient, Eval, Module, Predict, PredictError, Predicted,
     Signature, TestCompletionModel, TypedMetric, evaluate_trainset_with_concurrency,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
@@ -197,10 +197,10 @@ impl Module for LayeredDag {
 
 struct Exact;
 
-impl TypedMetric<Step, Chain> for Exact {
+impl TypedMetric<(StepInput, StepOutput), Chain> for Exact {
     async fn evaluate(
         &self,
-        _example: &Example<Step>,
+        _example: &(StepInput, StepOutput),
         prediction: &Predicted<StepOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
@@ -333,7 +333,7 @@ async fn main() -> Result<()> {
         .await;
         let mut builder = Predict::<Step>::builder().lm(lm.clone());
         for i in 0..demo_count {
-            builder = builder.demo(Example::new(
+            builder = builder.demo(Demo::new(
                 StepInput {
                     text: format!("Demo input {i} with a realistic sentence of content."),
                 },
@@ -402,9 +402,9 @@ async fn main() -> Result<()> {
     report("tool loop, 16 tool iterations", iters, 17, start);
 
     // --- 10. Concurrent eval of a deep pipeline ----------------------------
-    let examples: Vec<Example<Step>> = (0..64)
+    let examples: Vec<(StepInput, StepOutput)> = (0..64)
         .map(|i| {
-            Example::new(
+            (
                 StepInput {
                     text: i.to_string(),
                 },

@@ -67,10 +67,10 @@ use crate::core::{ModuleState, PredictState, StateUpdate};
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval, TypedMetric};
 use crate::optimizer::pareto::ParetoStatistics;
 use crate::optimizer::with_named_predictor;
-use crate::predictors::Example;
 use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
 use crate::utils::hash::StableHasher;
-use crate::{Facet, LmUsage, Module, Signature};
+use crate::core::ToInput;
+use crate::{Facet, LmUsage, Module};
 
 /// Score tolerance for Pareto win/tie comparisons (matches the historical
 /// `ParetoFrontier` tolerance).
@@ -684,8 +684,8 @@ struct EngineCheckpoint {
 /// register [`Candidate`]s and call [`evaluate`](Self::evaluate) /
 /// [`evaluate_gated`](Self::evaluate_gated); the engine handles application,
 /// fan-out, caching, accounting, and bookkeeping.
-pub struct EvalEngine<'m, S: Signature, MT> {
-    examples: Vec<Example<S>>,
+pub struct EvalEngine<'m, E, MT> {
+    examples: Vec<E>,
     example_uids: Vec<u64>,
     metric: &'m MT,
     config: EngineConfig,
@@ -696,15 +696,12 @@ pub struct EvalEngine<'m, S: Signature, MT> {
     spend: Spend,
 }
 
-impl<'m, S, MT> EvalEngine<'m, S, MT>
+impl<'m, E, MT> EvalEngine<'m, E, MT>
 where
-    S: Signature,
+    E: Serialize,
 {
-    pub fn new(examples: Vec<Example<S>>, metric: &'m MT, config: EngineConfig) -> Self {
-        let example_uids = examples
-            .iter()
-            .map(|example| canonical_hash(&(&example.input, &example.output)))
-            .collect();
+    pub fn new(examples: Vec<E>, metric: &'m MT, config: EngineConfig) -> Self {
+        let example_uids = examples.iter().map(canonical_hash).collect();
         let matrix = ScoreMatrix::new(examples.len());
         Self {
             examples,
@@ -723,7 +720,7 @@ where
     /// that `examples` matches the checkpointed set. Completed rollouts are
     /// served from the restored cache instead of re-executing.
     pub fn resume(
-        examples: Vec<Example<S>>,
+        examples: Vec<E>,
         metric: &'m MT,
         config: EngineConfig,
         checkpoint: &str,
@@ -764,7 +761,7 @@ where
         .map_err(|err| anyhow!("failed to serialize engine checkpoint: {err}"))
     }
 
-    pub fn examples(&self) -> &[Example<S>] {
+    pub fn examples(&self) -> &[E] {
         &self.examples
     }
 
@@ -846,9 +843,9 @@ where
         subset: Option<&[usize]>,
     ) -> Result<EvalOutcome>
     where
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let candidate_hash = *self
             .candidate_hashes
@@ -970,9 +967,9 @@ where
         threshold: f64,
     ) -> Result<GateOutcome>
     where
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let minibatch_eval = match self.evaluate(module, candidate, Some(minibatch)).await? {
             EvalOutcome::Complete(eval) => eval,
@@ -1006,18 +1003,18 @@ where
         candidate_hash: u64,
     ) -> Result<Vec<(usize, Eval, Trace)>>
     where
-        S::Input: Clone,
-        M: Module<Input = S::Input>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + Sync,
+        M: Module,
+        MT: TypedMetric<E, M>,
     {
         let metric = self.metric;
         stream::iter(pending.iter().map(|&idx| {
             let example = &self.examples[idx];
             async move {
-                let input = example.input.clone();
+                let input = example.to_input();
                 let meta = TraceMeta {
                     candidate_hash: Some(candidate_hash),
-                    input: json_object(serde_json::to_value(&example.input)),
+                    input: json_object(serde_json::to_value(&input)),
                     ..TraceMeta::default()
                 };
                 let started = Instant::now();

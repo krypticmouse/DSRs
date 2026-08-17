@@ -65,14 +65,16 @@ let optimizer = MIPROv2::builder()
     .minibatch_size(25)
     .build();
 
-// Typed metric implementing TypedMetric<MySignature, MyModule>
+// Typed metric implementing TypedMetric<Row, MyModule> for your trainset row type
 let metric = ExactMatchMetric;
 
 // Optimize your module
 optimizer.compile(&mut module, train_examples, &metric).await?;
 ```
 
-The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/components/evaluation) for the trait.
+The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`, where `example` is your full trainset row. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/components/evaluation) for the trait.
+
+`train_examples` is `Vec<Row>` for any row type implementing `ToInput` toward the module's input — a `#[derive(Example)]` struct or `(Input, Output)` tuples; see [Data](/docs/components/data).
 
 ### Typed data loading
 

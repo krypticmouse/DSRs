@@ -9,9 +9,9 @@ use crate::optimizer::engine::{
 };
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
-use crate::predictors::Example;
 use crate::trace::Trace;
-use crate::{Facet, Module, Signature, SignatureSchema};
+use crate::core::ToInput;
+use crate::{Facet, Module, SignatureSchema};
 
 /// The whole-program score recorded on a rollout trace, if a metric ran.
 fn trace_score(trace: &Trace) -> Option<f64> {
@@ -244,17 +244,16 @@ impl MIPROv2 {
 impl Optimizer for MIPROv2 {
     type Report = ();
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let predictor_names = predictor_names(module)?;
 
@@ -419,10 +418,12 @@ mod tests {
 
     struct AlwaysFailMetric;
 
-    impl TypedMetric<MiproStateSig, MiproStateModule> for AlwaysFailMetric {
+    type MiproRow = (MiproStateSigInput, MiproStateSigOutput);
+
+    impl TypedMetric<MiproRow, MiproStateModule> for AlwaysFailMetric {
         async fn evaluate(
             &self,
-            _example: &Example<MiproStateSig>,
+            _example: &MiproRow,
             _prediction: &Predicted<MiproStateSigOutput>,
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
@@ -430,8 +431,8 @@ mod tests {
         }
     }
 
-    fn trainset() -> Vec<Example<MiproStateSig>> {
-        vec![Example::new(
+    fn trainset() -> Vec<MiproRow> {
+        vec![(
             MiproStateSigInput {
                 prompt: "one".to_string(),
             },
@@ -455,7 +456,7 @@ mod tests {
         };
 
         let err = optimizer
-            .compile::<MiproStateSig, _, _>(&mut module, trainset(), &AlwaysFailMetric)
+            .compile(&mut module, trainset(), &AlwaysFailMetric)
             .await
             .expect_err("candidate evaluation should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));

@@ -3,7 +3,7 @@
 //! Typed ingestion is first-class:
 //!
 //! - [`DataLoader`] provides `load_*` methods that return
-//!   [`Example<S>`](crate::predictors::Example) directly.
+//!   plain row structs directly.
 //! - Typed examples flow directly into evaluation and optimizer APIs.
 //!
 //! There is no untyped row type: custom mappers work with [`RowRecord`]

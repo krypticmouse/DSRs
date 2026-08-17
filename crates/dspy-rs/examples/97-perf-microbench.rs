@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use dspy_rs::{
-    Chat, ChatAdapter, Example, LM, LMClient, Message, Predict, Signature, SignatureSchema,
+    Chat, ChatAdapter, Demo, LM, LMClient, Message, Predict, Signature, SignatureSchema,
     TestCompletionModel, configure, fx,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
@@ -140,8 +140,8 @@ fn bench_input() -> BenchQAInput {
     }
 }
 
-fn demo(idx: usize) -> Example<BenchQA> {
-    Example::new(
+fn demo(idx: usize) -> Demo<BenchQA> {
+    Demo::new(
         BenchQAInput {
             question: format!("Demo question {idx}?"),
             context: format!("Demo context {idx} with enough text to look like a real retrieval chunk for the benchmark."),

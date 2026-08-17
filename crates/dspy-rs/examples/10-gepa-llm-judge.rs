@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, Eval, GEPA, LM, Module, Optimizer, Predict,
+    Eval, GEPA, LM, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
@@ -28,6 +28,10 @@ struct MathWordProblem {
     #[output]
     answer: String,
 }
+
+/// A labeled trainset row: `(input, gold output)` tuples are rows out of the
+/// box — no dedicated struct needed for a small inline trainset.
+type MathRow = (MathWordProblemInput, MathWordProblemOutput);
 
 #[derive(Signature, Clone, Debug)]
 struct MathJudge {
@@ -72,15 +76,16 @@ struct LlmJudgeMetric {
     judge: Predict<MathJudge>,
 }
 
-impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
+impl TypedMetric<MathRow, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
-        example: &Example<MathWordProblem>,
+        example: &MathRow,
         prediction: &Predicted<MathWordProblemOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let problem = example.input.problem.clone();
-        let expected = example.output.answer.clone();
+        let (input, gold) = example;
+        let problem = input.problem.clone();
+        let expected = gold.answer.clone();
 
         let student_answer = prediction.answer.clone();
         let student_reasoning = prediction.reasoning.clone();
@@ -133,8 +138,8 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
     }
 }
 
-fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordProblem> {
-    Example::new(
+fn training_example(problem: &str, expected_answer: &str) -> MathRow {
+    (
         MathWordProblemInput {
             problem: problem.to_string(),
         },

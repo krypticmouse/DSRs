@@ -14,9 +14,9 @@ use crate::optimizer::engine::{
 };
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::{Optimizer, predictor_names};
-use crate::predictors::Example;
 use crate::trace::Trace;
-use crate::{Facet, Module, Signature};
+use crate::core::ToInput;
+use crate::{Facet, Module};
 
 /// Few-shot demo bootstrapper — the simplest complete optimizer.
 ///
@@ -82,17 +82,16 @@ pub struct BootstrapReport {
 impl Optimizer for BootstrapFewShot {
     type Report = BootstrapReport;
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let names = predictor_names(module)?;
         if names.is_empty() {

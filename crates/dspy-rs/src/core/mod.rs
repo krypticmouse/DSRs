@@ -22,6 +22,7 @@
 
 pub(crate) mod dyn_predictor;
 mod errors;
+pub mod example;
 pub mod lm;
 pub mod module;
 mod module_ext;
@@ -34,6 +35,7 @@ mod state;
 pub(crate) use dyn_predictor::*;
 pub use dyn_predictor::PredictState;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use example::{ToInput, ToOutput};
 pub use state::ModuleState;
 pub use lm::*;
 pub use module::*;

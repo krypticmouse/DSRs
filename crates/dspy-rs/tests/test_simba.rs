@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Eval, Example, LM, LMClient, Module, ModuleState, Optimizer, Predict, PredictError, Predicted,
-    SIMBA, Signature, SimbaMove, TestCompletionModel, TypedMetric,
+    Eval, LM, LMClient, Module, ModuleState, Optimizer, Predict, PredictError, Predicted, SIMBA,
+    Signature, SimbaMove, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -40,14 +40,14 @@ impl Module for SimbaModule {
 
 struct ExactMatch;
 
-impl TypedMetric<SimbaSig, SimbaModule> for ExactMatch {
+impl TypedMetric<(SimbaSigInput, SimbaSigOutput), SimbaModule> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<SimbaSig>,
+        example: &(SimbaSigInput, SimbaSigOutput),
         prediction: &Predicted<SimbaSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = (prediction.answer == example.output.answer) as u8 as f64;
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
         Ok(Eval::with_feedback(score, "exact-match"))
     }
 }
@@ -84,10 +84,10 @@ async fn simba_module(client: TestCompletionModel) -> SimbaModule {
     }
 }
 
-fn trainset(n: usize) -> Vec<Example<SimbaSig>> {
+fn trainset(n: usize) -> Vec<(SimbaSigInput, SimbaSigOutput)> {
     (0..n)
         .map(|idx| {
-            Example::new(
+            (
                 SimbaSigInput {
                     prompt: idx.to_string(),
                 },
@@ -123,7 +123,7 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
         .build();
 
     let report = simba
-        .compile::<SimbaSig, _, _>(&mut module, trainset(3), &ExactMatch)
+        .compile(&mut module, trainset(3), &ExactMatch)
         .await
         .expect("SIMBA should succeed on canned responses");
 
@@ -179,7 +179,7 @@ async fn append_rule_move_uses_the_reflection_lm() {
         .build();
 
     let report = simba
-        .compile::<SimbaSig, _, _>(&mut module, trainset(2), &ExactMatch)
+        .compile(&mut module, trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -222,7 +222,7 @@ async fn append_rule_falls_back_to_metric_feedback_without_prompt_model() {
         .build();
 
     let report = simba
-        .compile::<SimbaSig, _, _>(&mut module, trainset(2), &ExactMatch)
+        .compile(&mut module, trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -262,7 +262,7 @@ async fn gate_rejection_leaves_the_module_untouched() {
         .build();
 
     let report = simba
-        .compile::<SimbaSig, _, _>(&mut module, trainset(2), &ExactMatch)
+        .compile(&mut module, trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -300,7 +300,7 @@ async fn budget_stops_the_ascent_cleanly() {
         .build();
 
     let report = simba
-        .compile::<SimbaSig, _, _>(&mut module, trainset(2), &ExactMatch)
+        .compile(&mut module, trainset(2), &ExactMatch)
         .await
         .unwrap();
 

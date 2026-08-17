@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use anyhow::Result;
 use dspy_rs::{
-    Budget, CallMetadata, Candidate, EngineConfig, Eval, EvalEngine, EvalOutcome, Example,
-    GateOutcome, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, Signature,
+    Budget, CallMetadata, Candidate, EngineConfig, Eval, EvalEngine, EvalOutcome, GateOutcome, LM,
+    LMClient, Module, ModuleState, Predict, PredictError, Predicted, Signature,
     TestCompletionModel, TypedMetric, apply_candidate, restore_candidate,
 };
 use rig::completion::AssistantContent;
@@ -26,10 +26,10 @@ struct EngSig {
     answer: String,
 }
 
-fn trainset(n: usize) -> Vec<Example<EngSig>> {
+fn trainset(n: usize) -> Vec<(EngSigInput, EngSigOutput)> {
     (0..n)
         .map(|idx| {
-            Example::new(
+            (
                 EngSigInput {
                     prompt: idx.to_string(),
                 },
@@ -184,17 +184,17 @@ async fn lm_module(client: TestCompletionModel) -> LmModule {
 /// Deterministic per-example score: the prompt parsed as an index, over 10.
 struct IndexMetric;
 
-impl<M> TypedMetric<EngSig, M> for IndexMetric
+impl<M> TypedMetric<(EngSigInput, EngSigOutput), M> for IndexMetric
 where
     M: Module<Input = EngSigInput, Output = EngSigOutput>,
 {
     async fn evaluate(
         &self,
-        example: &Example<EngSig>,
+        example: &(EngSigInput, EngSigOutput),
         _prediction: &Predicted<EngSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let idx: f64 = example.input.prompt.parse().unwrap_or(0.0);
+        let idx: f64 = example.0.prompt.parse().unwrap_or(0.0);
         Ok(Eval::with_feedback(idx / 10.0, format!("idx={idx}")))
     }
 }
@@ -202,17 +202,17 @@ where
 /// Exact-match against the expected answer — for LM-backed modules.
 struct ExactMatch;
 
-impl<M> TypedMetric<EngSig, M> for ExactMatch
+impl<M> TypedMetric<(EngSigInput, EngSigOutput), M> for ExactMatch
 where
     M: Module<Input = EngSigInput, Output = EngSigOutput>,
 {
     async fn evaluate(
         &self,
-        example: &Example<EngSig>,
+        example: &(EngSigInput, EngSigOutput),
         prediction: &Predicted<EngSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = (prediction.answer == example.output.answer) as u8 as f64;
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
         Ok(Eval::with_feedback(score, "exact-match"))
     }
 }
@@ -223,13 +223,13 @@ struct HashKeyedMetric {
     scores: HashMap<u64, f64>,
 }
 
-impl<M> TypedMetric<EngSig, M> for HashKeyedMetric
+impl<M> TypedMetric<(EngSigInput, EngSigOutput), M> for HashKeyedMetric
 where
     M: Module<Input = EngSigInput, Output = EngSigOutput>,
 {
     async fn evaluate(
         &self,
-        _example: &Example<EngSig>,
+        _example: &(EngSigInput, EngSigOutput),
         _prediction: &Predicted<EngSigOutput>,
         trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
@@ -523,7 +523,7 @@ async fn checkpoint_resume_skips_completed_rollouts() {
     assert_eq!(engine.matrix().mean(idx), Some(1.0));
 
     // A checkpoint against a different example set is rejected.
-    match EvalEngine::<EngSig, ExactMatch>::resume(
+    match EvalEngine::<(EngSigInput, EngSigOutput), ExactMatch>::resume(
         trainset(4),
         &metric,
         EngineConfig::default(),
@@ -665,7 +665,7 @@ async fn auxiliary_charges_count_against_the_budget() {
     // Charged spend survives checkpoint/resume.
     let checkpoint = engine.checkpoint().unwrap();
     let resumed =
-        EvalEngine::<EngSig, IndexMetric>::resume(trainset(3), &metric, *engine.config(), &checkpoint)
+        EvalEngine::<(EngSigInput, EngSigOutput), IndexMetric>::resume(trainset(3), &metric, *engine.config(), &checkpoint)
             .unwrap();
     assert_eq!(resumed.spend().lm_calls, 5);
     assert_eq!(resumed.spend().metric_calls, 3);
@@ -681,7 +681,7 @@ async fn checkpoint_with_unknown_version_is_rejected() {
     doctored["version"] = serde_json::json!(99);
     let doctored = serde_json::to_string(&doctored).unwrap();
 
-    match EvalEngine::<EngSig, IndexMetric>::resume(
+    match EvalEngine::<(EngSigInput, EngSigOutput), IndexMetric>::resume(
         trainset(2),
         &metric,
         EngineConfig::default(),

@@ -7,8 +7,8 @@ use crate::optimizer::engine::{
     Budget, Candidate, EngineConfig, EvalEngine, EvalOutcome, apply_candidate,
 };
 use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
-use crate::predictors::Example;
-use crate::{Facet, Module, Signature};
+use crate::core::ToInput;
+use crate::{Facet, Module};
 
 /// Breadth-first instruction optimizer.
 ///
@@ -111,17 +111,16 @@ impl COPRO {
 impl Optimizer for COPRO {
     type Report = ();
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         if self.breadth <= 1 {
             return Err(anyhow!("breadth must be greater than 1"));
@@ -228,10 +227,12 @@ mod tests {
 
     struct AlwaysFailMetric;
 
-    impl TypedMetric<CoproStateSig, CoproStateModule> for AlwaysFailMetric {
+    type CoproRow = (CoproStateSigInput, CoproStateSigOutput);
+
+    impl TypedMetric<CoproRow, CoproStateModule> for AlwaysFailMetric {
         async fn evaluate(
             &self,
-            _example: &Example<CoproStateSig>,
+            _example: &CoproRow,
             _prediction: &Predicted<CoproStateSigOutput>,
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
@@ -239,8 +240,8 @@ mod tests {
         }
     }
 
-    fn trainset() -> Vec<Example<CoproStateSig>> {
-        vec![Example::new(
+    fn trainset() -> Vec<CoproRow> {
+        vec![(
             CoproStateSigInput {
                 prompt: "one".to_string(),
             },
@@ -260,7 +261,7 @@ mod tests {
         };
 
         let err = optimizer
-            .compile::<CoproStateSig, _, _>(&mut module, trainset(), &AlwaysFailMetric)
+            .compile(&mut module, trainset(), &AlwaysFailMetric)
             .await
             .expect_err("candidate scoring should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));

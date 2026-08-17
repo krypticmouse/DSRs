@@ -4,9 +4,9 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Example, Eval, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy,
-    average_score, evaluate_trainset,
+    COPRO, CallMetadata, DataLoader, Eval, Example, Module, Optimizer, Predict, PredictError,
+    Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score,
+    evaluate_trainset,
 };
 use parquet::arrow::ArrowWriter;
 use std::collections::HashMap;
@@ -24,12 +24,25 @@ struct LoaderSig {
     answer: String,
 }
 
-#[derive(Signature, Clone, Debug)]
-struct NumericSig {
+/// Loader rows are plain structs; `#[derive(Example)]` wires QARow to LoaderSig
+/// so loaded rows feed straight into the evaluator/optimizer paths.
+#[derive(Example, Clone, Debug, facet::Facet, serde::Serialize, serde::Deserialize)]
+#[facet(crate = facet)]
+#[example(LoaderSig)]
+struct QARow {
     #[input]
-    value: i64,
+    question: String,
 
     #[output]
+    answer: String,
+}
+
+#[derive(Clone, Debug, facet::Facet, serde::Deserialize)]
+#[facet(crate = facet)]
+struct NumericRow {
+    #[allow(dead_code)]
+    value: i64,
+
     doubled: i64,
 }
 
@@ -60,14 +73,14 @@ impl Module for EchoModule {
 
 struct ExactMatch;
 
-impl TypedMetric<LoaderSig, EchoModule> for ExactMatch {
+impl TypedMetric<QARow, EchoModule> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<LoaderSig>,
+        example: &QARow,
         prediction: &Predicted<LoaderSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = (example.output.answer == prediction.answer) as u8 as f64;
+        let score = (example.answer == prediction.answer) as u8 as f64;
         Ok(Eval::score(score))
     }
 }
@@ -120,7 +133,7 @@ fn csv_typed_success_path() -> Result<()> {
         "question,answer\nWhat is 2+2?,4\nCapital of France?,Paris\n",
     )?;
 
-    let examples = DataLoader::load_csv::<LoaderSig>(
+    let examples = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -128,8 +141,8 @@ fn csv_typed_success_path() -> Result<()> {
     )?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[0].input.question, "What is 2+2?");
-    assert_eq!(examples[0].output.answer, "4");
+    assert_eq!(examples[0].question, "What is 2+2?");
+    assert_eq!(examples[0].answer, "4");
     Ok(())
 }
 
@@ -142,7 +155,7 @@ fn csv_unknown_extra_columns_ignored_by_default() -> Result<()> {
         "question,answer,notes\nWhat is 2+2?,4,math\nCapital of France?,Paris,geo\n",
     )?;
 
-    let examples = DataLoader::load_csv::<LoaderSig>(
+    let examples = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -159,7 +172,7 @@ fn csv_unknown_columns_error_when_policy_is_error() -> Result<()> {
     let path = dir.path().join("train.csv");
     write_file(&path, "question,answer,notes\nWhat is 2+2?,4,math\n")?;
 
-    let err = DataLoader::load_csv::<LoaderSig>(
+    let err = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -180,7 +193,7 @@ fn csv_missing_required_input_field_errors() -> Result<()> {
     let path = dir.path().join("train.csv");
     write_file(&path, "answer\n4\n")?;
 
-    let err = DataLoader::load_csv::<LoaderSig>(
+    let err = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -198,7 +211,7 @@ fn csv_missing_required_output_field_errors() -> Result<()> {
     let path = dir.path().join("train.csv");
     write_file(&path, "question\nWhat is 2+2?\n")?;
 
-    let err = DataLoader::load_csv::<LoaderSig>(
+    let err = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -216,26 +229,22 @@ fn csv_mapper_overload_success() -> Result<()> {
     let path = dir.path().join("train.csv");
     write_file(&path, "q,a\nWhat is 2+2?,4\n")?;
 
-    let examples = DataLoader::load_csv_with::<LoaderSig, _>(
+    let examples = DataLoader::load_csv_with::<QARow, _>(
         path.to_str().unwrap(),
         ',',
         true,
         TypedLoadOptions::default(),
         |row| {
-            Ok(Example::new(
-                LoaderSigInput {
-                    question: row.get::<String>("q")?,
-                },
-                LoaderSigOutput {
-                    answer: row.get::<String>("a")?,
-                },
-            ))
+            Ok(QARow {
+                question: row.get::<String>("q")?,
+                answer: row.get::<String>("a")?,
+            })
         },
     )?;
 
     assert_eq!(examples.len(), 1);
-    assert_eq!(examples[0].input.question, "What is 2+2?");
-    assert_eq!(examples[0].output.answer, "4");
+    assert_eq!(examples[0].question, "What is 2+2?");
+    assert_eq!(examples[0].answer, "4");
     Ok(())
 }
 
@@ -245,7 +254,7 @@ fn csv_mapper_overload_error_includes_row_index() -> Result<()> {
     let path = dir.path().join("train.csv");
     write_file(&path, "q,a\nWhat is 2+2?,4\n")?;
 
-    let err = DataLoader::load_csv_with::<LoaderSig, _>(
+    let err = DataLoader::load_csv_with::<QARow, _>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -268,14 +277,14 @@ fn json_array_typed_success() -> Result<()> {
         r#"[{"question":"What is 2+2?","answer":"4"},{"question":"Capital of France?","answer":"Paris"}]"#,
     )?;
 
-    let examples = DataLoader::load_json::<LoaderSig>(
+    let examples = DataLoader::load_json::<QARow>(
         path.to_str().unwrap(),
         false,
         TypedLoadOptions::default(),
     )?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[1].output.answer, "Paris");
+    assert_eq!(examples[1].answer, "Paris");
     Ok(())
 }
 
@@ -288,25 +297,21 @@ fn json_mapper_overload_success() -> Result<()> {
         r#"[{"prompt":"What is 2+2?","gold":"4"},{"prompt":"Capital of France?","gold":"Paris"}]"#,
     )?;
 
-    let examples = DataLoader::load_json_with::<LoaderSig, _>(
+    let examples = DataLoader::load_json_with::<QARow, _>(
         path.to_str().unwrap(),
         false,
         TypedLoadOptions::default(),
         |row| {
-            Ok(Example::new(
-                LoaderSigInput {
-                    question: row.get::<String>("prompt")?,
-                },
-                LoaderSigOutput {
-                    answer: row.get::<String>("gold")?,
-                },
-            ))
+            Ok(QARow {
+                question: row.get::<String>("prompt")?,
+                answer: row.get::<String>("gold")?,
+            })
         },
     )?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[0].input.question, "What is 2+2?");
-    assert_eq!(examples[1].output.answer, "Paris");
+    assert_eq!(examples[0].question, "What is 2+2?");
+    assert_eq!(examples[1].answer, "Paris");
     Ok(())
 }
 
@@ -316,7 +321,7 @@ fn json_mapper_overload_error_includes_row_index() -> Result<()> {
     let path = dir.path().join("train.json");
     write_file(&path, r#"[{"question":"What is 2+2?","answer":"4"}]"#)?;
 
-    let err = DataLoader::load_json_with::<LoaderSig, _>(
+    let err = DataLoader::load_json_with::<QARow, _>(
         path.to_str().unwrap(),
         false,
         TypedLoadOptions::default(),
@@ -340,14 +345,14 @@ fn jsonl_typed_success() -> Result<()> {
 "#,
     )?;
 
-    let examples = DataLoader::load_json::<LoaderSig>(
+    let examples = DataLoader::load_json::<QARow>(
         path.to_str().unwrap(),
         true,
         TypedLoadOptions::default(),
     )?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[0].input.question, "What is 2+2?");
+    assert_eq!(examples[0].question, "What is 2+2?");
     Ok(())
 }
 
@@ -357,7 +362,7 @@ fn json_type_mismatch_errors() -> Result<()> {
     let path = dir.path().join("bad.json");
     write_file(&path, r#"[{"value":"not-an-int","doubled":2}]"#)?;
 
-    let err = DataLoader::load_json::<NumericSig>(
+    let err = DataLoader::load_json::<NumericRow>(
         path.to_str().unwrap(),
         false,
         TypedLoadOptions::default(),
@@ -378,7 +383,7 @@ fn jsonl_type_mismatch_errors() -> Result<()> {
 "#,
     )?;
 
-    let err = DataLoader::load_json::<NumericSig>(
+    let err = DataLoader::load_json::<NumericRow>(
         path.to_str().unwrap(),
         true,
         TypedLoadOptions::default(),
@@ -400,10 +405,10 @@ fn parquet_typed_success_path() -> Result<()> {
     )?;
 
     let examples =
-        DataLoader::load_parquet::<LoaderSig>(path.to_str().unwrap(), TypedLoadOptions::default())?;
+        DataLoader::load_parquet::<QARow>(path.to_str().unwrap(), TypedLoadOptions::default())?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[1].output.answer, "Paris");
+    assert_eq!(examples[1].answer, "Paris");
     Ok(())
 }
 
@@ -413,24 +418,20 @@ fn parquet_mapper_overload_success() -> Result<()> {
     let path = dir.path().join("train.parquet");
     write_qa_parquet(&path, &["Q1"], &["A1"])?;
 
-    let examples = DataLoader::load_parquet_with::<LoaderSig, _>(
+    let examples = DataLoader::load_parquet_with::<QARow, _>(
         path.to_str().unwrap(),
         TypedLoadOptions::default(),
         |row| {
-            Ok(Example::new(
-                LoaderSigInput {
-                    question: row.get::<String>("question")?,
-                },
-                LoaderSigOutput {
-                    answer: row.get::<String>("answer")?,
-                },
-            ))
+            Ok(QARow {
+                question: row.get::<String>("question")?,
+                answer: row.get::<String>("answer")?,
+            })
         },
     )?;
 
     assert_eq!(examples.len(), 1);
-    assert_eq!(examples[0].input.question, "Q1");
-    assert_eq!(examples[0].output.answer, "A1");
+    assert_eq!(examples[0].question, "Q1");
+    assert_eq!(examples[0].answer, "A1");
     Ok(())
 }
 
@@ -440,13 +441,13 @@ fn hf_typed_from_parquet_success_path() -> Result<()> {
     let path = dir.path().join("train.parquet");
     write_qa_parquet(&path, &["Q1", "Q2"], &["A1", "A2"])?;
 
-    let examples = DataLoader::load_hf_from_parquet::<LoaderSig>(
+    let examples = DataLoader::load_hf_from_parquet::<QARow>(
         vec![PathBuf::from(&path)],
         TypedLoadOptions::default(),
     )?;
 
     assert_eq!(examples.len(), 2);
-    assert_eq!(examples[0].output.answer, "A1");
+    assert_eq!(examples[0].answer, "A1");
     Ok(())
 }
 
@@ -460,7 +461,7 @@ fn typed_loader_field_remap_supports_input_and_output() -> Result<()> {
     field_map.insert("question".to_string(), "prompt".to_string());
     field_map.insert("answer".to_string(), "completion".to_string());
 
-    let examples = DataLoader::load_csv::<LoaderSig>(
+    let examples = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -471,8 +472,8 @@ fn typed_loader_field_remap_supports_input_and_output() -> Result<()> {
     )?;
 
     assert_eq!(examples.len(), 1);
-    assert_eq!(examples[0].input.question, "What is 2+2?");
-    assert_eq!(examples[0].output.answer, "4");
+    assert_eq!(examples[0].question, "What is 2+2?");
+    assert_eq!(examples[0].answer, "4");
     Ok(())
 }
 
@@ -482,13 +483,13 @@ fn parquet_numeric_round_trip_for_typed_conversion() -> Result<()> {
     let path = dir.path().join("numeric.parquet");
     write_numeric_parquet(&path, &[1, 2, 3], &[2, 4, 6])?;
 
-    let examples = DataLoader::load_parquet::<NumericSig>(
+    let examples = DataLoader::load_parquet::<NumericRow>(
         path.to_str().unwrap(),
         TypedLoadOptions::default(),
     )?;
 
     assert_eq!(examples.len(), 3);
-    assert_eq!(examples[2].output.doubled, 6);
+    assert_eq!(examples[2].doubled, 6);
     Ok(())
 }
 
@@ -498,7 +499,7 @@ async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()>
     let path = dir.path().join("train.csv");
     write_file(&path, "question,answer\none,one\ntwo,two\n")?;
 
-    let trainset = DataLoader::load_csv::<LoaderSig>(
+    let trainset = DataLoader::load_csv::<QARow>(
         path.to_str().unwrap(),
         ',',
         true,
@@ -514,7 +515,7 @@ async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()>
 
     let optimizer = COPRO::builder().breadth(2).depth(1).build();
     optimizer
-        .compile::<LoaderSig, _, _>(&mut module, trainset, &metric)
+        .compile(&mut module, trainset, &metric)
         .await?;
 
     Ok(())

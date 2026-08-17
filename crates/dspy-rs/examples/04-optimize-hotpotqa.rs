@@ -26,6 +26,18 @@ struct QA {
     answer: String,
 }
 
+/// The trainset row, shaped like the dataset and wired to `QA` by field name.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+#[example(QA)]
+struct HotpotRow {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
 #[derive(Builder, facet::Facet)]
 #[facet(crate = facet)]
 struct QAModule {
@@ -44,14 +56,14 @@ impl Module for QAModule {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QA, QAModule> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, QAModule> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &HotpotRow,
         prediction: &Predicted<QAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let expected = example.output.answer.trim().to_lowercase();
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(Eval::score((expected == actual) as u8 as f64))
     }
@@ -66,7 +78,7 @@ async fn main() -> Result<()> {
             .build()
             .await?);
 
-    let examples = DataLoader::load_hf::<QA>(
+    let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",

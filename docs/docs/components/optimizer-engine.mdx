@@ -13,13 +13,13 @@ The optimizer engine is the shared evaluation core under every optimizer. Strate
 
 Both lanes share the same `EngineConfig`, `Budget`, `Spend`, `RolloutCache`, `ScoreMatrix`, Pareto bookkeeping, outcome types, and minibatch gate. All items on this page are exported from the crate root except where a feature gate is noted.
 
-## `EvalEngine<'m, S: Signature, MT>`
+## `EvalEngine<'m, E, MT>`
 
-Owns the example set, the candidate registry, the score matrix, the rollout cache, and the budget meter. Strategies register candidates and call `evaluate` or `evaluate_gated`; the engine handles application, fan-out, caching, accounting, and bookkeeping.
+Owns the example set, the candidate registry, the score matrix, the rollout cache, and the budget meter. `E` is the trainset [row type](/docs/components/data); construction requires `E: Serialize`. Strategies register candidates and call `evaluate` or `evaluate_gated`; the engine handles application, fan-out, caching, accounting, and bookkeeping.
 
 | Method | What it does |
 |---|---|
-| `new(examples, metric, config)` | Builds an engine over `Vec<Example<S>>`, a `&MT` metric, and an `EngineConfig`. Example uids are content hashes of `(input, output)`. |
+| `new(examples, metric, config)` | Builds an engine over `Vec<E>`, a `&MT` metric, and an `EngineConfig`. Example uids are content hashes of the whole row. |
 | `evaluate(module, candidate, subset)` | Evaluates one registered candidate over `subset` example indices (`None` means the full set). Applies the overlay, fans out uncached rollouts with bounded concurrency under per-rollout trace capture, restores the module, records scores. Returns `EvalOutcome`. |
 | `evaluate_gated(module, candidate, minibatch, threshold)` | The GEPA acceptance pattern: evaluates on `minibatch`; only a minibatch mean strictly greater than `threshold` promotes to a full-set evaluation. Returns `GateOutcome`. |
 | `register(candidate)` | Registers a `Candidate`, deduplicating by content hash. Returns its index; a duplicate returns the existing index. |
@@ -31,7 +31,7 @@ Owns the example set, the candidate registry, the score matrix, the rollout cach
 | `checkpoint()` | Serializes engine state (example uids, candidates, matrix, cache, spend) to a JSON string, format version 1. |
 | `resume(examples, metric, config, checkpoint)` | Rebuilds an engine from a checkpoint. Fails if the version or the example set does not match. Completed rollouts are served from the restored cache instead of re-executing. |
 
-`evaluate` requires `M: Module<Input = S::Input> + Facet`, `MT: TypedMetric<S, M>`, and `S::Input: Clone`. The metric runs outside the trace capture scope, so LM-as-judge metrics do not pollute the execution trace.
+`evaluate` requires `E: ToInput<M::Input> + Sync`, `M: Module + Facet`, and `MT: TypedMetric<E, M>`. The metric runs outside the trace capture scope, so LM-as-judge metrics do not pollute the execution trace.
 
 **Concurrency model.** Candidates mutate shared predictor state, so the engine serializes candidate application and parallelizes across examples within one candidate (bounded by `EngineConfig::concurrency`). Candidate-level parallelism requires overlays resolved at render time; that is the program lane below.
 

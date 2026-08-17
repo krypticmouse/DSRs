@@ -19,9 +19,9 @@ use crate::optimizer::engine::{
 use crate::optimizer::gepa::format_schema_for_reflection;
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
-use crate::predictors::Example;
 use crate::trace::Trace;
 use crate::utils::truncate;
+use crate::core::ToInput;
 use crate::{Facet, Module, Predict, Signature};
 
 /// Distill one improvement rule from contrasting rollouts.
@@ -368,17 +368,16 @@ impl SIMBA {
 impl Optimizer for SIMBA {
     type Report = SimbaReport;
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let names = predictor_names(module)?;
         if names.is_empty() {

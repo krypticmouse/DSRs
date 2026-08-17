@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Example, LM, LMClient, Eval, Module, Predicted, Signature,
-    TestCompletionModel, TypedMetric, configure, fx,
+    LM, LMClient, Eval, Module, Predicted, Signature, TestCompletionModel, TypedMetric, configure,
+    fx,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -160,18 +160,18 @@ async fn capture_names_spans_after_fx_slots() {
 
 struct EchoMatch;
 
-impl<M> TypedMetric<FxQA, M> for EchoMatch
+impl<M> TypedMetric<(FxQAInput, FxQAOutput), M> for EchoMatch
 where
     M: Module<Input = FxQAInput, Output = FxQAOutput>,
 {
     async fn evaluate(
         &self,
-        example: &Example<FxQA>,
+        example: &(FxQAInput, FxQAOutput),
         prediction: &Predicted<FxQAOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
         Ok(Eval::score(
-            (prediction.answer == example.output.answer) as u8 as f64,
+            (prediction.answer == example.1.answer) as u8 as f64,
         ))
     }
 }
@@ -191,9 +191,9 @@ async fn fn_module_plugs_into_evaluate_trainset() {
     }
 
     let module = fx::module(harness);
-    let trainset: Vec<Example<FxQA>> = (0..4)
+    let trainset: Vec<(FxQAInput, FxQAOutput)> = (0..4)
         .map(|i| {
-            Example::new(
+            (
                 FxQAInput {
                     question: i.to_string(),
                 },

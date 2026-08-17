@@ -26,6 +26,19 @@ struct QuestionAnswering {
     answer: String,
 }
 
+/// The trainset row, shaped like the dataset and wired to the signature by
+/// field name via `#[derive(Example)]`.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+#[example(QuestionAnswering)]
+struct HotpotRow {
+    #[input]
+    question: String,
+
+    #[output]
+    answer: String,
+}
+
 #[derive(Builder, facet::Facet)]
 #[facet(crate = facet)]
 struct SimpleQA {
@@ -47,14 +60,14 @@ impl Module for SimpleQA {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, SimpleQA> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QuestionAnswering>,
+        example: &HotpotRow,
         prediction: &Predicted<QuestionAnsweringOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let expected = example.output.answer.trim().to_lowercase();
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
         let score = if expected == actual {
@@ -78,7 +91,7 @@ async fn main() -> Result<()> {
     configure(LM::default());
 
     println!("Loading training data from HuggingFace...");
-    let train_examples = DataLoader::load_hf::<QuestionAnswering>(
+    let train_examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",

@@ -2,7 +2,7 @@
 //! tool-loop event ordering, JSONL round-tripping, and component slicing.
 
 use dspy_rs::{
-    Example, LM, LMClient, Message, Predict, Signature, SpanErrorKind, SpanEvent, TestCompletionModel,
+    Demo, LM, LMClient, Message, Predict, Signature, SpanErrorKind, SpanEvent, TestCompletionModel,
     Trace, TraceMeta, begin_span, capture, capture_with_meta, is_capturing,
 };
 use rig::completion::AssistantContent;
@@ -55,7 +55,7 @@ fn answer(text: &str) -> AssistantContent {
 async fn capture_records_spans_with_component_names_and_seq() {
     let drafter = Predict::<CapQA>::builder()
         .named("drafter")
-        .demo(Example::new(
+        .demo(Demo::new(
             CapQAInput {
                 question: "demo-q".to_string(),
             },
@@ -166,6 +166,7 @@ async fn no_scope_means_zero_capture() {
         suffix: &[],
         input: None,
         model: &config,
+        request_hash: None,
     });
     assert!(guard.is_none());
 }
@@ -375,6 +376,7 @@ async fn dropped_guard_marks_span_cancelled() {
             suffix: &[Message::user("hello")],
             input: None,
             model: &config,
+            request_hash: None,
         })
         .expect("scope is active");
         drop(guard); // task dies before finish
@@ -413,10 +415,10 @@ impl dspy_rs::Module for OneStep {
 /// A metric that inspects the rollout's intermediate steps via the trace.
 struct TraceInspectingMetric;
 
-impl dspy_rs::TypedMetric<CapQA, OneStep> for TraceInspectingMetric {
+impl dspy_rs::TypedMetric<(CapQAInput, CapQAOutput), OneStep> for TraceInspectingMetric {
     async fn evaluate(
         &self,
-        _example: &dspy_rs::Example<CapQA>,
+        _example: &(CapQAInput, CapQAOutput),
         prediction: &dspy_rs::Predicted<CapQAOutput>,
         trace: Option<&Trace>,
     ) -> anyhow::Result<dspy_rs::Eval> {
@@ -440,7 +442,7 @@ async fn metric_reads_component_subtrace_during_evaluation() {
             .lm(make_test_lm(vec![answer("42")]).await)
             .build(),
     };
-    let trainset = vec![dspy_rs::Example::<CapQA>::new(
+    let trainset = vec![(
         CapQAInput {
             question: "meaning of life".to_string(),
         },

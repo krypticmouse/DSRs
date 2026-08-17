@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Example, Eval, GEPA, LM, Module, ModuleState, Optimizer,
+    Eval, GEPA, LM, Module, ModuleState, Optimizer,
     Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
     evaluate_trainset, init_tracing,
 };
@@ -28,6 +28,11 @@ struct SentimentSignature {
     #[output]
     reasoning: String,
 }
+
+/// A labeled trainset row: the input plus the gold output. Tuples implement
+/// `ToInput`/`ToOutput` out of the box, so a small inline trainset needs no
+/// dedicated row struct.
+type SentimentRow = (SentimentSignatureInput, SentimentSignatureOutput);
 
 #[derive(Builder, facet::Facet)]
 #[facet(crate = facet)]
@@ -50,15 +55,15 @@ impl Module for SentimentAnalyzer {
 
 struct SentimentMetric;
 
-impl TypedMetric<SentimentSignature, SentimentAnalyzer> for SentimentMetric {
+impl TypedMetric<SentimentRow, SentimentAnalyzer> for SentimentMetric {
     async fn evaluate(
         &self,
-        example: &Example<SentimentSignature>,
+        example: &SentimentRow,
         prediction: &Predicted<SentimentSignatureOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
         let predicted = prediction.sentiment.trim().to_lowercase();
-        let expected = example.output.sentiment.trim().to_lowercase();
+        let expected = example.1.sentiment.trim().to_lowercase();
 
         let score = (predicted == expected) as u8 as f64;
         Ok(Eval::with_feedback(
@@ -71,8 +76,8 @@ impl TypedMetric<SentimentSignature, SentimentAnalyzer> for SentimentMetric {
     }
 }
 
-fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> {
-    Example::new(
+fn sentiment_example(text: &str, expected: &str) -> SentimentRow {
+    (
         SentimentSignatureInput {
             text: text.to_string(),
         },

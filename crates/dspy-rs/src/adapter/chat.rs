@@ -521,7 +521,7 @@ impl ChatAdapter {
     /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
     pub fn format_demo_typed<S: Signature>(
         &self,
-        demo: &crate::predictors::Example<S>,
+        demo: &crate::predictors::Demo<S>,
     ) -> (String, String)
     where
         S::Input: Schema,

@@ -69,17 +69,28 @@ impl Module for MyModule {
     }
 }
 
+// The trainset row: any struct, connected to the signature by #[derive(Example)].
+// See the Data page for the row model.
+#[derive(Example, Clone, Debug, serde::Serialize)]
+#[example(MySignature)]
+struct MyRow {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
 struct MyMetric;
 
-impl TypedMetric<MySignature, MyModule> for MyMetric {
+impl TypedMetric<MyRow, MyModule> for MyMetric {
     async fn evaluate(
         &self,
-        example: &Example<MySignature>,
+        example: &MyRow,
         prediction: &Predicted<<MyModule as Module>::Output>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {
         let predicted = prediction.answer.as_str();
-        let expected = example.output.answer.as_str();
+        let expected = example.answer.as_str();
 
         let correct = predicted == expected;
         let score = if correct { 1.0 } else { 0.0 };
@@ -417,19 +428,24 @@ struct MathSolver {
 ### TypedMetric with judge
 
 ```rust
+/// A labeled trainset row: `(input, gold output)` tuples are rows out of the
+/// box — no dedicated struct needed for a small inline trainset.
+type MathRow = (MathWordProblemInput, MathWordProblemOutput);
+
 struct LlmJudgeMetric {
     judge: Predict<MathJudge>,
 }
 
-impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
+impl TypedMetric<MathRow, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
-        example: &Example<MathWordProblem>,
+        example: &MathRow,
         prediction: &Predicted<MathWordProblemOutput>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {
-        let problem = example.input.problem.clone();
-        let expected = example.output.answer.clone();
+        let (input, gold) = example;
+        let problem = input.problem.clone();
+        let expected = gold.answer.clone();
 
         let student_answer = prediction.answer.clone();
         let student_reasoning = prediction.reasoning.clone();
@@ -523,10 +539,10 @@ Ways to contain cost:
 Combining explicit checks with LLM judging often gives the best results:
 
 ```rust
-impl TypedMetric<MySignature, MyModule> for HybridMetric {
+impl TypedMetric<MyRow, MyModule> for HybridMetric {
     async fn evaluate(
         &self,
-        example: &Example<MySignature>,
+        example: &MyRow,
         prediction: &Predicted<<MyModule as Module>::Output>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {
@@ -605,10 +621,10 @@ GEPA requires feedback for every evaluated example.
 
 ```rust
 // Solution: Return Eval::with_feedback(...) from TypedMetric::evaluate
-impl TypedMetric<MySignature, MyModule> for MyMetric {
+impl TypedMetric<MyRow, MyModule> for MyMetric {
     async fn evaluate(
         &self,
-        example: &Example<MySignature>,
+        example: &MyRow,
         prediction: &Predicted<<MyModule as Module>::Output>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {

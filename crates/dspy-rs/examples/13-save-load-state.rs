@@ -16,7 +16,7 @@ cargo run --example 13-save-load-state
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{Example, Module, ModuleState, Predict, PredictError, Predicted, Signature};
+use dspy_rs::{Demo, Module, ModuleState, Predict, PredictError, Predicted, Signature};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -53,7 +53,7 @@ fn main() -> Result<()> {
         .answerer(
             Predict::<QA>::builder()
                 .instruction("Answer in one short, factual sentence.")
-                .demo(Example::new(
+                .demo(Demo::new(
                     QAInput {
                         question: "What is the capital of France?".to_string(),
                     },

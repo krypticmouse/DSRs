@@ -1,7 +1,7 @@
 use anyhow::Result;
 use dspy_rs::{
-    COPRO, CallMetadata, Example, Eval, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric,
+    COPRO, CallMetadata, Eval, Module, Optimizer, Predict, PredictError, Predicted, Signature,
+    TypedMetric,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -39,10 +39,12 @@ impl Module for InstructionEchoModule {
 
 struct InstructionLengthMetric;
 
-impl TypedMetric<OptimizerSig, InstructionEchoModule> for InstructionLengthMetric {
+impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
+    for InstructionLengthMetric
+{
     async fn evaluate(
         &self,
-        _example: &Example<OptimizerSig>,
+        _example: &(OptimizerSigInput, OptimizerSigOutput),
         prediction: &Predicted<OptimizerSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
@@ -50,9 +52,9 @@ impl TypedMetric<OptimizerSig, InstructionEchoModule> for InstructionLengthMetri
     }
 }
 
-fn trainset() -> Vec<Example<OptimizerSig>> {
+fn trainset() -> Vec<(OptimizerSigInput, OptimizerSigOutput)> {
     vec![
-        Example::new(
+        (
             OptimizerSigInput {
                 prompt: "one".to_string(),
             },
@@ -60,7 +62,7 @@ fn trainset() -> Vec<Example<OptimizerSig>> {
                 answer: "one".to_string(),
             },
         ),
-        Example::new(
+        (
             OptimizerSigInput {
                 prompt: "two".to_string(),
             },
@@ -81,7 +83,7 @@ async fn optimizer_compile_succeeds_without_public_named_parameter_access() {
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &InstructionLengthMetric)
+        .compile(&mut module, trainset(), &InstructionLengthMetric)
         .await
         .expect("COPRO compile should succeed with internal predictor discovery");
 }

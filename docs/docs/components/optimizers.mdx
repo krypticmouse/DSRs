@@ -73,21 +73,20 @@ Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/opti
 pub trait Optimizer {
     type Report;
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>;
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>;
 }
 ```
 
-`compile` takes exclusive `&mut` access to the module: no concurrent `call()` during optimization. The `Facet` bound is what lets the optimizer discover `Predict` leaves by reflection and address them by dotted path. `compile` returns an error when no optimizable predictors are found, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
+`compile` takes exclusive `&mut` access to the module: no concurrent `call()` during optimization. The trainset is `Vec<E>` for any [row type](/docs/components/data) that projects into the module's input via `ToInput` — a `#[derive(Example)]` struct, an `(Input, Output)` tuple, or a hand-written impl; the `Serialize` bound feeds rollout-cache uids, which content-hash the whole row. All type parameters are inferred from the arguments, so no turbofish is needed: `optimizer.compile(&mut module, trainset, &metric)`. The `Facet` bound is what lets the optimizer discover `Predict` leaves by reflection and address them by dotted path. `compile` returns an error when no optimizable predictors are found, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
 
 Each optimizer declares its own `Report`:
 

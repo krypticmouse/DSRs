@@ -15,11 +15,13 @@ use std::path::{Path, PathBuf};
 use tracing::debug;
 
 use crate::data::utils::is_url;
-use crate::predictors::Example as TypedExample;
-use crate::{FieldSchema, FieldType, Schema, Signature};
+use crate::typesys::schema::field_type_from_shape;
+use crate::FieldType;
+use facet::{Facet, Type, UserType};
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 
-/// Controls how typed loaders handle source fields that are not part of the target signature.
+/// Controls how typed loaders handle source fields that are not part of the target row struct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UnknownFieldPolicy {
     /// Ignore extra source fields that are not consumed by the signature.
@@ -29,10 +31,10 @@ pub enum UnknownFieldPolicy {
     Error,
 }
 
-/// Options for schema-driven typed loading.
+/// Options for shape-driven typed loading.
 ///
-/// `field_map` remaps signature fields to source fields:
-/// - key: signature field name (`S::schema()` field rust name)
+/// `field_map` remaps row-struct fields to source fields:
+/// - key: row struct field name
 /// - value: source field/column name in the file/dataset
 ///
 /// `unknown_fields` controls whether extra source fields are ignored or rejected.
@@ -129,7 +131,7 @@ pub enum DataLoadError {
     /// HuggingFace Hub listing or file retrieval failure.
     #[error("HuggingFace error: {0}")]
     Hf(anyhow::Error),
-    /// Required signature field was missing from a row.
+    /// Required row-struct field was missing from a row.
     #[error("missing field `{field}` at row {row}")]
     MissingField { row: usize, field: String },
     /// Row had an unexpected extra field when unknown-field policy is `Error`.
@@ -150,8 +152,10 @@ pub enum DataLoadError {
 /// Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources.
 ///
 /// Canonical public contract:
-/// - Returns `Vec<Example<S>>` directly.
-/// - Uses `S::schema()` for required input/output fields.
+/// - Returns `Vec<E>` for any row struct `E: Deserialize + Facet` — rows are
+///   *your* type, not a signature-shaped pair, so they can carry gold labels
+///   and metric-only fields freely.
+/// - Uses `E`'s Facet shape for required fields and type-aware coercion.
 /// - Supports field remapping via [`TypedLoadOptions::field_map`].
 /// - Reports row-aware failures through [`DataLoadError`].
 pub struct DataLoader;
@@ -175,17 +179,16 @@ impl DataLoader {
     /// # Errors
     /// Returns [`DataLoadError`] wrapped in `anyhow::Error` for parse, schema,
     /// mapping, and conversion failures.
-    pub fn load_json<S: Signature>(
+    pub fn load_json<E>(
         path: &str,
         lines: bool,
         opts: TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let rows = Self::load_json_rows(path, lines)?;
-        let examples = Self::rows_to_typed::<S>(rows, &opts)?;
+        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed json examples loaded");
         Ok(examples)
     }
@@ -205,15 +208,14 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_json_with<S, F>(
+    pub fn load_json_with<E, F>(
         path: &str,
         lines: bool,
         opts: TypedLoadOptions,
         mapper: F,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S: Signature,
-        F: Fn(&RowRecord) -> Result<TypedExample<S>>,
+        F: Fn(&RowRecord) -> Result<E>,
     {
         let _ = opts;
         let rows = Self::load_json_rows(path, lines)?;
@@ -240,19 +242,18 @@ impl DataLoader {
     /// Load typed rows from CSV.
     ///
     /// When `has_headers` is `false`, fields are exposed as `column_{idx}` for
-    /// mapper-based paths. Signature-based paths should typically use headers.
-    pub fn load_csv<S: Signature>(
+    /// mapper-based paths. Shape-based paths should typically use headers.
+    pub fn load_csv<E>(
         path: &str,
         delimiter: char,
         has_headers: bool,
         opts: TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let rows = Self::load_csv_rows(path, delimiter, has_headers)?;
-        let examples = Self::rows_to_typed::<S>(rows, &opts)?;
+        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed csv examples loaded");
         Ok(examples)
     }
@@ -273,16 +274,15 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_csv_with<S, F>(
+    pub fn load_csv_with<E, F>(
         path: &str,
         delimiter: char,
         has_headers: bool,
         opts: TypedLoadOptions,
         mapper: F,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S: Signature,
-        F: Fn(&RowRecord) -> Result<TypedExample<S>>,
+        F: Fn(&RowRecord) -> Result<E>,
     {
         let _ = opts;
         let rows = Self::load_csv_rows(path, delimiter, has_headers)?;
@@ -304,16 +304,15 @@ impl DataLoader {
         )
     )]
     /// Load typed rows from a local Parquet file.
-    pub fn load_parquet<S: Signature>(
+    pub fn load_parquet<E>(
         path: &str,
         opts: TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let rows = Self::load_parquet_rows(Path::new(path))?;
-        let examples = Self::rows_to_typed::<S>(rows, &opts)?;
+        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed parquet examples loaded");
         Ok(examples)
     }
@@ -331,14 +330,13 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_parquet_with<S, F>(
+    pub fn load_parquet_with<E, F>(
         path: &str,
         opts: TypedLoadOptions,
         mapper: F,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S: Signature,
-        F: Fn(&RowRecord) -> Result<TypedExample<S>>,
+        F: Fn(&RowRecord) -> Result<E>,
     {
         let _ = opts;
         let rows = Self::load_parquet_rows(Path::new(path))?;
@@ -367,19 +365,18 @@ impl DataLoader {
     ///
     /// Supports Parquet, JSON/JSONL, and CSV artifacts discovered in the dataset
     /// repo. `subset` and `split` are substring filters on artifact filenames.
-    pub fn load_hf<S: Signature>(
+    pub fn load_hf<E>(
         dataset_name: &str,
         subset: &str,
         split: &str,
         verbose: bool,
         opts: TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let rows = Self::load_hf_rows(dataset_name, subset, split, verbose)?;
-        let examples = Self::rows_to_typed::<S>(rows, &opts)?;
+        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed hf examples loaded");
         Ok(examples)
     }
@@ -401,17 +398,16 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_hf_with<S, F>(
+    pub fn load_hf_with<E, F>(
         dataset_name: &str,
         subset: &str,
         split: &str,
         verbose: bool,
         opts: TypedLoadOptions,
         mapper: F,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S: Signature,
-        F: Fn(&RowRecord) -> Result<TypedExample<S>>,
+        F: Fn(&RowRecord) -> Result<E>,
     {
         let _ = opts;
         let rows = Self::load_hf_rows(dataset_name, subset, split, verbose)?;
@@ -437,16 +433,15 @@ impl DataLoader {
     ///
     /// This is primarily used for deterministic/offline testing of HF-like data
     /// ingestion flows without network calls.
-    pub fn load_hf_from_parquet<S: Signature>(
+    pub fn load_hf_from_parquet<E>(
         parquet_files: Vec<PathBuf>,
         opts: TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    ) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
         let rows = Self::load_rows_from_parquet_files(&parquet_files)?;
-        let examples = Self::rows_to_typed::<S>(rows, &opts)?;
+        let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(
             examples = examples.len(),
             "typed hf parquet examples loaded"
@@ -454,23 +449,19 @@ impl DataLoader {
         Ok(examples)
     }
 
-    fn rows_to_typed<S: Signature>(
-        rows: Vec<RowRecord>,
-        opts: &TypedLoadOptions,
-    ) -> Result<Vec<TypedExample<S>>>
+    fn rows_to_typed<E>(rows: Vec<RowRecord>, opts: &TypedLoadOptions) -> Result<Vec<E>>
     where
-        S::Input: Schema,
-        S::Output: Schema,
+        E: DeserializeOwned + for<'f> Facet<'f>,
     {
+        let fields = row_struct_fields::<E>()?;
         rows.into_iter()
-            .map(|row| typed_example_from_row::<S>(&row, opts).map_err(anyhow::Error::from))
+            .map(|row| struct_from_row::<E>(&row, &fields, opts).map_err(anyhow::Error::from))
             .collect()
     }
 
-    fn rows_with_mapper<S, F>(rows: Vec<RowRecord>, mapper: F) -> Result<Vec<TypedExample<S>>>
+    fn rows_with_mapper<E, F>(rows: Vec<RowRecord>, mapper: F) -> Result<Vec<E>>
     where
-        S: Signature,
-        F: Fn(&RowRecord) -> Result<TypedExample<S>>,
+        F: Fn(&RowRecord) -> Result<E>,
     {
         rows.into_iter()
             .map(|row| {
@@ -722,30 +713,52 @@ fn resolve_source_field<'a>(field: &'a str, opts: &'a TypedLoadOptions) -> &'a s
         .unwrap_or(field)
 }
 
-fn typed_example_from_row<S: Signature>(
+/// Enumerates a row struct's (field name, declared type) pairs from its Facet shape.
+fn row_struct_fields<E: for<'f> Facet<'f>>()
+-> std::result::Result<Vec<(&'static str, FieldType)>, DataLoadError> {
+    let shape = E::SHAPE;
+    let struct_type = match &shape.ty {
+        Type::User(UserType::Struct(struct_type)) => struct_type,
+        _ => {
+            return Err(DataLoadError::Json(anyhow!(
+                "row type `{}` must be a struct",
+                shape.type_identifier
+            )));
+        }
+    };
+    Ok(struct_type
+        .fields
+        .iter()
+        .filter(|field| !field.should_skip_deserializing())
+        .map(|field| (field.name, field_type_from_shape(field.shape())))
+        .collect())
+}
+
+fn struct_from_row<E: DeserializeOwned>(
     row: &RowRecord,
+    fields: &[(&'static str, FieldType)],
     opts: &TypedLoadOptions,
-) -> std::result::Result<TypedExample<S>, DataLoadError>
-where
-    S::Input: Schema,
-    S::Output: Schema,
-{
-    let schema = S::schema();
+) -> std::result::Result<E, DataLoadError> {
     let mut used_source_fields = HashSet::new();
+    let mut map = Map::new();
 
-    let input_map = map_for_fields(
-        row,
-        schema.input_fields().iter(),
-        opts,
-        &mut used_source_fields,
-    )?;
-
-    let output_map = map_for_fields(
-        row,
-        schema.output_fields().iter(),
-        opts,
-        &mut used_source_fields,
-    )?;
+    for (name, type_ir) in fields {
+        let source_field = resolve_source_field(name, opts);
+        match row.values.get(source_field) {
+            Some(value) => {
+                map.insert(name.to_string(), coerce_row_value(value, type_ir));
+                used_source_fields.insert(source_field.to_string());
+            }
+            // Missing optional fields deserialize as `None`; anything else is an error.
+            None if type_ir.is_optional() => {}
+            None => {
+                return Err(DataLoadError::MissingField {
+                    row: row.row_index,
+                    field: name.to_string(),
+                });
+            }
+        }
+    }
 
     if opts.unknown_fields == UnknownFieldPolicy::Error {
         for key in row.values.keys() {
@@ -758,54 +771,11 @@ where
         }
     }
 
-    let input =
-        serde_json::from_value::<S::Input>(Value::Object(input_map)).map_err(|err| {
-            DataLoadError::TypeMismatch {
-                row: row.row_index,
-                field: "input".to_string(),
-                message: err.to_string(),
-            }
-        })?;
-
-    let output =
-        serde_json::from_value::<S::Output>(Value::Object(output_map)).map_err(|err| {
-            DataLoadError::TypeMismatch {
-                row: row.row_index,
-                field: "output".to_string(),
-                message: err.to_string(),
-            }
-        })?;
-
-    Ok(TypedExample::new(input, output))
-}
-
-fn map_for_fields<'a>(
-    row: &RowRecord,
-    signature_fields: impl Iterator<Item = &'a FieldSchema>,
-    opts: &TypedLoadOptions,
-    used_source_fields: &mut HashSet<String>,
-) -> std::result::Result<Map<String, Value>, DataLoadError> {
-    let mut map = Map::new();
-
-    for field in signature_fields {
-        let signature_field = field.rust_name.as_str();
-        let source_field = resolve_source_field(signature_field, opts);
-        let value = row
-            .values
-            .get(source_field)
-            .ok_or_else(|| DataLoadError::MissingField {
-                row: row.row_index,
-                field: signature_field.to_string(),
-            })?;
-
-        map.insert(
-            signature_field.to_string(),
-            coerce_row_value(value, &field.type_ir),
-        );
-        used_source_fields.insert(source_field.to_string());
-    }
-
-    Ok(map)
+    serde_json::from_value::<E>(Value::Object(map)).map_err(|err| DataLoadError::TypeMismatch {
+        row: row.row_index,
+        field: "row".to_string(),
+        message: err.to_string(),
+    })
 }
 
 /// Nudges a loosely-typed source value (common with CSV, where every cell starts as text)

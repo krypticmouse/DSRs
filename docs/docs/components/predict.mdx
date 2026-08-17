@@ -44,7 +44,7 @@ The derive generates `QAInput` and `QAOutput` from the field markers. `.call()` 
 | Method | Effect |
 |--------|--------|
 | `.named(name)` | Component name recorded on trace spans. Unnamed predictors fall back to the signature type name and log a warning |
-| `.demo(example)` | Appends one `Example<S>` few-shot demo |
+| `.demo(demo)` | Appends one `Demo<S>` few-shot demo |
 | `.with_demos(iter)` | Appends demos from an iterator |
 | `.instruction(text)` | Overrides the signature's docstring instruction |
 | `.add_tool(tool)` | Adds one `rig` `ToolDyn` the LM may invoke |
@@ -56,14 +56,14 @@ The derive generates `QAInput` and `QAOutput` from the field markers. `.call()` 
 let predict = Predict::<QA>::builder()
     .named("qa")
     .instruction("Answer in one word.")
-    .demo(Example::new(
+    .demo(Demo::new(
         QAInput { question: "What is 1+1?".into() },
         QAOutput { answer: "2".into() },
     ))
     .build();
 ```
 
-`Example<S>` is a typed input/output pair; the types guarantee demos match the signature. Tools are settable only at build time. Demos and the instruction override are also writable after construction through the optimizer seam (`DynPredictor::apply_update`, `load_state`), see [State](/docs/components/state). The formatted system message and demo turns are cached once per (instruction, demos) configuration; every state mutation invalidates the cache.
+`Demo<S>` is the typed input/output pair for few-shot prompting: `Demo::new(input, output)` with public fields `input: S::Input` and `output: S::Output`. Demos render as user/assistant exchanges in the prompt, and the types guarantee a demo matches the signature — a `Demo<QA>` cannot be attached to a `Predict<SummarizeSig>`. To seed a demo from a labeled trainset row, project the row through its `ToInput`/`ToOutput` impls: `Demo::new(row.to_input(), row.to_output())`, see [Data](/docs/components/data). Tools are settable only at build time. Demos and the instruction override are also writable after construction through the optimizer seam (`DynPredictor::apply_update`, `load_state`), see [State](/docs/components/state). The formatted system message and demo turns are cached once per (instruction, demos) configuration; every state mutation invalidates the cache.
 
 ## Calling
 

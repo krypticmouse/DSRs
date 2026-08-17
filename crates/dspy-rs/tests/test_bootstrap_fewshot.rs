@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    BootstrapFewShot, Eval, Example, LM, LMClient, Module, ModuleState, Optimizer, Predict,
-    PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
+    BootstrapFewShot, Eval, LM, LMClient, Module, ModuleState, Optimizer, Predict, PredictError,
+    Predicted, Signature, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -37,14 +37,14 @@ impl Module for BootModule {
 
 struct ExactMatch;
 
-impl TypedMetric<BootSig, BootModule> for ExactMatch {
+impl TypedMetric<(BootSigInput, BootSigOutput), BootModule> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<BootSig>,
+        example: &(BootSigInput, BootSigOutput),
         prediction: &Predicted<BootSigOutput>,
         _trace: Option<&dspy_rs::Trace>,
     ) -> Result<Eval> {
-        let score = (prediction.answer == example.output.answer) as u8 as f64;
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
         Ok(Eval::with_feedback(score, "exact-match"))
     }
 }
@@ -70,10 +70,10 @@ async fn boot_module(client: TestCompletionModel) -> BootModule {
     }
 }
 
-fn trainset() -> Vec<Example<BootSig>> {
+fn trainset() -> Vec<(BootSigInput, BootSigOutput)> {
     (0..3)
         .map(|idx: usize| {
-            Example::new(
+            (
                 BootSigInput {
                     prompt: idx.to_string(),
                 },
@@ -106,7 +106,7 @@ async fn bootstrap_harvests_demos_and_adopts_when_better() {
         .build();
 
     let report = bootstrap
-        .compile::<BootSig, _, _>(&mut module, trainset(), &ExactMatch)
+        .compile(&mut module, trainset(), &ExactMatch)
         .await
         .expect("bootstrap should succeed on canned responses");
 
@@ -152,7 +152,7 @@ async fn bootstrap_keeps_baseline_when_candidate_is_worse() {
         .build();
 
     let report = bootstrap
-        .compile::<BootSig, _, _>(&mut module, trainset(), &ExactMatch)
+        .compile(&mut module, trainset(), &ExactMatch)
         .await
         .unwrap();
 
@@ -184,7 +184,7 @@ async fn bootstrap_without_qualifying_rollouts_skips_candidate_eval() {
         .build();
 
     let report = bootstrap
-        .compile::<BootSig, _, _>(&mut module, trainset(), &ExactMatch)
+        .compile(&mut module, trainset(), &ExactMatch)
         .await
         .unwrap();
 
@@ -214,7 +214,7 @@ async fn bootstrap_respects_max_demos() {
         .build();
 
     let report = bootstrap
-        .compile::<BootSig, _, _>(&mut module, trainset(), &ExactMatch)
+        .compile(&mut module, trainset(), &ExactMatch)
         .await
         .unwrap();
 

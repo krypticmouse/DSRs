@@ -36,7 +36,7 @@ Other fields: `prompt_model` (separate LM for generating candidate instructions)
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, Eval, Example, LM, Module, Optimizer, Predict, PredictError,
+    COPRO, Eval, LM, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, Trace, TypedMetric, configure, init_tracing,
 };
 
@@ -67,14 +67,14 @@ impl Module for MyModule {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QA, MyModule> for ExactMatchMetric {
+impl TypedMetric<(QAInput, QAOutput), MyModule> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {
-        let expected = example.output.answer.trim().to_lowercase();
+        let expected = example.1.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
         Ok(Eval::score((expected == actual) as u8 as f64))
     }
@@ -94,7 +94,7 @@ async fn main() -> Result<()> {
 
     let mut module = MyModule::builder().build();
     let trainset = vec![
-        Example::new(
+        (
             QAInput {
                 question: "What is 2+2?".to_string(),
             },
@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
                 answer: "4".to_string(),
             },
         ),
-        Example::new(
+        (
             QAInput {
                 question: "Capital of France?".to_string(),
             },
@@ -123,6 +123,8 @@ async fn main() -> Result<()> {
     Ok(())
 }
 ```
+
+The trainset here is a `Vec` of `(QAInput, QAOutput)` tuples, the zero-boilerplate row form. Any row type that implements `ToInput<QAInput>` works, including `#[derive(Example)]` structs carrying gold labels and metric-only fields; see [Data](/docs/components/data).
 
 ### Typed data loading
 

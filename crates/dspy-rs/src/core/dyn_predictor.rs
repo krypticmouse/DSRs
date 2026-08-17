@@ -43,7 +43,7 @@ pub(crate) trait DynPredictor: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if updated demos can't be converted to the predictor's
-    /// typed `Example<S>` (schema mismatch).
+    /// typed `Demo<S>` (schema mismatch).
     fn apply_update(&mut self, update: StateUpdate) -> Result<()>;
 
     /// Restores predictor state from a snapshot. Delegates to
@@ -97,7 +97,7 @@ pub struct PredictState {
     /// Demo rows as flat JSON objects: field name → value, with input and
     /// output fields merged into one object. This is the serde boundary for
     /// demos-as-data — rows are split back into the predictor's typed
-    /// `Example<S>` via the signature schema on load.
+    /// `Demo<S>` via the signature schema on load.
     #[serde(default)]
     pub demos: Vec<JsonMap>,
     /// The instruction override, if any.

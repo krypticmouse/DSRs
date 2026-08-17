@@ -9,8 +9,8 @@ use crate::optimizer::engine::{
     apply_candidate,
 };
 use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
-use crate::predictors::Example;
 use crate::utils::truncate;
+use crate::core::ToInput;
 use crate::{Facet, Module, Predict, Schema, Signature, SignatureSchema};
 
 /// Improve an LLM-pipeline module's instruction using execution feedback.
@@ -477,19 +477,18 @@ impl GEPA {
         )
     }
 
-    async fn collect_best_outputs<S, M>(
+    async fn collect_best_outputs<E, M>(
         module: &M,
-        eval_set: &[Example<S>],
+        eval_set: &[E],
     ) -> Result<Vec<serde_json::Value>>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input>,
+        E: ToInput<M::Input>,
+        M: Module,
         M::Output: Schema,
     {
         let mut outputs = Vec::with_capacity(eval_set.len());
         for example in eval_set {
-            let input = example.input.clone();
+            let input = example.to_input();
             let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
             outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(serde_json::Value::Null));
         }
@@ -507,18 +506,17 @@ impl GEPA {
     /// - No optimizable predictors found
     /// - Any metric evaluation returns `feedback: None`
     /// - LM call failure during evaluation
-    pub async fn compile_with_valset<S, M, MT>(
+    pub async fn compile_with_valset<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
-        valset: Option<Vec<Example<S>>>,
+        trainset: Vec<E>,
+        valset: Option<Vec<E>>,
         metric: &MT,
     ) -> Result<GEPAResult>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let predictor_names = predictor_names(module)?;
         if predictor_names.is_empty() {
@@ -529,7 +527,7 @@ impl GEPA {
         // first (the Pareto/score columns), the trainset minibatch pool after
         // them when a separate valset is supplied.
         let train_len = trainset.len();
-        let (engine_examples, val_cols, train_pool): (Vec<Example<S>>, Vec<usize>, Vec<usize>) =
+        let (engine_examples, val_cols, train_pool): (Vec<E>, Vec<usize>, Vec<usize>) =
             match valset {
                 Some(mut valset) => {
                     let val_len = valset.len();
@@ -713,7 +711,7 @@ impl GEPA {
                 );
                 None
             } else {
-                let outputs = Self::collect_best_outputs::<S, _>(module, eval_set).await?;
+                let outputs = Self::collect_best_outputs::<E, _>(module, eval_set).await?;
                 engine.charge(eval_set.len(), eval_set.len());
                 Some(outputs)
             }
@@ -737,19 +735,18 @@ impl GEPA {
 impl Optimizer for GEPA {
     type Report = GEPAResult;
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
-        self.compile_with_valset::<S, _, _>(module, trainset, None, metric)
+        self.compile_with_valset(module, trainset, None, metric)
             .await
     }
 }
@@ -797,10 +794,12 @@ mod tests {
 
     struct AlwaysFailMetric;
 
-    impl TypedMetric<GepaStateSig, GepaStateModule> for AlwaysFailMetric {
+    type GepaRow = (GepaStateSigInput, GepaStateSigOutput);
+
+    impl TypedMetric<GepaRow, GepaStateModule> for AlwaysFailMetric {
         async fn evaluate(
             &self,
-            _example: &Example<GepaStateSig>,
+            _example: &GepaRow,
             _prediction: &Predicted<GepaStateSigOutput>,
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
@@ -808,8 +807,8 @@ mod tests {
         }
     }
 
-    fn eval_set() -> Vec<Example<GepaStateSig>> {
-        vec![Example::new(
+    fn eval_set() -> Vec<GepaRow> {
+        vec![(
             GepaStateSigInput {
                 prompt: "one".to_string(),
             },
@@ -829,7 +828,7 @@ mod tests {
         };
 
         let err = optimizer
-            .compile::<GepaStateSig, _, _>(&mut module, eval_set(), &AlwaysFailMetric)
+            .compile(&mut module, eval_set(), &AlwaysFailMetric)
             .await
             .expect_err("candidate evaluation should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));

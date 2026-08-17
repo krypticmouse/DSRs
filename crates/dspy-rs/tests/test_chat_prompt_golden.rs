@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, Example, Signature};
+use dspy_rs::{ChatAdapter, Demo, Signature};
 
 #[derive(Signature, Clone, Debug)]
 struct GoldenSig {
@@ -80,7 +80,7 @@ fn golden_assistant_prompt_is_stable() {
 #[test]
 fn golden_demo_messages_are_stable() {
     let adapter = ChatAdapter;
-    let demo = Example::<GoldenSig>::new(
+    let demo = Demo::<GoldenSig>::new(
         GoldenSigInput {
             question: "What is 2+2?".to_string(),
         },

@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `e9217b4`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `ec235d5`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 The foundational abstractions everything else is built on.
@@ -36,15 +36,29 @@ The foundational abstractions everything else is built on.
 | `settings::*` | Glob re-export. |
 | `signature::*` | Glob re-export. |
 | [`SignatureSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.SignatureSchema.html) | Re-export of `schema::SignatureSchema`. |
+| [`ToInput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToInput.html) | Re-export of `example::ToInput`. |
+| [`ToOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToOutput.html) | Re-export of `example::ToOutput`. |
 
 ## Modules
 
 | Item | Description |
 |---|---|
+| [`example`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/index.html) | How trainset rows connect to modules. |
 | [`lm`](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/index.html) |  |
 | [`module`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/index.html) |  |
 | [`settings`](https://docs.rs/dspy-rs/latest/dspy_rs/core/settings/index.html) |  |
 | [`signature`](https://docs.rs/dspy-rs/latest/dspy_rs/core/signature/index.html) |  |
+
+## `core::example`
+
+How trainset rows connect to modules.
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`ToInput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToInput.html) | Projects a trainset row into a module's input type. |
+| [`ToOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToOutput.html) | Projects a trainset row into a signature's output type — the gold label. |
 
 ## `core::lm`
 

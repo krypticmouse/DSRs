@@ -201,10 +201,10 @@ struct SentimentAnalysis {
 Add examples to guide the LM:
 
 ```rust
-use dspy_rs::Example;
+use dspy_rs::Demo;
 
 let predict = Predict::<QA>::builder()
-    .demo(Example::<QA>::new(
+    .demo(Demo::<QA>::new(
         QAInput { question: "What is 2+2?".into() },
         QAOutput { answer: "4".into() },
     ))

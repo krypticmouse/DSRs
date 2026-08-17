@@ -80,7 +80,7 @@
 //! - [`adapter`] — Prompt formatting and LM response parsing ([`ChatAdapter`])
 //! - [`core`] — [`Module`] trait, [`Signature`] trait, [`SignatureSchema`], error types,
 //!   LM client, [`Predicted`] and [`CallMetadata`]
-//! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Example`]
+//! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Demo`]
 //! - [`modules`] — [`ChainOfThought`] and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
@@ -157,8 +157,10 @@ pub mod __macro_support {
     pub use anyhow;
     pub use facet;
     pub use indexmap;
+    pub use rig;
     pub use serde;
     pub use serde_json;
+    pub use tokio;
 }
 
 #[macro_export]

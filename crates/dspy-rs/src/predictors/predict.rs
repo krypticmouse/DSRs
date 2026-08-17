@@ -24,19 +24,19 @@ use crate::{
 /// use dspy_rs::*;
 /// use dspy_rs::doctest::*;
 ///
-/// let example = Example::<QA>::new(
+/// let demo = Demo::<QA>::new(
 ///     QAInput { question: "What is 2+2?".into() },
 ///     QAOutput { answer: "4".into() },
 /// );
 /// ```
 #[derive(Clone, Debug, facet::Facet)]
 #[facet(crate = facet)]
-pub struct Example<S: Signature> {
+pub struct Demo<S: Signature> {
     pub input: S::Input,
     pub output: S::Output,
 }
 
-impl<S: Signature> Example<S> {
+impl<S: Signature> Demo<S> {
     pub fn new(input: S::Input, output: S::Output) -> Self {
         Self { input, output }
     }
@@ -104,7 +104,7 @@ where
 ///
 /// // With demos and custom instruction
 /// let predict = Predict::<QA>::builder()
-///     .demo(Example::new(
+///     .demo(Demo::new(
 ///         QAInput { question: "What is 1+1?".into() },
 ///         QAOutput { answer: "2".into() },
 ///     ))
@@ -122,7 +122,7 @@ pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
     #[facet(skip, opaque)]
-    demos: Vec<Example<S>>,
+    demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
     #[facet(skip, opaque)]
     lm: Option<Arc<crate::core::LM>>,
@@ -173,7 +173,7 @@ impl<S: Signature> Predict<S> {
     fn apply_state(
         &mut self,
         instruction: Option<Option<String>>,
-        demos: Option<Vec<Example<S>>>,
+        demos: Option<Vec<Demo<S>>>,
     ) {
         if let Some(instruction) = instruction {
             self.instruction_override = instruction;
@@ -398,6 +398,7 @@ impl<S: Signature> Predict<S> {
             suffix: &chat.messages[prefix_len..],
             input: capture_input,
             model: &lm.config,
+            request_hash: None,
         });
 
         // Replay scope (RFC 0001 §4d/e): intercept above the LM. A served call
@@ -665,7 +666,7 @@ impl<S: Signature> Default for Predict<S> {
 /// ```
 pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
-    demos: Vec<Example<S>>,
+    demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
     lm: Option<Arc<crate::core::LM>>,
     trace_name: Option<String>,
@@ -691,13 +692,13 @@ impl<S: Signature> PredictBuilder<S> {
     }
 
     /// Adds a single demo (few-shot example) to the predictor.
-    pub fn demo(mut self, demo: Example<S>) -> Self {
+    pub fn demo(mut self, demo: Demo<S>) -> Self {
         self.demos.push(demo);
         self
     }
 
     /// Adds multiple demos from an iterator.
-    pub fn with_demos(mut self, demos: impl IntoIterator<Item = Example<S>>) -> Self {
+    pub fn with_demos(mut self, demos: impl IntoIterator<Item = Demo<S>>) -> Self {
         self.demos.extend(demos);
         self
     }
@@ -766,10 +767,10 @@ fn pick_schema_fields(row: &Map<String, Value>, fields: &[FieldSchema]) -> Map<S
     map
 }
 
-/// Parses a typed example from a flat demo row (field name → value, input and
+/// Parses a typed demo from a flat demo row (field name → value, input and
 /// output fields merged into one object). The signature schema decides which
 /// fields belong to the input and which to the output.
-fn typed_example_from_json<S: Signature>(row: &Map<String, Value>) -> Result<Example<S>>
+fn demo_from_json<S: Signature>(row: &Map<String, Value>) -> Result<Demo<S>>
 where
     S::Input: Schema,
     S::Output: Schema,
@@ -785,12 +786,12 @@ where
         schema.output_fields(),
     )))
     .map_err(|err| anyhow::anyhow!(err))?;
-    Ok(Example::new(input, output))
+    Ok(Demo::new(input, output))
 }
 
-/// Serializes a typed example into a flat demo row (input and output fields
+/// Serializes a typed demo into a flat demo row (input and output fields
 /// merged into one object).
-fn json_from_typed_example<S: Signature>(example: &Example<S>) -> Result<Map<String, Value>>
+fn json_from_demo<S: Signature>(example: &Demo<S>) -> Result<Map<String, Value>>
 where
     S::Input: Schema,
     S::Output: Schema,
@@ -863,7 +864,7 @@ where
         self.demos
             .iter()
             .map(|example| {
-                json_from_typed_example::<S>(example)
+                json_from_demo::<S>(example)
                     .expect("typed Predict demo conversion should succeed")
             })
             .collect()
@@ -884,7 +885,7 @@ where
             .map(|demos| {
                 demos
                     .iter()
-                    .map(typed_example_from_json::<S>)
+                    .map(demo_from_json::<S>)
                     .collect::<Result<Vec<_>>>()
             })
             .transpose()?;
@@ -911,8 +912,8 @@ mod tests {
         answer: String,
     }
 
-    fn typed_row(prompt: &str, answer: &str) -> Example<PredictConversionSig> {
-        Example::new(
+    fn typed_row(prompt: &str, answer: &str) -> Demo<PredictConversionSig> {
+        Demo::new(
             PredictConversionSigInput {
                 prompt: prompt.to_string(),
             },
@@ -925,27 +926,27 @@ mod tests {
     #[test]
     fn typed_and_json_row_round_trip_preserves_fields() {
         let typed = typed_row("question", "response");
-        let row = json_from_typed_example::<PredictConversionSig>(&typed)
+        let row = json_from_demo::<PredictConversionSig>(&typed)
             .expect("typed example should convert to a flat row");
 
         assert_eq!(row.get("prompt"), Some(&json!("question")));
         assert_eq!(row.get("answer"), Some(&json!("response")));
 
-        let round_trip = typed_example_from_json::<PredictConversionSig>(&row)
+        let round_trip = demo_from_json::<PredictConversionSig>(&row)
             .expect("flat row should convert back to typed example");
         assert_eq!(round_trip.input.prompt, "question");
         assert_eq!(round_trip.output.answer, "response");
     }
 
     #[test]
-    fn typed_example_from_json_splits_fields_by_schema() {
+    fn demo_from_json_splits_fields_by_schema() {
         let row = Map::from_iter([
             ("prompt".to_string(), json!("schema-input")),
             ("answer".to_string(), json!("schema-output")),
             ("extra".to_string(), json!("ignored")),
         ]);
 
-        let typed = typed_example_from_json::<PredictConversionSig>(&row)
+        let typed = demo_from_json::<PredictConversionSig>(&row)
             .expect("schema keys should split the row into typed fields");
         assert_eq!(typed.input.prompt, "schema-input");
         assert_eq!(typed.output.answer, "schema-output");
@@ -954,7 +955,7 @@ mod tests {
     #[test]
     fn dyn_predictor_apply_update_round_trips_json_demo_rows() {
         let typed = typed_row("demo-input", "demo-output");
-        let row = json_from_typed_example::<PredictConversionSig>(&typed)
+        let row = json_from_demo::<PredictConversionSig>(&typed)
             .expect("typed demo should convert to a flat row");
         let mut predictor = Predict::<PredictConversionSig>::new();
 

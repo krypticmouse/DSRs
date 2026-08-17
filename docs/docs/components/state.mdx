@@ -34,7 +34,7 @@ A `ModuleState` holds one `PredictState` per predictor, keyed by the dotted path
 
 | Field | Type | Meaning |
 |---|---|---|
-| `demos` | `Vec<JsonMap>` | Demo rows as flat JSON objects: field name to value, with input and output fields merged into one object. Rows are split back into the predictor's typed `Example<S>` via the signature schema on load. |
+| `demos` | `Vec<JsonMap>` | Demo rows as flat JSON objects: field name to value, with input and output fields merged into one object. Rows are split back into the predictor's typed `Demo<S>` via the signature schema on load. |
 | `instruction_override` | `Option<String>` | The instruction override, if any. `null` means the signature default applies. |
 
 A saved file therefore looks like:

@@ -21,7 +21,7 @@ cargo run --example 20-frontdesk-contract
 
 use anyhow::Result;
 use dspy_rs::{
-    ChainOfThought, ChatAdapter, Example, LM, Predict, Schema, Signature, configure, init_tracing,
+    ChainOfThought, ChatAdapter, Demo, LM, Predict, Schema, Signature, configure, init_tracing,
 };
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
     // Demos: typed input/output pairs that ride along as worked examples.
     // The signature stays untouched — the baggage lives in the caller.
     let triage = Predict::<Triage>::builder()
-        .demo(Example::<Triage>::new(
+        .demo(Demo::<Triage>::new(
             TriageInput {
                 ticket: "The update crashed mid-payment and I got charged twice.".into(),
             },
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
                 category: Category::Billing,
             },
         ))
-        .demo(Example::<Triage>::new(
+        .demo(Demo::<Triage>::new(
             TriageInput {
                 ticket: "App crashes every time I open the feeding log.".into(),
             },

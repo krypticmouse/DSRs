@@ -3,10 +3,12 @@ Front Desk, chapter 11 ("What Does Better Even Mean?"): labeled tickets become
 a dataset, judgment becomes a metric, and the desk gets its first honest score.
 
 Two objects, neither exotic:
-- a dataset: `Vec<Example<Triage>>`, inline here, or loaded from JSONL with
-  `DataLoader::load_json` (same three arguments either way: path, lines, opts)
+- a dataset: a `Vec` of plain row structs — `#[derive(Example)]` wires each row
+  to the `Triage` signature by field name; build it inline or load it from
+  JSONL with `DataLoader::load_json`
 - a metric: a `TypedMetric` impl returning an `Eval` (a score, and optionally
-  the feedback string that chapter 13's GEPA will feed on)
+  the feedback string that chapter 13's GEPA will feed on); it reads the row's
+  gold fields directly
 
 Run with:
 ```
@@ -41,24 +43,36 @@ struct Triage {
     category: Category,
 }
 
+/// A labeled ticket, shaped like the data — ticket in, gold category out.
+/// `#[derive(Example)]` matches row fields to `Triage`'s fields by name;
+/// serde + Facet make the same struct loadable straight from JSONL.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+#[example(Triage)]
+struct LabeledTicket {
+    #[input]
+    ticket: String,
+    category: Category,
+}
+
 /// The predicted category either matches the label or it does not.
 struct TriageAccuracy;
 
-impl TypedMetric<Triage, Predict<Triage>> for TriageAccuracy {
+impl TypedMetric<LabeledTicket, Predict<Triage>> for TriageAccuracy {
     async fn evaluate(
         &self,
-        example: &Example<Triage>,
+        example: &LabeledTicket,
         prediction: &Predicted<TriageOutput>,
         _trace: Option<&Trace>,
     ) -> Result<Eval> {
-        let hit = example.output.category == prediction.category;
+        let hit = example.category == prediction.category;
         Ok(Eval::score(if hit { 1.0 } else { 0.0 }))
     }
 }
 
 /// The labeled cases, inline. A demo and a test case were always the same
 /// thing: an input plus the output you'd accept.
-fn inline_trainset() -> Vec<Example<Triage>> {
+fn inline_trainset() -> Vec<LabeledTicket> {
     [
         (
             "Charged twice after the update crashed mid-payment",
@@ -83,13 +97,9 @@ fn inline_trainset() -> Vec<Example<Triage>> {
         ),
     ]
     .into_iter()
-    .map(|(ticket, category)| {
-        Example::new(
-            TriageInput {
-                ticket: ticket.to_string(),
-            },
-            TriageOutput { category },
-        )
+    .map(|(ticket, category)| LabeledTicket {
+        ticket: ticket.to_string(),
+        category,
     })
     .collect()
 }
@@ -106,11 +116,11 @@ async fn main() -> Result<()> {
     );
 
     // When the labels live in a JSONL file ({"ticket": ..., "category": ...},
-    // one object per line), loading is one call, typed against the signature
-    // it will test. `true` means JSONL.
+    // one object per line), loading is one call, typed against the same row
+    // struct the metric reads. `true` means JSONL.
     let jsonl_path = "examples/data/tickets.jsonl";
-    let trainset: Vec<Example<Triage>> = if std::path::Path::new(jsonl_path).exists() {
-        DataLoader::load_json::<Triage>(jsonl_path, true, TypedLoadOptions::default())?
+    let trainset: Vec<LabeledTicket> = if std::path::Path::new(jsonl_path).exists() {
+        DataLoader::load_json::<LabeledTicket>(jsonl_path, true, TypedLoadOptions::default())?
     } else {
         inline_trainset()
     };
