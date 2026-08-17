@@ -26,17 +26,14 @@ struct QA {
 }
 
 /// A trainset row is a plain struct shaped like the *dataset*, not the
-/// signature. `#[derive(Example)]` wires it to `QA` by field name:
-/// `#[input]` fields form `QAInput`, `#[output]` fields form `QAOutput`, and
-/// unmarked fields are metric-only gold data the module never sees.
+/// signature. `#[derive(Example)]` projects it into `QAInput`/`QAOutput` by
+/// field name at the call site — no signature is named on the row, and extra
+/// fields are metric-only gold data the module never sees.
 #[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[facet(crate = facet)]
-#[example(QA)]
 struct HotpotRow {
-    #[input]
     question: String,
 
-    #[output]
     answer: String,
 
     /// HotpotQA's difficulty label — metric-only: it rides along in the row,

@@ -14,25 +14,18 @@ Few-shot demos are a separate type: `Demo<S>` is the signature-bound input/outpu
 
 ## Row structs
 
-A row struct is plain data. Fields fall into three roles:
-
-| Role | Marked by | Seen by |
-|---|---|---|
-| Input | `#[input]` | The module (via `to_input()`), the metric |
-| Output (gold label) | `#[output]`, or unmarked under the default partition | `to_output()` for demo seeding, the metric |
-| Metric-only metadata | `#[meta]`, or unmarked once any field is marked `#[output]` | The metric only |
+A row struct is plain data. It names no signature and marks no fields: which fields matter is decided at the call site, by name.
 
 ```rust
 #[derive(Example, Clone, Debug, serde::Serialize)]
-#[example(QA)]
 struct HotpotRow {
-    #[input]
-    question: String,
-    #[output]
-    answer: String,
-    supporting_facts: Vec<String>, // metric-only: never sent to the module
+    question: String,              // fills QAInput.question
+    answer: String,                // fills QAOutput.answer when seeding demos
+    supporting_facts: Vec<String>, // matches nothing in QA: metric-only
 }
 ```
+
+A field is used when the target type declares a field of that name; fields the target does not declare are ignored. `supporting_facts` above is metric-only for `QA` not because it is marked, but because `QAInput` and `QAOutput` have no such field. The same row type serves any signature whose input it can fill.
 
 The same row type flows through the whole loop:
 
@@ -42,7 +35,7 @@ The same row type flows through the whole loop:
 | [`Optimizer::compile`](/docs/components/optimizers) | `optimizer.compile(&mut module, Vec<E>, &metric)` | `E: ToInput<M::Input> + serde::Serialize + Send + Sync` |
 | [`TypedMetric<E, M>`](/docs/components/evaluation) | `evaluate(&self, example: &E, prediction, trace)` | none — the metric receives the full row |
 | [`EvalEngine::new`](/docs/components/optimizer-engine) | `EvalEngine::new(Vec<E>, &metric, config)` | `E: Serialize` (rollout-cache uids are content hashes of the whole row) |
-| Demo seeding | `Demo::new(row.to_input(), row.to_output())` | `E: ToInput<S::Input> + ToOutput<S::Output>` |
+| Demo seeding | `Demo::new(row.to_input()?, row.to_output()?)` | `E: ToInput<S::Input> + ToOutput<S::Output>` |
 
 Because the metric sees the row rather than a signature-shaped pair, ground truth does not have to fit the module's output type: a metric can score a `QAOutput` prediction against supporting facts the module never produced.
 
@@ -50,21 +43,20 @@ Because the metric sees the row rather than a signature-shaped pair, ground trut
 
 ```rust
 pub trait ToInput<I> {
-    fn to_input(&self) -> I;
+    fn to_input(&self) -> anyhow::Result<I>;
 }
 
 pub trait ToOutput<O> {
-    fn to_output(&self) -> O;
+    fn to_output(&self) -> anyhow::Result<O>;
 }
 ```
 
-`ToInput` projects a row into a module's input type. `ToOutput` is its counterpart for gold output, used to seed labeled few-shot demos (`Demo::new(row.to_input(), row.to_output())`); optimizers that harvest demos from traces do not need it. Four ways to get an impl:
+`ToInput` projects a row into a module's input type. `ToOutput` is its counterpart for gold output, used to seed labeled few-shot demos (`Demo::new(row.to_input()?, row.to_output()?)`); optimizers that harvest demos from traces do not need it. Both are fallible because the derived impl resolves fields by name at runtime; the tuple impls never fail. Three ways to get an impl:
 
 | Source | Provides | Use when |
 |---|---|---|
-| `#[derive(Example)]` | `ToInput`/`ToOutput` toward each signature named in `#[example(...)]` | The row struct's field names line up with the signature's |
+| `#[derive(Example)]` | `ToInput<I>`/`ToOutput<O>` for every `I`/`O` the row can fill, by field name | The row's field names line up with the target's |
 | `(I, O)` tuples | `ToInput<I>` and `ToOutput<O>` | Inline trainsets with no extra fields |
-| Identity: any `T: Clone` | `ToInput<T>` for `T` itself | Input-only trainsets: `Vec<S::Input>` |
 | Hand-written impl | Whatever you write | Field names or shapes that do not line up |
 
 Tuple rows make zero-boilerplate inline trainsets:
@@ -78,57 +70,35 @@ let trainset = vec![(
 
 ## `#[derive(Example)]`
 
-The derive generates `ToInput`/`ToOutput` impls from a row struct toward the signatures named in `#[example(...)]`, matching row fields to the signature's `Input`/`Output` struct fields by name at compile time. A typo or type mismatch is a compile error, not a runtime one.
-
-| Attribute | On | Meaning |
-|---|---|---|
-| `#[example(Sig)]` | struct | Target signature. Multiple targets: comma-separated (`#[example(QA, Grade)]`) or repeated attributes. At least one is required |
-| `#[input]` | field | Projected into `Signature::Input`. At least one is required |
-| `#[output]` | field | Projected into `Signature::Output`. Optional; switches the partition to explicit mode |
-| `#[meta]` | field | Metric-only metadata in any mode: excluded from the default output partition without switching to explicit mode. Cannot be combined with `#[input]` or `#[output]` |
-
-Partition rules:
-
-- `#[input]` fields form the input; at least one is required. A field cannot be both `#[input]` and `#[output]`.
-- With no explicit `#[output]` mark, every non-input, non-`#[meta]` field is an output.
-- Marking any field `#[output]` switches to explicit mode: only marked fields are outputs, and unmarked non-input fields become metric-only metadata.
-- `#[meta]` always excludes a field from the output partition.
-- When the resulting output set is empty, no `ToOutput` impl is generated (the `ToInput` impl is unaffected).
-- The derive requires a struct with named fields; projected fields must be `Clone`.
+The derive marks a struct as a trainset row. It takes no arguments and no field attributes, and generates blanket `ToInput<I>`/`ToOutput<O>` impls: the row projects into *any* target type by serializing itself and deserializing the target out of it, matching fields by name.
 
 ```rust
-#[derive(Example, Clone, Debug)]
-#[example(QA)]
-struct PlainRow {
-    #[input]
-    question: String,
-    answer: String, // no #[output] anywhere: every non-input field is an output
-}
-```
-
-The empty-output-set rule is the intended pattern for rows whose gold fields do not line up with the signature's `Output` struct. `ReasonedQA` below outputs `reasoning` and `answer`, but the dataset labels only the answer — under the default partition `gold_answer` would be projected into an `Output` it cannot fill. Keeping it `#[meta]` skips `ToOutput` generation entirely, and the metric reads the gold field from the row directly:
-
-```rust
-/// Think step by step, then answer.
-#[derive(Signature, Clone, Debug)]
-struct ReasonedQA {
-    #[input]
-    question: String,
-    #[output]
-    reasoning: String,
-    #[output]
-    answer: String,
-}
-
 #[derive(Example, Clone, Debug, serde::Serialize)]
-#[example(ReasonedQA)]
-struct GoldOnlyRow {
-    #[input]
+struct HotpotRow {
     question: String,
-    #[meta]
-    gold_answer: String, // empty output set: no ToOutput impl is generated
+    answer: String,
+    supporting_facts: Vec<String>,
 }
 ```
+
+Requirements and behavior:
+
+- The row must be a struct with named fields and must implement `serde::Serialize` (derive it alongside `Example`).
+- Fields the target type does not declare are ignored, so one row type can serve several signatures and carry metric-only columns.
+- Resolution happens at runtime, not compile time. A field the target requires but the row lacks — or one whose type does not deserialize — returns an error naming both types, propagated as an evaluation or compile error. Use tuple rows where you want the check at compile time.
+
+Because the impls are blanket, the target type comes from the call site: the module's `Input` for `to_input()`, the signature's `Output` for `to_output()`. Nothing on the row names a signature.
+
+```rust
+let row = HotpotRow { /* … */ };
+
+let input: QAInput = row.to_input()?;      // target inferred from the binding
+let demo = Demo::<QA>::new(row.to_input()?, row.to_output()?);
+```
+
+A row whose gold fields do not line up with the signature's `Output` needs no special handling: nothing is generated per-signature, so `to_input()` works regardless and only a `to_output()` call that cannot be satisfied fails. Metrics read gold fields from the row directly, so rows labeling a subset of a multi-field output (a dataset with a gold answer against a signature that also outputs `reasoning`) simply never call `to_output()`.
+
+`dspy_rs::core::example::project` is the underlying helper (`project::<T, U>(&T) -> Result<U>`) if you need the same field-name projection outside a row impl.
 
 ## DataLoader
 
@@ -137,11 +107,8 @@ struct GoldOnlyRow {
 ```rust
 #[derive(Example, Clone, Debug, facet::Facet, serde::Serialize, serde::Deserialize)]
 #[facet(crate = facet)]
-#[example(QA)]
 struct HotpotRow {
-    #[input]
     question: String,
-    #[output]
     answer: String,
     supporting_facts: Vec<String>,
 }
@@ -236,7 +203,7 @@ Data loading is versioned under `data::v1`. The module tree is `data::v1::datalo
 
 ### Migration note
 
-The signature-bound pair `Example<S> { input, output }` was removed. Trainset rows are now plain structs connected to signatures through `ToInput`/`ToOutput` (this page), and few-shot demos are `Demo<S>` on [Predict](/docs/components/predict). Loaders that took a signature (`load_json::<Sig>`) now take the row struct (`load_json::<Row>`); `TypedLoadOptions::field_map` keys are row-struct field names instead of signature field names.
+The signature-bound pair `Example<S> { input, output }` was removed. Trainset rows are now plain structs that project into a signature's types through `ToInput`/`ToOutput` (this page), and few-shot demos are `Demo<S>` on [Predict](/docs/components/predict). Loaders that took a signature (`load_json::<Sig>`) now take the row struct (`load_json::<Row>`); `TypedLoadOptions::field_map` keys are row-struct field names instead of signature field names.
 
 The pre-v1 raw loaders were also removed. Use the typed `load_*` / `load_*_with` APIs instead of:
 

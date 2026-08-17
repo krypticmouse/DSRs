@@ -1,162 +1,77 @@
-//! `#[derive(Example)]` — connects a plain trainset-row struct to signatures.
+//! `#[derive(Example)]` — marks a plain struct as a trainset row.
 //!
-//! The row struct stays yours: any fields, any types. The derive generates
-//! `ToInput`/`ToOutput` impls toward the signatures named in `#[example(...)]`,
-//! matching row fields to signature Input/Output fields *by name* at compile
-//! time — a typo or type mismatch is a compile error, not a runtime one.
+//! The row stays yours: any fields, any types, no signature named anywhere.
+//! The derive generates generic `ToInput`/`ToOutput` impls that project the
+//! row into *any* target type by field name through serde: extra row fields
+//! (gold labels, metric-only metadata) are ignored; a missing or mismatched
+//! field is a runtime error on first use, naming both types.
 //!
 //! ```ignore
-//! #[derive(Example)]
-//! #[example(QA)]
+//! #[derive(Example, Clone, Debug, serde::Serialize)]
 //! struct HotpotRow {
-//!     #[input]
-//!     question: String,
-//!     #[output]
-//!     answer: String,
-//!     supporting_facts: Vec<String>, // metric-only: not part of input or output
+//!     question: String,              // → QAInput.question, matched by name
+//!     answer: String,                // → QAOutput.answer, when seeding demos
+//!     supporting_facts: Vec<String>, // metric-only: ignored by projection
 //! }
 //! ```
 //!
-//! Partition rules:
-//! - `#[input]` marks the fields projected into `Signature::Input`. At least one is required.
-//! - With no explicit `#[output]` marks, every non-input field is an output.
-//! - Marking any field `#[output]` switches to explicit mode: only marked fields
-//!   are outputs, and unmarked non-input fields become metric-only metadata.
-//! - `#[meta]` excludes a field from the default output partition without
-//!   switching to explicit mode.
-//! - An empty output set is fine: no `ToOutput` impl is generated. Metrics read
-//!   the row directly, so gold fields that don't line up with the signature's
-//!   Output struct (e.g. reasoning-bearing signatures) can simply stay `#[meta]`.
+//! The row must be `Serialize` (derive it alongside `Example`); target types
+//! come from the signatures the row meets at the call site, so one row type
+//! works with every module whose input it can fill.
 
-use quote::{format_ident, quote};
-use syn::punctuated::Punctuated;
-use syn::{Data, DeriveInput, Error, Fields, Ident, Path, Result, Token};
+use quote::quote;
+use syn::{Data, DeriveInput, Error, Fields, Path, Result, parse_quote};
 
-pub(crate) fn expand_example(input: &DeriveInput, runtime: &Path) -> Result<proc_macro2::TokenStream> {
-    let signatures = collect_signatures(input)?;
-    if signatures.is_empty() {
-        return Err(Error::new_spanned(
-            &input.ident,
-            "#[derive(Example)] needs at least one target signature: #[example(MySignature)]",
-        ));
-    }
-
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => &named.named,
-            _ => {
+pub(crate) fn expand_example(
+    input: &DeriveInput,
+    runtime: &Path,
+) -> Result<proc_macro2::TokenStream> {
+    match &input.data {
+        Data::Struct(data) => {
+            if !matches!(data.fields, Fields::Named(_)) {
                 return Err(Error::new_spanned(
                     &input.ident,
-                    "#[derive(Example)] requires named struct fields",
+                    "#[derive(Example)] requires named struct fields (projection matches by field name)",
                 ));
             }
-        },
+        }
         _ => {
             return Err(Error::new_spanned(
                 &input.ident,
                 "#[derive(Example)] only supports structs",
             ));
         }
-    };
-
-    let mut input_fields: Vec<&Ident> = Vec::new();
-    let mut marked_outputs: Vec<&Ident> = Vec::new();
-    let mut unmarked: Vec<&Ident> = Vec::new();
-
-    for field in fields {
-        let ident = field.ident.as_ref().expect("named field");
-        let is_input = field.attrs.iter().any(|attr| attr.path().is_ident("input"));
-        let is_output = field.attrs.iter().any(|attr| attr.path().is_ident("output"));
-        let is_meta = field.attrs.iter().any(|attr| attr.path().is_ident("meta"));
-        if is_meta && (is_input || is_output) {
-            return Err(Error::new_spanned(
-                ident,
-                "#[meta] cannot be combined with #[input] or #[output]",
-            ));
-        }
-        match (is_input, is_output) {
-            (true, true) => {
-                return Err(Error::new_spanned(
-                    ident,
-                    "a field cannot be both #[input] and #[output]",
-                ));
-            }
-            (true, false) => input_fields.push(ident),
-            (false, true) => marked_outputs.push(ident),
-            (false, false) if is_meta => {}
-            (false, false) => unmarked.push(ident),
-        }
     }
-
-    if input_fields.is_empty() {
-        return Err(Error::new_spanned(
-            &input.ident,
-            "#[derive(Example)] needs at least one #[input] field",
-        ));
-    }
-
-    // Explicit #[output] marks switch off the everything-else-is-output default.
-    let output_fields: Vec<&Ident> = if marked_outputs.is_empty() {
-        unmarked.clone()
-    } else {
-        marked_outputs
-    };
 
     let name = &input.ident;
-    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+    let serde = quote! { #runtime::__macro_support::serde };
+    let anyhow = quote! { #runtime::__macro_support::anyhow };
 
-    let mut impls = proc_macro2::TokenStream::new();
-    for (idx, sig) in signatures.iter().enumerate() {
-        let input_alias = format_ident!("__DsrsExampleInput{idx}");
-        let output_alias = format_ident!("__DsrsExampleOutput{idx}");
-        let input_inits = input_fields.iter().map(|field| {
-            quote! { #field: ::core::clone::Clone::clone(&self.#field) }
-        });
-        let output_inits = output_fields.iter().map(|field| {
-            quote! { #field: ::core::clone::Clone::clone(&self.#field) }
-        });
+    let (_, ty_generics, _) = input.generics.split_for_impl();
 
-        impls.extend(quote! {
-            #[allow(non_camel_case_types)]
-            impl #impl_generics #runtime::ToInput<<#sig as #runtime::Signature>::Input>
-                for #name #ty_generics #where_clause
-            {
-                fn to_input(&self) -> <#sig as #runtime::Signature>::Input {
-                    type #input_alias = <#sig as #runtime::Signature>::Input;
-                    #input_alias { #(#input_inits,)* }
-                }
+    // The impls add one generic param (the projection target) on top of the
+    // row's own generics, plus the serde bounds the projection needs.
+    let mut generics = input.generics.clone();
+    generics
+        .params
+        .push(parse_quote!(__DsrsTarget: #serde::de::DeserializeOwned));
+    let where_clause = generics.make_where_clause();
+    where_clause
+        .predicates
+        .push(parse_quote!(Self: #serde::Serialize));
+    let (impl_generics, _, where_clause) = generics.split_for_impl();
+
+    Ok(quote! {
+        impl #impl_generics #runtime::ToInput<__DsrsTarget> for #name #ty_generics #where_clause {
+            fn to_input(&self) -> #anyhow::Result<__DsrsTarget> {
+                #runtime::core::example::project(self)
             }
-        });
-
-        if !output_fields.is_empty() {
-            impls.extend(quote! {
-                #[allow(non_camel_case_types)]
-                impl #impl_generics #runtime::ToOutput<<#sig as #runtime::Signature>::Output>
-                    for #name #ty_generics #where_clause
-                {
-                    fn to_output(&self) -> <#sig as #runtime::Signature>::Output {
-                        type #output_alias = <#sig as #runtime::Signature>::Output;
-                        #output_alias { #(#output_inits,)* }
-                    }
-                }
-            });
         }
-    }
 
-    Ok(impls)
-}
-
-/// Collects target signature paths from every `#[example(...)]` attribute
-/// (comma-separated and/or repeated attributes both work).
-fn collect_signatures(input: &DeriveInput) -> Result<Vec<Path>> {
-    let mut signatures = Vec::new();
-    for attr in &input.attrs {
-        if !attr.path().is_ident("example") {
-            continue;
+        impl #impl_generics #runtime::ToOutput<__DsrsTarget> for #name #ty_generics #where_clause {
+            fn to_output(&self) -> #anyhow::Result<__DsrsTarget> {
+                #runtime::core::example::project(self)
+            }
         }
-        let paths =
-            attr.parse_args_with(Punctuated::<Path, Token![,]>::parse_terminated)?;
-        signatures.extend(paths);
-    }
-    Ok(signatures)
+    })
 }

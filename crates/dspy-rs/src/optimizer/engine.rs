@@ -1011,7 +1011,7 @@ where
         stream::iter(pending.iter().map(|&idx| {
             let example = &self.examples[idx];
             async move {
-                let input = example.to_input();
+                let input = example.to_input()?;
                 let meta = TraceMeta {
                     candidate_hash: Some(candidate_hash),
                     input: json_object(serde_json::to_value(&input)),

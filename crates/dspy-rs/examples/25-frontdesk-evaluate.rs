@@ -3,8 +3,8 @@ Front Desk, chapter 11 ("What Does Better Even Mean?"): labeled tickets become
 a dataset, judgment becomes a metric, and the desk gets its first honest score.
 
 Two objects, neither exotic:
-- a dataset: a `Vec` of plain row structs — `#[derive(Example)]` wires each row
-  to the `Triage` signature by field name; build it inline or load it from
+- a dataset: a `Vec` of plain row structs — `#[derive(Example)]` projects each
+  row into `Triage`'s input by field name; build it inline or load it from
   JSONL with `DataLoader::load_json`
 - a metric: a `TypedMetric` impl returning an `Eval` (a score, and optionally
   the feedback string that chapter 13's GEPA will feed on); it reads the row's
@@ -48,9 +48,7 @@ struct Triage {
 /// serde + Facet make the same struct loadable straight from JSONL.
 #[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[facet(crate = facet)]
-#[example(Triage)]
 struct LabeledTicket {
-    #[input]
     ticket: String,
     category: Category,
 }

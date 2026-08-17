@@ -15,11 +15,8 @@ use anyhow::Result;
 use dspy_rs::{Eval, Example, Predict, Predicted, Trace, TypedMetric};
 
 #[derive(Example, Clone, Debug, serde::Serialize)]
-#[example(QA)]
 struct QARow {
-    #[input]
     question: String,
-    #[output]
     answer: String,
 }
 

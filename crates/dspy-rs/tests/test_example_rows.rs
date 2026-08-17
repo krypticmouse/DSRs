@@ -1,5 +1,6 @@
-//! Trainset rows are plain structs: `#[derive(Example)]`, tuple rows, and the
-//! `ToInput`/`ToOutput` projections they feed into evaluation and optimization.
+//! Trainset rows are plain structs: `#[derive(Example)]` projects them into
+//! any signature's input/output by field name at runtime; tuples stay the
+//! compile-checked zero-conversion path.
 
 use anyhow::Result;
 use dspy_rs::*;
@@ -13,81 +14,65 @@ struct RowQA {
     answer: String,
 }
 
+// No signature named, no field marks: the row is just data. `question` and
+// `answer` are matched by name at the call site; `supporting_facts` is only
+// ever seen by the metric.
 #[derive(Example, Clone, Debug, serde::Serialize)]
-#[example(RowQA)]
 struct HotpotRow {
-    #[input]
     question: String,
-    #[output]
     answer: String,
-    // Metric-only: visible to TypedMetric, never sent to the module.
     supporting_facts: Vec<String>,
 }
 
-#[derive(Example, Clone, Debug)]
-#[example(RowQA)]
-struct DefaultPartitionRow {
-    #[input]
-    question: String,
-    // No explicit #[output] anywhere: every non-input field is an output.
-    answer: String,
-}
-
 #[test]
-fn derive_projects_marked_fields_by_name() {
+fn derive_projects_by_field_name() {
     let row = HotpotRow {
         question: "What is 2+2?".to_string(),
         answer: "4".to_string(),
         supporting_facts: vec!["arithmetic".to_string()],
     };
 
-    let input: RowQAInput = row.to_input();
-    let output: RowQAOutput = row.to_output();
+    let input: RowQAInput = row.to_input().expect("question field lines up");
+    let output: RowQAOutput = row.to_output().expect("answer field lines up");
     assert_eq!(input.question, "What is 2+2?");
     assert_eq!(output.answer, "4");
 }
 
-#[derive(Signature, Clone, Debug)]
-/// Think step by step, then answer.
-struct ReasonedQA {
-    #[input]
-    question: String,
-    #[output]
-    reasoning: String,
-    #[output]
-    answer: String,
-}
-
-// Gold answer doesn't cover ReasonedQA's `reasoning` output, so it stays
-// `#[meta]`: the metric reads it from the row and no ToOutput is generated.
-#[derive(Example, Clone, Debug)]
-#[example(ReasonedQA)]
-struct GoldOnlyRow {
-    #[input]
-    question: String,
-    #[meta]
-    gold_answer: String,
-}
-
 #[test]
-fn meta_fields_skip_the_default_output_partition() {
-    let row = GoldOnlyRow {
-        question: "q".to_string(),
-        gold_answer: "a".to_string(),
-    };
-    let input: ReasonedQAInput = row.to_input();
-    assert_eq!(input.question, "q");
-    assert_eq!(row.gold_answer, "a");
-}
+fn one_row_type_serves_any_matching_signature() {
+    #[derive(Signature, Clone, Debug)]
+    /// Same input contract, different signature type.
+    struct OtherQA {
+        #[input]
+        question: String,
+        #[output]
+        answer: String,
+    }
 
-#[test]
-fn derive_defaults_non_input_fields_to_output() {
-    let row = DefaultPartitionRow {
+    let row = HotpotRow {
         question: "q".to_string(),
         answer: "a".to_string(),
+        supporting_facts: vec![],
     };
-    let output: RowQAOutput = row.to_output();
-    assert_eq!(output.answer, "a");
+    let input: OtherQAInput = row.to_input().expect("rows are signature-independent");
+    assert_eq!(input.question, "q");
+}
+
+#[test]
+fn projection_mismatch_is_a_clear_runtime_error() {
+    #[derive(Example, Clone, Debug, serde::Serialize)]
+    struct WrongRow {
+        prompt: String,
+    }
+
+    let row = WrongRow {
+        prompt: "q".to_string(),
+    };
+    let projected: Result<RowQAInput> = row.to_input();
+    let err = projected.expect_err("no `question` field to project");
+    let message = format!("{err:#}");
+    assert!(message.contains("WrongRow"), "names the row: {message}");
+    assert!(message.contains("RowQAInput"), "names the target: {message}");
 }
 
 #[test]
@@ -100,22 +85,23 @@ fn tuple_rows_project_both_ways() {
             answer: "a".to_string(),
         },
     );
-    let input: RowQAInput = row.to_input();
-    let output: RowQAOutput = row.to_output();
+    let input: RowQAInput = row.to_input().expect("tuple input clones");
+    let output: RowQAOutput = row.to_output().expect("tuple output clones");
     assert_eq!(input.question, "q");
     assert_eq!(output.answer, "a");
 }
 
 #[test]
-fn rows_seed_labeled_demos() {
+fn rows_seed_labeled_demos() -> Result<()> {
     let row = HotpotRow {
         question: "q".to_string(),
         answer: "a".to_string(),
         supporting_facts: vec![],
     };
-    let demo = Demo::<RowQA>::new(row.to_input(), row.to_output());
+    let demo = Demo::<RowQA>::new(row.to_input()?, row.to_output()?);
     assert_eq!(demo.input.question, "q");
     assert_eq!(demo.output.answer, "a");
+    Ok(())
 }
 
 /// An offline module: echoes the question back as the answer.

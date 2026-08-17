@@ -488,7 +488,7 @@ impl GEPA {
     {
         let mut outputs = Vec::with_capacity(eval_set.len());
         for example in eval_set {
-            let input = example.to_input();
+            let input = example.to_input()?;
             let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
             outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(serde_json::Value::Null));
         }

@@ -138,7 +138,7 @@ where
     I: IntoIterator<Item = &'a E>,
 {
     stream::iter(examples.into_iter().map(|example| async move {
-        let input = example.to_input();
+        let input = example.to_input()?;
         let meta = TraceMeta {
             input: serde_json::to_value(&input)
                 .ok()

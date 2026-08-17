@@ -26,15 +26,12 @@ struct QA {
     answer: String,
 }
 
-/// The trainset row, shaped like the dataset and wired to `QA` by field name.
+/// The trainset row, shaped like the dataset; projected into `QA` by field name.
 #[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[facet(crate = facet)]
-#[example(QA)]
 struct HotpotRow {
-    #[input]
     question: String,
 
-    #[output]
     answer: String,
 }
 

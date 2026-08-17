@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `ec235d5`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 The foundational abstractions everything else is built on.
@@ -59,6 +59,12 @@ How trainset rows connect to modules.
 |---|---|
 | [`ToInput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToInput.html) | Projects a trainset row into a module's input type. |
 | [`ToOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/trait.ToOutput.html) | Projects a trainset row into a signature's output type — the gold label. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`project`](https://docs.rs/dspy-rs/latest/dspy_rs/core/example/fn.project.html) | Field-name projection: serializes `row` and deserializes `U` out of it. |
 
 ## `core::lm`
 

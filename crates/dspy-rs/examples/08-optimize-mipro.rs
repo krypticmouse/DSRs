@@ -30,12 +30,9 @@ struct QuestionAnswering {
 /// field name via `#[derive(Example)]`.
 #[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
 #[facet(crate = facet)]
-#[example(QuestionAnswering)]
 struct HotpotRow {
-    #[input]
     question: String,
 
-    #[output]
     answer: String,
 }
 

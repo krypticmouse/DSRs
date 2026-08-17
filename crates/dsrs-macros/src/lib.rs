@@ -123,30 +123,24 @@ pub fn include_program(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Derives [`ToInput`]/[`ToOutput`] impls connecting a plain trainset-row
-/// struct to one or more signatures.
+/// Marks a plain struct as a trainset row by deriving generic
+/// [`ToInput`]/[`ToOutput`] projections.
 ///
-/// Mark input fields with `#[input]` and name the target signature(s) with
-/// `#[example(QA)]`. By default every non-input field becomes an output;
-/// marking any field `#[output]` switches to explicit mode, leaving unmarked
-/// fields as metric-only metadata, and `#[meta]` excludes a single field from
-/// the default partition. When the output set is empty no `ToOutput` impl is
-/// generated — gold fields that don't line up with the signature's Output
-/// struct can stay `#[meta]` and be read by the metric from the row directly.
-/// Conversions match fields by name and are checked at compile time.
+/// No signature is named on the row and no field marks are needed: the row
+/// projects into whatever input/output type it meets at the call site, matched
+/// by field name through serde. Extra row fields (gold labels, metric-only
+/// metadata) are ignored by the projection; a missing or mismatched field is a
+/// runtime error on first use. The row must also derive `serde::Serialize`.
 ///
 /// ```ignore
-/// #[derive(Example, Clone, serde::Serialize)]
-/// #[example(QA)]
+/// #[derive(Example, Clone, Debug, serde::Serialize)]
 /// struct HotpotRow {
-///     #[input]
-///     question: String,
-///     #[output]
-///     answer: String,
+///     question: String,              // → QAInput.question, by name
+///     answer: String,                // → QAOutput.answer, when seeding demos
 ///     supporting_facts: Vec<String>, // metric-only
 /// }
 /// ```
-#[proc_macro_derive(Example, attributes(input, output, meta, example))]
+#[proc_macro_derive(Example)]
 pub fn derive_example(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let runtime = match resolve_dspy_rs_path() {

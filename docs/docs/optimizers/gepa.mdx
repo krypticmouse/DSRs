@@ -69,14 +69,11 @@ impl Module for MyModule {
     }
 }
 
-// The trainset row: any struct, connected to the signature by #[derive(Example)].
-// See the Data page for the row model.
+// The trainset row: any struct. #[derive(Example)] projects it into the
+// signature's types by field name. See the Data page for the row model.
 #[derive(Example, Clone, Debug, serde::Serialize)]
-#[example(MySignature)]
 struct MyRow {
-    #[input]
     question: String,
-    #[output]
     answer: String,
 }
 

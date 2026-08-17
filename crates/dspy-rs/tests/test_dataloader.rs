@@ -24,16 +24,13 @@ struct LoaderSig {
     answer: String,
 }
 
-/// Loader rows are plain structs; `#[derive(Example)]` wires QARow to LoaderSig
-/// so loaded rows feed straight into the evaluator/optimizer paths.
+/// Loader rows are plain structs; `#[derive(Example)]` lets loaded rows feed
+/// straight into the evaluator/optimizer paths via field-name projection.
 #[derive(Example, Clone, Debug, facet::Facet, serde::Serialize, serde::Deserialize)]
 #[facet(crate = facet)]
-#[example(LoaderSig)]
 struct QARow {
-    #[input]
     question: String,
 
-    #[output]
     answer: String,
 }
 
