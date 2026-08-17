@@ -123,6 +123,33 @@ pub async fn with_overlay<Fut: Future>(
     Ok(crate::fx::with_params(params, fut).await)
 }
 
+tokio::task_local! {
+    /// The ambient overlay `#[module]` executable fns read (RFC 0003 §5).
+    static CURRENT_OVERLAY: std::sync::Arc<Overlay>;
+}
+
+/// Runs `fut` with `overlay` as the ambient candidate for every `#[module]`
+/// fn called on this task — the interpreter-lane sibling of
+/// [`fx::with_params`](crate::fx::with_params). Scoping matches it exactly:
+/// task-local, spawned subtasks do not inherit, nesting replaces.
+///
+/// The overlay's [`base`](Overlay::base) is checked by `Interpreter::run`
+/// against each module's program, not here — one scope can span calls into
+/// several modules, and only the matching one accepts it.
+pub async fn with_ambient_overlay<Fut: Future>(
+    overlay: std::sync::Arc<Overlay>,
+    fut: Fut,
+) -> Fut::Output {
+    CURRENT_OVERLAY.scope(overlay, fut).await
+}
+
+/// The ambient overlay, if a [`with_ambient_overlay`] scope is active on
+/// this task. Read by `#[module]`-generated executable fns immediately
+/// before `Interpreter::run`.
+pub fn current_overlay() -> Option<std::sync::Arc<Overlay>> {
+    CURRENT_OVERLAY.try_with(std::sync::Arc::clone).ok()
+}
+
 // ---------------------------------------------------------------------------
 // Core conversions
 // ---------------------------------------------------------------------------

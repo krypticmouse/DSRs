@@ -25,8 +25,8 @@ use serde_json::{Value, json};
 
 use crate::adapter::chat::ChatAdapter;
 use crate::ir::graph::{
-    AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleNode, ModelId, Node, NodeId, PortRef,
-    PredictNode, Program, ToolId, ToolKind,
+    AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
+    PortRef, PredictNode, Program, ToolId, ToolKind,
 };
 use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
@@ -154,6 +154,8 @@ pub enum LoadError {
     Model { name: String, message: String },
     #[error("host tool `{name}` is not bound in the runtime environment")]
     HostToolUnbound { name: String },
+    #[error("host (extern) hole `{name}` is not bound in the runtime environment")]
+    HostHoleUnbound { name: String },
     #[error("program contains sandboxed code but the environment has no sandbox executor")]
     SandboxMissing,
     #[error("sandboxed code at `{at}` failed to register")]
@@ -203,6 +205,13 @@ pub enum RunError {
     /// Additive to RFC 0002: interpreter invariant violation.
     #[error("internal interpreter error at `{at}`: {message}")]
     Internal { at: Box<str>, message: String },
+    /// RFC 0003 M-1: a strict replay scope refused this call.
+    #[error("replay refused at `{at}`")]
+    Replay {
+        at: Box<str>,
+        #[source]
+        source: crate::trace::ReplayError,
+    },
 }
 
 impl RunError {
@@ -231,6 +240,10 @@ pub struct RuntimeEnv {
     pub models: HashMap<String, Arc<LM>>,
     /// Host tool bindings by tool name, consulted once at load.
     pub host_tools: HashMap<String, Arc<dyn rig::tool::ToolDyn>>,
+    /// Host (extern) hole bindings by leaf name, consulted once at load
+    /// (RFC 0003 §4.1). The fn receives the hole's resolved input map and
+    /// returns a JSON value coerced against the hole's output signature.
+    pub host_holes: HashMap<String, HostHoleFn>,
     /// The sandbox executing holes and sandboxed tools (QuickJS in v1).
     /// Required iff the program carries sandboxed code.
     pub sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
@@ -266,6 +279,17 @@ impl RuntimeEnv {
         self
     }
 
+    /// Binds a native implementation for an extern hole by leaf name.
+    pub fn bind_host_hole<F, Fut>(mut self, name: &str, f: F) -> Self
+    where
+        F: Fn(JsonMap) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, String>> + Send + 'static,
+    {
+        self.host_holes
+            .insert(name.to_string(), Arc::new(move |input| Box::pin(f(input))));
+        self
+    }
+
     pub fn with_sandbox(mut self, sandbox: Arc<dyn dsrs_tools::Executor>) -> Self {
         self.sandbox = Some(sandbox);
         self
@@ -296,12 +320,19 @@ enum ToolExec {
     Sandboxed,
 }
 
+/// A native extern-hole implementation: resolved input map in, JSON value out
+/// (coerced against the hole's output signature by the interpreter).
+pub type HostHoleFn =
+    Arc<dyn Fn(JsonMap) -> BoxFuture<'static, Result<Value, String>> + Send + Sync>;
+
 /// A loaded, executable program: validated graph + bound models/tools +
 /// registered sandbox code. Cheap to share; run state never lives here.
 pub struct Interpreter {
     program: Arc<Program>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
+    /// Extern-hole bindings by leaf name, verified complete at load.
+    host_holes: HashMap<String, HostHoleFn>,
     sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
     /// Code-hash → registered sandbox tool name. Seeded at load with every
     /// default code gene; overlay code variants register on first use.
@@ -371,9 +402,21 @@ impl Interpreter {
                 }
             }
         }
+        let mut host_holes: HashMap<String, HostHoleFn> = HashMap::new();
         for (_, node) in program.nodes.iter() {
             if let Node::Hole(hole) = node {
-                sandboxed.push((program.syms.get(hole.name).to_string(), hole.code, hole.sig));
+                let name = program.syms.get(hole.name).to_string();
+                match hole.imp {
+                    HoleImpl::Sandboxed { code } => sandboxed.push((name, code, hole.sig)),
+                    HoleImpl::Host { .. } => {
+                        let bound = env
+                            .host_holes
+                            .get(&name)
+                            .cloned()
+                            .ok_or(LoadError::HostHoleUnbound { name: name.clone() })?;
+                        host_holes.insert(name, bound);
+                    }
+                }
             }
         }
 
@@ -436,6 +479,7 @@ impl Interpreter {
             program: Arc::new(program),
             models,
             tool_exec,
+            host_holes,
             sandbox,
             registered: tokio::sync::Mutex::new(registered),
             #[cfg(feature = "code-mode")]
@@ -689,20 +733,71 @@ impl Interpreter {
         }
         let lm = self.p_model(&at, cx, n.model)?;
 
-        cx.meter.try_reserve_call().map_err(|_| RunError::Budget {
-            at: at.clone().into(),
-        })?;
-
         let guard = begin_span(SpanRequest {
             component: &at,
             prefix: Some(&prefix),
             suffix: &suffix,
             input: Some(input.clone()),
             model: &lm.config,
+            request_hash: None,
         });
 
         let mut messages = prefix;
         messages.extend(suffix);
+
+        // Replay scope (RFC 0001 §4d/e, RFC 0003 M-1): intercept above the
+        // LM. A served call reserves no budget, constructs no client, and
+        // reaches no provider.
+        match crate::trace::replay::intercept(&at, &lm.config, &messages) {
+            Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let output = span
+                    .output
+                    .clone()
+                    .expect("replay serves only spans with parsed output");
+                if let Some(guard) = guard {
+                    guard.finish(SpanOutcome {
+                        events: span.events.clone(),
+                        raw_output: span.raw_output.clone(),
+                        output: Some(output.clone()),
+                        usage: span.usage,
+                        error: None,
+                    });
+                }
+                return Ok(output);
+            }
+            Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Lm,
+                        err.to_string(),
+                        Vec::new(),
+                        None,
+                        LmUsage::default(),
+                    ));
+                }
+                return Err(RunError::Replay {
+                    at: at.into(),
+                    source: err,
+                });
+            }
+            Some(crate::trace::replay::ReplayDirective::Live) | None => {}
+        }
+
+        if cx.meter.try_reserve_call().is_err() {
+            if let Some(guard) = guard {
+                guard.finish(span_error(
+                    crate::trace::SpanErrorKind::Lm,
+                    "budget exhausted".to_string(),
+                    Vec::new(),
+                    None,
+                    LmUsage::default(),
+                ));
+            }
+            return Err(RunError::Budget {
+                at: at.clone().into(),
+            });
+        }
+
         let response = match lm.call(Chat::new(messages), Vec::new()).await {
             Ok(response) => response,
             Err(err) => {
@@ -762,29 +857,30 @@ impl Interpreter {
         let def = &p.sigs[n.sig];
         let input = self.resolve_bindings(&at, Some(id), &n.binding, cx)?;
 
-        // The capability gate is constructive (§3.5): caps were checked at
-        // build/load and the sandbox only carries granted host functions —
-        // undeclared authority is unreachable at call time.
-        let sandbox = self.sandbox.as_ref().ok_or_else(|| RunError::Internal {
-            at: at.clone().into(),
-            message: "hole evaluated without a sandbox (load should have refused)".into(),
-        })?;
-
-        let (source, hash) = match self.p_value(cx, n.code) {
-            ParamValue::Code { source, hash, .. } => (source.clone(), *hash),
-            other => {
-                return Err(RunError::Internal {
-                    at: at.into(),
-                    message: format!("code slot resolved to {:?}", other.kind()),
-                });
-            }
+        // Resolve the implementation up front — its hash is part of the
+        // replay preimage (RFC 0003 §4.4).
+        let imp = match &n.imp {
+            HoleImpl::Sandboxed { code } => match self.p_value(cx, *code) {
+                ParamValue::Code { source, hash, .. } => ResolvedHoleImpl::Sandboxed {
+                    source: source.clone(),
+                    hash: *hash,
+                },
+                other => {
+                    return Err(RunError::Internal {
+                        at: at.into(),
+                        message: format!("code slot resolved to {:?}", other.kind()),
+                    });
+                }
+            },
+            HoleImpl::Host { hash } => ResolvedHoleImpl::Host { hash: *hash },
         };
-        let tool_name = self
-            .ensure_registered(&at, sandbox.as_ref(), &source, hash, def)
-            .await?;
+        let request_hash = hole_request_hash(&imp, &input, &n.caps);
 
-        let sandbox_config = LMConfig {
-            model: "sandbox:quickjs".to_string(),
+        let pseudo_model = LMConfig {
+            model: match &imp {
+                ResolvedHoleImpl::Sandboxed { .. } => "sandbox:quickjs".to_string(),
+                ResolvedHoleImpl::Host { .. } => "host:extern".to_string(),
+            },
             ..LMConfig::default()
         };
         let guard = begin_span(SpanRequest {
@@ -792,21 +888,58 @@ impl Interpreter {
             prefix: None,
             suffix: &[],
             input: Some(input.clone()),
-            model: &sandbox_config,
+            model: &pseudo_model,
+            request_hash: Some(request_hash),
         });
 
+        // Replay (RFC 0003 M-1): a hole keys on (impl ++ input ++ caps); a
+        // served span returns the recorded, already-coerced output without
+        // touching the sandbox or the host fn.
+        match crate::trace::replay::intercept_hashed(&at, request_hash) {
+            Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let output = span
+                    .output
+                    .clone()
+                    .expect("replay serves only spans with parsed output");
+                if let Some(guard) = guard {
+                    guard.finish(SpanOutcome {
+                        events: span.events.clone(),
+                        raw_output: span.raw_output.clone(),
+                        output: Some(output.clone()),
+                        usage: span.usage,
+                        error: None,
+                    });
+                }
+                return Ok(output);
+            }
+            Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Tool,
+                        err.to_string(),
+                        Vec::new(),
+                        None,
+                        LmUsage::default(),
+                    ));
+                }
+                return Err(RunError::Replay {
+                    at: at.into(),
+                    source: err,
+                });
+            }
+            Some(crate::trace::replay::ReplayDirective::Live) | None => {}
+        }
+
         let started = Instant::now();
-        let invocation =
-            dsrs_tools::ToolInvocation::new(tool_name.clone(), Value::Object(input.clone()));
-        let result = sandbox.execute(invocation).await;
+        let result = self.execute_hole_impl(&at, &imp, &input, def).await;
         let duration_us = started.elapsed().as_micros() as u64;
 
         match result {
-            Ok(value) => {
+            Ok((invoked_as, value)) => {
                 let raw = value.to_string();
                 let event = SpanEvent::ToolRun {
                     id: String::new(),
-                    name: tool_name,
+                    name: invoked_as,
                     args: Value::Object(input.clone()),
                     result: raw.clone(),
                     duration_us,
@@ -849,10 +982,55 @@ impl Interpreter {
                         LmUsage::default(),
                     ));
                 }
-                Err(RunError::Hole {
+                Err(err)
+            }
+        }
+    }
+
+    /// Executes a hole's resolved implementation. Returns the name it was
+    /// invoked as (the registered sandbox tool name, or the leaf name for
+    /// host holes) and the raw JSON result.
+    async fn execute_hole_impl(
+        &self,
+        at: &str,
+        imp: &ResolvedHoleImpl,
+        input: &JsonMap,
+        def: &SignatureDef,
+    ) -> Result<(String, Value), RunError> {
+        match imp {
+            ResolvedHoleImpl::Sandboxed { source, hash } => {
+                // The capability gate is constructive (§3.5): caps were
+                // checked at build/load and the sandbox only carries granted
+                // host functions — undeclared authority is unreachable here.
+                let sandbox = self.sandbox.as_ref().ok_or_else(|| RunError::Internal {
                     at: at.into(),
-                    source: err,
-                })
+                    message: "hole evaluated without a sandbox (load should have refused)".into(),
+                })?;
+                let name = self
+                    .ensure_registered(at, sandbox.as_ref(), source, *hash, def)
+                    .await?;
+                let value = sandbox
+                    .execute(dsrs_tools::ToolInvocation::new(
+                        name.clone(),
+                        Value::Object(input.clone()),
+                    ))
+                    .await
+                    .map_err(|source| RunError::Hole {
+                        at: at.into(),
+                        source,
+                    })?;
+                Ok((name, value))
+            }
+            ResolvedHoleImpl::Host { .. } => {
+                let host = self.host_holes.get(at).ok_or_else(|| RunError::Internal {
+                    at: at.into(),
+                    message: "host hole not bound (load should have refused)".into(),
+                })?;
+                let value = host(input.clone()).await.map_err(|message| RunError::Hole {
+                    at: at.into(),
+                    source: dsrs_tools::ExecError::Internal { message },
+                })?;
+                Ok((at.to_string(), value))
             }
         }
     }
@@ -928,12 +1106,51 @@ impl Interpreter {
             suffix: &suffix,
             input: Some(input.clone()),
             model: &lm.config,
+            request_hash: None,
         });
 
         let prefix_len = prefix.len();
         let mut messages = prefix;
         messages.extend(suffix);
         let chat = Chat::new(messages);
+
+        // Replay (RFC 0003 M-1): an agent loop is one span keyed on its
+        // opening prompt; serving it returns the recorded final output with
+        // every tool effect baked in — nothing re-executes.
+        match crate::trace::replay::intercept(&at, &lm.config, &chat.messages) {
+            Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                let output = span
+                    .output
+                    .clone()
+                    .expect("replay serves only spans with parsed output");
+                if let Some(guard) = guard {
+                    guard.finish(SpanOutcome {
+                        events: span.events.clone(),
+                        raw_output: span.raw_output.clone(),
+                        output: Some(output.clone()),
+                        usage: span.usage,
+                        error: None,
+                    });
+                }
+                return Ok(output);
+            }
+            Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Lm,
+                        err.to_string(),
+                        Vec::new(),
+                        None,
+                        LmUsage::default(),
+                    ));
+                }
+                return Err(RunError::Replay {
+                    at: at.into(),
+                    source: err,
+                });
+            }
+            Some(crate::trace::replay::ReplayDirective::Live) | None => {}
+        }
 
         let loop_cx = AgentLoopCx {
             at: &at,
@@ -1589,8 +1806,10 @@ fn coerce_outputs(
 }
 
 /// Projects a tool/hole signature's *input* side to a JSON Schema object —
-/// the declared interface is the schema the model sees.
-pub(crate) fn input_schema_of(def: &SignatureDef, types: &TypeTable) -> Value {
+/// the declared interface is the schema the model sees. Public because
+/// `#[tool]`-generated `rig::tool::Tool` impls build their definitions
+/// through it (RFC 0003 M-2).
+pub fn input_schema_of(def: &SignatureDef, types: &TypeTable) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
     for field in def.inputs.iter() {
@@ -1700,6 +1919,39 @@ fn tool_result_block(call: &rig::message::ToolCall, result: String) -> crate::Co
         UserContent::ToolResult(tool_result) => crate::ContentBlock::tool_result(tool_result),
         _ => unreachable!("tool_result constructors return ToolResult"),
     }
+}
+
+/// A hole's implementation, resolved through the overlay (sandboxed code may
+/// be a candidate's Code gene; host holes are fixed by their content hash).
+enum ResolvedHoleImpl {
+    Sandboxed { source: String, hash: u64 },
+    Host { hash: u64 },
+}
+
+/// The hole replay preimage (RFC 0003 §4.4): impl discriminant ++ impl/code
+/// hash ++ canonical input (sorted keys) ++ sorted caps. Holes render no
+/// prompt, so the config+prompt hash every other leaf uses would be identical
+/// for every hole in every program — this preimage is what makes hole spans
+/// individually addressable by replay and divergence detection.
+fn hole_request_hash(imp: &ResolvedHoleImpl, input: &JsonMap, caps: &CapSet) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = crate::utils::hash::StableHasher::new();
+    let (discriminant, hash) = match imp {
+        ResolvedHoleImpl::Sandboxed { hash, .. } => (0u8, *hash),
+        ResolvedHoleImpl::Host { hash } => (1u8, *hash),
+    };
+    hasher.write_u8(discriminant);
+    hasher.write_u64(hash);
+    let mut fields: Vec<(&String, &Value)> = input.iter().collect();
+    fields.sort_by_key(|(key, _)| *key);
+    for (key, value) in fields {
+        hasher.write(key.as_bytes());
+        hasher.write(value.to_string().as_bytes());
+    }
+    for cap in caps.iter() {
+        hasher.write(cap.as_bytes());
+    }
+    hasher.finish()
 }
 
 /// Registers a code gene in the sandbox under a content-addressed name

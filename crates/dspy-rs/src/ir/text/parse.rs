@@ -1367,10 +1367,23 @@ impl<'a> Parser<'a> {
             caps.push(cap);
         }
         self.bump()?; // ]
-        self.expect_kw("js", "after the hole capability list")?;
-        let code = self.raw_code("after `js`")?;
         let cap_refs: Vec<&str> = caps.iter().map(String::as_str).collect();
-        let mut spec = builder::hole(&name, sig, &code, &cap_refs);
+        // `js <fence>` (sandboxed) or `extern "<hash>"` (host-bound, RFC 0003).
+        let mut spec = if self.at_kw("extern") {
+            self.bump()?; // extern
+            let (text, span) = self.expect_str("after `extern` (the host implementation hash)")?;
+            let hash = u64::from_str_radix(&text, 16).map_err(|_| {
+                ParseError::at(
+                    span,
+                    format!("`extern` hash must be 16 hex digits, got `{text}`"),
+                )
+            })?;
+            builder::extern_hole(&name, sig, hash, &cap_refs)
+        } else {
+            self.expect_kw("js", "after the hole capability list (or `extern \"<hash>\"`)")?;
+            let code = self.raw_code("after `js`")?;
+            builder::hole(&name, sig, &code, &cap_refs)
+        };
         for (field, port) in binds {
             spec = spec.bind(&field, port);
         }

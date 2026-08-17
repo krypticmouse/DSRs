@@ -145,7 +145,7 @@ impl TraceSink {
             suffix: req.suffix.to_vec(),
             input: req.input,
             model,
-            request_hash: 0,
+            request_hash: req.request_hash.unwrap_or(0),
             events: Vec::new(),
             raw_output: None,
             output: None,
@@ -163,29 +163,40 @@ impl TraceSink {
             sink: self.clone(),
             started,
             done: false,
+            hash_override: req.request_hash.is_some(),
         }
     }
 
-    fn close(&self, id: SpanId, started: std::time::Duration, outcome: SpanOutcome) {
+    fn close(
+        &self,
+        id: SpanId,
+        started: std::time::Duration,
+        outcome: SpanOutcome,
+        hash_override: bool,
+    ) {
         let mut inner = self.0.lock().unwrap();
         let duration_us = inner.epoch.elapsed().saturating_sub(started).as_micros() as u64;
         inner.open.retain(|open| *open != id);
 
-        let config_hash = {
-            let span = &inner.trace.spans[id.0 as usize];
-            inner.trace.models[span.model.0 as usize].config_hash
-        };
-        let hash = {
-            let span = &inner.trace.spans[id.0 as usize];
-            let prefix = span
-                .prefix
-                .map(|p| inner.trace.prefixes[p.0 as usize].messages.as_slice())
-                .unwrap_or(&[]);
-            request_hash(config_hash, prefix, &span.suffix)
-        };
+        // An explicit request_hash (holes) was stamped at open; everything
+        // else hashes the redacted config + rendered prompt at close.
+        if !hash_override {
+            let config_hash = {
+                let span = &inner.trace.spans[id.0 as usize];
+                inner.trace.models[span.model.0 as usize].config_hash
+            };
+            let hash = {
+                let span = &inner.trace.spans[id.0 as usize];
+                let prefix = span
+                    .prefix
+                    .map(|p| inner.trace.prefixes[p.0 as usize].messages.as_slice())
+                    .unwrap_or(&[]);
+                request_hash(config_hash, prefix, &span.suffix)
+            };
+            inner.trace.spans[id.0 as usize].request_hash = hash;
+        }
 
         let span = &mut inner.trace.spans[id.0 as usize];
-        span.request_hash = hash;
         span.events = outcome.events;
         span.raw_output = outcome.raw_output;
         span.output = outcome.output;
@@ -237,6 +248,12 @@ pub struct SpanRequest<'a> {
     /// Typed input fields as JSON, when available.
     pub input: Option<JsonMap>,
     pub model: &'a LMConfig,
+    /// Explicit `request_hash` preimage override. `None` (the norm) computes
+    /// the hash at close from the redacted config + rendered prompt. Leaves
+    /// with no prompt-shaped identity — holes (RFC 0003 §4.4: impl hash ++
+    /// canonical input ++ caps) — pass their own hash so every span keys
+    /// replay on a real preimage instead of a degenerate empty-prompt one.
+    pub request_hash: Option<u64>,
 }
 
 /// Everything recorded lazily at span close.
@@ -266,6 +283,9 @@ pub struct SpanGuard {
     sink: TraceSink,
     started: std::time::Duration,
     done: bool,
+    /// The span opened with an explicit `request_hash`; close must not
+    /// overwrite it with the prompt-derived hash.
+    hash_override: bool,
 }
 
 impl SpanGuard {
@@ -275,7 +295,8 @@ impl SpanGuard {
 
     pub fn finish(mut self, out: SpanOutcome) {
         self.done = true;
-        self.sink.close(self.id, self.started, out);
+        self.sink
+            .close(self.id, self.started, out, self.hash_override);
     }
 }
 
@@ -295,6 +316,7 @@ impl Drop for SpanGuard {
                         message: "scope ended while span was open".to_string(),
                     }),
                 },
+                self.hash_override,
             );
         }
     }

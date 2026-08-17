@@ -385,17 +385,31 @@ pub struct LoopNode {
     pub out: Box<[Binding]>,
 }
 
-/// LACUNA-style typed hole: opaque-but-typed sandboxed code. The optimizer
-/// sees a signature and a Code gene; the type system sees a normal node.
+/// LACUNA-style typed hole: opaque-but-typed code. The optimizer sees a
+/// signature (and, when sandboxed, a Code gene); the type system sees a
+/// normal node.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HoleNode {
     pub name: Sym,
     pub sig: SigId,
-    /// `ParamKind::Code`.
-    pub code: ParamId,
+    pub imp: HoleImpl,
     /// ⊆ `program.caps`.
     pub caps: CapSet,
     pub binding: Box<[Binding]>,
+}
+
+/// How a hole is implemented (RFC 0003 §4.1) — mirrors [`ToolKind`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleImpl {
+    /// Sandboxed source carried in the artifact; the source is a `Code`
+    /// `ParamSlot` (`"<leaf>.code"`) — the implementation is optimizable.
+    Sandboxed { code: ParamId },
+    /// Native fn bound by leaf name from `RuntimeEnv` at load ("extern").
+    /// `hash` is the stable content hash of the host implementation —
+    /// integrity, lineage, and the replay preimage. Program is portable,
+    /// binding isn't. Not optimizable as a Code gene (no rustc at runtime).
+    Host { hash: u64 },
 }
 
 impl Node {

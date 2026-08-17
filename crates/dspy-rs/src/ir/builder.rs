@@ -38,7 +38,8 @@ use cranelift_entity::{EntityRef, PrimaryMap};
 use crate::LMConfig;
 use crate::core::Signature;
 use crate::ir::graph::{
-    AgentLoopNode, Binding, CapSet, ForkJoinNode, HoleNode, Interner, LoopNode, ModelDef, ModelId,
+    AgentLoopNode, Binding, CapSet, ForkJoinNode, HoleImpl, HoleNode, Interner, LoopNode, ModelDef,
+    ModelId,
     Node, NodeBudget, NodeId, PortRef, PredictNode, Program, ProgramMeta, RefineNode, RetryNode,
     RouteNode, SeqNode, SigId, StopSpec, ToolDef, ToolId, ToolKind,
 };
@@ -164,7 +165,7 @@ enum SpecKind {
     Hole {
         name: String,
         sig: SigId,
-        code: String,
+        imp: HoleSpecImpl,
         caps: Vec<String>,
         binds: Vec<(String, Port)>,
     },
@@ -476,12 +477,36 @@ pub fn hole(name: &str, sig: SigId, js: &str, caps: &[&str]) -> NodeSpec {
         kind: SpecKind::Hole {
             name: name.to_string(),
             sig,
-            code: js.to_string(),
+            imp: HoleSpecImpl::Js(js.to_string()),
             caps: caps.iter().map(|c| c.to_string()).collect(),
             binds: Vec::new(),
         },
         name: None,
     }
+}
+
+/// An extern (host-backed) typed hole (RFC 0003 §4): a native fn bound by
+/// leaf name from the runtime environment at load. `hash` is the stable
+/// content hash of the host implementation — it travels in the artifact
+/// (`extern "<hex>"`) as the integrity/replay fingerprint.
+pub fn extern_hole(name: &str, sig: SigId, hash: u64, caps: &[&str]) -> NodeSpec {
+    NodeSpec {
+        kind: SpecKind::Hole {
+            name: name.to_string(),
+            sig,
+            imp: HoleSpecImpl::Host(hash),
+            caps: caps.iter().map(|c| c.to_string()).collect(),
+            binds: Vec::new(),
+        },
+        name: None,
+    }
+}
+
+/// Builder-side mirror of [`HoleImpl`].
+#[derive(Clone, Debug)]
+enum HoleSpecImpl {
+    Js(String),
+    Host(u64),
 }
 
 /// Sequential composition.
@@ -915,24 +940,29 @@ impl Lowering {
             SpecKind::Hole {
                 name,
                 sig,
-                code,
+                imp,
                 caps,
                 binds,
             } => {
                 let name_sym = self.syms.intern(&name);
                 let node_id = NodeId::new(self.nodes.len());
-                let code = self.leaf_param(
-                    &name,
-                    "code",
-                    node_id,
-                    ParamKind::Code,
-                    ParamValue::code(CodeLang::Js, code),
-                );
+                let imp = match imp {
+                    HoleSpecImpl::Js(code) => HoleImpl::Sandboxed {
+                        code: self.leaf_param(
+                            &name,
+                            "code",
+                            node_id,
+                            ParamKind::Code,
+                            ParamValue::code(CodeLang::Js, code),
+                        ),
+                    },
+                    HoleSpecImpl::Host(hash) => HoleImpl::Host { hash },
+                };
                 let binding = self.lower_binds(binds)?;
                 Node::Hole(HoleNode {
                     name: name_sym,
                     sig,
-                    code,
+                    imp,
                     caps: caps.iter().map(String::as_str).collect(),
                     binding,
                 })

@@ -47,7 +47,8 @@ use std::fmt::Write as _;
 use crate::LMConfig;
 use crate::ir::builder::cot_reasoning_field;
 use crate::ir::graph::{
-    AgentLoopNode, Binding, HoleNode, Node, NodeId, PortRef, PredictNode, Program, SigId, ToolKind,
+    AgentLoopNode, Binding, HoleImpl, HoleNode, Node, NodeId, PortRef, PredictNode, Program, SigId,
+    ToolKind,
 };
 use crate::ir::params::{ContextPolicy, ParamId, ParamValue};
 use crate::ir::sig::{ConstraintDef, FieldDef, RenderSpec};
@@ -662,10 +663,17 @@ impl<'p> Printer<'p> {
         let _ = write!(self.out, "hole {sig_name}");
         self.args(&n.binding);
         let caps: Vec<&str> = n.caps.iter().collect();
-        let _ = write!(self.out, " caps [{}] js", caps.join(" "));
-        if let ParamValue::Code { source, .. } = &self.p.params[n.code].default {
-            let source = source.clone();
-            self.code_fence(&source);
+        match &n.imp {
+            HoleImpl::Sandboxed { code } => {
+                let _ = write!(self.out, " caps [{}] js", caps.join(" "));
+                if let ParamValue::Code { source, .. } = &self.p.params[*code].default {
+                    let source = source.clone();
+                    self.code_fence(&source);
+                }
+            }
+            HoleImpl::Host { hash } => {
+                let _ = write!(self.out, " caps [{}] extern \"{hash:016x}\"", caps.join(" "));
+            }
         }
     }
 

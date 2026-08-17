@@ -189,6 +189,18 @@ impl ReplaySession {
 
     /// Decides the fate of one `Predict` call: serve, go live, or refuse.
     fn decide(&self, component: &str, config: &LMConfig, chat: &[Message]) -> ReplayDirective {
+        // The same preimage `TraceSink::close` hashes: redacted-config hash ++
+        // full rendered prompt. The prefix/suffix split does not matter — the
+        // hash streams prefix ++ suffix, and `chat` is exactly that.
+        let got_hash = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
+        self.decide_hashed(component, got_hash)
+    }
+
+    /// [`decide`] with a caller-computed `request_hash` — the seam for leaves
+    /// whose identity is not prompt-shaped (holes: impl hash ++ canonical
+    /// input ++ caps, RFC 0003 §4.4). The recorded span's `request_hash` was
+    /// stamped from the same preimage at capture time.
+    fn decide_hashed(&self, component: &str, got_hash: u64) -> ReplayDirective {
         let mut inner = self.0.lock().unwrap();
 
         if inner.diverged {
@@ -229,10 +241,6 @@ impl ReplaySession {
             );
         }
 
-        // The same preimage `TraceSink::close` hashes: redacted-config hash ++
-        // full rendered prompt. The prefix/suffix split does not matter — the
-        // hash streams prefix ++ suffix, and `chat` is exactly that.
-        let got_hash = request_hash(ModelEntry::from_config(config).config_hash, &[], chat);
         if got_hash != span.request_hash {
             return inner.mismatch(
                 Some(span.id),
@@ -306,4 +314,11 @@ pub(crate) fn intercept(
 ) -> Option<ReplayDirective> {
     let session = ACTIVE.try_with(|session| session.clone()).ok()?;
     Some(session.decide(component, config, chat))
+}
+
+/// [`intercept`] with a caller-computed `request_hash` — used by leaves whose
+/// replay identity is not prompt-shaped (interpreter holes, RFC 0003 §4.4).
+pub(crate) fn intercept_hashed(component: &str, got_hash: u64) -> Option<ReplayDirective> {
+    let session = ACTIVE.try_with(|session| session.clone()).ok()?;
+    Some(session.decide_hashed(component, got_hash))
 }

@@ -302,7 +302,9 @@ impl<'p> Validator<'p> {
                 Node::Hole(n) => {
                     sym_ok(&at, n.name)?;
                     sig_ok(&at, n.sig)?;
-                    param_ok(&at, n.code)?;
+                    if let crate::ir::graph::HoleImpl::Sandboxed { code } = n.imp {
+                        param_ok(&at, code)?;
+                    }
                     binds_ok(&at, &n.binding)?;
                 }
                 Node::Seq(n) => {
@@ -512,7 +514,9 @@ impl<'p> Validator<'p> {
                         missing: n.caps.missing_from(&self.p.caps),
                     });
                 }
-                self.check_param_ref(&at, n.code, ParamKind::Code, ParamOwner::Node(id))?;
+                if let crate::ir::graph::HoleImpl::Sandboxed { code } = n.imp {
+                    self.check_param_ref(&at, code, ParamKind::Code, ParamOwner::Node(id))?;
+                }
                 self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;
                 sig_outputs(&self.p.sigs[n.sig])
             }
