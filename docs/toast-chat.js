@@ -80,8 +80,14 @@
     ".m.bot code{background:var(--code);padding:1px 5px;border-radius:5px;" +
     "font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}" +
     ".m.bot pre{background:#16181d;color:#e6e6ea;padding:11px 13px;border-radius:10px;" +
-    "overflow-x:auto;margin:8px 0;font-size:12px;line-height:1.5}" +
-    ".m.bot pre code{background:none;border:none;padding:0;color:inherit}" +
+    "overflow-x:auto;max-width:100%;margin:8px 0;font-size:12px;line-height:1.55;" +
+    "scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.25) transparent}" +
+    ".m.bot pre::-webkit-scrollbar{height:6px}" +
+    ".m.bot pre::-webkit-scrollbar-thumb{background:rgba(255,255,255,.22);border-radius:3px}" +
+    ".m.bot pre::-webkit-scrollbar-track{background:transparent}" +
+    ".m.bot pre code{background:none;border:none;padding:0;color:inherit;font-size:inherit}" +
+    ".c-kw{color:#c792ea}.c-ty{color:#ffcb6b}.c-str{color:#c3e88d}" +
+    ".c-com{color:#7a8494;font-style:italic}.c-num{color:#f78c6c}.c-mac{color:#89ddff}" +
     ".m.bot a{color:var(--accent-text);text-decoration:underline;text-underline-offset:2px}" +
 
     ".status{align-self:flex-start;display:flex;align-items:center;gap:8px;font-size:12.5px;" +
@@ -214,6 +220,27 @@
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
+  // tiny Rust-leaning highlighter (CSP forbids external libs); runs on
+  // escaped text, so entities like &lt; pass through untouched
+  var HL_RE = new RegExp(
+    "(\\/\\/[^\\n]*)" + // comment
+      '|("(?:[^"\\\\\\n]|\\\\.)*")' + // string
+      "|\\b(fn|let|mut|pub|impl|trait|struct|enum|match|if|else|for|while|loop|" +
+      "return|use|mod|where|async|await|move|ref|type|const|static|dyn|self|" +
+      "Self|super|crate|in|as|break|continue|unsafe)\\b" + // keyword
+      "|\\b([A-Z][A-Za-z0-9_]*)\\b" + // type
+      "|\\b(\\d[\\d_]*(?:\\.\\d+)?)\\b" + // number
+      "|\\b([a-z_][a-z0-9_]*!)", // macro
+    "g"
+  );
+
+  function hl(src) {
+    return esc(src).replace(HL_RE, function (m, com, str, kw, ty, num, mac) {
+      var cls = com ? "c-com" : str ? "c-str" : kw ? "c-kw" : ty ? "c-ty" : num ? "c-num" : "c-mac";
+      return '<span class="' + cls + '">' + m + "</span>";
+    });
+  }
+
   // minimal markdown: fenced code, inline code, bold, links, lists, paragraphs
   function md(s) {
     function kind(line) {
@@ -252,7 +279,7 @@
     var parts = s.split(/```(?:\w*\n)?/);
     for (var i = 0; i < parts.length; i++) {
       if (i % 2) {
-        out.push("<pre><code>" + esc(parts[i]) + "</code></pre>");
+        out.push("<pre><code>" + hl(parts[i]) + "</code></pre>");
         continue;
       }
       var t = esc(parts[i])
