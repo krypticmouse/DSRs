@@ -1,0 +1,24 @@
+name: Docs Search Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/index.mdx"
+      - "docs/docs/**"
+      - "docs/snippets/**"
+      - "crates/**/*.rs"
+
+jobs:
+  sync:
+    name: Sync docs to Mixedbread store
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install mixedbread
+      - run: python3 docs/scripts/search_docs.py sync
+        env:
+          MXBAI_API_KEY: ${{ secrets.MXBAI_API_KEY }}
