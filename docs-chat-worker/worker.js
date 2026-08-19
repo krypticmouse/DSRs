@@ -31,10 +31,17 @@ export default {
 
     let messages;
     try {
-      ({ messages } = await request.json());
+      const raw = await request.text();
+      if (raw.length > 32_000) throw new Error(); // bound input-token spend
+      ({ messages } = JSON.parse(raw));
       if (!Array.isArray(messages) || !messages.length) throw new Error();
+      if (messages.some((m) => typeof m.content !== "string" || m.content.length > 4_000))
+        throw new Error();
     } catch {
-      return new Response("body must be {messages: [...]}", { status: 400, headers: cors });
+      return new Response("body must be {messages: [...]} within size limits", {
+        status: 400,
+        headers: cors,
+      });
     }
 
     const allStores = (env.STORES || "dsrs-docs,dsrs-code")
@@ -51,6 +58,7 @@ export default {
         body: JSON.stringify({
           model: "toast-1",
           stream: true,
+          max_tokens: 2048,
           messages: [
             { role: "system", content: SYSTEM },
             // keep history bounded; roles/content only, drop anything else

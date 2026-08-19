@@ -4,6 +4,4 @@ compatibility_date = "2026-08-01"
 
 [vars]
 STORES = "dsrs-docs,dsrs-code"
-# Lock down once the docs domain is known, e.g.:
-# ALLOWED_ORIGINS = "https://docs.dsrs.dev,http://localhost:3000,http://localhost:3001"
-ALLOWED_ORIGINS = "*"
+ALLOWED_ORIGINS = "https://dsrs.herumbshandilya.com"

@@ -9,7 +9,7 @@
     window.TOAST_CHAT_ENDPOINT ||
     (location.hostname === "localhost"
       ? "http://localhost:8787" // `npx wrangler dev` in docs-chat-worker
-      : "https://dsrs-toast-chat.YOUR-SUBDOMAIN.workers.dev"); // set after deploy
+      : "https://dsrs-toast-chat.herumbshandilya123.workers.dev");
 
   var SUGGESTIONS = [
     "What is a signature?",
@@ -304,6 +304,18 @@
   function askToast() {
     var q = input.value.trim();
     if (!q || send.disabled) return;
+    if (ENDPOINT.indexOf("YOUR-SUBDOMAIN") !== -1) {
+      var h0 = msgs.querySelector(".hello");
+      if (h0) h0.remove();
+      bubble("user", q);
+      input.value = "";
+      bubble(
+        "bot",
+        "**The chat backend isn't deployed yet.** Deploy `docs-chat-worker/` " +
+          "with wrangler and set its URL in `toast-chat.js` (see docs/README.md)."
+      );
+      return;
+    }
     input.value = "";
     send.disabled = true;
     var h = msgs.querySelector(".hello");
