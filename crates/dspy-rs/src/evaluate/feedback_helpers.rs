@@ -1,12 +1,11 @@
-/// Helper functions for creating rich feedback metrics
+/// Helper functions for creating rich feedback [`Eval`]s
 ///
 /// This module provides utilities for common feedback patterns in different domains:
 /// - Document retrieval (precision, recall, F1)
 /// - Code generation (compilation, execution, testing)
 /// - Multi-objective evaluation
-/// - Structured error reporting
-use super::FeedbackMetric;
-use serde_json::json;
+/// - String similarity and classification
+use super::Eval;
 use std::collections::{HashMap, HashSet};
 
 // ============================================================================
@@ -23,15 +22,15 @@ use std::collections::{HashMap, HashSet};
 /// # Example Feedback
 /// ```text
 /// Retrieved 3/5 correct documents (Precision: 0.6, Recall: 0.6, F1: 0.6)
-/// ✓ Correctly retrieved: doc1, doc2, doc3
-/// ✗ Missed: doc4, doc5
-/// ✗ Incorrectly retrieved: doc6, doc7
+/// Correctly retrieved: doc1, doc2, doc3
+/// Missed: doc4, doc5
+/// Incorrectly retrieved: doc6, doc7
 /// ```
 pub fn retrieval_feedback(
     retrieved: &[impl AsRef<str>],
     expected: &[impl AsRef<str>],
     context_docs: Option<&[impl AsRef<str>]>,
-) -> FeedbackMetric {
+) -> Eval {
     let retrieved_set: HashSet<String> = retrieved.iter().map(|s| s.as_ref().to_string()).collect();
 
     let expected_set: HashSet<String> = expected.iter().map(|s| s.as_ref().to_string()).collect();
@@ -45,13 +44,13 @@ pub fn retrieval_feedback(
     let precision = if retrieved.is_empty() {
         0.0
     } else {
-        correct.len() as f32 / retrieved.len() as f32
+        correct.len() as f64 / retrieved.len() as f64
     };
 
     let recall = if expected.is_empty() {
         1.0
     } else {
-        correct.len() as f32 / expected.len() as f32
+        correct.len() as f64 / expected.len() as f64
     };
 
     let f1 = if precision + recall > 0.0 {
@@ -84,23 +83,11 @@ pub fn retrieval_feedback(
         ));
     }
 
-    let mut metadata = HashMap::new();
-    metadata.insert("precision".to_string(), json!(precision));
-    metadata.insert("recall".to_string(), json!(recall));
-    metadata.insert("f1".to_string(), json!(f1));
-    metadata.insert("correct_count".to_string(), json!(correct.len()));
-    metadata.insert("missed_count".to_string(), json!(missed.len()));
-    metadata.insert("incorrect_count".to_string(), json!(incorrect.len()));
-
     if let Some(docs) = context_docs {
-        metadata.insert("total_available".to_string(), json!(docs.len()));
+        feedback.push_str(&format!("Total available documents: {}\n", docs.len()));
     }
 
-    FeedbackMetric {
-        score: f1,
-        feedback,
-        metadata,
-    }
+    Eval::with_feedback(f1, feedback)
 }
 
 // ============================================================================
@@ -142,57 +129,27 @@ pub enum StageResult {
 ///
 /// # Example Feedback
 /// ```text
-/// ✓ Parse: Success
-/// ✓ Compile: Success
-/// ✗ Execute: RuntimeError: division by zero on line 10
+/// Parse: Success
+/// Compile: Success
+/// Execute: RuntimeError: division by zero on line 10
 /// ```
-pub fn code_pipeline_feedback(
-    stages: &[(CodeStage, StageResult)],
-    final_score: f32,
-) -> FeedbackMetric {
+pub fn code_pipeline_feedback(stages: &[(CodeStage, StageResult)], final_score: f64) -> Eval {
     let mut feedback = String::new();
-    let mut metadata = HashMap::new();
 
-    let mut last_successful_stage = None;
-    let mut failure_stage = None;
-
-    for (i, (stage, result)) in stages.iter().enumerate() {
-        let stage_name = stage.to_string();
-        metadata.insert(format!("stage_{}_name", i), json!(stage_name));
-
+    for (stage, result) in stages {
         match result {
             StageResult::Success => {
                 feedback.push_str(&format!("{}: Success\n", stage));
-                metadata.insert(format!("stage_{}_result", i), json!("success"));
-                last_successful_stage = Some(stage);
             }
             StageResult::Failure { error } => {
                 feedback.push_str(&format!("{}: {}\n", stage, error));
-                metadata.insert(format!("stage_{}_result", i), json!("failure"));
-                metadata.insert(format!("stage_{}_error", i), json!(error));
-                failure_stage = Some((stage, error));
+                feedback.push_str(&format!("Failed at stage: {}\n", stage));
                 break; // Stop at first failure
             }
         }
     }
 
-    if let Some((stage, error)) = failure_stage {
-        metadata.insert("failed_at_stage".to_string(), json!(stage.to_string()));
-        metadata.insert("failure_error".to_string(), json!(error));
-    }
-
-    if let Some(stage) = last_successful_stage {
-        metadata.insert(
-            "last_successful_stage".to_string(),
-            json!(stage.to_string()),
-        );
-    }
-
-    FeedbackMetric {
-        score: final_score,
-        feedback,
-        metadata,
-    }
+    Eval::with_feedback(final_score, feedback)
 }
 
 // ============================================================================
@@ -213,11 +170,10 @@ pub fn code_pipeline_feedback(
 /// Overall: 0.87 (weighted average)
 /// ```
 pub fn multi_objective_feedback(
-    objectives: &HashMap<String, (f32, String)>,
-    weights: Option<&HashMap<String, f32>>,
-) -> FeedbackMetric {
+    objectives: &HashMap<String, (f64, String)>,
+    weights: Option<&HashMap<String, f64>>,
+) -> Eval {
     let mut feedback = String::new();
-    let mut metadata = HashMap::new();
 
     let mut total_score = 0.0;
     let mut total_weight = 0.0;
@@ -237,10 +193,6 @@ pub fn multi_objective_feedback(
                 name, score, obj_feedback
             ));
 
-            metadata.insert(format!("objective_{}_score", name), json!(score));
-            metadata.insert(format!("objective_{}_weight", name), json!(weight));
-            metadata.insert(format!("objective_{}_feedback", name), json!(obj_feedback));
-
             total_score += score * weight;
             total_weight += weight;
         }
@@ -256,14 +208,8 @@ pub fn multi_objective_feedback(
         "\nOverall: {:.3} (weighted average)",
         aggregate_score
     ));
-    metadata.insert("aggregate_score".to_string(), json!(aggregate_score));
-    metadata.insert("num_objectives".to_string(), json!(objectives.len()));
 
-    FeedbackMetric {
-        score: aggregate_score,
-        feedback,
-        metadata,
-    }
+    Eval::with_feedback(aggregate_score, feedback)
 }
 
 // ============================================================================
@@ -273,18 +219,18 @@ pub fn multi_objective_feedback(
 /// Create feedback for string similarity tasks
 ///
 /// Uses simple word-level comparison to provide actionable feedback
-pub fn string_similarity_feedback(predicted: &str, expected: &str) -> FeedbackMetric {
+pub fn string_similarity_feedback(predicted: &str, expected: &str) -> Eval {
     let exact_match = predicted.trim() == expected.trim();
 
     if exact_match {
-        return FeedbackMetric::new(1.0, "Exact match");
+        return Eval::with_feedback(1.0, "Exact match");
     }
 
     let pred_lower = predicted.to_lowercase();
     let exp_lower = expected.to_lowercase();
 
     if pred_lower == exp_lower {
-        return FeedbackMetric::new(0.95, "Match ignoring case (minor formatting difference)");
+        return Eval::with_feedback(0.95, "Match ignoring case (minor formatting difference)");
     }
 
     // Word-level comparison
@@ -296,13 +242,13 @@ pub fn string_similarity_feedback(predicted: &str, expected: &str) -> FeedbackMe
     let extra_words: Vec<_> = pred_words.difference(&exp_words).collect();
 
     let recall = if !exp_words.is_empty() {
-        common_words.len() as f32 / exp_words.len() as f32
+        common_words.len() as f64 / exp_words.len() as f64
     } else {
         1.0
     };
 
     let precision = if !pred_words.is_empty() {
-        common_words.len() as f32 / pred_words.len() as f32
+        common_words.len() as f64 / pred_words.len() as f64
     } else {
         0.0
     };
@@ -339,7 +285,7 @@ pub fn string_similarity_feedback(predicted: &str, expected: &str) -> FeedbackMe
         ));
     }
 
-    FeedbackMetric::new(f1, feedback)
+    Eval::with_feedback(f1, feedback)
 }
 
 // ============================================================================
@@ -350,8 +296,8 @@ pub fn string_similarity_feedback(predicted: &str, expected: &str) -> FeedbackMe
 pub fn classification_feedback(
     predicted_class: &str,
     expected_class: &str,
-    confidence: Option<f32>,
-) -> FeedbackMetric {
+    confidence: Option<f64>,
+) -> Eval {
     let correct = predicted_class == expected_class;
     let score = if correct { 1.0 } else { 0.0 };
 
@@ -368,30 +314,25 @@ pub fn classification_feedback(
         feedback.push_str(&format!("\n  Confidence: {:.3}", conf));
     }
 
-    let mut metadata = HashMap::new();
-    metadata.insert("predicted_class".to_string(), json!(predicted_class));
-    metadata.insert("expected_class".to_string(), json!(expected_class));
-    metadata.insert("correct".to_string(), json!(correct));
-
-    if let Some(conf) = confidence {
-        metadata.insert("confidence".to_string(), json!(conf));
-    }
-
-    FeedbackMetric::with_metadata(score, feedback, metadata)
+    Eval::with_feedback(score, feedback)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn feedback_text(eval: &Eval) -> &str {
+        eval.feedback.as_deref().unwrap_or("")
+    }
+
     #[test]
     fn test_retrieval_feedback_perfect() {
         let retrieved = vec!["doc1", "doc2", "doc3"];
         let expected = vec!["doc1", "doc2", "doc3"];
 
-        let feedback = retrieval_feedback(&retrieved, &expected, None::<&[&str]>);
-        assert_eq!(feedback.score, 1.0);
-        assert!(feedback.feedback.contains("3/3"));
+        let eval = retrieval_feedback(&retrieved, &expected, None::<&[&str]>);
+        assert_eq!(eval.score, 1.0);
+        assert!(feedback_text(&eval).contains("3/3"));
     }
 
     #[test]
@@ -399,10 +340,10 @@ mod tests {
         let retrieved = vec!["doc1", "doc2", "doc4"];
         let expected = vec!["doc1", "doc2", "doc3"];
 
-        let feedback = retrieval_feedback(&retrieved, &expected, None::<&[&str]>);
-        assert!(feedback.score < 1.0 && feedback.score > 0.0);
-        assert!(feedback.feedback.contains("Missed: doc3"));
-        assert!(feedback.feedback.contains("Incorrectly retrieved: doc4"));
+        let eval = retrieval_feedback(&retrieved, &expected, None::<&[&str]>);
+        assert!(eval.score < 1.0 && eval.score > 0.0);
+        assert!(feedback_text(&eval).contains("Missed: doc3"));
+        assert!(feedback_text(&eval).contains("Incorrectly retrieved: doc4"));
     }
 
     #[test]
@@ -418,11 +359,11 @@ mod tests {
             ),
         ];
 
-        let feedback = code_pipeline_feedback(&stages, 0.6);
-        assert!(feedback.feedback.contains("Parse"));
-        assert!(feedback.feedback.contains("Compile"));
-        assert!(feedback.feedback.contains("Execute"));
-        assert_eq!(feedback.score, 0.6);
+        let eval = code_pipeline_feedback(&stages, 0.6);
+        assert!(feedback_text(&eval).contains("Parse"));
+        assert!(feedback_text(&eval).contains("Compile"));
+        assert!(feedback_text(&eval).contains("Execute"));
+        assert_eq!(eval.score, 0.6);
     }
 
     #[test]
@@ -431,32 +372,32 @@ mod tests {
         objectives.insert("accuracy".to_string(), (0.9, "Good accuracy".to_string()));
         objectives.insert("latency".to_string(), (0.7, "Slow response".to_string()));
 
-        let feedback = multi_objective_feedback(&objectives, None);
-        assert!(feedback.feedback.contains("[accuracy]"));
-        assert!(feedback.feedback.contains("[latency]"));
-        assert!((feedback.score - 0.8).abs() < 0.01); // Average of 0.9 and 0.7
+        let eval = multi_objective_feedback(&objectives, None);
+        assert!(feedback_text(&eval).contains("[accuracy]"));
+        assert!(feedback_text(&eval).contains("[latency]"));
+        assert!((eval.score - 0.8).abs() < 0.01); // Average of 0.9 and 0.7
     }
 
     #[test]
     fn test_string_similarity_exact() {
-        let feedback = string_similarity_feedback("hello world", "hello world");
-        assert_eq!(feedback.score, 1.0);
+        let eval = string_similarity_feedback("hello world", "hello world");
+        assert_eq!(eval.score, 1.0);
     }
 
     #[test]
     fn test_string_similarity_case() {
-        let feedback = string_similarity_feedback("Hello World", "hello world");
-        assert_eq!(feedback.score, 0.95);
+        let eval = string_similarity_feedback("Hello World", "hello world");
+        assert_eq!(eval.score, 0.95);
     }
 
     #[test]
     fn test_classification_feedback() {
-        let feedback = classification_feedback("positive", "positive", Some(0.95));
-        assert_eq!(feedback.score, 1.0);
-        assert!(feedback.feedback.contains("Correct"));
+        let eval = classification_feedback("positive", "positive", Some(0.95));
+        assert_eq!(eval.score, 1.0);
+        assert!(feedback_text(&eval).contains("Correct"));
 
-        let feedback = classification_feedback("negative", "positive", Some(0.85));
-        assert_eq!(feedback.score, 0.0);
-        assert!(feedback.feedback.contains("Incorrect"));
+        let eval = classification_feedback("negative", "positive", Some(0.85));
+        assert_eq!(eval.score, 0.0);
+        assert!(feedback_text(&eval).contains("Incorrect"));
     }
 }

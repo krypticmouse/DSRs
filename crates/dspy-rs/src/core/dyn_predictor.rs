@@ -6,7 +6,7 @@ use facet::{ConstTypeId, Def, Facet, KnownPointer, Shape, Type, UserType};
 use facet_reflect::Peek;
 
 use crate::SignatureSchema;
-use crate::data::example::Example as RawExample;
+use crate::trace::JsonMap;
 
 /// Type-erased optimizer handle to a [`crate::Predict`] leaf.
 ///
@@ -24,52 +24,82 @@ pub(crate) trait DynPredictor: Send + Sync {
     /// Returns the current instruction (override or default from the signature).
     fn instruction(&self) -> String;
 
-    /// Overrides the instruction for this predictor.
-    fn set_instruction(&mut self, instruction: String);
-
-    /// Returns the raw instruction override (`None` when the signature default is active).
-    ///
-    /// Together with [`restore_instruction`](DynPredictor::restore_instruction) this
-    /// gives optimizers a cheap save/restore for instruction-only candidate
-    /// evaluation — no demo serialization round-trip like
-    /// [`dump_state`](DynPredictor::dump_state)/[`load_state`](DynPredictor::load_state).
-    fn instruction_override(&self) -> Option<String>;
-
-    /// Restores a previously saved instruction override (including `None`).
-    fn restore_instruction(&mut self, instruction: Option<String>);
-
-    /// Returns current demos as type-erased [`Example`]s.
-    fn demos_as_examples(&self) -> Vec<RawExample>;
-
-    /// Sets demos from type-erased [`Example`]s, converting to typed `Example<S>` internally.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any example can't be converted to the predictor's typed
-    /// `Example<S>` (schema mismatch).
-    fn set_demos_from_examples(&mut self, demos: Vec<RawExample>) -> Result<()>;
+    /// Returns current demos as flat JSON rows (field name → value; input and
+    /// output fields merged into one object).
+    fn demos_as_json(&self) -> Vec<JsonMap>;
 
     /// Snapshots the predictor's mutable state (demos + instruction override).
     fn dump_state(&self) -> PredictState;
 
-    /// Restores predictor state from a snapshot.
+    /// **The mutation seam.** Every write to a predictor's optimizable state —
+    /// instruction override and demos — flows through this one method: optimizer
+    /// candidate set/restore, [`ModuleState`](crate::ModuleState) restore, and the
+    /// [`fx::Params`](crate::fx::Params) overlay all delegate here (the builder
+    /// funnels into the same typed applicator at construction time). This is the
+    /// single place where prompt caches are invalidated; the overlay direction for
+    /// v1 is that a candidate is *data* applied through this seam, never ad-hoc
+    /// field mutation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if updated demos can't be converted to the predictor's
+    /// typed `Demo<S>` (schema mismatch).
+    fn apply_update(&mut self, update: StateUpdate) -> Result<()>;
+
+    /// Restores predictor state from a snapshot. Delegates to
+    /// [`apply_update`](DynPredictor::apply_update).
     ///
     /// # Errors
     ///
     /// Returns an error if the demos can't be converted to the predictor's typed format.
-    fn load_state(&mut self, state: PredictState) -> Result<()>;
+    fn load_state(&mut self, state: PredictState) -> Result<()> {
+        self.apply_update(StateUpdate::from(state))
+    }
+
+    /// Assigns the component name this predictor records on trace spans.
+    ///
+    /// Optimizers call this with each leaf's dotted path before running traced
+    /// passes, so spans join back to the same names the mutation seam addresses
+    /// — identity data, not optimizable state.
+    fn set_trace_name(&mut self, name: &str);
+}
+
+/// A partial update to a predictor's mutable state, applied through the single
+/// mutation seam [`DynPredictor::apply_update`].
+///
+/// `None` fields are left untouched; `instruction: Some(None)` clears the
+/// override back to the signature default.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct StateUpdate {
+    /// `Some(override)` replaces the instruction override (`Some(None)` clears it).
+    pub instruction: Option<Option<String>>,
+    /// `Some(demos)` replaces the demo set (flat JSON rows, see
+    /// [`PredictState::demos`]).
+    pub demos: Option<Vec<JsonMap>>,
+}
+
+impl From<PredictState> for StateUpdate {
+    fn from(state: PredictState) -> Self {
+        Self {
+            instruction: Some(state.instruction_override),
+            demos: Some(state.demos),
+        }
+    }
 }
 
 /// Serializable snapshot of a [`crate::Predict`]'s mutable state.
 ///
-/// Contains demos (as type-erased [`Example`]s) and the instruction override.
+/// Contains demos (as flat JSON rows) and the instruction override.
 /// Produced by optimizers when they tune a predictor; persist a whole module's
 /// worth of these with [`ModuleState`](crate::ModuleState).
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PredictState {
-    /// The demos as type-erased examples.
+    /// Demo rows as flat JSON objects: field name → value, with input and
+    /// output fields merged into one object. This is the serde boundary for
+    /// demos-as-data — rows are split back into the predictor's typed
+    /// `Demo<S>` via the signature schema on load.
     #[serde(default)]
-    pub demos: Vec<RawExample>,
+    pub demos: Vec<JsonMap>,
     /// The instruction override, if any.
     #[serde(default)]
     pub instruction_override: Option<String>,

@@ -10,9 +10,9 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, DataLoader, Example, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
-    evaluate_trainset, init_tracing,
+    COPRO, DataLoader, Example, LM, Eval, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
+    configure, evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -23,6 +23,15 @@ struct QA {
     question: String,
 
     #[output(desc = "Answer in less than 5 words.")]
+    answer: String,
+}
+
+/// The trainset row, shaped like the dataset; projected into `QA` by field name.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+struct HotpotRow {
+    question: String,
+
     answer: String,
 }
 
@@ -44,15 +53,16 @@ impl Module for QAModule {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QA, QAModule> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, QAModule> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &HotpotRow,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        let expected = example.output.answer.trim().to_lowercase();
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        Ok(Eval::score((expected == actual) as u8 as f64))
     }
 }
 
@@ -60,15 +70,12 @@ impl TypedMetric<QA, QAModule> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
-    let examples = DataLoader::load_hf::<QA>(
+    let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",
@@ -83,13 +90,21 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("baseline score: {baseline:.3}");
 
-    let optimizer = COPRO::builder().breadth(10).depth(1).build();
+    let optimizer = COPRO::builder()
+        .breadth(10)
+        .depth(1)
+        .eval_concurrency(16) // candidate evaluations fan out 16 LM calls at a time
+        .build();
     optimizer
         .compile(&mut module, examples.clone(), &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
+
+    // Persist the tuned instructions for later `ModuleState::load(...).apply(...)`.
+    ModuleState::from_module(&mut module)?.save("optimized-hotpotqa.json")?;
+    println!("saved optimized module state to optimized-hotpotqa.json");
 
     Ok(())
 }

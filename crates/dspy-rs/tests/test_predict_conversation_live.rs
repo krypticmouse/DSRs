@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, LM, Message, Predict, Signature, configure};
+use dspy_rs::{LM, Message, Predict, Signature, configure};
 use std::sync::LazyLock;
 use tokio::sync::Mutex;
 
@@ -16,7 +16,7 @@ struct LiveConversation {
 
 #[tokio::test]
 #[ignore] // Requires real network access and provider API key(s)
-async fn live_forward_continue_two_turn_roundtrip() {
+async fn live_call_and_parse_two_turn_roundtrip() {
     let _lock = SETTINGS_LOCK.lock().await;
 
     let lm = LM::builder()
@@ -26,7 +26,7 @@ async fn live_forward_continue_two_turn_roundtrip() {
         .build()
         .await
         .expect("failed to build LM for live smoke test");
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     let predict = Predict::<LiveConversation>::new();
 
@@ -52,7 +52,7 @@ async fn live_forward_continue_two_turn_roundtrip() {
     ));
 
     let (second, chat2) = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect("second turn failed");
 

@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    COPRO, CallMetadata, Example, MIPROv2, MetricOutcome, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric,
+    COPRO, CallMetadata, MIPROv2, Eval, Module, Optimizer, Predict, PredictError, Predicted,
+    Signature, TypedMetric,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -43,37 +43,43 @@ struct RecordingMetric {
     seen_answers: Arc<Mutex<Vec<String>>>,
 }
 
-impl TypedMetric<OptimizerSig, InstructionEchoModule> for RecordingMetric {
+impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
+    for RecordingMetric
+{
     async fn evaluate(
         &self,
-        example: &Example<OptimizerSig>,
+        example: &(OptimizerSigInput, OptimizerSigOutput),
         prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         self.seen_answers
             .lock()
             .expect("metric lock should not be poisoned")
             .push(prediction.answer.clone());
 
-        let score = (prediction.answer == example.input.prompt) as u8 as f32;
-        Ok(MetricOutcome::score(score))
+        let score = (prediction.answer == example.0.prompt) as u8 as f64;
+        Ok(Eval::score(score))
     }
 }
 
 struct FailingMetric;
 
-impl TypedMetric<OptimizerSig, InstructionEchoModule> for FailingMetric {
+impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
+    for FailingMetric
+{
     async fn evaluate(
         &self,
-        _example: &Example<OptimizerSig>,
+        _example: &(OptimizerSigInput, OptimizerSigOutput),
         _prediction: &Predicted<OptimizerSigOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         Err(anyhow!("metric failure"))
     }
 }
 
-fn trainset() -> Vec<Example<OptimizerSig>> {
+fn trainset() -> Vec<(OptimizerSigInput, OptimizerSigOutput)> {
     vec![
-        Example::new(
+        (
             OptimizerSigInput {
                 prompt: "one".to_string(),
             },
@@ -81,7 +87,7 @@ fn trainset() -> Vec<Example<OptimizerSig>> {
                 answer: "one".to_string(),
             },
         ),
-        Example::new(
+        (
             OptimizerSigInput {
                 prompt: "two".to_string(),
             },
@@ -107,7 +113,7 @@ async fn copro_compile_uses_typed_metric_predictions() {
 
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
     optimizer
-        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
+        .compile(&mut module, trainset(), &metric)
         .await
         .expect("COPRO compile should succeed on typed metric");
 
@@ -141,7 +147,7 @@ async fn mipro_compile_uses_typed_metric_predictions() {
         .build();
 
     optimizer
-        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &metric)
+        .compile(&mut module, trainset(), &metric)
         .await
         .expect("MIPRO compile should succeed on typed metric");
 
@@ -165,7 +171,7 @@ async fn copro_compile_propagates_metric_errors() {
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
 
     let err = optimizer
-        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &FailingMetric)
+        .compile(&mut module, trainset(), &FailingMetric)
         .await
         .expect_err("COPRO should propagate typed metric errors");
 
@@ -186,7 +192,7 @@ async fn mipro_compile_propagates_metric_errors() {
         .build();
 
     let err = optimizer
-        .compile::<OptimizerSig, _, _>(&mut module, trainset(), &FailingMetric)
+        .compile(&mut module, trainset(), &FailingMetric)
         .await
         .expect_err("MIPRO should propagate typed metric errors");
 

@@ -1,0 +1,101 @@
+---
+title: "How DSRs thinks"
+description: "The mental model behind the library: typed contracts, programs as data, and the three authoring lanes"
+icon: "compass"
+---
+
+This page explains the ideas the library is built on. Each idea gets a fuller treatment on its component page; this is the map of how they fit together.
+
+## Prompts are typed contracts
+
+Every LM interaction has the same shape: inputs go in, outputs come out, and an instruction says what to do. DSRs takes that literally. You declare the interaction as a Rust struct with `#[input]` and `#[output]` fields and a doc-comment instruction, and the library renders the prompt, calls the model, and parses the response back into your types.
+
+```rust
+/// Answer questions accurately and concisely.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+```
+
+The consequences run deeper than convenience. Typed contracts compose: a step producing `QAOutput` plugs into anything that accepts that shape. The output type is itself part of the prompt: an enum constrains the model to its variants, an `Option` makes absence a legal answer, a constraint attaches a rule the value must satisfy. And the parsing layer absorbs the mess models actually produce, so a bad response is a typed error rather than a corrupted string. See [Signatures](/docs/components/signatures).
+
+The contract is stateless. The thing that executes it, a [predictor](/docs/components/predict), carries the changeable parts: few-shot demos, instruction overrides, model choice, tools. This split matters later: it is exactly the surface [optimizers](/docs/components/optimizers) edit.
+
+## Programs are data
+
+A pipeline in DSRs is not only code that runs. It can also be held as data: a `Program` value with a canonical text form, the [`.dsrs` file](/docs/components/dsrs-file).
+
+<svg viewBox="0 0 760 430" role="img" aria-label="A pipeline shown twice: below, the running code; above, the .dsrs artifact generated from it on every build" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="pg-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <rect x="40" y="270" width="680" height="130" rx="10" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" />
+  <text x="60" y="298" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the running pipeline</text>
+  <text x="60" y="316" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">compiled Rust: executable, opaque</text>
+  <circle cx="300" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <circle cx="420" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <circle cx="540" cy="335" r="17" fill="none" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <line x1="317" y1="335" x2="403" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <line x1="437" y1="335" x2="523" y2="335" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <path d="M 380 262 C 380 232, 380 222, 380 196" fill="none" stroke="#ed6c13" strokeWidth="2.5" markerEnd="url(#pg-arrow)" />
+  <text x="396" y="234" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="#ed6c13">projected at build time</text>
+  <text x="396" y="250" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">one source, so the two cannot drift</text>
+  <g transform="rotate(-2 380 105)">
+    <rect x="200" y="28" width="360" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <path d="M 560 28 L 536 28 L 560 52 Z" fill="currentColor" fillOpacity="0.15" />
+    <text x="220" y="56" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program qa</text>
+    <circle cx="270" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <circle cx="360" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <circle cx="450" cy="100" r="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+    <line x1="281" y1="100" x2="349" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
+    <line x1="371" y1="100" x2="439" y2="100" stroke="#ed6c13" strokeWidth="1.5" />
+    <text x="270" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">draft</text>
+    <text x="360" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">rate</text>
+    <text x="450" y="128" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.7" textAnchor="middle">out</text>
+    <line x1="220" y1="152" x2="470" y2="152" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+    <line x1="220" y1="166" x2="400" y2="166" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2" strokeLinecap="round" />
+  </g>
+  <text x="580" y="70" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="13" fontWeight="600" fill="currentColor">the .dsrs artifact</text>
+  <text x="580" y="88" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">printable, diffable,</text>
+  <text x="580" y="104" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.65">servable, embeddable</text>
+</svg>
+
+The data form is what unlocks the rest of the library. A text artifact can be diffed in review and hashed for identity. A server can load and run it without your source (`dsrs serve`). An optimizer can address every instruction and demo set inside it by name and try candidate values as overlays, without mutating anything. A build can embed one back into a binary with `include_program!`, validated at compile time.
+
+The artifact is produced at build time, not recovered at runtime. The `#[module]` macro reads your function once and emits two projections of it: the runnable function and the `Program`. Because both come from a single read of a single source, the artifact cannot drift from the code. DSRs deliberately does not reconstruct structure by observing a run: a recording shows only the path that executed, so branches not taken and parallelism are invisible to it. Structure comes from source; recordings are for [replay](/docs/components/traces).
+
+## Three authoring lanes
+
+There are three ways to write a pipeline, differing in how much of it the system can see:
+
+| | Structs | fx calls | `#[module]` |
+|---|---|---|---|
+| Run it | Yes | Yes | Yes |
+| Trace its runs | Yes | Yes | Yes |
+| Tune its prompts | Yes | Yes | Yes |
+| Full control of the code | Yes | Some | Some |
+| Print it as a `.dsrs` file | No | No | Yes |
+| Serve it from a file | No | No | Yes |
+| Restructure it with an optimizer | No | No | Yes |
+
+The [struct lane](/docs/components/modules) is ordinary Rust: a struct with predictor fields and a `forward` method. Maximum control; the method body is compiled code the system can run but not read. The [fx lane](/docs/components/fx) is for scripts and experiments: predictors as named function calls, tunable by call-site name. The [`#[module]` lane](/docs/components/module-macro) is the recommended one for pipelines: a plain async function whose body is lowered to a `Program` at build time.
+
+The bottom rows of the table are constraints, not missing features. A server cannot load a function body that exists only as machine code, and an optimizer cannot restructure steps it cannot see. When part of a `#[module]` body is plain Rust that cannot be expressed as data, it is kept as a typed [hole](/docs/components/holes): named, typed at its boundary, opaque inside.
+
+## The rest of the system
+
+Three more mechanisms complete the picture:
+
+- **[Capabilities](/docs/components/capabilities)** gate what programs can touch. The program declares its needs in the artifact; the host declares its grants; loading fails on any mismatch, before anything runs.
+- **[Traces](/docs/components/traces)** record every run. Strict replay reproduces a recorded run with zero live calls, which makes model-dependent tests free and deterministic. Until-divergence replay re-runs only the steps a change actually affects.
+- **[Evaluation](/docs/components/evaluation) and [optimizers](/docs/components/optimizers)** close the loop: a metric scores outputs (optionally with textual feedback), and optimizers search instruction and demo candidates against it.
+
+## Where to go next
+
+Follow the [Quickstart](/docs/getting-started/quickstart) to make a first typed call, then read [Signatures](/docs/components/signatures) and [Predict](/docs/components/predict). The component pages are self-contained; read them in any order.

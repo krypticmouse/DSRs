@@ -6,21 +6,19 @@
 //! type structure, exactly as before, but the translation target is now local types
 //! instead of vendored BAML crates.
 
-use std::any::TypeId;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
 
 use facet::{Def, Facet, Field, ScalarType, Shape, Type, UserType};
 use indexmap::IndexMap;
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use super::constraint::{Constraint, ConstraintKind};
 
 /// Structural type of a signature/nested field, mirroring the subset of BAML's `TypeIR`
 /// that DSRs actually uses. Class/enum variants carry the *internal name* used as a key
-/// into [`OutputSchema`].
-#[derive(Debug, Clone, PartialEq)]
+/// into [`TypeTable`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FieldType {
     String,
     Int,
@@ -31,9 +29,9 @@ pub enum FieldType {
     List(Box<FieldType>),
     Optional(Box<FieldType>),
     Map(Box<FieldType>, Box<FieldType>),
-    /// Named struct; look up the definition in [`OutputSchema::classes`].
+    /// Named struct; look up the definition in [`TypeTable::classes`].
     Class(String),
-    /// Named unit enum; look up the definition in [`OutputSchema::enums`].
+    /// Named unit enum; look up the definition in [`TypeTable::enums`].
     Enum(String),
     /// Union of alternatives (e.g. untagged enums rendered as `A | B`).
     Union(Vec<FieldType>),
@@ -62,7 +60,7 @@ impl FieldType {
 }
 
 /// A single field inside a [`ClassDef`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FieldDef {
     /// Rust field name.
     pub name: String,
@@ -74,7 +72,7 @@ pub struct FieldDef {
 }
 
 /// A struct definition reachable from a signature's output type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClassDef {
     pub internal_name: String,
     pub rendered_name: String,
@@ -84,7 +82,7 @@ pub struct ClassDef {
 }
 
 /// A single value of a unit enum.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumValueDef {
     pub name: String,
     pub rendered_name: String,
@@ -92,7 +90,7 @@ pub struct EnumValueDef {
 }
 
 /// A unit-enum definition reachable from a signature's output type.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnumDef {
     pub internal_name: String,
     pub rendered_name: String,
@@ -100,13 +98,43 @@ pub struct EnumDef {
     pub values: Vec<EnumValueDef>,
 }
 
-/// The full type description for a value: the root [`FieldType`] plus every class/enum
-/// definition it references. Replaces BAML's `OutputFormatContent`.
-#[derive(Debug, Clone, Default)]
-pub struct OutputSchema {
-    pub target: FieldType,
+/// Owned registry of the class/enum definitions reachable from a signature (RFC 0002 §1.3).
+///
+/// [`FieldType::Class`]/[`FieldType::Enum`] reference definitions by name; this table is
+/// where those names resolve. In the static lane it is derived from facet shapes and cached
+/// per signature type; in the dynamic lane a loaded program owns its table outright and
+/// drops it with the program — no global cache, no leak.
+///
+/// Deliberate exception to "no string maps at runtime": `FieldType` references classes by
+/// name today (render + coerce read these maps), and re-keying to dense ids would fork
+/// `FieldType`. Lookups happen at load-validation and at per-field render/coerce —
+/// measured non-hot.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TypeTable {
     pub classes: IndexMap<String, ClassDef>,
     pub enums: IndexMap<String, EnumDef>,
+}
+
+impl TypeTable {
+    /// Returns the rendered (LM-facing) name for a class/enum internal name, falling back
+    /// to the last `::` segment of the token when it isn't a known class/enum.
+    pub fn rendered_name(&self, token: &str) -> String {
+        if let Some(class) = self.classes.get(token) {
+            return class.rendered_name.clone();
+        }
+        if let Some(enm) = self.enums.get(token) {
+            return enm.rendered_name.clone();
+        }
+        token.rsplit("::").next().unwrap_or(token).to_string()
+    }
+}
+
+/// The full type description for a value: the root [`FieldType`] plus the [`TypeTable`]
+/// of every class/enum definition it references. Replaces BAML's `OutputFormatContent`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OutputSchema {
+    pub target: FieldType,
+    pub types: TypeTable,
 }
 
 impl Default for FieldType {
@@ -122,21 +150,17 @@ impl OutputSchema {
         let target = builder.build_field_type(shape);
         OutputSchema {
             target,
-            classes: builder.classes,
-            enums: builder.enums,
+            types: TypeTable {
+                classes: builder.classes,
+                enums: builder.enums,
+            },
         }
     }
 
     /// Returns the rendered (LM-facing) name for a class/enum internal name, falling back
     /// to the last `::` segment of the token when it isn't a known class/enum.
     pub fn rendered_name(&self, token: &str) -> String {
-        if let Some(class) = self.classes.get(token) {
-            return class.rendered_name.clone();
-        }
-        if let Some(enm) = self.enums.get(token) {
-            return enm.rendered_name.clone();
-        }
-        token.rsplit("::").next().unwrap_or(token).to_string()
+        self.types.rendered_name(token)
     }
 }
 
@@ -145,15 +169,17 @@ impl OutputSchema {
 /// Implemented for every `facet::Facet + Serialize + DeserializeOwned` type via a blanket
 /// impl, so `#[derive(Signature)]` and `#[Schema]` don't need to emit any of this by hand.
 pub trait Schema: Serialize + DeserializeOwned + 'static {
-    /// The cached [`OutputSchema`] for this type.
-    fn output_schema() -> &'static OutputSchema;
+    /// Builds the [`OutputSchema`] for this type. Owned — callers that need it repeatedly
+    /// cache it themselves (the signature entry in `StaticSigCache` is the one static-lane
+    /// cache; nothing is leaked here).
+    fn output_schema() -> OutputSchema;
 
     /// The internal (fully-qualified) name of this type.
-    fn internal_name() -> &'static str;
+    fn internal_name() -> String;
 
     /// The root [`FieldType`] for this type.
     fn field_type() -> FieldType {
-        Self::output_schema().target.clone()
+        Self::output_schema().target
     }
 }
 
@@ -161,22 +187,11 @@ impl<T> Schema for T
 where
     T: for<'a> Facet<'a> + Serialize + DeserializeOwned + 'static,
 {
-    fn output_schema() -> &'static OutputSchema {
-        static CACHE: OnceLock<RwLock<HashMap<TypeId, &'static OutputSchema>>> = OnceLock::new();
-        let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-        {
-            let guard = cache.read().expect("output schema cache poisoned");
-            if let Some(schema) = guard.get(&TypeId::of::<T>()) {
-                return schema;
-            }
-        }
-        let built = OutputSchema::from_shape(<T as Facet<'_>>::SHAPE);
-        let leaked: &'static OutputSchema = Box::leak(Box::new(built));
-        let mut guard = cache.write().expect("output schema cache poisoned");
-        guard.entry(TypeId::of::<T>()).or_insert(leaked)
+    fn output_schema() -> OutputSchema {
+        OutputSchema::from_shape(<T as Facet<'_>>::SHAPE)
     }
 
-    fn internal_name() -> &'static str {
+    fn internal_name() -> String {
         internal_name_for_shape(<T as Facet<'_>>::SHAPE)
     }
 }
@@ -190,27 +205,15 @@ pub fn field_type_from_shape(shape: &'static Shape) -> FieldType {
 }
 
 /// Computes the internal name for a shape: module path + type identifier when available.
-pub fn internal_name_for_shape(shape: &'static Shape) -> &'static str {
-    // Interned into a process-global set so we can hand out `'static` names.
-    static NAMES: OnceLock<RwLock<HashMap<String, &'static str>>> = OnceLock::new();
-    let names = NAMES.get_or_init(|| RwLock::new(HashMap::new()));
-    let computed = match shape.module_path {
+///
+/// Owned: the old process-global `&'static str` intern (one of the four leaked caches
+/// RFC 0002 §1.2 collapses) is gone — the name is a trivial `format!` and every caller
+/// owns its copy.
+pub fn internal_name_for_shape(shape: &'static Shape) -> String {
+    match shape.module_path {
         Some(module) if !module.is_empty() => format!("{module}::{}", shape.type_identifier),
         _ => shape.type_identifier.to_string(),
-    };
-    {
-        let guard = names.read().expect("name intern poisoned");
-        if let Some(existing) = guard.get(&computed) {
-            return existing;
-        }
     }
-    let mut guard = names.write().expect("name intern poisoned");
-    if let Some(existing) = guard.get(&computed) {
-        return existing;
-    }
-    let leaked: &'static str = Box::leak(computed.clone().into_boxed_str());
-    guard.insert(computed, leaked);
-    leaked
 }
 
 struct SchemaBuilder {
@@ -309,7 +312,7 @@ impl SchemaBuilder {
         shape: &'static Shape,
         struct_type: &facet::StructType,
     ) -> FieldType {
-        let internal_name = internal_name_for_shape(shape).to_string();
+        let internal_name = internal_name_for_shape(shape);
         let rendered_name = rendered_name_for_shape(shape);
         let type_ir = FieldType::Class(internal_name.clone());
         self.visited.insert(shape.id, type_ir.clone());
@@ -358,7 +361,7 @@ impl SchemaBuilder {
             );
         }
 
-        let internal_name = internal_name_for_shape(shape).to_string();
+        let internal_name = internal_name_for_shape(shape);
         let rendered_name = rendered_name_for_shape(shape);
         let type_ir = FieldType::Enum(internal_name.clone());
         self.visited.insert(shape.id, type_ir.clone());
@@ -417,7 +420,11 @@ fn doc_to_description(doc: &'static [&'static str]) -> Option<String> {
         .map(|line| line.trim())
         .collect::<Vec<_>>()
         .join("\n");
-    if joined.is_empty() { None } else { Some(joined) }
+    if joined.is_empty() {
+        None
+    } else {
+        Some(joined)
+    }
 }
 
 /// Reads `#[check]`/`#[assert]` constraints declared directly on a facet field via the

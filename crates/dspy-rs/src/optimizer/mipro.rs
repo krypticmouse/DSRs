@@ -1,59 +1,25 @@
-use std::collections::{HashMap, HashSet};
-
 use anyhow::{Result, anyhow};
 use bon::Builder;
 use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
-use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::debug;
 
-use crate::evaluate::{TypedMetric, average_score};
-use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_instance_keys, predictor_names,
-    with_named_predictor,
+use crate::evaluate::TypedMetric;
+use crate::optimizer::engine::{
+    Budget, Candidate, EngineConfig, EvalEngine, EvalOutcome, apply_candidate,
 };
-use crate::predictors::Example;
-use crate::trace::NodeType;
-use crate::{BamlValue, Facet, Module, RawExample, Signature, SignatureSchema};
+use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
+use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
+use crate::trace::Trace;
+use crate::core::ToInput;
+use crate::{Facet, Module, SignatureSchema};
 
-/// A single program execution trace: input, outputs, and score.
-///
-/// Used internally by [`MIPROv2`] to collect execution data that informs
-/// candidate instruction generation. Traces with higher scores guide the
-/// optimizer toward better instructions.
-#[derive(Clone, Debug)]
-pub struct Trace<S: Signature> {
-    pub input: S::Input,
-    pub outputs: BamlValue,
-    pub score: Option<f32>,
-}
-
-impl<S: Signature> Trace<S> {
-    pub fn new(input: S::Input, outputs: BamlValue, score: Option<f32>) -> Self {
-        Self {
-            input,
-            outputs,
-            score,
-        }
-    }
-
-    pub fn format_for_prompt(&self) -> String {
-        let mut result = String::new();
-        result.push_str("Input:\n");
-
-        result.push_str(&format!(
-            "  {}\n",
-            serde_json::to_value(&self.input).unwrap_or(BamlValue::Null)
-        ));
-
-        result.push_str("Output:\n");
-        result.push_str(&format!("  {}\n", self.outputs));
-
-        if let Some(score) = self.score {
-            result.push_str(&format!("Score: {:.3}\n", score));
-        }
-
-        result
-    }
+/// The whole-program score recorded on a rollout trace, if a metric ran.
+fn trace_score(trace: &Trace) -> Option<f64> {
+    trace
+        .outcome
+        .as_ref()
+        .and_then(|outcome| outcome.eval.as_ref())
+        .map(|eval| eval.score)
 }
 
 /// An instruction candidate with its evaluated score.
@@ -63,7 +29,7 @@ impl<S: Signature> Trace<S> {
 #[derive(Clone, Debug)]
 pub struct PromptCandidate {
     pub instruction: String,
-    pub score: f32,
+    pub score: f64,
 }
 
 impl PromptCandidate {
@@ -74,7 +40,7 @@ impl PromptCandidate {
         }
     }
 
-    pub fn with_score(mut self, score: f32) -> Self {
+    pub fn with_score(mut self, score: f64) -> Self {
         self.score = score;
         self
     }
@@ -123,18 +89,20 @@ impl PromptingTips {
 
 /// Trace-guided instruction and demo optimizer.
 ///
-/// MIPROv2 (Multi-prompt Instruction PRoposal Optimizer v2) works in four phases:
+/// MIPROv2 (Multi-prompt Instruction PRoposal Optimizer v2) is a thin strategy
+/// over the shared [`EvalEngine`], working in four phases:
 ///
-/// 1. **Trace collection** — runs the module on the trainset once under a
-///    [`trace()`](crate::trace::trace) scope, collecting whole-program scores plus
-///    per-`Predict` input/output pairs
-/// 2. **Demo bootstrapping** — input/output pairs from runs scoring at least
-///    `min_demo_score` become few-shot demos on the predictor that produced them
-///    (top `max_bootstrapped_demos` by score, deduplicated on inputs)
+/// 1. **Trace collection** — one traced teacher pass over the trainset (the
+///    engine's baseline candidate), collecting whole-program scores plus
+///    per-`Predict` input/output spans
+/// 2. **Demo bootstrapping** — successful spans from rollouts scoring at least
+///    `min_demo_score` become few-shot demos on the predictor that produced
+///    them via the trace name-join (top `max_bootstrapped_demos` by score,
+///    deduplicated on inputs), installed through the one candidate seam
 /// 3. **Candidate generation** — uses the traces and prompting tips to generate
 ///    `num_candidates` instruction variants per predictor
 /// 4. **Trial evaluation** — evaluates up to `num_trials` candidates on a sampled
-///    minibatch, keeps the best
+///    minibatch through the engine (cached, budget-metered fan-out), keeps the best
 ///
 /// Unlike [`GEPA`](crate::GEPA), MIPROv2 does not require feedback — only numerical scores.
 /// Unlike [`COPRO`](crate::COPRO), it uses execution traces to inform candidate generation
@@ -151,9 +119,16 @@ impl PromptingTips {
 /// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
 /// - **`seed`** — fixes minibatch sampling for reproducible runs.
 ///
+/// # Errors
+///
+/// Any LM-call or metric failure during the teacher pass or a trial evaluation
+/// propagates and aborts the run (the engine's evaluation contract).
+///
 /// # Cost
 ///
-/// Roughly `num_predictors × (trainset_size + num_trials × minibatch_size)` LM calls.
+/// Roughly `num_predictors × (trainset_size + num_trials × minibatch_size)` LM calls,
+/// minus whatever the engine's rollout cache serves for free (duplicate candidates
+/// deduplicate by content hash and re-seen examples cost nothing).
 ///
 /// ```ignore
 /// let mipro = MIPROv2::builder()
@@ -183,7 +158,7 @@ pub struct MIPROv2 {
     /// Minimum whole-program score a trace needs for its per-predictor
     /// input/output pairs to qualify as bootstrapped demos.
     #[builder(default = 0.0)]
-    pub min_demo_score: f32,
+    pub min_demo_score: f64,
 
     /// Concurrent LM calls in flight during candidate evaluation.
     #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
@@ -194,160 +169,33 @@ pub struct MIPROv2 {
 }
 
 impl MIPROv2 {
-    /// Runs the module over the trainset once, collecting whole-program traces
-    /// *and* per-predictor demo candidates from the recorded execution graphs.
-    ///
-    /// Each example runs inside a [`trace()`](crate::trace::trace) scope, so every
-    /// `Predict` leaf records its own input/output pair. Pairs from examples whose
-    /// final score reaches `min_demo_score` become demo candidates for the
-    /// predictor that produced them (joined via `instance_keys`).
-    ///
-    /// Failing examples (LM error or metric error) are skipped with a warning
-    /// instead of aborting the run — a trace pass over an unoptimized module is
-    /// expected to have failures; those examples simply contribute no trace.
-    async fn generate_traces_with_bootstrap<S, M, MT>(
-        &self,
-        module: &M,
-        examples: &[Example<S>],
-        metric: &MT,
-        instance_keys: &HashMap<usize, String>,
-    ) -> Result<(Vec<Trace<S>>, HashMap<String, Vec<RawExample>>)>
-    where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input>,
-        MT: TypedMetric<S, M>,
-    {
-        let mut traces = Vec::with_capacity(examples.len());
-        let mut demo_candidates: HashMap<String, Vec<(f32, RawExample)>> = HashMap::new();
-        let mut skipped = 0usize;
+    /// Rollout traces with the highest recorded scores, descending. Traces
+    /// without a recorded eval are ignored.
+    pub fn select_best_traces<'a>(&self, traces: &'a [Trace], num_select: usize) -> Vec<&'a Trace> {
+        let mut scored_traces: Vec<_> = traces
+            .iter()
+            .filter_map(|t| trace_score(t).map(|score| (score, t)))
+            .collect();
 
-        for example in examples {
-            let input = example.input.clone();
-            // Metric evaluation happens outside the trace scope so LM-as-judge
-            // metrics don't pollute the execution graph with their own nodes.
-            let (result, graph) = crate::trace::trace(|| module.call(input)).await;
-            let predicted = match result {
-                Ok(predicted) => predicted,
-                Err(err) => {
-                    debug!(error = %err, "skipping trainset example that failed during trace collection");
-                    skipped += 1;
-                    continue;
-                }
-            };
-            let outcome = match metric.evaluate(example, &predicted).await {
-                Ok(outcome) => outcome,
-                Err(err) => {
-                    debug!(error = %err, "skipping trainset example whose metric evaluation failed");
-                    skipped += 1;
-                    continue;
-                }
-            };
-            let score = outcome.score;
-            let (output, _) = predicted.into_parts();
-            traces.push(Trace::new(
-                example.input.clone(),
-                serde_json::to_value(output).unwrap_or(BamlValue::Null),
-                Some(score),
-            ));
-
-            if score >= self.min_demo_score {
-                for node in &graph.nodes {
-                    if let NodeType::Predict { instance_key, .. } = &node.node_type
-                        && let Some(path) = instance_keys.get(instance_key)
-                        && let (Some(input_data), Some(node_output)) =
-                            (&node.input_data, &node.output)
-                    {
-                        let mut data = input_data.data.clone();
-                        let output_keys: Vec<String> = node_output.data.keys().cloned().collect();
-                        data.extend(
-                            node_output
-                                .data
-                                .iter()
-                                .map(|(key, value)| (key.clone(), value.clone())),
-                        );
-                        let demo =
-                            RawExample::new(data, input_data.input_keys.clone(), output_keys);
-                        demo_candidates
-                            .entry(path.clone())
-                            .or_default()
-                            .push((score, demo));
-                    }
-                }
-            }
-        }
-
-        if skipped > 0 {
-            warn!(
-                skipped,
-                total = examples.len(),
-                "some trainset examples failed during trace collection"
-            );
-        }
-
-        Ok((traces, self.select_demos(demo_candidates)))
-    }
-
-    /// Keeps the top `max_bootstrapped_demos` demos per predictor by score,
-    /// deduplicated on input fields so repeated inputs don't crowd the demo set.
-    fn select_demos(
-        &self,
-        candidates: HashMap<String, Vec<(f32, RawExample)>>,
-    ) -> HashMap<String, Vec<RawExample>> {
-        let mut selected = HashMap::with_capacity(candidates.len());
-        for (path, mut scored) in candidates {
-            scored.sort_by(|(left, _), (right, _)| {
-                right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-            let mut seen_inputs = HashSet::new();
-            let mut demos = Vec::new();
-            for (_, demo) in scored {
-                let mut input_pairs: Vec<(&String, &Value)> = demo
-                    .input_keys
-                    .iter()
-                    .filter_map(|key| demo.data.get(key).map(|value| (key, value)))
-                    .collect();
-                input_pairs.sort_by_key(|(name, _)| *name);
-                let fingerprint = serde_json::to_string(&input_pairs).unwrap_or_default();
-                if seen_inputs.insert(fingerprint) {
-                    demos.push(demo);
-                    if demos.len() >= self.max_bootstrapped_demos {
-                        break;
-                    }
-                }
-            }
-            if !demos.is_empty() {
-                selected.insert(path, demos);
-            }
-        }
-        selected
-    }
-
-    pub fn select_best_traces<'a, S: Signature>(
-        &self,
-        traces: &'a [Trace<S>],
-        num_select: usize,
-    ) -> Vec<&'a Trace<S>> {
-        let mut scored_traces: Vec<_> = traces.iter().filter(|t| t.score.is_some()).collect();
-
-        scored_traces.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
+        scored_traces.sort_by(|(left, _), (right, _)| {
+            right.partial_cmp(left).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        scored_traces.into_iter().take(num_select).collect()
+        scored_traces
+            .into_iter()
+            .take(num_select)
+            .map(|(_, t)| t)
+            .collect()
     }
 
-    fn generate_candidate_instructions<S: Signature>(
+    fn generate_candidate_instructions(
         &self,
         program_description: &str,
-        traces: &[Trace<S>],
+        traces: &[Trace],
         num_candidates: usize,
     ) -> Vec<String> {
         let tips = PromptingTips::default_tips();
-        let score_hint = traces.iter().filter_map(|t| t.score).fold(0.0f32, f32::max);
+        let score_hint = traces.iter().filter_map(trace_score).fold(0.0f64, f64::max);
 
         (0..num_candidates)
             .map(|idx| {
@@ -364,100 +212,6 @@ impl MIPROv2 {
 
     pub fn create_prompt_candidates(&self, instructions: Vec<String>) -> Vec<PromptCandidate> {
         instructions.into_iter().map(PromptCandidate::new).collect()
-    }
-
-    async fn evaluate_candidate<'a, S, M, MT, I>(
-        &self,
-        module: &mut M,
-        candidate: &PromptCandidate,
-        eval_examples: I,
-        predictor_name: &str,
-        metric: &MT,
-    ) -> Result<f32>
-    where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'b> Facet<'b>,
-        MT: TypedMetric<S, M>,
-        I: IntoIterator<Item = &'a Example<S>>,
-    {
-        // Instruction-only save/restore — bootstrapped demos stay installed and
-        // are never round-tripped through serialization per candidate.
-        let original_instruction = with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.instruction_override())
-        })?;
-
-        with_named_predictor(module, predictor_name, |predictor| {
-            predictor.set_instruction(candidate.instruction.clone());
-            Ok(())
-        })?;
-
-        let evaluation =
-            evaluate_module_with_metric(&*module, eval_examples, metric, self.eval_concurrency)
-                .await;
-
-        match evaluation {
-            Ok(outcomes) => {
-                with_named_predictor(module, predictor_name, |predictor| {
-                    predictor.restore_instruction(original_instruction);
-                    Ok(())
-                })?;
-                Ok(average_score(&outcomes))
-            }
-            Err(eval_err) => {
-                if let Err(restore_err) =
-                    with_named_predictor(module, predictor_name, |predictor| {
-                        predictor.restore_instruction(original_instruction.clone());
-                        Ok(())
-                    })
-                {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
-                    ));
-                }
-                Err(eval_err)
-            }
-        }
-    }
-
-    async fn evaluate_and_select_best<S, M, MT>(
-        &self,
-        module: &mut M,
-        candidates: Vec<PromptCandidate>,
-        minibatch: &[&Example<S>],
-        predictor_name: &str,
-        metric: &MT,
-    ) -> Result<PromptCandidate>
-    where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
-    {
-        let mut evaluated = Vec::new();
-
-        let num_trials = self.num_trials.max(1);
-        for candidate in candidates.into_iter().take(num_trials) {
-            let score = self
-                .evaluate_candidate::<S, _, _, _>(
-                    module,
-                    &candidate,
-                    minibatch.iter().copied(),
-                    predictor_name,
-                    metric,
-                )
-                .await?;
-            evaluated.push(candidate.with_score(score));
-        }
-
-        evaluated
-            .into_iter()
-            .max_by(|a, b| {
-                a.score
-                    .partial_cmp(&b.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .ok_or_else(|| anyhow!("no candidates to evaluate"))
     }
 
     pub fn format_schema_fields(&self, signature: &SignatureSchema) -> String {
@@ -490,17 +244,16 @@ impl MIPROv2 {
 impl Optimizer for MIPROv2 {
     type Report = ();
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         let predictor_names = predictor_names(module)?;
 
@@ -513,30 +266,70 @@ impl Optimizer for MIPROv2 {
             None => StdRng::from_entropy(),
         };
 
-        // Phase 1: one traced pass over the trainset. Whole-program traces feed
-        // candidate generation; per-predictor input/output pairs from successful
-        // runs become bootstrapped demos.
-        let instance_keys = predictor_instance_keys(module)?;
-        let (traces, bootstrapped_demos) = self
-            .generate_traces_with_bootstrap::<S, _, _>(module, &trainset, metric, &instance_keys)
-            .await?;
+        let mut engine = EvalEngine::new(
+            trainset,
+            metric,
+            EngineConfig {
+                concurrency: self.eval_concurrency,
+                budget: Budget::unlimited(),
+                cache_salt: 0,
+            },
+        );
 
-        // Phase 2: install demos before instruction search so candidates are
-        // scored against the module as it will actually run.
-        for (predictor_name, demos) in &bootstrapped_demos {
-            debug!(
-                predictor = %predictor_name,
-                demo_count = demos.len(),
-                "installing bootstrapped demos"
-            );
-            with_named_predictor(module, predictor_name, |predictor| {
-                predictor.set_demos_from_examples(demos.clone())
-            })?;
+        // Phase 1: one traced teacher pass over the trainset — the engine's
+        // baseline candidate. Whole-program traces feed candidate generation;
+        // per-predictor spans feed demo bootstrapping via the trace name-join
+        // (spans record the dotted paths assigned by the naming pass above).
+        let baseline = engine.register(Candidate::new());
+        let baseline_eval = match engine.evaluate(module, baseline, None).await? {
+            EvalOutcome::Complete(eval) => eval,
+            EvalOutcome::BudgetExhausted { needed } => {
+                return Err(anyhow!(
+                    "unexpected budget exhaustion ({needed} rollouts) with an unlimited budget"
+                ));
+            }
+        };
+        let scored_traces: Vec<(f64, &Trace)> = baseline_eval
+            .rollouts
+            .iter()
+            .filter_map(|rollout| {
+                rollout
+                    .trace
+                    .as_ref()
+                    .map(|trace| (rollout.eval.score, trace))
+            })
+            .collect();
+
+        // Phase 2: bootstrap demos from successful spans of well-scored
+        // rollouts and install them permanently before instruction search, so
+        // candidates are scored against the module as it will actually run.
+        let bootstrapped_demos = select_demos(
+            collect_demo_candidates(scored_traces, self.min_demo_score),
+            self.max_bootstrapped_demos,
+        );
+        if !bootstrapped_demos.is_empty() {
+            let mut demo_candidate = Candidate::new();
+            for (predictor_name, demos) in bootstrapped_demos {
+                debug!(
+                    predictor = %predictor_name,
+                    demo_count = demos.len(),
+                    "installing bootstrapped demos"
+                );
+                demo_candidate.set_demos(predictor_name, demos);
+            }
+            let _undo = apply_candidate(module, &demo_candidate)?;
         }
+
+        let traces: Vec<Trace> = baseline_eval
+            .rollouts
+            .into_iter()
+            .filter_map(|rollout| rollout.trace)
+            .collect();
 
         // Phase 3: per-predictor instruction search on a sampled minibatch —
         // one minibatch per predictor round so all candidates score on the
         // same examples and remain comparable.
+        let all_indices: Vec<usize> = (0..engine.num_examples()).collect();
         for predictor_name in predictor_names {
             let signature_desc = {
                 with_named_predictor(module, &predictor_name, |predictor| {
@@ -546,26 +339,37 @@ impl Optimizer for MIPROv2 {
 
             let instructions =
                 self.generate_candidate_instructions(&signature_desc, &traces, self.num_candidates);
-            let candidates = self.create_prompt_candidates(instructions);
 
-            let minibatch_size = trainset.len().min(self.minibatch_size.max(1));
-            let minibatch: Vec<&Example<S>> =
-                trainset.choose_multiple(&mut rng, minibatch_size).collect();
+            let minibatch_size = all_indices.len().min(self.minibatch_size.max(1));
+            let minibatch: Vec<usize> = all_indices
+                .choose_multiple(&mut rng, minibatch_size)
+                .copied()
+                .collect();
 
-            let best_candidate = self
-                .evaluate_and_select_best::<S, _, _>(
-                    module,
-                    candidates,
-                    &minibatch,
-                    &predictor_name,
-                    metric,
-                )
-                .await?;
+            let mut best: Option<(f64, String)> = None;
+            for instruction in instructions.into_iter().take(self.num_trials.max(1)) {
+                let row =
+                    engine.register(Candidate::with_instruction(&predictor_name, &instruction));
+                let eval = match engine.evaluate(module, row, Some(&minibatch)).await? {
+                    EvalOutcome::Complete(eval) => eval,
+                    EvalOutcome::BudgetExhausted { needed } => {
+                        return Err(anyhow!(
+                            "unexpected budget exhaustion ({needed} rollouts) with an unlimited budget"
+                        ));
+                    }
+                };
+                let score = eval.mean();
+                if best.as_ref().is_none_or(|(top, _)| score > *top) {
+                    best = Some((score, instruction));
+                }
+            }
 
-            with_named_predictor(module, &predictor_name, |predictor| {
-                predictor.set_instruction(best_candidate.instruction.clone());
-                Ok(())
-            })?;
+            let (_, best_instruction) =
+                best.ok_or_else(|| anyhow!("no candidates to evaluate"))?;
+            let _undo = apply_candidate(
+                module,
+                &Candidate::with_instruction(&predictor_name, best_instruction),
+            )?;
         }
 
         Ok(())
@@ -577,7 +381,7 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
-    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::evaluate::{Eval, TypedMetric};
     use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
@@ -614,18 +418,21 @@ mod tests {
 
     struct AlwaysFailMetric;
 
-    impl TypedMetric<MiproStateSig, MiproStateModule> for AlwaysFailMetric {
+    type MiproRow = (MiproStateSigInput, MiproStateSigOutput);
+
+    impl TypedMetric<MiproRow, MiproStateModule> for AlwaysFailMetric {
         async fn evaluate(
             &self,
-            _example: &Example<MiproStateSig>,
+            _example: &MiproRow,
             _prediction: &Predicted<MiproStateSigOutput>,
-        ) -> Result<MetricOutcome> {
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
         }
     }
 
-    fn trainset() -> Vec<Example<MiproStateSig>> {
-        vec![Example::new(
+    fn trainset() -> Vec<MiproRow> {
+        vec![(
             MiproStateSigInput {
                 prompt: "one".to_string(),
             },
@@ -636,7 +443,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn evaluate_candidate_restores_state_when_metric_errors() {
+    async fn compile_restores_state_when_metric_errors() {
         let optimizer = MIPROv2::builder()
             .num_candidates(2)
             .num_trials(1)
@@ -647,16 +454,9 @@ mod tests {
                 .instruction("seed-instruction")
                 .build(),
         };
-        let candidate = PromptCandidate::new("candidate instruction".to_string());
 
         let err = optimizer
-            .evaluate_candidate::<MiproStateSig, _, _, _>(
-                &mut module,
-                &candidate,
-                &trainset(),
-                "predictor",
-                &AlwaysFailMetric,
-            )
+            .compile(&mut module, trainset(), &AlwaysFailMetric)
             .await
             .expect_err("candidate evaluation should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));

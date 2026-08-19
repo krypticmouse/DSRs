@@ -41,7 +41,7 @@
 //!     .build()
 //!     .await
 //!     .unwrap();
-//! dspy_rs::configure(lm, ChatAdapter);
+//! dspy_rs::configure(lm);
 //!
 //! // 2. Pick a strategy
 //! let cot = ChainOfThought::<QA>::new();
@@ -80,12 +80,12 @@
 //! - [`adapter`] — Prompt formatting and LM response parsing ([`ChatAdapter`])
 //! - [`core`] — [`Module`] trait, [`Signature`] trait, [`SignatureSchema`], error types,
 //!   LM client, [`Predicted`] and [`CallMetadata`]
-//! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Example`]
+//! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Demo`]
 //! - [`modules`] — [`ChainOfThought`] and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
-//! - [`trace`] — Execution graph recording for debugging
+//! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
 
 // TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
@@ -99,6 +99,8 @@ pub mod augmentation;
 pub mod core;
 pub mod data;
 pub mod evaluate;
+pub mod fx;
+pub mod ir;
 pub mod modules;
 pub mod optimizer;
 pub mod predictors;
@@ -109,28 +111,33 @@ pub use adapter::chat::*;
 pub use augmentation::*;
 pub use core::*;
 pub use data::dataloader::*;
-pub(crate) use data::example::Example as RawExample;
-pub use data::prediction::*;
-pub use data::serialize::*;
 pub use data::utils::*;
 pub use evaluate::*;
 pub use modules::*;
 pub use optimizer::*;
 pub use predictors::*;
+// The unified trace format (RFC 0001).
+pub use trace::{
+    CompId, Eval, JsonMap, ModelEntry, ModelId, OtelEvent, OtelKeyValue, OtelSpan, OtelStatus,
+    OtelValue, PrefixEntry, PrefixId, ReplayError, ReplayMode, ReplayReport, RlRollout,
+    RlTransition, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
+    SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
+    is_capturing, is_replaying, replay,
+};
 pub use utils::*;
 
+// Code Mode (vision report §5.5): tools as a sandboxed JS API. See
+// `ToolSet::code_mode` for the module lane and `RuntimeEnv` for the IR lane.
+#[cfg(feature = "code-mode")]
+pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
+
 pub mod typesys;
+pub use dsrs_macros::*;
+pub use facet::{Facet, Shape};
 pub use typesys::{
     Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
     Schema, evaluate_constraints,
 };
-pub use dsrs_macros::*;
-pub use facet::{Facet, Shape};
-
-/// The runtime value model is now `serde_json::Value`. This alias keeps the historical
-/// `BamlValue` name available to downstream code and tests during the migration away from
-/// the vendored BAML value type.
-pub type BamlValue = serde_json::Value;
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -150,99 +157,10 @@ pub mod __macro_support {
     pub use anyhow;
     pub use facet;
     pub use indexmap;
-    pub use schemars;
+    pub use rig;
     pub use serde;
     pub use serde_json;
-}
-
-#[macro_export]
-macro_rules! field {
-    // Example Usage: field! {
-    //   input["Description"] => question: String
-    // }
-    //
-    // Example Output:
-    //
-    // {
-    //   "question": {
-    //     "type": "String",
-    //     "desc": "Description",
-    //     "schema": ""
-    //   },
-    //   ...
-    // }
-
-    // Pattern for field definitions with descriptions
-    { $($field_type:ident[$desc:literal] => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::__macro_support::serde_json::json;
-
-        let mut result = $crate::__macro_support::serde_json::Map::new();
-
-        $(
-            let type_str = stringify!($field_ty);
-            let schema = {
-                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
-                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
-                // Extract just the properties if it's an object schema
-                if let Some(obj) = schema_json.as_object() {
-                    if obj.contains_key("properties") {
-                        schema_json["properties"].clone()
-                    } else {
-                        "".to_string().into()
-                    }
-                } else {
-                    "".to_string().into()
-                }
-            };
-            result.insert(
-                stringify!($field_name).to_string(),
-                json!({
-                    "type": type_str,
-                    "desc": $desc,
-                    "schema": schema,
-                    "__dsrs_field_type": stringify!($field_type)
-                })
-            );
-        )*
-
-        $crate::__macro_support::serde_json::Value::Object(result)
-    }};
-
-    // Pattern for field definitions without descriptions
-    { $($field_type:ident => $field_name:ident : $field_ty:ty),* $(,)? } => {{
-        use $crate::__macro_support::serde_json::json;
-
-        let mut result = $crate::__macro_support::serde_json::Map::new();
-
-        $(
-            let type_str = stringify!($field_ty);
-            let schema = {
-                let schema = $crate::__macro_support::schemars::schema_for!($field_ty);
-                let schema_json = $crate::__macro_support::serde_json::to_value(schema).unwrap();
-                // Extract just the properties if it's an object schema
-                if let Some(obj) = schema_json.as_object() {
-                    if obj.contains_key("properties") {
-                        schema_json["properties"].clone()
-                    } else {
-                        "".to_string().into()
-                    }
-                } else {
-                    "".to_string().into()
-                }
-            };
-            result.insert(
-                stringify!($field_name).to_string(),
-                json!({
-                    "type": type_str,
-                    "desc": "",
-                    "schema": schema,
-                    "__dsrs_field_type": stringify!($field_type)
-                })
-            );
-        )*
-
-        $crate::__macro_support::serde_json::Value::Object(result)
-    }};
+    pub use tokio;
 }
 
 #[macro_export]
@@ -283,18 +201,3 @@ macro_rules! sign {
     }};
 }
 
-/// Source: <https://github.com/wholesome-ghoul/hashmap_macro/blob/master/src/lib.rs>
-/// Author: <https://github.com/wholesome-ghoul>
-/// License: MIT
-/// Description: This macro creates a HashMap from a list of key-value pairs.
-/// Reason for Reuse: Want to avoid adding a dependency for a simple macro.
-#[macro_export]
-macro_rules! hashmap {
-    () => {
-        ::std::collections::HashMap::new()
-    };
-
-    ($($key:expr => $value:expr),+ $(,)?) => {
-        ::std::collections::HashMap::from([ $(($key, $value)),* ])
-    };
-}

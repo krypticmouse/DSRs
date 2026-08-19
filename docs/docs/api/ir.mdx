@@ -1,0 +1,409 @@
+---
+title: "dspy_rs::ir"
+description: "The intermediate representation (RFC 0002)."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+The intermediate representation (RFC 0002).
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`agent`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.agent.html) | Re-export of `builder::agent`. |
+| [`AgentLoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.AgentLoopNode.html) | Re-export of `graph::AgentLoopNode`. |
+| [`AgentStepOpts`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.AgentStepOpts.html) | Re-export of `step::AgentStepOpts`. |
+| [`AsNodeName`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/trait.AsNodeName.html) | Re-export of `builder::AsNodeName`. |
+| [`BakeError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.BakeError.html) | Re-export of `graph::BakeError`. |
+| [`Binding`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Binding.html) | Re-export of `graph::Binding`. |
+| [`Budget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Budget.html) | Re-export of `interp::Budget`. |
+| [`BudgetMeter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.BudgetMeter.html) | Re-export of `interp::BudgetMeter`. |
+| [`BudgetPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.BudgetPolicy.html) | Re-export of `graph::BudgetPolicy`. |
+| [`build_module_program`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.build_module_program.html) | Re-export of `module_build::build_module_program`. |
+| [`BuildError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/enum.BuildError.html) | Re-export of `builder::BuildError`. |
+| [`CapSet`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.CapSet.html) | Re-export of `graph::CapSet`. |
+| [`carried`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.carried.html) | Re-export of `builder::carried`. |
+| [`ClassDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.ClassDef.html) | Re-export of `crate::typesys::ClassDef`. |
+| [`code_hash`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/fn.code_hash.html) | Re-export of `params::code_hash`. |
+| [`CodeK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.CodeK.html) | Re-export of `params::CodeK`. |
+| [`CodeLang`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.CodeLang.html) | Re-export of `params::CodeLang`. |
+| [`ConstraintDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.ConstraintDef.html) | Re-export of `sig::ConstraintDef`. |
+| [`ContextK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ContextK.html) | Re-export of `params::ContextK`. |
+| [`ContextPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ContextPolicy.html) | Re-export of `params::ContextPolicy`. |
+| [`cot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.cot.html) | Re-export of `builder::cot`. |
+| [`current_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.current_overlay.html) | Re-export of `bridge::current_overlay`. |
+| [`default_lm`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.default_lm.html) | Re-export of `module_build::default_lm`. |
+| [`DemoRow`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.DemoRow.html) | Re-export of `params::DemoRow`. |
+| [`Demos`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.Demos.html) | Re-export of `params::Demos`. |
+| [`DsrsFileError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/enum.DsrsFileError.html) | Re-export of `text::DsrsFileError`. |
+| [`EnumDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumDef.html) | Re-export of `crate::typesys::EnumDef`. |
+| [`EnumValueDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumValueDef.html) | Re-export of `crate::typesys::EnumValueDef`. |
+| [`Exhausted`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Exhausted.html) | Re-export of `interp::Exhausted`. |
+| [`extern_hole`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.extern_hole.html) | Re-export of `builder::extern_hole`. |
+| [`FieldDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.FieldDef.html) | Re-export of `sig::FieldDef`. |
+| [`FieldType`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/enum.FieldType.html) | Re-export of `crate::typesys::FieldType`. |
+| [`fork`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.fork.html) | Re-export of `builder::fork`. |
+| [`ForkJoinNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ForkJoinNode.html) | Re-export of `graph::ForkJoinNode`. |
+| [`hole`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.hole.html) | Re-export of `builder::hole`. |
+| [`HoleImpl`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.HoleImpl.html) | Re-export of `graph::HoleImpl`. |
+| [`HoleNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.HoleNode.html) | Re-export of `graph::HoleNode`. |
+| [`HoleReport`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.HoleReport.html) | Re-export of `step::HoleReport`. |
+| [`HostHoleFn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/type.HostHoleFn.html) | Re-export of `interp::HostHoleFn`. |
+| [`input_schema_of`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/fn.input_schema_of.html) | Re-export of `interp::input_schema_of`. |
+| [`input`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.input.html) | Re-export of `builder::input`. |
+| [`Instruction`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.Instruction.html) | Re-export of `params::Instruction`. |
+| [`Interner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Interner.html) | Re-export of `graph::Interner`. |
+| [`Interpreter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Interpreter.html) | Re-export of `interp::Interpreter`. |
+| [`KindTag`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/trait.KindTag.html) | Re-export of `params::KindTag`. |
+| [`Lineage`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Lineage.html) | Re-export of `graph::Lineage`. |
+| [`lit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.lit.html) | Re-export of `builder::lit`. |
+| [`LoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.LoadError.html) | Re-export of `interp::LoadError`. |
+| [`loop_`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.loop_.html) | Re-export of `builder::loop_`. |
+| [`LoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.LoopNode.html) | Re-export of `graph::LoopNode`. |
+| [`ModelDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelDef.html) | Re-export of `graph::ModelDef`. |
+| [`ModelId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelId.html) | Re-export of `graph::ModelId`. |
+| [`ModelRefK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ModelRefK.html) | Re-export of `params::ModelRefK`. |
+| [`ModuleBuildError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.ModuleBuildError.html) | Re-export of `module_build::ModuleBuildError`. |
+| [`ModuleSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/struct.ModuleSpec.html) | Re-export of `module_build::ModuleSpec`. |
+| [`ModuleStep`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/struct.ModuleStep.html) | Re-export of `module_build::ModuleStep`. |
+| [`ModuleStepKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.ModuleStepKind.html) | Re-export of `module_build::ModuleStepKind`. |
+| [`Node`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.Node.html) | Re-export of `graph::Node`. |
+| [`NodeBudget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.NodeBudget.html) | Re-export of `graph::NodeBudget`. |
+| [`NodeId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.NodeId.html) | Re-export of `graph::NodeId`. |
+| [`NodeSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/struct.NodeSpec.html) | Re-export of `builder::NodeSpec`. |
+| [`out`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.out.html) | Re-export of `builder::out`. |
+| [`Overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.Overlay.html) | Re-export of `params::Overlay`. |
+| [`OverlayError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.OverlayError.html) | Re-export of `params::OverlayError`. |
+| [`ParamId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ParamId.html) | Re-export of `params::ParamId`. |
+| [`ParamKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamKind.html) | Re-export of `params::ParamKind`. |
+| [`ParamOwner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamOwner.html) | Re-export of `params::ParamOwner`. |
+| [`ParamSlot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ParamSlot.html) | Re-export of `params::ParamSlot`. |
+| [`ParamValue`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamValue.html) | Re-export of `params::ParamValue`. |
+| [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/struct.ParseError.html) | Re-export of `text::ParseError`. |
+| [`Port`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/enum.Port.html) | Re-export of `builder::Port`. |
+| [`PortRef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.PortRef.html) | Re-export of `graph::PortRef`. |
+| [`PortSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.PortSpec.html) | Re-export of `module_build::PortSpec`. |
+| [`predict`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.predict.html) | Re-export of `builder::predict`. |
+| [`PredictNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.PredictNode.html) | Re-export of `graph::PredictNode`. |
+| [`Program`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Program.html) | Re-export of `graph::Program`. |
+| [`ProgramBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/struct.ProgramBuilder.html) | Re-export of `builder::ProgramBuilder`. |
+| [`ProgramMeta`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ProgramMeta.html) | Re-export of `graph::ProgramMeta`. |
+| [`refine`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.refine.html) | Re-export of `builder::refine`. |
+| [`RefineNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RefineNode.html) | Re-export of `graph::RefineNode`. |
+| [`RenderSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/enum.RenderSpec.html) | Re-export of `sig::RenderSpec`. |
+| [`retry`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.retry.html) | Re-export of `builder::retry`. |
+| [`RetryNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RetryNode.html) | Re-export of `graph::RetryNode`. |
+| [`route`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.route.html) | Re-export of `builder::route`. |
+| [`RouteNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RouteNode.html) | Re-export of `graph::RouteNode`. |
+| [`RunError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.RunError.html) | Re-export of `interp::RunError`. |
+| [`RuntimeEnv`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RuntimeEnv.html) | Re-export of `interp::RuntimeEnv`. |
+| [`seq`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.seq.html) | Re-export of `builder::seq`. |
+| [`SeqNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.SeqNode.html) | Re-export of `graph::SeqNode`. |
+| [`SigError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/enum.SigError.html) | Re-export of `sig::SigError`. |
+| [`SigId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.SigId.html) | Re-export of `graph::SigId`. |
+| [`SigMismatch`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SigMismatch.html) | Re-export of `sig::SigMismatch`. |
+| [`SignatureBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SignatureBuilder.html) | Re-export of `sig::SignatureBuilder`. |
+| [`SignatureDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SignatureDef.html) | Re-export of `sig::SignatureDef`. |
+| [`Slot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.Slot.html) | Re-export of `params::Slot`. |
+| [`StepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.StepDef.html) | Re-export of `step::StepDef`. |
+| [`StepKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/enum.StepKind.html) | Re-export of `step::StepKind`. |
+| [`StopSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.StopSpec.html) | Re-export of `graph::StopSpec`. |
+| [`Sym`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Sym.html) | Re-export of `graph::Sym`. |
+| [`ToolDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolDef.html) | Re-export of `graph::ToolDef`. |
+| [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) | Re-export of `params::ToolDesc`. |
+| [`ToolId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolId.html) | Re-export of `graph::ToolId`. |
+| [`ToolKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.ToolKind.html) | Re-export of `graph::ToolKind`. |
+| [`ToolStepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.ToolStepDef.html) | Re-export of `step::ToolStepDef`. |
+| [`TypeTable`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.TypeTable.html) | Re-export of `crate::typesys::TypeTable`. |
+| [`unbound_model_config`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.unbound_model_config.html) | Re-export of `module_build::unbound_model_config`. |
+| [`ValidateError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/validate/enum.ValidateError.html) | Re-export of `validate::ValidateError`. |
+| [`with_ambient_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.with_ambient_overlay.html) | Re-export of `bridge::with_ambient_overlay`. |
+| [`with_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.with_overlay.html) | Re-export of `bridge::with_overlay`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`bridge`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/index.html) | The fx/ModuleState ↔ `Overlay` bridge (RFC 0002 §2.4 migration contract). |
+| [`builder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/index.html) | The Rust builder frontend (RFC 0002 §4.3–4.4): constructs the same runtime `Program` value the text parser will. |
+| [`graph`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/index.html) | The IR graph core (RFC 0002 §2): entity ids, the `Interner`, the closed `Node` enum, field-level `Binding`/`PortRef` dataflow, and `Program` — arenas over value-level signatures. |
+| [`interp`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/index.html) | The IR interpreter (RFC 0002 §3): async evaluation of a loaded `Program`. |
+| [`module_build`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/index.html) | RFC 0003 stage M-3 library support: the module "linker". |
+| [`params`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/index.html) | Parameters (RFC 0002 §2.4): every mutable thing is a named, addressable slot; a candidate is an `Overlay` read through at render time, never a mutation. |
+| [`sig`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/index.html) | Value-level signatures (RFC 0002 §1) — `SignatureDef` and friends. |
+| [`step`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/index.html) | RFC 0003 stage M-2: step metadata. |
+| [`text`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/index.html) | The `.dsrs` text format (RFC 0002 §4, stage IR-5). |
+| [`validate`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/validate/index.html) | Load-time validation (RFC 0002 §2.3): builder `finish()`, the loader, and `Program::validate()` run the same code path. Nothing is checked lazily at call time. |
+
+## `ir::sig`
+
+Value-level signatures (RFC 0002 §1) — `SignatureDef` and friends.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ConstraintDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.ConstraintDef.html) | Owned runtime form of `ConstraintSpec` (which stays `&'static` for the derive). |
+| [`FieldDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.FieldDef.html) | One input or output field of a `SignatureDef`. |
+| [`SigMismatch`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SigMismatch.html) | Structural mismatch reported by `SignatureDef::matches`. |
+| [`SignatureBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SignatureBuilder.html) | Builder for `SignatureDef`; validation happens at `finish`. |
+| [`SignatureDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.SignatureDef.html) | A signature as an owned value: what the derive macro knows at compile time, available at runtime with no `'static` requirement (RFC 0002 §1.1). |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`RenderSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/enum.RenderSpec.html) | Owned runtime form of `InputRenderSpec`. |
+| [`SigError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/enum.SigError.html) | Validation failure from `SignatureBuilder::finish`. What the derive macro rejects, this rejects — same closed subset in both lanes (RFC 0002 §1.3). |
+
+## `ir::bridge`
+
+The fx/ModuleState ↔ `Overlay` bridge (RFC 0002 §2.4 migration contract).
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`current_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.current_overlay.html) | The ambient overlay, if a `with_ambient_overlay` scope is active on this task. Read by `#module`-generated executable fns immediately before `Interpreter::run`. |
+| [`with_ambient_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.with_ambient_overlay.html) | Runs `fut` with `overlay` as the ambient candidate for every `#module` fn called on this task — the interpreter-lane sibling of `fx::with_params`. |
+| [`with_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.with_overlay.html) | Runs `fut` with `overlay` (unbound against `program`) as the ambient `fx::Params` scope — the fx-lane equivalent of passing the overlay to `Interpreter::run`. |
+
+## `ir::builder`
+
+The Rust builder frontend (RFC 0002 §4.3–4.4): constructs the same runtime `Program` value the text parser will.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`NodeSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/struct.NodeSpec.html) | An unregistered node: the builder-side mirror of `Node` with name-based ports and inline children. |
+| [`ProgramBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/struct.ProgramBuilder.html) | Builds a `Program`. Declarations (caps, models, sigs, tools) accumulate; `main` lowers the node tree, materializes param slots, seals the hash, and validates. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`BuildError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/enum.BuildError.html) |  |
+| [`Port`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/enum.Port.html) | A name-based port, resolved to a `PortRef` at `main()`. |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`AsNodeName`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/trait.AsNodeName.html) | Anything that names a node: a string, or a leaf/step spec. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`agent`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.agent.html) | The LLM+tool loop. |
+| [`carried`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.carried.html) | `^field` — the previous iteration's carried value (Loop bodies only). |
+| [`cot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.cot.html) | Chain-of-thought sugar: a Predict over `sig.augmented_with(reasoning)`. |
+| [`extern_hole`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.extern_hole.html) | An extern (host-backed) typed hole (RFC 0003 §4): a native fn bound by leaf name from the runtime environment at load. |
+| [`fork`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.fork.html) | Concurrent branches, joined all-success / fail-fast. |
+| [`hole`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.hole.html) | A typed hole: sandboxed JS with a declared signature and capability set. |
+| [`input`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.input.html) | `$.field` — the enclosing scope's input. |
+| [`lit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.lit.html) | A JSON literal port. |
+| [`loop_`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.loop_.html) | Bounded loop. |
+| [`out`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.out.html) | `node.field` — an earlier node's output. `node` accepts a name string or a leaf spec (anything `AsNodeName`). |
+| [`predict`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.predict.html) | One LM call over `sig`. |
+| [`refine`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.refine.html) | Judge-gated refinement of a child. |
+| [`retry`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.retry.html) | Bounded retry of a child. |
+| [`route`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.route.html) | Enum-discriminated branching. |
+| [`seq`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.seq.html) | Sequential composition. |
+
+## `ir::graph`
+
+The IR graph core (RFC 0002 §2): entity ids, the `Interner`, the closed `Node` enum, field-level `Binding`/`PortRef` dataflow, and `Program` — arenas over value-level signatures.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`AgentLoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.AgentLoopNode.html) | The LLM+tool loop as the first-class unit. |
+| [`Binding`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Binding.html) | One field-level wire: `dst` input field (or exported name) fed from `src`. |
+| [`CapSet`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.CapSet.html) | Capability names: namespaced, colon-separated (`"net:search"`, `"fs:read"`). `BTreeSet`: set ops happen at load only, never on the hot path. |
+| [`ForkJoinNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ForkJoinNode.html) |  |
+| [`HoleNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.HoleNode.html) | LACUNA-style typed hole: opaque-but-typed code. The optimizer sees a signature (and, when sandboxed, a Code gene); the type system sees a normal node. |
+| [`Interner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Interner.html) | Graph-side string interner. Signatures speak strings (`SignatureDef` is constructible with zero context); the *graph* speaks `Sym`s. |
+| [`Lineage`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Lineage.html) |  |
+| [`LoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.LoopNode.html) |  |
+| [`ModelDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelDef.html) | `LMConfig` is already serde with `api_key` `#serde(skip)` — reused verbatim: model entries carry provider/URL/sampling only, never secrets. |
+| [`ModelId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelId.html) | Model reference id. Distinct from the trace format's per-trace `trace::ModelId` — this one indexes `Program::models`. |
+| [`NodeBudget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.NodeBudget.html) |  |
+| [`NodeId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.NodeId.html) |  |
+| [`PredictNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.PredictNode.html) | One LM call. No tools. `cot` in the surface syntax lowers to a Predict over `sig.augmented_with(reasoning)`. |
+| [`Program`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Program.html) | A loaded IR program: arenas + interner + capability ceiling. |
+| [`ProgramMeta`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ProgramMeta.html) |  |
+| [`RefineNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RefineNode.html) |  |
+| [`RetryNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RetryNode.html) |  |
+| [`RouteNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RouteNode.html) |  |
+| [`SeqNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.SeqNode.html) |  |
+| [`SigId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.SigId.html) |  |
+| [`StopSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.StopSpec.html) |  |
+| [`Sym`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Sym.html) | Interned string: node names, field references in bindings, tool names. |
+| [`ToolDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolDef.html) |  |
+| [`ToolId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolId.html) |  |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`BakeError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.BakeError.html) | Why `Program::bake` refused. |
+| [`BudgetPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.BudgetPolicy.html) |  |
+| [`HoleImpl`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.HoleImpl.html) | How a hole is implemented (RFC 0003 §4.1) — mirrors `ToolKind`. |
+| [`Node`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.Node.html) | The closed node vocabulary. `Predict` carries no tools — tool use is `AgentLoop`; `cot` is signature sugar, not a node kind. |
+| [`PortRef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.PortRef.html) |  |
+| [`ToolKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.ToolKind.html) |  |
+
+## `ir::interp`
+
+The IR interpreter (RFC 0002 §3): async evaluation of a loaded `Program`.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Budget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Budget.html) | Run-level spend limits. `None` = unlimited. |
+| [`BudgetMeter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.BudgetMeter.html) | Check-before-call metering: calls and deadline are hard-gated pre-call; token budgets are soft (checked against accumulated usage, since usage is only known post-hoc). |
+| [`Exhausted`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Exhausted.html) | Budget reservation failure. |
+| [`Interpreter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Interpreter.html) | A loaded, executable program: validated graph + bound models/tools + registered sandbox code. Cheap to share; run state never lives here. |
+| [`RuntimeEnv`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RuntimeEnv.html) | What the host supplies at load: live models, host tool bindings, the sandbox, and the capability grants. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`LoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.LoadError.html) |  |
+| [`RunError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.RunError.html) |  |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`input_schema_of`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/fn.input_schema_of.html) | Projects a tool/hole signature's *input* side to a JSON Schema object — the declared interface is the schema the model sees. |
+
+### Type aliases
+
+| Item | Description |
+|---|---|
+| [`HostHoleFn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/type.HostHoleFn.html) | A native extern-hole implementation: resolved input map in, JSON value out (coerced against the hole's output signature by the interpreter). |
+
+## `ir::module_build`
+
+RFC 0003 stage M-3 library support: the module "linker".
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ModuleSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/struct.ModuleSpec.html) | The parsed shape of a `#module` fn body. |
+| [`ModuleStep`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/struct.ModuleStep.html) |  |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ModuleBuildError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.ModuleBuildError.html) | Why a `#module` body could not be linked into a program. |
+| [`ModuleStepKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.ModuleStepKind.html) |  |
+| [`PortSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.PortSpec.html) | A macro-emitted port: name-based, resolved by the linker. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`build_module_program`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.build_module_program.html) | Links a `ModuleSpec` into a validated `Program`. Deterministic: the same spec produces the same canonical text and therefore the same program hash. |
+| [`default_lm`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.default_lm.html) | The globally-configured LM (`configure`), used by generated module code to bind the `default` model ref at load. |
+| [`unbound_model_config`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.unbound_model_config.html) | The placeholder config a module program declares for model ref `name`. Loading it unbound fails loudly; the real client arrives by name through `RuntimeEnv::bind_model`. |
+
+## `ir::params`
+
+Parameters (RFC 0002 §2.4): every mutable thing is a named, addressable slot; a candidate is an `Overlay` read through at render time, never a mutation.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ContextPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ContextPolicy.html) | The open-lane optimizable slot (vision §6.6). Minimal v1; additive later. |
+| [`DemoRow`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.DemoRow.html) | One few-shot demonstration row: input and output field maps. |
+| [`Overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.Overlay.html) | A candidate = dense data overlay over a fixed skeleton. Clone is a vec clone. |
+| [`ParamId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ParamId.html) |  |
+| [`ParamSlot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ParamSlot.html) | One optimizable slot: canonical path, owner, kind, and the incumbent value. |
+| [`Slot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.Slot.html) | Typed slot handle: optimizer-side mutation mistakes are compile errors. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`CodeK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.CodeK.html) |  |
+| [`CodeLang`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.CodeLang.html) |  |
+| [`ContextK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ContextK.html) |  |
+| [`Demos`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.Demos.html) |  |
+| [`Instruction`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.Instruction.html) |  |
+| [`ModelRefK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ModelRefK.html) |  |
+| [`OverlayError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.OverlayError.html) |  |
+| [`ParamKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamKind.html) |  |
+| [`ParamOwner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamOwner.html) |  |
+| [`ParamValue`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamValue.html) |  |
+| [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) |  |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`KindTag`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/trait.KindTag.html) |  |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`code_hash`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/fn.code_hash.html) | Stable content hash of a code gene's source. |
+
+## `ir::step`
+
+RFC 0003 stage M-2: step metadata.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`AgentStepOpts`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.AgentStepOpts.html) | `#agent(...)` attribute options, mirroring the `AgentLoopNode` surface. |
+| [`HoleReport`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.HoleReport.html) | One hole-ized expression in a `#module` body (RFC 0003 §6) — the opacity report entry. |
+| [`StepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.StepDef.html) | One step declaration — what a `#predict`/`#cot`/`#agent` fn *is*, as data. |
+| [`ToolStepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.ToolStepDef.html) | One `#tool` declaration: metadata plus the host implementation. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`StepKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/enum.StepKind.html) |  |
+
+## `ir::text`
+
+The `.dsrs` text format (RFC 0002 §4, stage IR-5).
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/struct.ParseError.html) | A parse failure with the source position and what was expected — designed to be actionable feedback for a model regenerating the program. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`DsrsFileError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/enum.DsrsFileError.html) | Failure loading or saving a `.dsrs` artifact file. |
+
+## `ir::validate`
+
+Load-time validation (RFC 0002 §2.3): builder `finish()`, the loader, and `Program::validate()` run the same code path. Nothing is checked lazily at call time.
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ValidateError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/validate/enum.ValidateError.html) |  |

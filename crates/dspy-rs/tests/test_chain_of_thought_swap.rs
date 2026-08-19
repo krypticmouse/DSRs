@@ -1,5 +1,5 @@
 use dspy_rs::{
-    ChainOfThought, ChatAdapter, LM, LMClient, Module, Predict, Reasoning, Signature,
+    ChainOfThought, LM, LMClient, Module, Predict, Reasoning, Signature,
     TestCompletionModel, WithReasoning, configure,
 };
 use rig::completion::AssistantContent;
@@ -36,7 +36,7 @@ async fn configure_test_lm(responses: Vec<String>) {
     .await
     .unwrap();
 
-    configure(lm, ChatAdapter {});
+    configure(lm);
 }
 
 #[derive(Signature, Clone, Debug, PartialEq, facet::Facet)]

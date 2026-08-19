@@ -22,6 +22,7 @@
 
 pub(crate) mod dyn_predictor;
 mod errors;
+pub mod example;
 pub mod lm;
 pub mod module;
 mod module_ext;
@@ -29,12 +30,12 @@ mod predicted;
 mod schema;
 pub mod settings;
 pub mod signature;
-pub mod specials;
 mod state;
 
 pub(crate) use dyn_predictor::*;
 pub use dyn_predictor::PredictState;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use example::{ToInput, ToOutput};
 pub use state::ModuleState;
 pub use lm::*;
 pub use module::*;
@@ -43,4 +44,3 @@ pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;
-pub use specials::*;

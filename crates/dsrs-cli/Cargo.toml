@@ -1,0 +1,31 @@
+[package]
+name = "dsrs-cli"
+version = "0.1.0"
+edition = "2024"
+authors = ["Herumb Shandilya <herumb@stanford.edu>"]
+description = "The dsrs command line: check, format, and serve .dsrs program artifacts"
+readme = "../../README.md"
+documentation = "https://dsrs.herumbshandilya.com"
+homepage = "https://dsrs.herumbshandilya.com"
+repository = "https://github.com/krypticmouse/DSRs"
+license = "Apache-2.0"
+
+[[bin]]
+name = "dsrs"
+path = "src/main.rs"
+
+[dependencies]
+dspy-rs = { version = "0.7.3", path = "../dspy-rs" }
+dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+
+[dev-dependencies]
+reqwest = { version = "0.13", features = ["json"] }
+# Same pin as dspy-rs: needed to construct canned AssistantContent responses
+# for the TestCompletionModel in server integration tests.
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+tempfile = "3"

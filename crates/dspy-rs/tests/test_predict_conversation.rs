@@ -1,5 +1,5 @@
 use dspy_rs::{
-    ChatAdapter, LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure,
+    LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure,
 };
 use rig::completion::{AssistantContent, CompletionRequest};
 use rig::message::{Message as RigMessage, Text, UserContent};
@@ -35,7 +35,7 @@ async fn configure_test_lm(responses: Vec<String>) -> TestCompletionModel {
     .await
     .unwrap();
 
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     client
 }
@@ -118,7 +118,7 @@ async fn forward_returns_chat_and_prediction() {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn forward_continue_supports_two_turn_roundtrip() {
+async fn call_and_parse_supports_two_turn_roundtrip() {
     let _lock = SETTINGS_LOCK.lock().await;
     let first_response = response_with_fields(&[("answer", "First turn answer")]);
     let second_response = response_with_fields(&[("answer", "Second turn answer")]);
@@ -144,7 +144,7 @@ async fn forward_continue_supports_two_turn_roundtrip() {
     chat.push_message(Message::user(caller_follow_up));
 
     let (second_predicted, second_chat) = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect("second turn should succeed");
 

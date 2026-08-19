@@ -1,0 +1,187 @@
+---
+title: 'Holes'
+description: 'Plain Rust inside a module, kept in the program graph as a named, typed black box'
+icon: 'circle-dot'
+---
+
+A `#[module]` lowers each step call in its body to a node in a program graph. Lines that are not step calls, plain Rust like uppercasing a string, cannot be described as steps, so DSRs keeps each one as a hole: a named, typed black box. The graph records the hole's name, its inputs, and its output type; the interior stays private. A typed border around an unknown interior is still a contract, like a blender: you do not know the circuitry inside, but you know what goes in and what pours out, and that is enough to build the rest of the program around it.
+
+## Declaring a hole
+
+A type-ascribed `let` becomes a hole. That is the whole mechanism:
+
+```rust
+use dspy_rs::{module, predict};
+
+/// Answer the question.
+#[predict]
+fn draft(question: String) -> String;
+
+/// Rate the text from 1-10.
+#[predict]
+fn rate(text: String) -> String;
+
+#[dspy_rs::Schema]
+#[derive(Debug)]
+pub struct QaOut {
+    pub answer: String,
+    pub upper: String,
+}
+
+#[module]
+async fn qa(question: String) -> Result<QaOut, dspy_rs::ir::RunError> {
+    let drafter = draft(question.clone()).await?;
+    let upper: String = {
+        let d: String = drafter.draft;
+        d.to_uppercase()
+    };
+    let checker = rate(upper.clone()).await?;
+    Ok(QaOut {
+        answer: checker.rate,
+        upper,
+    })
+}
+```
+
+`drafter` and `checker` are steps. `upper` is not a step call, so it becomes a hole named `upper`. Its input is `drafter.draft`, found automatically, and its output is a `String`.
+
+## Allowed types
+
+The ascribed type becomes a field in the program's interface, so it must be simple:
+
+- `String`
+- integers (`i64`, `i32`, and friends)
+- floats (`f64`, `f32`)
+- `bool`
+- `Vec<...>` and `Option<...>` of the above
+
+Anything else is a compile error with a hint to pick one of these.
+
+## Type anchors
+
+Values that flow into a hole from earlier steps arrive through a decode step at run time, and the compiler sometimes cannot work out their concrete type on its own. The fix is a small inner `let` with a type, as an anchor:
+
+```rust
+let upper: String = {
+    let d: String = drafter.draft;   // the anchor
+    d.to_uppercase()
+};
+```
+
+The anchor must be a type-ascribed `let`. Calling a method on the incoming value instead, for example `ticket.clone()`, fails inference, because the method resolves against a type the compiler does not yet know. `let t: String = ticket;` states the type first, and everything after it infers normally.
+
+## Two kinds of holes
+
+<svg viewBox="0 0 760 400" role="img" aria-label="A map with a here-be-dragons region: the coastline is precisely typed while the interior stays private; a JS dragon travels inside the map, a native dragon is chained to the binary outside it" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <rect x="30" y="30" width="460" height="340" rx="8" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="52" y="60" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk</text>
+  <circle cx="100" cy="120" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="100" y="150" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.7" textAnchor="middle">sum</text>
+  <circle cx="100" cy="230" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="100" y="260" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
+  <line x1="100" y1="133" x2="100" y2="217" stroke="#ed6c13" strokeWidth="1.5" />
+  <path d="M 220 100 C 260 78, 330 82, 380 100 C 430 118, 448 170, 430 220 C 412 268, 350 292, 295 280 C 240 268, 200 230, 205 175 C 208 142, 200 112, 220 100 Z" fill="currentColor" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <rect x="180" y="160" width="96" height="18" rx="4" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="228" y="173" fontFamily="ui-monospace, monospace" fontSize="10" fill="#fff" textAnchor="middle">in ticket: string</text>
+  <rect x="386" y="228" width="96" height="18" rx="4" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="434" y="241" fontFamily="ui-monospace, monospace" fontSize="10" fill="#fff" textAnchor="middle">out clean: string</text>
+  <path d="M 280 160 C 320 150, 340 170, 330 195 C 322 215, 290 218, 285 240 C 282 255, 300 262, 318 258" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="3" strokeLinecap="round" />
+  <path d="M 300 152 L 306 140 L 314 152 M 322 158 L 330 148 L 336 160" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="2" strokeLinecap="round" />
+  <circle cx="279" cy="162" r="2.5" fill="currentColor" fillOpacity="0.8" />
+  <text x="318" y="205" fontFamily="ui-serif, serif" fontSize="11" fontStyle="italic" fill="currentColor" fillOpacity="0.65" textAnchor="middle">here be dragons</text>
+  <rect x="288" y="288" width="60" height="17" rx="4" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1" />
+  <text x="318" y="300" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.75" textAnchor="middle">js``` ... ```</text>
+  <text x="318" y="322" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">sandboxed: travels inside the map</text>
+  <path d="M 590 120 C 630 110, 650 130, 640 155 C 632 175, 600 178, 595 200 C 592 215, 610 222, 628 218" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="3" strokeLinecap="round" />
+  <path d="M 610 112 L 616 100 L 624 112 M 632 118 L 640 108 L 646 120" fill="none" stroke="currentColor" strokeOpacity="0.75" strokeWidth="2" strokeLinecap="round" />
+  <circle cx="589" cy="122" r="2.5" fill="currentColor" fillOpacity="0.8" />
+  <rect x="560" y="270" width="150" height="70" rx="8" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="635" y="298" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor" textAnchor="middle">your binary</text>
+  <text x="635" y="318" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">extern "a90e86e4381f68a9"</text>
+  <circle cx="618" cy="232" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <circle cx="622" cy="245" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <circle cx="626" cy="258" r="5" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2" />
+  <text x="635" y="360" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">native: anchored to one binary</text>
+  <text x="520" y="60" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">exact borders,</text>
+  <text x="520" y="76" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.6">private interior</text>
+</svg>
+
+The examples below use a hole named `clean` that scrubs email addresses out of a ticket string.
+
+### Native holes
+
+A hole written in a `#[module]` body is compiled Rust, and machine code cannot travel in a text artifact. The printed program therefore records only the typed border and a fingerprint of the code, marked `extern`:
+
+```text
+clean = hole clean_hole (ticket = $.ticket) caps [] extern "a90e86e4381f68a9"
+```
+
+Whoever loads this file must supply an implementation for `clean`: a host binds its native holes by name, and the 16-hex fingerprint lets it verify it holds the same code the file was printed against, not merely something with a matching name. Next to the binary that defined it, the program runs. Loaded anywhere else, it fails immediately with a "host hole unbound" error.
+
+### Sandboxed holes
+
+A sandboxed hole carries its implementation inside the file, as JavaScript, executed in a sandbox by whatever host loads it:
+
+````text
+clean = hole Scrub (ticket = $.ticket) caps [] js```
+(a) => ({
+  clean: a.ticket
+    .split(/\s+/)
+    .map((w) => (w.includes("@") ? "[email]" : w))
+    .join(" "),
+})
+```
+````
+
+Same typed border, but the interior travels with the file. The portability rule: a file with only steps and sandboxed holes runs anywhere; a file with a native hole runs only beside the binary that defined it. The file tells you which kind you are holding.
+
+## Inspecting holes
+
+Every module lists its holes in a constant called `OPACITY`. For a module `frontdesk` with the `clean` hole above:
+
+```rust
+for hole in frontdesk::OPACITY {
+    println!("{} ({}): {}", hole.name, hole.kind, hole.excerpt);
+}
+```
+
+```text
+clean (host): {
+    let t : String = ticket;
+    t.split_whitespace().map(| w | if w.contains('@') { "[email]" } else
+    { w }).collect :: < Vec < & str > > ().join(" ")
+}
+```
+
+Each entry carries the hole's name, its kind, the actual source excerpt, and the reason it could not be lowered to a step. Nothing becomes opaque in silence.
+
+## Forbidding holes
+
+`deny_holes` makes any line that is not a step call a compile error:
+
+```rust
+#[module(deny_holes)]
+async fn qa(question: String) -> Result<QaOut, dspy_rs::ir::RunError> {
+    // only `let x = step(args).await?;` lines allowed here
+}
+```
+
+## The optimization cost
+
+Holes are opaque to optimizers. An optimizer can rewrite an instruction because an instruction is data with an address; it cannot rewrite the inside of a hole, because there is nothing there to read. Every hole subtracts from the surface an optimizer can improve. Prefer fewer and smaller holes: each line moved out of a hole into a visible step is a line an optimizer can tune and any host can run. Keep the interiors small enough that what stays opaque is genuinely the part with nothing to say.
+
+## Common mistakes
+
+**No type on the `let`.** A hole must declare its output type. `let upper = ...;` without a type is a compile error that tells you to write `let upper: String = ...;`.
+
+**Using a whole step result inside a hole.** Holes consume output fields, not whole results. Write `drafter.draft`, not `drafter`.
+
+**Expecting the file to carry the code.** It does not. The printed program marks a native hole as `extern`. Portability stops at the binary that defined it. If you need a fully portable program, replace the native hole with a sandboxed hole in the `.dsrs` file, or with another step.
+
+## See also
+
+- [The module macro](/docs/components/module-macro) for the body rules that decide what becomes a step and what becomes a hole
+- [The .dsrs file](/docs/components/dsrs-file) for both hole forms in the grammar
+- [Capabilities](/docs/components/capabilities) for the `caps []` printed on every hole
+- [Runtime](/docs/components/runtime) for binding native holes and the load-time checks
+- [Optimizers](/docs/components/optimizers) for the tuning surface that holes subtract from

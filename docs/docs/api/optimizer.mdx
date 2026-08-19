@@ -1,0 +1,179 @@
+---
+title: "dspy_rs::optimizer"
+description: "Automatic prompt optimization."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+Automatic prompt optimization.
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| `bootstrap::*` | Glob re-export. |
+| `copro::*` | Glob re-export. |
+| `engine::*` | Glob re-export. |
+| `gepa::*` | Glob re-export. |
+| `mipro::*` | Glob re-export. |
+| `pareto::*` | Glob re-export. |
+| `program_engine::*` | Glob re-export. |
+| `simba::*` | Glob re-export. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`bootstrap`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/bootstrap/index.html) | BootstrapFewShot: the minimal end-to-end exercise of the optimizer contract (vision §5. |
+| [`copro`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/copro/index.html) |  |
+| [`engine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/index.html) | The shared evaluation engine (vision §5.4): every optimizer is a thin strategy over this core. |
+| [`gepa`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/index.html) |  |
+| [`mipro`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/index.html) |  |
+| [`pareto`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/index.html) |  |
+| [`program_engine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/index.html) | The IR-native evaluation path (RFC 0002 IR-6): candidate `Overlay`s evaluated over one shared `Arc<Program>` through the `Interpreter` with **candidate-level parallelism**. |
+| [`simba`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/index.html) | SIMBA: Stochastic Introspective Mini-Batch Ascent (vision §4.3) — the cheap agentic default. |
+
+## Traits
+
+| Item | Description |
+|---|---|
+| [`Optimizer`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/trait.Optimizer.html) | Tunes a module's `Predict` leaves for better performance. |
+
+## `optimizer::bootstrap`
+
+BootstrapFewShot: the minimal end-to-end exercise of the optimizer contract (vision §5.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`BootstrapFewShot`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/bootstrap/struct.BootstrapFewShot.html) | Few-shot demo bootstrapper — the simplest complete optimizer. |
+| [`BootstrapFewShotBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/bootstrap/struct.BootstrapFewShotBuilder.html) | Use builder syntax to set the inputs and finish with `build()`). |
+| [`BootstrapReport`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/bootstrap/struct.BootstrapReport.html) | What a `BootstrapFewShot` run did. |
+
+## `optimizer::copro`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`COPRO`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/copro/struct.COPRO.html) | Breadth-first instruction optimizer. |
+| [`COPROBuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/copro/struct.COPROBuilder.html) | Use builder syntax to set the inputs and finish with `build()`). |
+
+## `optimizer::engine`
+
+The shared evaluation engine (vision §5.4): every optimizer is a thin strategy over this core.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Budget`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Budget.html) | Hard caps on evaluation spend. `None` = unlimited. |
+| [`Candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Candidate.html) | A candidate is *data*: a named set of `Overlay`s (predictor name → instruction/demos) plus a stable hash (`Candidate::stable_hash`). |
+| [`CandidateEval`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.CandidateEval.html) | A candidate's results over one evaluation batch, in request order. |
+| [`CandidateUndo`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.CandidateUndo.html) | Saved pre-overlay state for the predictors a candidate touched. Produced by `apply_candidate`, consumed by `restore_candidate`. |
+| [`EngineConfig`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.EngineConfig.html) | Engine tuning knobs. |
+| [`EvalEngine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.EvalEngine.html) | The shared evaluation core (vision §5.4). |
+| [`Overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Overlay.html) | A per-predictor parameter overlay: which optimizable values to install. |
+| [`ParetoView`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.ParetoView.html) | Dominance snapshot computed from a `ScoreMatrix`: which candidates win (or tie, within tolerance) on at least one example. |
+| [`RolloutCache`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.RolloutCache.html) | In-memory rollout cache: `(baseline, candidate, example, salt)` → `Eval`. |
+| [`RolloutOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.RolloutOutcome.html) | One evaluated (or cache-served) rollout. |
+| [`ScoreMatrix`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.ScoreMatrix.html) | Per-instance score matrix: candidates × examples. |
+| [`Spend`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Spend.html) | What the engine has consumed so far. Serialized into checkpoints and reported to strategies. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`EvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.EvalOutcome.html) | Result of `EvalEngine::evaluate`. |
+| [`GateOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.GateOutcome.html) | Result of `EvalEngine::evaluate_gated`. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`apply_candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/fn.apply_candidate.html) | Applies a candidate's overlays to a module through the single mutation seam (`DynPredictor::apply_update`), returning the undo snapshot. |
+| [`restore_candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/fn.restore_candidate.html) | Restores the pre-candidate state captured by `apply_candidate`. |
+
+## `optimizer::gepa`
+
+### Re-exports
+
+| Item | Description |
+|---|---|
+| [`ParetoStatistics`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoStatistics.html) | Re-export of `super::pareto::ParetoStatistics`. |
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`GEPA`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/struct.GEPA.html) | Genetic-Pareto instruction optimizer with feedback-driven evolution. |
+| [`GEPABuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/struct.GEPABuilder.html) | Use builder syntax to set the inputs and finish with `build()`). |
+| [`GEPACandidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/struct.GEPACandidate.html) | A single instruction candidate tracked through GEPA's evolutionary search. |
+| [`GEPAResult`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/struct.GEPAResult.html) | Full report from a `GEPA` optimization run. |
+| [`ReflectOnInstructionOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/struct.ReflectOnInstructionOutput.html) |  |
+
+## `optimizer::mipro`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`MIPROv2`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.MIPROv2.html) | Trace-guided instruction and demo optimizer. |
+| [`MIPROv2Builder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.MIPROv2Builder.html) | Use builder syntax to set the inputs and finish with `build()`). |
+| [`PromptCandidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.PromptCandidate.html) | An instruction candidate with its evaluated score. |
+| [`PromptingTips`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.PromptingTips.html) | Library of general prompting best practices used to seed candidate generation. |
+
+## `optimizer::pareto`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ParetoFrontier`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoFrontier.html) | Per-example dominance frontier for candidate selection. |
+| [`ParetoStatistics`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoStatistics.html) | Snapshot of the Pareto frontier at a point in the search. |
+
+## `optimizer::program_engine`
+
+The IR-native evaluation path (RFC 0002 IR-6): candidate `Overlay`s evaluated over one shared `Arc<Program>` through the `Interpreter` with **candidate-level parallelism**.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`ProgramEvalEngine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/struct.ProgramEvalEngine.html) | The shared evaluation core for the dynamic lane: candidate overlays over one interpreter-loaded program. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ProgramEvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/enum.ProgramEvalOutcome.html) | Result of `ProgramEvalEngine::evaluate_program_candidates`. |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`ProgramMetric`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/trait.ProgramMetric.html) | How a program-lane strategy tells the engine what "good" means: score one interpreter output (`JsonMap` of the program's output signature fields) against a labeled example. |
+
+## `optimizer::simba`
+
+SIMBA: Stochastic Introspective Mini-Batch Ascent (vision §4.3) — the cheap agentic default.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`IntrospectRolloutsOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/struct.IntrospectRolloutsOutput.html) |  |
+| [`SIMBA`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/struct.SIMBA.html) | Minibatch introspective ascent — the cheap agentic default (vision §4.3). |
+| [`SIMBABuilder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/struct.SIMBABuilder.html) | Use builder syntax to set the inputs and finish with `build()`). |
+| [`SimbaReport`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/struct.SimbaReport.html) | What a `SIMBA` run did. |
+| [`SimbaStep`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/struct.SimbaStep.html) | What one SIMBA step did. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`SimbaMove`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/enum.SimbaMove.html) | Which of SIMBA's two moves a step proposed. |

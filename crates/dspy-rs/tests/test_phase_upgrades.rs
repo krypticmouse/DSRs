@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Chat, Example, GEPA, LM, LMClient, MIPROv2, Message, MetricOutcome, Module,
-    ModuleState, Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel,
-    TypedMetric, evaluate_trainset,
+    CallMetadata, Chat, Demo, Eval, GEPA, LM, LMClient, MIPROv2, Message, Module, ModuleState,
+    Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
+    evaluate_trainset,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -47,7 +47,7 @@ struct QA {
     answer: String,
 }
 
-// --- Trace: inputs, edges, and instance keys -------------------------------
+// --- Trace: inputs, edges, and component names ------------------------------
 
 #[derive(facet::Facet)]
 #[facet(crate = facet)]
@@ -72,60 +72,59 @@ impl Module for TwoStep {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
-async fn trace_records_inputs_edges_and_instance_keys() {
+async fn capture_records_inputs_edges_and_component_names() {
     let module = TwoStep {
         first: Predict::<QA>::builder()
+            .named("first")
             .lm(make_test_lm(vec![response_with_fields(&[("answer", "intermediate")])]).await)
             .build(),
         second: Predict::<QA>::builder()
+            .named("second")
             .lm(make_test_lm(vec![response_with_fields(&[("answer", "final")])]).await)
             .build(),
     };
 
-    let (result, graph) = dspy_rs::trace::trace(|| {
+    let (result, trace) = dspy_rs::trace::capture(|| {
         module.forward(QAInput {
             question: "start".to_string(),
         })
     })
     .await;
-    let predicted = result.expect("traced pipeline should succeed");
+    let predicted = result.expect("captured pipeline should succeed");
     assert_eq!(predicted.answer, "final");
 
-    assert_eq!(graph.nodes.len(), 2, "one node per Predict call");
+    assert_eq!(trace.spans.len(), 2, "one span per Predict call");
 
-    let first = &graph.nodes[0];
-    let second = &graph.nodes[1];
+    let first = &trace.spans[0];
+    let second = &trace.spans[1];
 
-    // Inputs are recorded for both nodes.
-    let first_input = first.input_data.as_ref().expect("first node input recorded");
-    assert_eq!(first_input.data["question"], "start");
-    let second_input = second
-        .input_data
-        .as_ref()
-        .expect("second node input recorded");
-    assert_eq!(second_input.data["question"], "intermediate");
+    // Inputs are recorded for both spans.
+    assert_eq!(first.input.as_ref().expect("first input")["question"], "start");
+    assert_eq!(
+        second.input.as_ref().expect("second input")["question"],
+        "intermediate"
+    );
 
-    // The second node is chained to the first.
-    assert!(first.inputs.is_empty());
-    assert_eq!(second.inputs, vec![first.id]);
+    // The second span is chained to the first.
+    assert!(first.links.is_empty());
+    assert_eq!(second.links, vec![first.id]);
 
     // Outputs are recorded.
     assert_eq!(
-        first.output.as_ref().expect("first output").data["answer"],
+        first.output.as_ref().expect("first output")["answer"],
         "intermediate"
     );
     assert_eq!(
-        second.output.as_ref().expect("second output").data["answer"],
+        second.output.as_ref().expect("second output")["answer"],
         "final"
     );
 
-    // Instance keys identify distinct Predict instances.
-    let key = |node: &dspy_rs::trace::Node| match &node.node_type {
-        dspy_rs::trace::NodeType::Predict { instance_key, .. } => *instance_key,
-        other => panic!("expected Predict node, got {other:?}"),
-    };
-    assert_ne!(key(first), 0);
-    assert_ne!(key(first), key(second));
+    // Distinct Predict instances record under their own component names — the
+    // same names the params system addresses.
+    assert_eq!(trace.component_name(first.component), "first");
+    assert_eq!(trace.component_name(second.component), "second");
+    assert_eq!(trace.for_component("first").count(), 1);
+    assert_eq!(trace.for_component("second").count(), 1);
 }
 
 // --- ModuleState: save / load round trip -----------------------------------
@@ -141,7 +140,7 @@ fn module_state_round_trips_through_json() {
     let mut tuned = OneStep {
         predictor: Predict::<QA>::builder()
             .instruction("tuned instruction")
-            .demo(Example::new(
+            .demo(Demo::new(
                 QAInput {
                     question: "1+1?".to_string(),
                 },
@@ -168,8 +167,8 @@ fn module_state_round_trips_through_json() {
         Some("tuned instruction")
     );
     assert_eq!(predictor_state.demos.len(), 1);
-    assert_eq!(predictor_state.demos[0].data["question"], "1+1?");
-    assert_eq!(predictor_state.demos[0].data["answer"], "2");
+    assert_eq!(predictor_state.demos[0]["question"], "1+1?");
+    assert_eq!(predictor_state.demos[0]["answer"], "2");
 }
 
 #[test]
@@ -209,22 +208,23 @@ impl Module for Echo {
 
 struct IndexScore;
 
-impl TypedMetric<QA, Echo> for IndexScore {
+impl TypedMetric<(QAInput, QAOutput), Echo> for IndexScore {
     async fn evaluate(
         &self,
-        _example: &Example<QA>,
+        _example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(prediction.answer.parse::<f32>()?))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(prediction.answer.parse::<f64>()?))
     }
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn concurrent_evaluation_preserves_trainset_order() {
-    let trainset: Vec<Example<QA>> = (0..8)
+    let trainset: Vec<(QAInput, QAOutput)> = (0..8)
         .map(|idx| {
-            Example::new(
+            (
                 QAInput {
                     question: idx.to_string(),
                 },
@@ -239,29 +239,27 @@ async fn concurrent_evaluation_preserves_trainset_order() {
         .await
         .expect("evaluation should succeed");
 
-    let scores: Vec<f32> = outcomes.iter().map(|outcome| outcome.score).collect();
-    assert_eq!(scores, (0..8).map(|idx| idx as f32).collect::<Vec<_>>());
+    let scores: Vec<f64> = outcomes.iter().map(|outcome| outcome.score).collect();
+    assert_eq!(scores, (0..8).map(|idx| idx as f64).collect::<Vec<_>>());
 }
 
 // --- GEPA: reflection through prompt_model ---------------------------------
 
 struct FeedbackEcho;
 
-impl TypedMetric<QA, OneStepEcho> for FeedbackEcho {
+impl TypedMetric<(QAInput, QAOutput), OneStepEcho> for FeedbackEcho {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        let score = if prediction.answer == example.output.answer {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = if prediction.answer == example.1.answer {
             1.0
         } else {
             0.0
         };
-        Ok(MetricOutcome::with_feedback(
-            score,
-            dspy_rs::FeedbackMetric::new(score, "answer should match exactly"),
-        ))
+        Ok(Eval::with_feedback(score, "answer should match exactly"))
     }
 }
 
@@ -304,7 +302,7 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
     let mut module = OneStepEcho {
         predictor: Predict::<QA>::builder().instruction("seed").build(),
     };
-    let trainset = vec![Example::new(
+    let trainset = vec![(
         QAInput {
             question: "echo".to_string(),
         },
@@ -312,9 +310,19 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
             answer: "echo".to_string(),
         },
     )];
+    // A distinct valset keeps the trainset minibatch out of the engine's
+    // rollout cache, so every phase below is a fresh, countable rollout.
+    let valset = vec![(
+        QAInput {
+            question: "echo-val".to_string(),
+        },
+        QAOutput {
+            answer: "echo-val".to_string(),
+        },
+    )];
 
     let report = optimizer
-        .compile(&mut module, trainset, &FeedbackEcho)
+        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackEcho)
         .await
         .expect("gepa compile should succeed");
 
@@ -324,26 +332,125 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
         "Be concise and cite evidence.",
         "child instruction should come from the reflection LM, not concatenation"
     );
-    // seed eval (1) + parent minibatch (1) + reflection (1) + child eval (1)
+    // seed eval on valset (1) + parent minibatch on trainset (1)
+    // + reflection (1) + child eval on valset (1)
     assert_eq!(report.total_lm_calls, 4);
+}
+
+struct FeedbackForPredict;
+
+impl TypedMetric<(QAInput, QAOutput), OneStepPredict> for FeedbackForPredict {
+    async fn evaluate(
+        &self,
+        example: &(QAInput, QAOutput),
+        prediction: &Predicted<QAOutput>,
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = if prediction.answer == example.1.answer {
+            1.0
+        } else {
+            0.0
+        };
+        Ok(Eval::with_feedback(score, "match the expected answer"))
+    }
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn gepa_reflection_receives_component_subtrace() {
+    // A module with a real Predict leaf, so evaluation rollouts carry spans.
+    // 3 module calls: initial eval + parent minibatch + child eval.
+    let responses = vec![response_with_fields(&[("answer", "4")]); 3];
+    let mut module = OneStepPredict {
+        predictor: Predict::<QA>::builder()
+            .instruction("seed")
+            .lm(make_test_lm(responses).await)
+            .build(),
+    };
+
+    let reflection_client = TestCompletionModel::new([text_response(response_with_fields(&[(
+        "improved_instruction",
+        "Improved.",
+    )]))]);
+    let reflection_lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+    )
+    .await
+    .unwrap()
+    .with_client(LMClient::Test(reflection_client.clone()))
+    .await
+    .unwrap();
+
+    let optimizer = GEPA::builder()
+        .num_iterations(1)
+        .minibatch_size(1)
+        .prompt_model(reflection_lm)
+        .seed(7)
+        .build();
+
+    let trainset = vec![(
+        QAInput {
+            question: "What is 2+2?".to_string(),
+        },
+        QAOutput {
+            answer: "4".to_string(),
+        },
+    )];
+    // A distinct valset keeps the parent's trainset minibatch out of the
+    // engine's rollout cache, so its rollout carries a fresh trace for the
+    // reflector to read.
+    let valset = vec![(
+        QAInput {
+            question: "What is 3+1?".to_string(),
+        },
+        QAOutput {
+            answer: "4".to_string(),
+        },
+    )];
+
+    optimizer
+        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackForPredict)
+        .await
+        .expect("gepa compile should succeed");
+
+    // The reflection prompt's execution_feedback carries the mutated
+    // component's per-invocation sub-trace, not just the metric string.
+    let request = reflection_client
+        .last_request()
+        .expect("reflection LM should have been called");
+    let rendered = format!("{:?}", request.chat_history);
+    assert!(
+        rendered.contains("call 0:"),
+        "reflection input should include the component's invocation record: {rendered}"
+    );
+    assert!(
+        rendered.contains("What is 2+2?"),
+        "reflection input should include the span's recorded input"
+    );
+    assert!(
+        rendered.contains("match the expected answer"),
+        "reflection input should keep the metric feedback"
+    );
 }
 
 // --- MIPRO: demo bootstrapping from traces ---------------------------------
 
 struct ExactMatch;
 
-impl TypedMetric<QA, OneStepPredict> for ExactMatch {
+impl TypedMetric<(QAInput, QAOutput), OneStepPredict> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        let score = if prediction.answer == example.output.answer {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let score = if prediction.answer == example.1.answer {
             1.0
         } else {
             0.0
         };
-        Ok(MetricOutcome::score(score))
+        Ok(Eval::score(score))
     }
 }
 
@@ -381,7 +488,7 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
         .seed(7)
         .build();
 
-    let trainset = vec![Example::new(
+    let trainset = vec![(
         QAInput {
             question: "What is 2+2?".to_string(),
         },
@@ -402,8 +509,8 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
         1,
         "the successful trace should be installed as a demo"
     );
-    assert_eq!(predictor_state.demos[0].data["question"], "What is 2+2?");
-    assert_eq!(predictor_state.demos[0].data["answer"], "4");
+    assert_eq!(predictor_state.demos[0]["question"], "What is 2+2?");
+    assert_eq!(predictor_state.demos[0]["answer"], "4");
     assert!(
         predictor_state.instruction_override.is_some(),
         "instruction search should install a candidate"

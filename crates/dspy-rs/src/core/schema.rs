@@ -1,6 +1,5 @@
-use std::any::TypeId;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 use facet::{Def, Field, Shape, Type, UserType};
 use serde_json::Value;
@@ -131,33 +130,19 @@ pub struct SignatureSchema {
 impl SignatureSchema {
     /// Returns the cached schema for signature `S`, building it on first access.
     ///
+    /// The cache behind this is the single static-lane cache
+    /// ([`StaticSigCache`](crate::ir::sig) — RFC 0002 §1.2): one entry per compiled
+    /// signature type, holding the value-level [`SignatureDef`](crate::ir::SignatureDef)
+    /// plus this legacy schema façade.
+    ///
     /// # Panics
     ///
     /// Panics if the schema can't be built (e.g. the input/output shapes aren't structs).
     pub fn of<S: Signature>() -> &'static Self {
-        static CACHE: OnceLock<RwLock<HashMap<TypeId, &'static SignatureSchema>>> = OnceLock::new();
-
-        let cache = CACHE.get_or_init(|| RwLock::new(HashMap::new()));
-        {
-            let guard = cache.read().expect("schema cache lock poisoned");
-            if let Some(schema) = guard.get(&TypeId::of::<S>()) {
-                return schema;
-            }
-        }
-
-        let built = Self::build::<S>().unwrap_or_else(|err| {
-            panic!(
-                "failed to build SignatureSchema for `{}`: {err}",
-                std::any::type_name::<S>()
-            )
-        });
-        let leaked = Box::leak(Box::new(built));
-
-        let mut guard = cache.write().expect("schema cache lock poisoned");
-        guard.entry(TypeId::of::<S>()).or_insert(leaked)
+        crate::ir::sig::static_schema::<S>()
     }
 
-    fn build<S: Signature>() -> Result<Self, String> {
+    pub(crate) fn build<S: Signature>() -> Result<Self, String> {
         let mut input_fields = collect_fields(
             "input",
             S::input_shape(),
@@ -182,7 +167,7 @@ impl SignatureSchema {
             instruction: S::instruction(),
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
-            output_schema: <S::Output as crate::typesys::Schema>::output_schema().clone(),
+            output_schema: <S::Output as crate::typesys::Schema>::output_schema(),
             response_instructions: OnceLock::new(),
         })
     }

@@ -87,7 +87,7 @@ fn optimizer_compile_rejects_wrong_signature_input_type() {
         "wrong_signature_case",
         r#"
 use anyhow::Result;
-use dspy_rs::{COPRO, ChainOfThought, Example, MetricOutcome, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
+use dspy_rs::{COPRO, ChainOfThought, Eval, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct RightSig {
@@ -107,30 +107,32 @@ struct WrongSig {
 
 struct Metric;
 
-impl TypedMetric<RightSig, ChainOfThought<RightSig>> for Metric {
+impl TypedMetric<(WrongSigInput, WrongSigOutput), ChainOfThought<RightSig>> for Metric {
     async fn evaluate(
         &self,
-        _example: &Example<RightSig>,
+        _example: &(WrongSigInput, WrongSigOutput),
         _prediction: &Predicted<WithReasoning<RightSigOutput>>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::score(1.0))
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::score(1.0))
     }
 }
 
 fn main() {
     let mut module = ChainOfThought::<RightSig>::new();
-    let trainset: Vec<Example<WrongSig>> = Vec::new();
+    // Rows for the wrong signature never project into the module's input.
+    let trainset: Vec<(WrongSigInput, WrongSigOutput)> = Vec::new();
     let optimizer = COPRO::builder().breadth(1).depth(1).build();
-    let _future = optimizer.compile::<WrongSig, _, _>(&mut module, trainset, &Metric);
+    let _future = optimizer.compile(&mut module, trainset, &Metric);
 }
 "#,
     );
 
     assert_not_masked_by_e0401(&stderr);
     assert!(
-        stderr.contains("Module<Input = S::Input>")
+        stderr.contains("ToInput<RightSigInput>")
             || stderr.contains("type mismatch")
-            || stderr.contains("TypedMetric<WrongSig"),
-        "expected optimizer signature mismatch failure, got:\n{stderr}"
+            || stderr.contains("ToInput"),
+        "expected optimizer row-projection mismatch failure, got:\n{stderr}"
     );
 }

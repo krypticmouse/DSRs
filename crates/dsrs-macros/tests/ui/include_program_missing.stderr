@@ -1,0 +1,5 @@
+error: include_program!: could not read `no/such/program.dsrs` (tried relative to CARGO_MANIFEST_DIR and the invoking file): No such file or directory (os error 2)
+ --> tests/ui/include_program_missing.rs:1:31
+  |
+1 | dsrs_macros::include_program!("no/such/program.dsrs");
+  |                               ^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,154 @@
+---
+title: "Predict"
+description: "Predict<S>, Predicted<O>, CallMetadata, PredictError, and ToolSet: the leaf module that formats a signature into a prompt, calls the LM, and parses the typed output"
+icon: "robot"
+---
+
+`Predict<S>` is the leaf module. One `Predict` is one prompt template and one LM call: it formats a [signature](/docs/components/signatures)'s fields, instruction, and demos into a prompt, sends it to the configured LM, and parses the response into `S::Output`. Every other module ultimately delegates to one or more `Predict` leaves, and optimizers tune a program by rewriting `Predict` state (instruction override and demos). See [How DSRs thinks](/docs/getting-started/how-dsrs-thinks) for the mental model.
+
+## Usage
+
+```rust
+use dspy_rs::{Predict, Signature};
+
+/// Answer questions accurately.
+#[derive(Signature, Clone, Debug)]
+struct QA {
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
+let predict = Predict::<QA>::new();
+
+let result = predict.call(QAInput {
+    question: "What is the capital of France?".into(),
+}).await?;
+
+println!("{}", result.answer); // "Paris"
+```
+
+The derive generates `QAInput` and `QAOutput` from the field markers. `.call()` returns `Result<Predicted<QAOutput>, PredictError>`, and `Predicted<O>` implements `Deref<Target = O>`, so output fields read directly off the result. Everything beyond the defaults, such as demos, an instruction override, tools, or a per-instance LM, goes through the builder.
+
+## Construction
+
+| Path | Produces |
+|------|----------|
+| `Predict::<S>::new()` (also `Default`) | Predictor with no demos, no instruction override, no tools, global LM |
+| `Predict::<S>::builder()` | `PredictBuilder<S>` for full configuration |
+| `fx::predict("name", input)` | Functional lane: a named predictor per call slot, see [fx](/docs/components/fx) |
+
+### `PredictBuilder<S>`
+
+| Method | Effect |
+|--------|--------|
+| `.named(name)` | Component name recorded on trace spans. Unnamed predictors fall back to the signature type name and log a warning |
+| `.demo(demo)` | Appends one `Demo<S>` few-shot demo |
+| `.with_demos(iter)` | Appends demos from an iterator |
+| `.instruction(text)` | Overrides the signature's docstring instruction |
+| `.add_tool(tool)` | Adds one `rig` `ToolDyn` the LM may invoke |
+| `.with_tools(iter)` | Adds `Arc<dyn ToolDyn>` tools from an iterator |
+| `.lm(lm)` | Per-instance [LM](/docs/components/lm), bypassing the global `configure()` LM |
+| `.build()` | Produces the `Predict<S>` |
+
+```rust
+let predict = Predict::<QA>::builder()
+    .named("qa")
+    .instruction("Answer in one word.")
+    .demo(Demo::new(
+        QAInput { question: "What is 1+1?".into() },
+        QAOutput { answer: "2".into() },
+    ))
+    .build();
+```
+
+`Demo<S>` is the typed input/output pair for few-shot prompting: `Demo::new(input, output)` with public fields `input: S::Input` and `output: S::Output`. Demos render as user/assistant exchanges in the prompt, and the types guarantee a demo matches the signature — a `Demo<QA>` cannot be attached to a `Predict<SummarizeSig>`. To seed a demo from a labeled trainset row, project the row through its `ToInput`/`ToOutput` impls: `Demo::new(row.to_input()?, row.to_output()?)`, see [Data](/docs/components/data). Tools are settable only at build time. Demos and the instruction override are also writable after construction through the optimizer seam (`DynPredictor::apply_update`, `load_state`), see [State](/docs/components/state). The formatted system message and demo turns are cached once per (instruction, demos) configuration; every state mutation invalidates the cache.
+
+## Calling
+
+| Method | Returns | Use |
+|--------|---------|-----|
+| `.call(input)` | `Result<Predicted<S::Output>, PredictError>` | The typed direct call |
+| `.forward(input)` | Same as `call` | `Module` trait hook; delegates to `call`. Callers should invoke `Module::call`, which exists as the future middleware seam |
+| `.build_chat(&input)` | `Result<Chat, PredictError>` | Inspect or modify the first-turn prompt before sending |
+| `.call_and_parse(chat)` | `Result<(Predicted<S::Output>, Chat), PredictError>` | Multi-turn: the caller owns the `Chat` between turns |
+
+Each `call` executes this pipeline:
+
+1. Build the chat: cached system + demo prefix, plus the input formatted as the live user message.
+2. Resolve the LM: the per-instance `.lm(...)` if set, otherwise the global `configure()` LM.
+3. Consult any active replay scope (see below).
+4. Send via `LM::call_with_toolset` in `ToolLoopMode::Auto`, executing tool calls up to `max_tool_iterations`.
+5. Parse the response into `S::Output` through the `[[ ## field ## ]]` protocol, evaluating `#[check]` and `#[assert]` constraints.
+6. Record a trace span when inside a `capture()` scope.
+
+### Replay interception
+
+Before constructing any client, `Predict` consults the active replay scope. A `Serve` directive returns the recorded span with zero provider calls and zero tool re-executions; a `Refuse` directive returns `PredictError::Replay`; `Live` (or no scope) proceeds normally. Served predictions carry no per-field parse metadata. See [Traces](/docs/components/traces).
+
+## `Predicted<O>`
+
+Every call returns `Predicted<O>`: the typed output plus runtime bookkeeping. It implements `Deref<Target = O>`, so output fields read directly (`result.answer`).
+
+| Method | Returns |
+|--------|---------|
+| `.metadata()` | `&CallMetadata` |
+| `.into_inner()` | `O`, discarding metadata |
+| `.into_parts()` | `(O, CallMetadata)` |
+
+### `CallMetadata`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `raw_response` | `String` | Full LM response text before parsing |
+| `lm_usage` | `LmUsage` | `prompt_tokens`, `completion_tokens`, `total_tokens` |
+| `tool_calls` | `Vec<ToolCall>` | Tool calls the LM requested |
+| `tool_executions` | `Vec<String>` | Results from executing tool calls |
+| `span_id` | `Option<SpanId>` | Trace span id, when the call ran inside a capture scope |
+| `field_meta` | `IndexMap<String, FieldMeta>` | Per-field parse details, keyed by field name |
+
+Each `FieldMeta` records `raw_text` (the text the LM produced for that field), `flags` (`Vec<Flag>`, non-fatal coercion observations such as a stripped code fence), and `checks` (`Vec<ConstraintResult>` with `label`, `expression`, `passed`). Accessors: `field_meta()`, `field_raw(field)`, `field_flags(field)`, `field_checks(field)`, `field_names()`, and `has_failed_checks()` for a quick scan across all fields. Failed `#[check]` constraints land here; failed `#[assert]` constraints become a `Parse` error instead.
+
+## `PredictError`
+
+| Variant | Payload | Fires when | Retryable |
+|---------|---------|------------|-----------|
+| `Lm` | `source: LmError` | The provider failed before returning a usable response: network, rate limit, timeout, bad status | Per `LmError::is_retryable()` |
+| `Parse` | `source: ParseError`, `raw_response`, `lm_usage` | The LM responded but the expected fields could not be extracted or coerced, or an `#[assert]` failed | Yes |
+| `Conversion` | `source: ConversionError`, `parsed` | The parsed JSON value does not fit the typed output struct | No |
+| `Replay` | `source: ReplayError` | A strict replay scope refused the call: the live request diverged from its recording, or the recorded span is unusable | No |
+
+`PredictError::class()` buckets into `ErrorClass` (`BadRequest`, `NotFound`, `Forbidden`, `Temporary`, `BadResponse`, `Internal`); `is_retryable()` drives retry logic. `Parse` errors include the raw response and the token usage: failed parses still consume tokens.
+
+## `ToolSet`
+
+`ToolSet` is pre-fetched tool definitions plus name-indexed executors, built once and reused across calls.
+
+| Constructor | Behavior |
+|-------------|----------|
+| `ToolSet::build(&tools)` | Fetches each definition once, indexes executors by name; duplicate names keep the first tool |
+| `ToolSet::from_definitions(defs)` | Definitions with no executors, for caller-managed loops |
+| `ToolSet::code_mode(tools, SandboxConfig)` | Requires the `code-mode` feature. Collapses the tools into one sandboxed `run_js` tool: the model writes JavaScript against the tools as JS APIs and composes results in one execution. Errors when two tool names mangle to the same JS identifier |
+
+`Predict` builds and caches one `ToolSet` per instance from its builder tools on first use. To put Code Mode on a predictor, add the `CodeModeTool` (re-exported by `dspy_rs` under the `code-mode` feature) as the single tool:
+
+```rust
+let predict = Predict::<QA>::builder()
+    .add_tool(CodeModeTool::new(tools, SandboxConfig::default()).await?)
+    .build();
+```
+
+A `ToolSet::code_mode(...)` set drops into `LM::call_with_toolset` directly. See [Code Mode](/docs/components/code-mode).
+
+## See also
+
+- [Signatures](/docs/components/signatures)
+- [Modules](/docs/components/modules)
+- [LM](/docs/components/lm)
+- [Traces](/docs/components/traces)
+- [Code Mode](/docs/components/code-mode)
+- [Example: simple predict](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs)
+- [Example: tools](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/15-tools.rs)
+- [Example: tracing](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/12-tracing.rs)
+- [Example: save and load state](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/13-save-load-state.rs)

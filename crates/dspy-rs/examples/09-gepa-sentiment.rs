@@ -10,9 +10,9 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
-    init_tracing,
+    Eval, GEPA, LM, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -28,6 +28,11 @@ struct SentimentSignature {
     #[output]
     reasoning: String,
 }
+
+/// A labeled trainset row: the input plus the gold output. Tuples implement
+/// `ToInput`/`ToOutput` out of the box, so a small inline trainset needs no
+/// dedicated row struct.
+type SentimentRow = (SentimentSignatureInput, SentimentSignatureOutput);
 
 #[derive(Builder, facet::Facet)]
 #[facet(crate = facet)]
@@ -50,30 +55,29 @@ impl Module for SentimentAnalyzer {
 
 struct SentimentMetric;
 
-impl TypedMetric<SentimentSignature, SentimentAnalyzer> for SentimentMetric {
+impl TypedMetric<SentimentRow, SentimentAnalyzer> for SentimentMetric {
     async fn evaluate(
         &self,
-        example: &Example<SentimentSignature>,
+        example: &SentimentRow,
         prediction: &Predicted<SentimentSignatureOutput>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         let predicted = prediction.sentiment.trim().to_lowercase();
-        let expected = example.output.sentiment.trim().to_lowercase();
+        let expected = example.1.sentiment.trim().to_lowercase();
 
-        let score = (predicted == expected) as u8 as f32;
-        let feedback = FeedbackMetric::new(
+        let score = (predicted == expected) as u8 as f64;
+        Ok(Eval::with_feedback(
             score,
             format!(
                 "expected={expected}; predicted={predicted}; reasoning={}",
                 prediction.reasoning
             ),
-        );
-
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        ))
     }
 }
 
-fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> {
-    Example::new(
+fn sentiment_example(text: &str, expected: &str) -> SentimentRow {
+    (
         SentimentSignatureInput {
             text: text.to_string(),
         },
@@ -88,7 +92,7 @@ fn sentiment_example(text: &str, expected: &str) -> Example<SentimentSignature> 
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(LM::builder().temperature(0.7).build().await?);
 
     let trainset = vec![
         sentiment_example(
@@ -111,11 +115,18 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
     println!("Baseline score: {baseline:.3}");
 
+    // A reflection LM turns GEPA's mutation step into a real rewrite: it reads
+    // the current instruction plus per-example feedback and proposes an improved
+    // instruction each generation. Without `prompt_model`, GEPA falls back to
+    // deterministic feedback concatenation.
+    let reflection_lm = LM::builder().temperature(1.0).build().await?;
+
     let gepa = GEPA::builder()
         .num_iterations(5)
         .minibatch_size(4)
-        .num_trials(3)
-        .temperature(0.9)
+        .prompt_model(reflection_lm)
+        .seed(42) // reproducible minibatch sampling
+        .eval_concurrency(8) // LM calls in flight during candidate evaluation
         .track_stats(true)
         .build();
 
@@ -138,13 +149,18 @@ async fn main() -> Result<()> {
             text: "This product changed my life! Absolutely amazing!".to_string(),
         })
         .await?;
-    let test_feedback = metric.evaluate(&test_example, &test_prediction).await?;
+    let test_feedback = metric.evaluate(&test_example, &test_prediction, None).await?;
 
     println!("Test prediction: {}", test_prediction.sentiment);
     println!("Test score: {:.3}", test_feedback.score);
     if let Some(feedback) = test_feedback.feedback {
-        println!("Feedback: {}", feedback.feedback);
+        println!("Feedback: {feedback}");
     }
+
+    // Persist the optimized instructions/demos so production can reload them
+    // with `ModuleState::load(...)?.apply(&mut module)?` — no re-optimization.
+    ModuleState::from_module(&mut module)?.save("optimized-sentiment.json")?;
+    println!("Saved optimized module state to optimized-sentiment.json");
 
     Ok(())
 }

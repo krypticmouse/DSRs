@@ -9,9 +9,150 @@ use syn::{
     visit::Visit,
 };
 
+mod dsrs_syntax;
+mod example_derive;
+mod include_program;
+mod module_macro;
 mod runtime_path;
+mod step_support;
+mod tool_agent;
 
 use runtime_path::resolve_dspy_rs_path;
+
+/// Declares a host tool: an ordinary (optionally async) fn whose body IS the
+/// implementation (RFC 0003 M-2). Params become the tool's input schema, the
+/// return type its single output field, the doc comment its default
+/// description (an optimizable `ToolDesc` gene once lowered).
+///
+/// ```ignore
+/// /// Web search; returns result snippets with URLs.
+/// #[tool(caps("net:search"))]
+/// async fn search(query: String) -> Vec<String> { … }
+/// ```
+///
+/// Generates `search::__dsrs_tool()` (metadata + a `rig` tool wrapper) for
+/// `#[agent]`/`#[module]` consumption; the fn itself stays callable as plain
+/// Rust. Fallible tools may return `Result<T, E: Display>`.
+#[proc_macro_attribute]
+pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool_agent::expand_tool(attr, item)
+}
+
+/// Declares an LLM+tool loop as a bodyless fn (RFC 0003 M-2) — the agent
+/// sibling of [`macro@predict`].
+///
+/// ```ignore
+/// /// Verify the draft against sources.
+/// #[agent(model = "@fast", tools(search), max_turns = 6)]
+/// fn research(question: String, draft: String) -> Vec<String>;
+/// ```
+///
+/// Options: `model = "@name"`, `tools(a, b)`, `stop_tools(a)`,
+/// `max_turns = N`, `until_parse = bool`,
+/// `budget(calls = N, tokens = N, deadline_ms = N, on_exhausted = finalize)`,
+/// `context(max_history_turns = N, tool_result_max_bytes = N, playbook = "…")`.
+///
+/// Inside `#[module]` bodies this lowers to a first-class `AgentLoop` node.
+/// Called standalone it runs the static-lane tool loop (`Predict` +
+/// `ToolLoopMode::Auto`) — loop options apply to the lowered form only.
+#[proc_macro_attribute]
+pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
+    tool_agent::expand_agent(attr, item)
+}
+
+/// Compiles an ordinary async fn body into an IR [`Program`] (RFC 0003 M-3).
+///
+/// One parse, two projections: the executable fn (typed boundary, runs
+/// through the interpreter, reads the ambient overlay) and
+/// `<name>::program()` — the same harness as a servable, optimizable,
+/// printable artifact. Drift between them is impossible by construction.
+///
+/// M-3 supports straight-line bodies: `let x = step(args).await?;`
+/// statements over `#[predict]`/`#[cot]`/`#[agent]` fns, hole-ized
+/// expressions (`let y: SimpleType = <any Rust>;` → typed extern hole), and
+/// an `Ok(Struct { field: port, … })` tail. Attrs: `caps("…")`,
+/// `deny_holes`.
+#[proc_macro_attribute]
+pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
+    module_macro::expand_module(attr, item)
+}
+
+/// Embeds a `.dsrs` program artifact at build time (RFC 0002 §6.1).
+///
+/// ```ignore
+/// dspy_rs::include_program!("programs/qa.dsrs");
+/// let program: &'static dspy_rs::ir::Program = qa::program();
+/// ```
+///
+/// Expands in-place to a module named after the file stem (`qa.dsrs` → `mod
+/// qa`, `-` mapped to `_`) containing:
+///
+/// - `SOURCE: &str` — the embedded text (`include_str!`, so rustc rebuilds on
+///   file change);
+/// - `program() -> &'static Program` — parse+validate on first access,
+///   panicking on semantic errors;
+/// - `try_program()` — the non-panicking form;
+/// - a generated `#[cfg(test)]` test that forces full validation under
+///   `cargo test`.
+///
+/// The path resolves relative to `CARGO_MANIFEST_DIR` (the sqlx rule), with
+/// the invoking file's directory as a fallback base; absolute paths are used
+/// as-is.
+///
+/// # Validation layering (read this before trusting the build gate)
+///
+/// The full `.dsrs` parser lives in `dspy-rs`, which depends on this macro
+/// crate — it cannot be called from here without a dependency cycle. The
+/// macro therefore validates **syntax only** at build time: the `dsrs 1`
+/// pragma, the top-level keyword vocabulary and declaration shapes, balanced
+/// delimiters, strings/numbers/code fences — a standalone check against the
+/// same surface grammar (see `docs/dsrs-format.md`). Types, dataflow,
+/// capability subsets, and everything else semantic are checked by the real
+/// parser at first use of `program()`/`try_program()` — and at CI time by the
+/// generated test, which is the sqlx-offline analogue: run `cargo test` and a
+/// semantically invalid artifact fails the suite even if never executed.
+#[proc_macro]
+pub fn include_program(input: TokenStream) -> TokenStream {
+    let source_dir = proc_macro::Span::call_site()
+        .local_file()
+        .and_then(|f| f.parent().map(std::path::Path::to_path_buf));
+    let input = parse_macro_input!(input as include_program::Input);
+    match include_program::expand(input, source_dir) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+/// Marks a plain struct as a trainset row by deriving generic
+/// [`ToInput`]/[`ToOutput`] projections.
+///
+/// No signature is named on the row and no field marks are needed: the row
+/// projects into whatever input/output type it meets at the call site, matched
+/// by field name through serde. Extra row fields (gold labels, metric-only
+/// metadata) are ignored by the projection; a missing or mismatched field is a
+/// runtime error on first use. The row must also derive `serde::Serialize`.
+///
+/// ```ignore
+/// #[derive(Example, Clone, Debug, serde::Serialize)]
+/// struct HotpotRow {
+///     question: String,              // → QAInput.question, by name
+///     answer: String,                // → QAOutput.answer, when seeding demos
+///     supporting_facts: Vec<String>, // metric-only
+/// }
+/// ```
+#[proc_macro_derive(Example)]
+pub fn derive_example(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match example_derive::expand_example(&input, &runtime) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
 #[proc_macro_derive(
     Signature,
@@ -87,6 +228,193 @@ fn expand_schema_attr(item: TokenStream) -> TokenStream {
         #input
     }
     .into()
+}
+
+/// Declares an LM call as a bodyless function — the function *is* the signature.
+///
+/// ```ignore
+/// #[predict]
+/// /// Answer the question accurately.
+/// fn answer(question: String) -> String;
+/// ```
+///
+/// Expands to:
+/// - a module `answer` containing the generated signature (`answer::Sig`,
+///   `answer::SigInput`, `answer::SigOutput`) — parameters become `#[input]`
+///   fields, the return type becomes a single `#[output]` field named after the
+///   function, and the doc comment becomes the instruction;
+/// - an `async fn answer(question: String) -> Result<Predicted<answer::SigOutput>, PredictError>`
+///   that calls [`fx::predict`] with the function's name as its params slot.
+///
+/// The name links everything: `fx::Params::set_instruction("answer", ...)`
+/// overrides its instruction, and trace nodes record `param_name = "answer"`.
+#[proc_macro_attribute]
+pub fn predict(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_fn_predictor(attr, item, PredictorKind::Predict)
+}
+
+/// [`macro@predict`] with chain-of-thought: the LM produces a `reasoning` field
+/// before the output, and the generated function returns
+/// `Predicted<WithReasoning<...>>` (auto-derefs to the output).
+#[proc_macro_attribute]
+pub fn cot(attr: TokenStream, item: TokenStream) -> TokenStream {
+    expand_fn_predictor(attr, item, PredictorKind::ChainOfThought)
+}
+
+#[derive(Clone, Copy)]
+enum PredictorKind {
+    Predict,
+    ChainOfThought,
+}
+
+fn expand_fn_predictor(attr: TokenStream, item: TokenStream, kind: PredictorKind) -> TokenStream {
+    let model = match step_support::parse_model_only_attr(attr.into()) {
+        Ok(model) => model,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    // `ForeignItemFn` is the syn node for a bodyless fn with attrs + visibility.
+    let func = parse_macro_input!(item as syn::ForeignItemFn);
+    let runtime = match resolve_dspy_rs_path() {
+        Ok(path) => path,
+        Err(err) => return err.to_compile_error().into(),
+    };
+
+    match expand_fn_predictor_inner(&func, &runtime, kind, model.as_deref()) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn expand_fn_predictor_inner(
+    func: &syn::ForeignItemFn,
+    runtime: &syn::Path,
+    kind: PredictorKind,
+    model: Option<&str>,
+) -> syn::Result<proc_macro2::TokenStream> {
+    let sig = &func.sig;
+    if let Some(asyncness) = &sig.asyncness {
+        return Err(syn::Error::new_spanned(
+            asyncness,
+            "remove `async` — the generated function is async automatically",
+        ));
+    }
+    if !sig.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &sig.generics,
+            "#[predict]/#[cot] functions cannot be generic",
+        ));
+    }
+
+    let fn_name = &sig.ident;
+    let fn_name_str = fn_name.to_string();
+    let vis = &func.vis;
+
+    // Doc comment -> instruction, forwarded onto the generated signature struct.
+    let doc_attrs: Vec<&Attribute> = func
+        .attrs
+        .iter()
+        .filter(|attr| attr.path().is_ident("doc"))
+        .collect();
+
+    let mut arg_names = Vec::new();
+    let mut arg_types = Vec::new();
+    for input in &sig.inputs {
+        match input {
+            syn::FnArg::Typed(pat_type) => match pat_type.pat.as_ref() {
+                syn::Pat::Ident(ident) => {
+                    arg_names.push(ident.ident.clone());
+                    arg_types.push(pat_type.ty.as_ref().clone());
+                }
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        other,
+                        "#[predict]/#[cot] parameters must be plain identifiers",
+                    ));
+                }
+            },
+            syn::FnArg::Receiver(receiver) => {
+                return Err(syn::Error::new_spanned(
+                    receiver,
+                    "#[predict]/#[cot] functions cannot take self",
+                ));
+            }
+        }
+    }
+    if arg_names.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &sig.inputs,
+            "#[predict]/#[cot] functions need at least one input parameter",
+        ));
+    }
+
+    let output_type = match &sig.output {
+        syn::ReturnType::Type(_, ty) => ty.as_ref().clone(),
+        syn::ReturnType::Default => {
+            return Err(syn::Error::new_spanned(
+                sig,
+                "#[predict]/#[cot] functions need an explicit return type (the output field)",
+            ));
+        }
+    };
+
+    // The signature type the fx call is parameterized by, and the value the
+    // generated function resolves to.
+    let (call_sig, predicted_output) = match kind {
+        PredictorKind::Predict => (quote! { #fn_name::Sig }, quote! { #fn_name::SigOutput }),
+        PredictorKind::ChainOfThought => (
+            quote! { #runtime::Augmented<#fn_name::Sig, #runtime::Reasoning> },
+            quote! { #runtime::WithReasoning<#fn_name::SigOutput> },
+        ),
+    };
+
+    let step_kind = match kind {
+        PredictorKind::Predict => quote! { Predict },
+        PredictorKind::ChainOfThought => quote! { Cot },
+    };
+    let model_tokens = step_support::option_str_tokens(model);
+
+    Ok(quote! {
+        #vis mod #fn_name {
+            #![allow(non_camel_case_types, unused_imports)]
+            use super::*;
+
+            #(#doc_attrs)*
+            #[derive(#runtime::Signature, Clone, Debug)]
+            pub struct Sig {
+                #(
+                    #[input]
+                    pub #arg_names: #arg_types,
+                )*
+                #[output]
+                pub #fn_name: #output_type,
+            }
+
+            /// RFC 0003 M-2: this step as data — what `#[module]` lowering
+            /// consumes. The base (un-augmented) signature; `cot` augments at
+            /// lowering time.
+            pub fn __dsrs_step() -> #runtime::ir::StepDef {
+                #runtime::ir::StepDef {
+                    name: #fn_name_str,
+                    kind: #runtime::ir::StepKind::#step_kind,
+                    sig: #runtime::ir::SignatureDef::of::<Sig>(),
+                    types: #runtime::ir::SignatureDef::types_of::<Sig>(),
+                    model: #model_tokens,
+                    agent: ::core::option::Option::None,
+                }
+            }
+        }
+
+        #(#doc_attrs)*
+        #vis async fn #fn_name(
+            #(#arg_names: #arg_types),*
+        ) -> ::core::result::Result<#runtime::Predicted<#predicted_output>, #runtime::PredictError> {
+            #runtime::fx::predict::<#call_sig>(
+                #fn_name_str,
+                #fn_name::SigInput { #(#arg_names),* },
+            )
+            .await
+        }
+    })
 }
 
 #[proc_macro_derive(Augmentation, attributes(output, augment, alias))]
@@ -167,7 +495,6 @@ struct ParsedConstraint {
 struct ParsedSignature {
     input_fields: Vec<ParsedField>,
     output_fields: Vec<ParsedField>,
-    all_fields: Vec<ParsedField>,
     instruction: String,
 }
 
@@ -214,7 +541,6 @@ fn parse_signature_fields(
 ) -> syn::Result<ParsedSignature> {
     let mut input_fields = Vec::new();
     let mut output_fields = Vec::new();
-    let mut all_fields = Vec::new();
 
     for field in fields {
         let parsed = parse_single_field(field)?;
@@ -232,7 +558,6 @@ fn parse_signature_fields(
             ));
         }
 
-        all_fields.push(parsed.clone());
         if parsed.is_input {
             input_fields.push(parsed);
         } else {
@@ -258,7 +583,6 @@ fn parse_signature_fields(
     Ok(ParsedSignature {
         input_fields,
         output_fields,
-        all_fields,
         instruction: collect_doc_comment(attrs),
     })
 }
@@ -788,7 +1112,6 @@ fn generate_helper_structs(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let input_name = format_ident!("{}Input", name);
     let output_name = format_ident!("{}Output", name);
-    let all_name = format_ident!("{}All", name);
 
     let helper_generics = unconstrained_generics(generics);
     let (helper_impl_generics, helper_ty_generics, _helper_where_clause) =
@@ -832,25 +1155,6 @@ fn generate_helper_structs(
         output_new_fields.push(marker.init.clone());
     }
 
-    let mut all_fields: Vec<_> = parsed.all_fields.iter().map(field_tokens).collect();
-    let all_marker = generic_marker_field(generics, &parsed.all_fields);
-    if let Some(marker) = &all_marker {
-        all_fields.push(marker.field.clone());
-    }
-    let all_new_args: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(constructor_arg_tokens)
-        .collect();
-    let mut all_new_fields: Vec<_> = parsed
-        .all_fields
-        .iter()
-        .map(constructor_init_tokens)
-        .collect();
-    if let Some(marker) = &all_marker {
-        all_new_fields.push(marker.init.clone());
-    }
-
     let facet = quote! { #runtime::__macro_support::facet };
     let serde = quote! { #runtime::__macro_support::serde };
     let serde_crate = format!(
@@ -890,20 +1194,6 @@ fn generate_helper_structs(
             }
         }
 
-        #[derive(Debug, Clone, #facet::Facet, #serde::Serialize, #serde::Deserialize)]
-        #[facet(crate = #facet)]
-        #[serde(crate = #serde_crate)]
-        pub struct #all_name #helper_generics {
-            #(#all_fields),*
-        }
-
-        impl #helper_impl_generics #all_name #helper_ty_generics {
-            pub fn new(#(#all_new_args),*) -> Self {
-                Self {
-                    #(#all_new_fields),*
-                }
-            }
-        }
     })
 }
 
@@ -1141,22 +1431,9 @@ fn generate_signature_impl(
     let output_metadata_static =
         format_ident!("__{}_OUTPUT_METADATA", name.to_string().to_uppercase());
 
-    // Per-type schema fast path: a monomorphized static skips the global
-    // TypeId-keyed cache lock on every `S::schema()` call. Only emitted for
-    // non-generic signatures — a static inside a generic impl would be shared
-    // across monomorphizations and return the wrong schema.
-    let schema_fast_path = if generics.params.is_empty() {
-        quote! {
-            fn schema() -> &'static #runtime::SignatureSchema {
-                static SCHEMA: ::std::sync::OnceLock<&'static #runtime::SignatureSchema> =
-                    ::std::sync::OnceLock::new();
-                *SCHEMA.get_or_init(|| #runtime::SignatureSchema::of::<Self>())
-            }
-        }
-    } else {
-        quote! {}
-    };
-
+    // Note: no per-type `schema()` override. The default trait method resolves
+    // through the single `StaticSigCache` (RFC 0002 §1.2) — the per-derive
+    // `OnceLock` fast path was one of the four leaked caches it collapsed.
     quote! {
         impl #impl_generics #runtime::Signature for #name #ty_generics #where_clause {
             type Input = #input_name #ty_generics;
@@ -1165,8 +1442,6 @@ fn generate_signature_impl(
             fn instruction() -> &'static str {
                 #instruction
             }
-
-            #schema_fast_path
 
             fn input_shape() -> &'static #runtime::Shape {
                 <#input_name #ty_generics as #runtime::__macro_support::facet::Facet<'static>>::SHAPE

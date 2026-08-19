@@ -4,7 +4,7 @@
 //! manages the conversation loop, not the LM layer's auto tool loop.
 
 use dspy_rs::{
-    ChatAdapter, LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel,
+    LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel,
     ToolLoopMode, configure,
 };
 use rig::completion::AssistantContent;
@@ -57,7 +57,7 @@ struct CodeExec {
 /// 1. Predict builds initial chat → calls LM → model requests a tool call
 /// 2. CallerManaged mode: LM returns the tool call without executing it
 /// 3. Caller manually executes the tool, appends result to chat
-/// 4. Caller calls forward_continue → LM returns the final text answer
+/// 4. Caller calls call_and_parse → LM returns the final text answer
 ///
 /// This is the exact pattern RLM will use for Python REPL interaction.
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
@@ -73,7 +73,7 @@ async fn caller_managed_tool_loop_with_conversation() {
     let final_response = text_response(response_with_fields(&[("result", "42")]));
 
     let (lm, _client) = build_test_lm(vec![tool_call_response, final_response]).await;
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     let predict = Predict::<CodeExec>::new();
     let input = CodeExecInput {
@@ -98,7 +98,7 @@ async fn caller_managed_tool_loop_with_conversation() {
 
     // Turn 2: Continue the conversation
     let (second_result, final_chat) = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect("second turn should succeed");
     assert_eq!(second_result.into_inner().result, "42");
@@ -170,7 +170,7 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     let bad_response = text_response("This response has no field markers at all.");
 
     let (lm, _client) = build_test_lm(vec![good_response, bad_response]).await;
-    configure(lm, ChatAdapter {});
+    configure(lm);
 
     let predict = Predict::<CodeExec>::new();
     let input = CodeExecInput {
@@ -185,7 +185,7 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     // Turn 2: should fail with parse error containing the bad response
     chat.push_message(Message::user("follow up"));
     let err = predict
-        .forward_continue(chat)
+        .call_and_parse(chat)
         .await
         .expect_err("second turn should fail");
 

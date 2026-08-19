@@ -1,0 +1,107 @@
+---
+title: 'Capabilities'
+description: 'Named permissions: programs declare a ceiling, tools and holes declare needs, hosts grant, and load checks the subset'
+icon: 'passport'
+---
+
+A capability is a named permission: `orders:read`, `net:search`, `fs:read`. Nothing more mysterious than that, a short label for one kind of access to the world. Three parties each state their side in writing, and the statements are checked against each other at load, before a single step runs.
+
+## Three statements, one check
+
+| Party | Statement | Where it is written |
+|---|---|---|
+| The program | Its ceiling: the most it could ever touch | `caps { ... }` in the artifact, `#[module(caps(...))]` in source |
+| Each tool and hole | Its needs | `#[tool(caps("..."))]` in source, `caps [...]` on the printed tool or hole |
+| The host | Its grants | `--allow` on the `dsrs` host, `RuntimeEnv::grant` in an embedding binary |
+
+**The program declares its ceiling.** At the top of the artifact:
+
+```text
+caps { kb:read orders:read }
+```
+
+This is not what the program will do on a given run. It is the most it could ever do. Because the declaration is a line in a reviewable text file, it is diffable data: a program that never declared network access cannot quietly grow it, because the file would change and the change would show in review like any other line.
+
+**Every tool and hole declares its needs.** A host tool names them in its attribute:
+
+```rust
+/// Look up an order's status by id.
+#[tool(caps("orders:read"))]
+async fn order_lookup(order_id: String) -> Result<String, String> {
+    // your implementation
+}
+```
+
+A tool or hole that touches nothing declares `caps []`. Each piece's needs must fit under the program's ceiling as a subset, and this is checked at load: a ceiling that says only `kb:read` cannot contain a tool that needs `orders:read`, and the violation is a load error, not an incident in production.
+
+**The host states its grants.** Whoever runs the program has the final word. Serve the file but grant only the FAQ capability:
+
+```bash
+dsrs serve frontdesk.dsrs --allow kb:read
+```
+
+```text
+program caps exceed host grants: missing ["orders:read"]
+```
+
+The program's caps must be a subset of the host's grants or loading refuses, up front and by name, before a token is spent. In an embedding binary the same grants come from `RuntimeEnv::grant(cap)`, and the same subset check runs inside `Interpreter::load`.
+
+<svg viewBox="0 0 760 400" role="img" aria-label="The border crossing: the program's declared manifest meets the host's grant list at a checkpoint; inset, the sandbox room contains only granted capabilities, with no door to pick" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <g transform="rotate(-2 140 130)">
+    <rect x="40" y="50" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <text x="60" y="80" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the declaration</text>
+    <text x="60" y="98" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">declared needs,</text>
+    <text x="60" y="113" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">written in the artifact</text>
+    <text x="60" y="145" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">caps &#123;</text>
+    <text x="76" y="163" fontFamily="ui-monospace, monospace" fontSize="11" fill="#ed6c13">kb:read</text>
+    <text x="76" y="181" fontFamily="ui-monospace, monospace" fontSize="11" fill="#ed6c13">orders:read</text>
+    <text x="60" y="199" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">&#125;</text>
+  </g>
+  <g transform="rotate(2 620 130)">
+    <rect x="520" y="50" width="200" height="160" rx="6" fill="currentColor" fillOpacity="0.04" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+    <text x="540" y="80" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor">the grants</text>
+    <text x="540" y="98" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6">the host has the final word</text>
+    <text x="540" y="145" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">--allow kb:read</text>
+    <text x="540" y="163" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.85">--allow orders:read</text>
+  </g>
+  <rect x="330" y="60" width="100" height="120" rx="8" fill="#ed6c13" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <rect x="352" y="84" width="56" height="34" rx="4" fill="none" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="380" y="106" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fontWeight="600" fill="#ed6c13" textAnchor="middle">load</text>
+  <line x1="342" y1="150" x2="418" y2="150" stroke="currentColor" strokeOpacity="0.7" strokeWidth="4" strokeLinecap="round" />
+  <circle cx="342" cy="150" r="5" fill="currentColor" fillOpacity="0.7" />
+  <text x="380" y="204" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">needs &#8838; grants, checked</text>
+  <text x="380" y="219" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">before a single step runs</text>
+  <line x1="248" y1="120" x2="322" y2="120" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" />
+  <line x1="512" y1="120" x2="438" y2="120" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" />
+  <rect x="230" y="260" width="300" height="110" rx="8" fill="currentColor" fillOpacity="0.07" stroke="currentColor" strokeOpacity="0.6" strokeWidth="2.5" />
+  <text x="380" y="288" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="12" fontWeight="600" fill="currentColor" textAnchor="middle">the sandbox room</text>
+  <rect x="268" y="304" width="92" height="22" rx="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="314" y="319" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" textAnchor="middle">kb:read</text>
+  <rect x="400" y="304" width="92" height="22" rx="11" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="446" y="319" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" textAnchor="middle">orders:read</text>
+  <text x="380" y="352" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">an ungranted capability is not a locked door: there is no door</text>
+</svg>
+
+## The empty sandbox
+
+Permission systems usually fail by omission: a deny list forgets an entry, or a check gets bypassed by a code path nobody audited. The DSRs sandbox inverts this. When a sandboxed hole or a [Code Mode](/docs/components/code-mode) script starts, its environment contains only what the host granted. An ungranted capability is not a blocked call inside the sandbox; the function for it does not exist there at all. Ungrant `orders:read` and the sandbox simply contains no `order_lookup`, so no script, however creative, can invoke it. There is nothing to bypass. Deny lists require perfect memory; empty sandboxes do not.
+
+This is why a model writing JavaScript in the sandbox is not being trusted. It is being contained by construction: the sandbox starts empty, and only grants get placed inside.
+
+## Local modules and loaded files
+
+When you run your own `#[module]` directly, nobody asks you to `--allow` anything. The native parts are already in your binary, compiled from your own source, and a gate between you and code you wrote yourself withholds nothing. The module's generated `env()` therefore grants its own declared ceiling, and the declaration serves as documentation plus the fence around any sandboxed parts.
+
+The moment the same program travels as a `.dsrs` file, trust resets to zero. A host loading the file re-checks the program's caps against its own grants, and the program gets exactly what the host allows. Same declaration, two enforcement postures, both consistent with who wrote what.
+
+## Declarations are data
+
+Every capability statement lives in the artifact as plain text: the `caps { ... }` ceiling at the top, and `caps [...]` on each printed tool and hole. That makes the permission surface reviewable with the same machinery as any other change. A pull request that widens a program's ceiling is a visible diff on one line, and a load failure names the exact missing set, as in the error above.
+
+## See also
+
+- [Tools and agents](/docs/components/tools-and-agents) for declaring needs on host and sandboxed tools
+- [Holes](/docs/components/holes) for the `caps []` printed on holes
+- [Runtime](/docs/components/runtime) for `RuntimeEnv::grant` and the load-time subset check
+- [The .dsrs file](/docs/components/dsrs-file) for the caps grammar
+- [Code Mode](/docs/components/code-mode) for the sandbox that scripts run inside

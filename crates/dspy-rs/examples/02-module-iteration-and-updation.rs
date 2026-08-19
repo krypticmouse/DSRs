@@ -10,7 +10,7 @@ cargo run --example 02-module-iteration-and-updation
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, ChatAdapter, Example, LM, MetricOutcome, Module, Optimizer, Predict, PredictError,
+    COPRO, LM, Eval, Module, Optimizer, Predict, PredictError,
     Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
@@ -41,21 +41,25 @@ impl Module for QAModule {
 
 struct ExactMatch;
 
-impl TypedMetric<QA, QAModule> for ExactMatch {
+// The metric's first parameter is the trainset row type. For a small inline
+// trainset, an `(input, output)` tuple is row enough.
+impl TypedMetric<(QAInput, QAOutput), QAModule> for ExactMatch {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &(QAInput, QAOutput),
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        let expected = example.output.answer.trim().to_lowercase();
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let (_, gold) = example;
+        let expected = gold.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        Ok(Eval::score((expected == actual) as u8 as f64))
     }
 }
 
-fn trainset() -> Vec<Example<QA>> {
+fn trainset() -> Vec<(QAInput, QAOutput)> {
     vec![
-        Example::new(
+        (
             QAInput {
                 question: "What is 2+2?".to_string(),
             },
@@ -63,7 +67,7 @@ fn trainset() -> Vec<Example<QA>> {
                 answer: "4".to_string(),
             },
         ),
-        Example::new(
+        (
             QAInput {
                 question: "Capital of France?".to_string(),
             },
@@ -78,13 +82,10 @@ fn trainset() -> Vec<Example<QA>> {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let metric = ExactMatch;
     let mut module = QAModule::builder().build();

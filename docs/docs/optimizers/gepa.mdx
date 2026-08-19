@@ -1,25 +1,27 @@
 ---
-title: 'GEPA: Reflective Optimizer'
-description: 'Optimize prompts using rich textual feedback and Pareto frontiers'
+title: 'GEPA'
+description: 'Reflective instruction evolution from textual feedback: config, usage, and when to use it'
 icon: 'dna'
 ---
 
-**GEPA** (Genetic-Pareto) is a state-of-the-art reflective prompt optimizer that uses rich textual feedback and evolutionary algorithms to improve LM-powered applications.
+import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
+
+**GEPA** (Genetic-Pareto) is a reflective prompt optimizer: it evolves instructions using the textual feedback your metric returns alongside each score, and it keeps a Pareto frontier of candidates that win on different examples instead of a single best candidate.
 
 <Info>
 Reference: "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning" (Agrawal et al., 2025, [arxiv:2507.19457](https://arxiv.org/abs/2507.19457))
 </Info>
 
-## What is GEPA?
+## Overview
 
-GEPA is a reflective optimizer that adaptively evolves textual components (such as prompts) of arbitrary systems. In addition to scalar scores returned by metrics, users can also provide GEPA with text feedback to guide the optimization process. Such textual feedback provides GEPA more visibility into why the system got the score that it did, and then GEPA can introspect to identify how to improve the score. This allows GEPA to propose high performing prompts in very few rollouts.
+GEPA adaptively evolves the textual components of your module (its instructions). In addition to the scalar score, your metric returns text feedback explaining why the score is what it is. That feedback gives GEPA visibility into the failure, and a reflection LM uses it to propose a better instruction. Because each rollout carries an explanation rather than just a number, GEPA can find high-performing prompts in comparatively few rollouts.
 
-## What Makes GEPA Unique?
+## What GEPA adds
 
-Unlike traditional optimizers (COPRO, MIPROv2), GEPA introduces several key innovations:
+Compared to COPRO and MIPROv2, GEPA changes four things:
 
-### 1. Rich Textual Feedback
-Instead of just scalar scores (0.8, 0.9), GEPA leverages detailed explanations:
+### Rich textual feedback
+Instead of just scalar scores (0.8, 0.9), GEPA uses detailed explanations:
 ```
 Incorrect classification
   Expected: "positive"
@@ -28,25 +30,26 @@ Incorrect classification
   May have misunderstood mixed sentiment
 ```
 
-### 2. Pareto-based Selection
+### Pareto-based selection
 GEPA maintains a diverse set of candidates that excel on different examples, preventing premature convergence:
 - Candidate A: Best on examples 1, 3, 5
 - Candidate B: Best on examples 2, 4, 6
 - Both stay in the population (complementary strengths)
 
-### 3. LLM-driven Reflection
-Uses LLMs to analyze execution traces and propose targeted improvements:
+### LLM-driven reflection
+A reflection LM (`prompt_model`) reads the current instruction, the per-example feedback, and the mutated component's execution trace, then proposes a targeted rewrite:
 ```
-"The current instruction doesn't handle mixed sentiments well. 
+"The current instruction doesn't handle mixed sentiments well.
 Suggest modifying to explicitly consider both positive and negative aspects..."
 ```
+Without a `prompt_model`, mutation degrades to deterministic feedback concatenation, so setting one is strongly recommended.
 
-### 4. Inference-Time Search
-Can optimize at test time, not just training time.
+### Inference-time search
+GEPA can optimize at test time, not just training time (see [Inference-time search](#inference-time-search)).
 
-## Quick Start
+## Quick start
 
-### 1. Implement a Typed Metric with Feedback
+### 1. Implement a typed metric with feedback
 
 ```rust
 use dspy_rs::*;
@@ -66,43 +69,54 @@ impl Module for MyModule {
     }
 }
 
+// The trainset row: any struct. #[derive(Example)] projects it into the
+// signature's types by field name. See the Data page for the row model.
+#[derive(Example, Clone, Debug, serde::Serialize)]
+struct MyRow {
+    question: String,
+    answer: String,
+}
+
 struct MyMetric;
 
-impl TypedMetric<MySignature, MyModule> for MyMetric {
+impl TypedMetric<MyRow, MyModule> for MyMetric {
     async fn evaluate(
         &self,
-        example: &Example<MySignature>,
+        example: &MyRow,
         prediction: &Predicted<<MyModule as Module>::Output>,
-    )
-        -> Result<MetricOutcome>
-    {
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
         let predicted = prediction.answer.as_str();
-        let expected = example.output.answer.as_str();
-        
+        let expected = example.answer.as_str();
+
         let correct = predicted == expected;
         let score = if correct { 1.0 } else { 0.0 };
-        
+
         let feedback = if correct {
-            format!("Correct answer: {}", predicted)
+            format!("Correct answer: {predicted}")
         } else {
-            format!("Incorrect\n  Expected: {}\n  Predicted: {}", expected, predicted)
+            format!("Incorrect\n  Expected: {expected}\n  Predicted: {predicted}")
         };
-        
-        Ok(MetricOutcome::with_feedback(score, FeedbackMetric::new(score, feedback)))
+
+        Ok(Eval::with_feedback(score, feedback))
     }
 }
 ```
 
-### 2. Configure and Run GEPA
+The third parameter is the rollout's execution [`Trace`](/docs/components/traces); metrics that inspect intermediate steps can slice it with `trace.for_component("predictor")`.
+
+### 2. Configure and run GEPA
 
 ```rust
+// The reflection LM that rewrites instructions from feedback
+let reflection_lm = LM::builder().temperature(1.0).build().await?;
+
 let gepa = GEPA::builder()
     .num_iterations(20)
     .minibatch_size(25)
-    .num_trials(10)
-    .temperature(0.9)
+    .prompt_model(reflection_lm)
     .track_stats(true)
-    .maybe_max_rollouts(Some(500))  // Budget control
+    .max_rollouts(500)  // Budget control
     .build();
 
 let result = gepa.compile(&mut module, trainset, &metric).await?;
@@ -111,29 +125,29 @@ println!("Best score: {:.3}", result.best_candidate.average_score());
 println!("Best instruction: {}", result.best_candidate.instruction);
 ```
 
-## Feedback Helpers
+## Feedback helpers
 
-DSRs provides utilities for common feedback patterns:
+DSRs provides utilities for common feedback patterns. Each returns a ready-made `Eval` with the score and a formatted feedback string:
 
-### Document Retrieval
+### Document retrieval
 ```rust
-use dspy_rs::feedback_helpers::retrieval_feedback;
+use dspy_rs::retrieval_feedback;
 
-let feedback = retrieval_feedback(
+let eval = retrieval_feedback(
     &retrieved_docs,
     &expected_docs,
     Some(&all_available_docs)
 );
 
-// Output:
-// Retrieved 3/5 correct documents (Precision: 0.6, Recall: 0.6, F1: 0.6)
+// Feedback:
+// Retrieved 3/5 correct documents (Precision: 0.600, Recall: 0.600, F1: 0.600)
 // Correctly retrieved: doc1, doc2, doc3
 // Missed: doc4, doc5
 ```
 
-### Code Generation
+### Code generation
 ```rust
-use dspy_rs::feedback_helpers::{code_pipeline_feedback, CodeStage, StageResult};
+use dspy_rs::{code_pipeline_feedback, CodeStage, StageResult};
 
 let stages = vec![
     (CodeStage::Parse, StageResult::Success),
@@ -143,17 +157,17 @@ let stages = vec![
     }),
 ];
 
-let feedback = code_pipeline_feedback(&stages, 0.6);
+let eval = code_pipeline_feedback(&stages, 0.6);
 
-// Output:
+// Feedback:
 // Parse: Success
 // Compile: Success
 // Execute: Division by zero on line 42
 ```
 
-### Multi-Objective Optimization
+### Multi-objective optimization
 ```rust
-use dspy_rs::feedback_helpers::multi_objective_feedback;
+use dspy_rs::multi_objective_feedback;
 
 let mut objectives = HashMap::new();
 objectives.insert("accuracy".to_string(), (0.9, "High accuracy".to_string()));
@@ -165,24 +179,28 @@ weights.insert("accuracy".to_string(), 2.0);
 weights.insert("latency".to_string(), 1.0);
 weights.insert("cost".to_string(), 1.0);
 
-let feedback = multi_objective_feedback(&objectives, Some(&weights));
+let eval = multi_objective_feedback(&objectives, Some(&weights));
 ```
 
-## Configuration Options
+`string_similarity_feedback` and `classification_feedback` are also available.
+
+## Configuration options
 
 ```rust
 GEPA::builder()
-    .num_iterations(20)          // Number of evolutionary iterations
-    .minibatch_size(25)          // Examples per rollout
-    .num_trials(10)              // Trials per candidate evaluation
-    .temperature(0.9)            // LLM temperature for mutations
-    .track_stats(true)           // Track detailed statistics
-    .track_best_outputs(false)   // Store best outputs per example
-    .maybe_max_rollouts(Some(500))   // Budget: max rollouts
-    .maybe_max_lm_calls(Some(1000))  // Budget: max LM calls
-    .maybe_prompt_model(Some(lm))    // Separate LM for meta-prompting
+    .num_iterations(20)          // Evolutionary generations
+    .minibatch_size(25)          // Examples per parent re-evaluation
+    .track_stats(true)           // Record candidates and evolution history
+    .track_best_outputs(false)   // Record best outputs per eval example
+    .max_rollouts(500)           // Budget: max evaluation rollouts
+    .max_lm_calls(1000)          // Budget: max LM calls
+    .prompt_model(reflection_lm) // Reflection LM (strongly recommended)
+    .eval_concurrency(16)        // LM calls in flight during evaluation
+    .seed(42)                    // Reproducible sampling
     .build()
 ```
+
+`num_trials` and `temperature` also exist on the builder but are currently unused (reserved for multi-child evolution and mutation diversity control). The full field table is in the [optimizers reference](/docs/components/optimizers#gepa).
 
 Pass validation data at compile time:
 
@@ -192,12 +210,14 @@ let result = gepa
     .await?;
 ```
 
-## Understanding GEPA Results
+With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile` does).
+
+## Understanding GEPA results
 
 ```rust
 let result = gepa.compile(&mut module, trainset, &metric).await?;
 
-// Best candidate found
+// Best candidate found (already installed on the module)
 println!("Best instruction: {}", result.best_candidate.instruction);
 println!("Average score: {:.3}", result.best_candidate.average_score());
 println!("Generation: {}", result.best_candidate.generation);
@@ -214,28 +234,21 @@ for (generation, score) in &result.evolution_history {
 
 ## Architecture
 
-### Core Components
+### Core components
 
-**FeedbackMetric**
+**Eval**
+
+The metric result type: one score, optional textual feedback. GEPA errors if any `Eval` has `feedback: None`.
 ```rust
-pub struct FeedbackMetric {
-    pub score: f32,
-    pub feedback: String,
-    pub metadata: HashMap<String, serde_json::Value>,
+pub struct Eval {
+    pub score: f64,
+    pub feedback: Option<String>,
 }
 ```
 
-**ExecutionTrace**
-```rust
-pub struct ExecutionTrace {
-    pub inputs: Example,
-    pub outputs: Option<BamlValue>,
-    pub feedback: Option<FeedbackMetric>,
-    pub intermediate_steps: Vec<(String, serde_json::Value)>,
-    pub errors: Vec<String>,
-    pub metadata: HashMap<String, serde_json::Value>,
-}
-```
+**Execution traces**
+
+Every rollout runs under trace capture, recording one span per `Predict` invocation. GEPA feeds the mutated component's spans (`trace.for_component(name)`) to the reflection LM alongside the feedback. See [Traces](/docs/components/traces).
 
 **ParetoFrontier**
 - Each candidate tracks which examples it wins on
@@ -254,79 +267,321 @@ pub struct GEPACandidate {
 }
 ```
 
-### Evolutionary Algorithm
+### Evolutionary algorithm
 
 1. **Initialize** the candidate pool with the unoptimized program
 2. **Iterate**:
-   - Sample a candidate from Pareto frontier (proportional to coverage)
+   - Sample a candidate from the Pareto frontier (proportional to coverage)
    - Sample a minibatch from the training set
    - Collect execution traces with feedback
-   - Select a module for targeted improvement
-   - LLM Reflection: Propose new instruction using reflective meta-prompting
-   - Roll out the new candidate; if improved, evaluate on validation set
+   - Select a module component for targeted improvement
+   - LLM Reflection: Propose a new instruction using reflective meta-prompting
+   - Roll out the new candidate; if improved, evaluate on the validation columns
    - Update the Pareto frontier
 3. **Continue** until budget is exhausted
 4. **Return** best candidate by average score
 
-## Implementing Feedback Metrics
+## Implementing feedback metrics
 
-A well-designed metric is central to GEPA's sample efficiency. The DSRs implementation expects the metric to return a `MetricOutcome`; for GEPA that means `MetricOutcome::with_feedback(score, FeedbackMetric { ... })`.
+A well-designed metric is central to GEPA's sample efficiency. The DSRs implementation expects the metric to return an `Eval`; for GEPA that means `Eval::with_feedback(score, feedback)` on every example.
 
-### Practical Recipe for GEPA-Friendly Feedback
+### Practical recipe for GEPA-friendly feedback
 
-- **Leverage Existing Artifacts**: Use logs, unit tests, evaluation scripts, profiler outputs
-- **Decompose Outcomes**: Break scores into per-objective components
-- **Expose Trajectories**: Label pipeline stages with pass/fail and errors
-- **Ground in Checks**: Use validators or LLM-as-a-judge for subjective tasks
-- **Prioritize Clarity**: Focus on error coverage and decision points
+- **Leverage existing artifacts**: Use logs, unit tests, evaluation scripts, profiler outputs
+- **Decompose outcomes**: Break scores into per-objective components
+- **Expose trajectories**: Label pipeline stages with pass/fail and errors
+- **Ground in checks**: Use validators or an [LLM judge](#using-an-llm-judge-for-feedback) for subjective tasks
+- **Prioritize clarity**: Focus on error coverage and decision points
 
-### Feedback Examples by Domain
+### Feedback examples by domain
 
-**Document Retrieval**: List correctly retrieved, incorrect, or missed documents
+**Document retrieval**: List correctly retrieved, incorrect, or missed documents
 
-**Multi-Objective Tasks**: Decompose aggregate scores to reveal contributions from each objective
+**Multi-objective tasks**: Decompose aggregate scores to reveal contributions from each objective
 
-**Stacked Pipelines**: Expose stage-specific failures (parse, compile, run, test)
+**Stacked pipelines**: Expose stage-specific failures (parse, compile, run, test)
 
-## Best Practices
+## Best practices
 
-### Design Feedback for Actionability
+### Design feedback for actionability
 ```rust
 // BAD: Vague feedback
-FeedbackMetric::new(0.5, "Wrong answer")
+Eval::with_feedback(0.5, "Wrong answer")
 
 // GOOD: Specific, actionable feedback
-FeedbackMetric::new(0.5, 
+Eval::with_feedback(0.5,
     "Incorrect answer\n\
      Expected: 'Paris'\n\
      Predicted: 'France'\n\
      Issue: Returned country instead of city")
 ```
 
-### Leverage Domain Knowledge
+### Leverage domain knowledge
 - Code generation: Show stage-specific failures
 - Retrieval: List specific documents missed
 - QA: Explain reasoning errors
 
-### Balance Feedback Detail
+### Balance feedback detail
 - Too brief: Not actionable
 - Too verbose: Drowns out signal
-- Sweet spot: 2-5 lines per issue
+- Aim for 2 to 5 lines per issue
 
-### Set Realistic Budgets
+### Set realistic budgets
 ```rust
 // For development/testing
 GEPA::builder()
     .num_iterations(5)
-    .maybe_max_rollouts(Some(100))
+    .max_rollouts(100)
     .build()
 
 // For production optimization
 GEPA::builder()
     .num_iterations(20)
-    .maybe_max_rollouts(Some(1000))
+    .max_rollouts(1000)
     .build()
 ```
+
+## Using an LLM judge for feedback
+
+For tasks where feedback rules are hard to codify, a second LLM can generate the feedback: it reads the task output and writes the evaluation text that becomes the metric's feedback string.
+
+```
+Task LM → generates answer + reasoning
+    ↓
+Judge LM → analyzes quality and provides feedback
+    ↓
+GEPA Reflection LM → reads feedback and improves prompt
+    ↓
+Better Task LM prompt
+```
+
+A judge fits these situations:
+
+- Subjective quality assessment (writing style, helpfulness, clarity)
+- Complex reasoning evaluation (soundness of the logic)
+- Tasks where rules are hard to codify
+- Analyzing reasoning quality beyond answer correctness
+
+Prefer deterministic checks over a judge when they exist:
+
+- Unit tests or schema validation cover the failure modes
+- Correctness is verifiable (code compilation, exact matches)
+- Evaluation must be fast and cheap
+- The outcome is a simple binary pass/fail
+
+### Task signature with reasoning
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct MathWordProblem {
+    /// Solve the problem step by step.
+
+    #[input]
+    problem: String,
+
+    #[output]
+    reasoning: String,  // We want to optimize this too
+
+    #[output]
+    answer: String,
+}
+```
+
+### Judge signature
+
+```rust
+#[derive(Signature, Clone, Debug)]
+struct MathJudge {
+    /// Evaluate student reasoning and answer quality.
+
+    #[input(desc = "The original problem")]
+    problem: String,
+
+    #[input(desc = "Expected answer")]
+    expected_answer: String,
+
+    #[input(desc = "Student answer")]
+    student_answer: String,
+
+    #[input(desc = "Student reasoning")]
+    student_reasoning: String,
+
+    #[output(desc = "Evaluation of the solution quality")]
+    evaluation: String,  // This becomes the feedback
+}
+```
+
+### Optimized module
+
+```rust
+#[derive(Builder, facet::Facet)]
+#[facet(crate = facet)]
+struct MathSolver {
+    #[builder(default = Predict::<MathWordProblem>::new())]
+    solver: Predict<MathWordProblem>,  // This gets optimized
+}
+```
+
+### TypedMetric with judge
+
+```rust
+/// A labeled trainset row: `(input, gold output)` tuples are rows out of the
+/// box — no dedicated struct needed for a small inline trainset.
+type MathRow = (MathWordProblemInput, MathWordProblemOutput);
+
+struct LlmJudgeMetric {
+    judge: Predict<MathJudge>,
+}
+
+impl TypedMetric<MathRow, MathSolver> for LlmJudgeMetric {
+    async fn evaluate(
+        &self,
+        example: &MathRow,
+        prediction: &Predicted<MathWordProblemOutput>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        let (input, gold) = example;
+        let problem = input.problem.clone();
+        let expected = gold.answer.clone();
+
+        let student_answer = prediction.answer.clone();
+        let student_reasoning = prediction.reasoning.clone();
+        let exact_match = student_answer.trim() == expected.trim();
+
+        let judge_output = self
+            .judge
+            .call(MathJudgeInput {
+                problem: problem.clone(),
+                expected_answer: expected.clone(),
+                student_answer: student_answer.clone(),
+                student_reasoning: student_reasoning.clone(),
+            })
+            .await;
+
+        let (score, evaluation_text) = match judge_output {
+            Ok(evaluation) => {
+                let evaluation_text = evaluation.evaluation.clone();
+                let score = if exact_match {
+                    if evaluation_text.to_lowercase().contains("clear")
+                        || evaluation_text.to_lowercase().contains("correct")
+                    {
+                        1.0
+                    } else {
+                        0.7
+                    }
+                } else if evaluation_text.to_lowercase().contains("partially")
+                    || evaluation_text.to_lowercase().contains("good start")
+                {
+                    0.3
+                } else {
+                    0.0
+                };
+                (score, evaluation_text)
+            }
+            Err(err) => {
+                let fallback = format!(
+                    "judge call failed: {err}; expected={expected}; predicted={student_answer}"
+                );
+                ((exact_match as u8 as f64), fallback)
+            }
+        };
+
+        Ok(Eval::with_feedback(
+            score,
+            format!(
+                "problem={problem}\nexpected={expected}\npredicted={student_answer}\njudge={evaluation_text}"
+            ),
+        ))
+    }
+}
+```
+
+`GEPA` itself does not own a special `feedback_metric` hook.
+The feedback function lives in your `TypedMetric` implementation, and GEPA enforces that every evaluation returns `Eval::with_feedback(...)`.
+That keeps the optimizer generic while preserving full judge-driven behavior.
+
+### What a judge catches
+
+- Lucky guesses: a correct answer reached through unsound reasoning is penalized instead of scoring 1.0.
+- Partial progress: a wrong answer with a correct approach (an arithmetic slip in the final step) earns partial credit instead of 0.
+- Systematic issues: the judge surfaces recurring patterns such as skipped intermediate steps, confused concepts (area versus perimeter), or missing unit checks, and GEPA's reflection turns them into explicit instructions.
+
+In the worked example, the baseline instruction "Solve the math word problem step by step" produced solutions that skipped steps, which the judge flagged as incomplete reasoning. After optimization the instruction requires all intermediate calculations to be shown and each step to be labeled. The judge's analysis is the signal that drives the rewrite.
+
+### Cost considerations
+
+<Warning>
+LLM judges double your evaluation cost since every prediction requires both a task LM call and a judge LM call.
+</Warning>
+
+Budget accordingly:
+
+```rust
+GEPA::builder()
+    .num_iterations(3)     // Fewer iterations
+    .minibatch_size(3)     // Smaller batches
+    .max_lm_calls(100)     // Explicit limit
+    .build()
+```
+
+Ways to contain cost:
+
+- Use a cheaper model for judging (gpt-4o-mini vs gpt-4)
+- Judge only failed examples (not ones that passed)
+- Cache judge evaluations for identical outputs
+- Use parallel evaluation to reduce wall-clock time
+
+### Hybrid metrics
+
+Combining explicit checks with LLM judging often gives the best results:
+
+```rust
+impl TypedMetric<MyRow, MyModule> for HybridMetric {
+    async fn evaluate(
+        &self,
+        example: &MyRow,
+        prediction: &Predicted<<MyModule as Module>::Output>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        let mut score = 1.0;
+        let mut feedback_parts = vec![];
+
+        // Explicit checks first (fast, cheap, deterministic)
+        if !is_valid_json(&prediction.result_json) {
+            feedback_parts.push("Invalid JSON format".to_string());
+            score = 0.0;
+        }
+
+        if score > 0.0 && missing_required_fields(&prediction.result_json) {
+            feedback_parts.push("Missing fields: user_id, timestamp".to_string());
+            score *= 0.5;
+        }
+
+        // Optional judge pass for qualitative scoring
+        if score > 0.0 {
+            let judge_feedback = self.judge_quality(example, prediction).await?;
+            if judge_feedback.to_lowercase().contains("low quality") {
+                score *= 0.7;
+            }
+            feedback_parts.push(judge_feedback);
+        }
+
+        Ok(Eval::with_feedback(score, feedback_parts.join("\n")))
+    }
+}
+```
+
+### Running the judge example
+
+```bash
+OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
+```
+
+The run shows baseline performance, judge evaluations during optimization, the prompt evolving from feedback, and a final test with judge analysis.
+
+<Card title="Full Working Example" icon="code" href="https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/10-gepa-llm-judge.rs">
+  See the complete implementation with step-by-step comments
+</Card>
 
 ## Examples
 
@@ -334,22 +589,15 @@ GEPA::builder()
   Basic GEPA usage with explicit feedback for sentiment classification
 </Card>
 
-<Card title="LLM-as-Judge" icon="gavel" href="/docs/optimizers/gepa-llm-judge">
-  Using an LLM judge to automatically generate feedback
+<Card title="LLM-as-Judge" icon="gavel" href="#using-an-llm-judge-for-feedback">
+  Using an LLM judge to generate feedback
 </Card>
 
-## Comparison with Other Optimizers
+## Comparison with other optimizers
 
-| Feature              | COPRO | MIPROv2 | GEPA |
-|----------------------|-------|---------|------|
-| **Feedback Type**    | Score | Score   | Score + Text |
-| **Selection Strategy** | Best | Batch | Pareto |
-| **Diversity**        | Low   | Medium  | High |
-| **Actionability**    | Low   | Medium  | High |
-| **Compute Cost**     | Low   | Medium  | Medium-High |
-| **Sample Efficiency** | Medium | High | Very High |
+<OptimizerComparison />
 
-### When to Use GEPA
+### When to use GEPA
 
 - Complex tasks with subtle failure modes
 - When you can provide rich feedback
@@ -357,37 +605,39 @@ GEPA::builder()
 - Need for diverse solutions
 - Inference-time search
 
-### When to Use Alternatives
+### When to use alternatives
 
 - **COPRO**: Simple tasks, quick iteration
 - **MIPROv2**: Best prompting practices, single objective
 
 ## Troubleshooting
 
-### Issue: "GEPA requires feedback for every evaluated example"
+### Issue: GEPA errors because an `Eval` has no feedback
+
+GEPA requires feedback for every evaluated example.
+
 ```rust
-// Solution: Return MetricOutcome::with_feedback(...) from TypedMetric::evaluate
-impl TypedMetric<MySignature, MyModule> for MyMetric {
+// Solution: Return Eval::with_feedback(...) from TypedMetric::evaluate
+impl TypedMetric<MyRow, MyModule> for MyMetric {
     async fn evaluate(
         &self,
-        example: &Example<MySignature>,
+        example: &MyRow,
         prediction: &Predicted<<MyModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
-        Ok(MetricOutcome::with_feedback(
-            1.0,
-            FeedbackMetric::new(1.0, "detailed textual feedback"),
-        ))
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        Ok(Eval::with_feedback(1.0, "detailed textual feedback"))
     }
 }
 ```
 
 ### Issue: Slow convergence
 ```rust
-// Increase minibatch size for better gradient
+// Increase minibatch size for a better signal per generation
 GEPA::builder().minibatch_size(50).build()
 
-// Increase temperature for more exploration
-GEPA::builder().temperature(1.2).build()
+// Make sure a reflection LM is set; without one, mutation is just
+// deterministic feedback concatenation
+GEPA::builder().prompt_model(reflection_lm).build()
 ```
 
 ### Issue: Running out of budget
@@ -395,13 +645,13 @@ GEPA::builder().temperature(1.2).build()
 // Reduce iterations or increase budget
 GEPA::builder()
     .num_iterations(10)
-    .maybe_max_rollouts(Some(2000))
+    .max_rollouts(2000)
     .build()
 ```
 
-## Inference-Time Search
+## Inference-time search
 
-GEPA can act as a test-time/inference search mechanism. By setting your `valset` to your evaluation batch and using `track_best_outputs=True`, GEPA produces for each batch element the highest-scoring outputs found during the evolutionary search.
+GEPA can act as a test-time/inference search mechanism. By setting your `valset` to your evaluation batch and enabling `track_best_outputs(true)`, GEPA produces for each batch element the highest-scoring outputs found during the evolutionary search.
 
 ```rust
 let gepa = GEPA::builder()
@@ -418,9 +668,9 @@ let best_scores = result.highest_score_achieved_per_val_task;
 let best_outputs = result.best_outputs_valset;
 ```
 
-## Additional Resources
+## Additional resources
 
 - [GEPA Paper](https://arxiv.org/abs/2507.19457)
 - [GEPA GitHub](https://github.com/gepa-ai/gepa)
-- [LLM-as-Judge Pattern](/docs/optimizers/gepa-llm-judge)
+- [Using an LLM judge for feedback](#using-an-llm-judge-for-feedback)
 - [Example Code](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/09-gepa-sentiment.rs)

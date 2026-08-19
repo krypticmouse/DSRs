@@ -1,0 +1,77 @@
+---
+title: "dspy_rs::utils"
+description: "LM response caching."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+LM response caching.
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`CacheEntry`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/struct.CacheEntry.html) | Re-export of `cache::CacheEntry`. |
+| [`CacheKey`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/type.CacheKey.html) | Re-export of `cache::CacheKey`. |
+| [`init_tracing`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/fn.init_tracing.html) | Re-export of `telemetry::init_tracing`. |
+| [`ResponseCache`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/struct.ResponseCache.html) | Re-export of `cache::ResponseCache`. |
+| [`TelemetryInitError`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/enum.TelemetryInitError.html) | Re-export of `telemetry::TelemetryInitError`. |
+| [`truncate`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/fn.truncate.html) | Re-export of `telemetry::truncate`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`cache`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/index.html) |  |
+| [`hash`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/hash/index.html) | Stable 64-bit hashing for trace request hashes and LM cache keys. |
+| [`telemetry`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/index.html) |  |
+
+## `utils::cache`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`CacheEntry`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/struct.CacheEntry.html) | A cached prompt-response pair. |
+| [`ResponseCache`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/struct.ResponseCache.html) | Hybrid memory + disk LM response cache. |
+
+### Type aliases
+
+| Item | Description |
+|---|---|
+| [`CacheKey`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/cache/type.CacheKey.html) | Response-cache key: a 64-bit hash over the prompt + generation parameters. |
+
+## `utils::hash`
+
+Stable 64-bit hashing for trace request hashes and LM cache keys.
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`HashWriter`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/hash/struct.HashWriter.html) | Adapts a `Hasher` into a `std::fmt::Write` sink so values can be hashed through their `Debug`/`Display` representation without materializing a string. |
+| [`StableHasher`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/hash/struct.StableHasher.html) | FNV-1a 64-bit hasher: deterministic across platforms and Rust versions. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`stable_hash_debug`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/hash/fn.stable_hash_debug.html) | Hashes a `Debug`-formatted value with the stable hasher. |
+
+## `utils::telemetry`
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`TelemetryInitError`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/enum.TelemetryInitError.html) |  |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`init_tracing`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/fn.init_tracing.html) | Installs process-global, pretty tracing output for DSRs. |
+| [`truncate`](https://docs.rs/dspy-rs/latest/dspy_rs/utils/telemetry/fn.truncate.html) |  |

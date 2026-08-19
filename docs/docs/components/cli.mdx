@@ -1,0 +1,180 @@
+---
+title: "CLI"
+description: "Reference for the dsrs binary: check, fmt, the HTTP serving host, and the full print-and-serve workflow"
+icon: "terminal"
+---
+
+The `dsrs` binary is the `.dsrs` toolchain: check, fmt, serve. It ships as the `dsrs-cli` crate; every subcommand is a plain library function (`dsrs_cli::check`, `dsrs_cli::fmt`, `dsrs_cli::serve`), and the binary itself is argument parsing plus process exit codes. All subcommands exit 0 on success and non-zero on failure.
+
+```bash
+dsrs check qa.dsrs               # parse, validate, print the program summary
+dsrs fmt qa.dsrs --write         # rewrite the file in canonical form
+dsrs serve qa.dsrs --port 8080   # serve it over HTTP
+```
+
+The toolchain covers the whole journey of a program file: printed from your code, checked, served on another host, and embeddable back into a Rust build.
+
+<svg viewBox="0 0 760 340" role="img" aria-label="The map leaves home: the .dsrs file travels from the laptop through the dsrs check checkpoint to a serving host, and include_program brings it home again" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="jr-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+    <marker id="jr-arrow-dim" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" fillOpacity="0.55" />
+    </marker>
+  </defs>
+  <rect x="50" y="90" width="130" height="80" rx="6" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <rect x="36" y="170" width="158" height="10" rx="5" fill="currentColor" fillOpacity="0.35" />
+  <circle cx="115" cy="130" r="16" fill="#ed6c13" fillOpacity="0.12" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="115" y="135" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.85" textAnchor="middle">bake</text>
+  <text x="115" y="205" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">home: tuned and baked</text>
+  <g transform="rotate(3 300 96)">
+    <rect x="262" y="60" width="76" height="72" rx="4" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+    <path d="M 338 60 L 322 60 L 338 76 Z" fill="currentColor" fillOpacity="0.2" />
+    <text x="300" y="92" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.9" textAnchor="middle">frontdesk</text>
+    <text x="300" y="106" fontFamily="ui-monospace, monospace" fontSize="10" fill="currentColor" fillOpacity="0.9" textAnchor="middle">.dsrs</text>
+    <text x="300" y="122" fontFamily="ui-monospace, monospace" fontSize="8" fill="currentColor" fillOpacity="0.55" textAnchor="middle">lineage inside</text>
+  </g>
+  <rect x="400" y="66" width="96" height="94" rx="8" fill="#ed6c13" fillOpacity="0.10" stroke="#ed6c13" strokeWidth="2" />
+  <line x1="448" y1="82" x2="448" y2="118" stroke="#ed6c13" strokeWidth="2" />
+  <path d="M 448 82 L 476 90 L 448 98 Z" fill="#ed6c13" />
+  <text x="448" y="140" fontFamily="ui-monospace, monospace" fontSize="10.5" fontWeight="600" fill="#ed6c13" textAnchor="middle">dsrs check</text>
+  <text x="448" y="186" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">parse, types, ports,</text>
+  <text x="448" y="201" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">caps: customs for files</text>
+  <rect x="580" y="60" width="130" height="110" rx="8" fill="currentColor" fillOpacity="0.06" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <line x1="596" y1="88" x2="694" y2="88" stroke="currentColor" strokeOpacity="0.4" strokeWidth="2" />
+  <line x1="596" y1="114" x2="694" y2="114" stroke="currentColor" strokeOpacity="0.4" strokeWidth="2" />
+  <circle cx="608" cy="74" r="3" fill="#ed6c13" />
+  <circle cx="608" cy="101" r="3" fill="currentColor" fillOpacity="0.5" />
+  <text x="645" y="146" fontFamily="ui-monospace, monospace" fontSize="10.5" fontWeight="600" fill="currentColor" textAnchor="middle">dsrs serve</text>
+  <text x="645" y="162" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">:8080/run</text>
+  <text x="645" y="205" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">any host that can read</text>
+  <text x="645" y="220" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">the map can make the journey</text>
+  <line x1="196" y1="112" x2="252" y2="102" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <line x1="348" y1="102" x2="392" y2="110" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <line x1="504" y1="112" x2="572" y2="112" stroke="#ed6c13" strokeWidth="2" markerEnd="url(#jr-arrow)" />
+  <path d="M 620 250 C 500 300, 260 300, 140 250" fill="none" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" strokeDasharray="6 5" markerEnd="url(#jr-arrow-dim)" />
+  <text x="380" y="308" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8" textAnchor="middle">include_program!("frontdesk.dsrs")</text>
+  <text x="380" y="325" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.6" textAnchor="middle">the map comes home, checked at the border of your build</text>
+</svg>
+
+## `dsrs check <program>`
+
+Parses and validates a `.dsrs` artifact via `Program::load_dsrs`, running the full pipeline: lex and parse with positions, lowering, `Program::validate`, hash sealing. This is exactly what `Interpreter::load` would accept, which makes `check` a pre-commit gate for a human and a regeneration signal for a model loop.
+
+On success it prints one line to stdout: `ok: program` with the program name, its 16-hex hash, the node, signature, model, and tool counts, and the caps set when non-empty. On failure the parser's error goes to stderr with the artifact path and a `line N, column M: expected ...` position, and the exit code is non-zero.
+
+## `dsrs fmt <program> [--write]`
+
+Prints (or rewrites) the canonical form of an artifact. The canonical form is `Program::to_dsrs`, the same text that seals `program_hash` and that `bake` writes. Formatting is parse then print, never token shuffling, so an artifact that does not parse does not format.
+
+| Flag | Effect |
+|---|---|
+| (none) | Prints the canonical text to stdout. |
+| `--write` | Rewrites the file in place, only when the bytes differ. Reports ``formatted `<path>` `` or `` `<path>` already canonical`` on stderr. |
+
+## `dsrs serve <program> [flags]`
+
+Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--host <addr>` | `127.0.0.1` | Bind address. |
+| `--port <n>` | `8080` | Bind port (0 binds an ephemeral port). |
+| `--overlay <path>` | none | Overlay JSON in the named form (`{"<param path>": <value>, ...}`), applied read-through on every run. |
+| `--allow <CAP>` | none | Capability grant, repeatable: `--allow net:search --allow fs:read`. Load is refused (with the missing set printed) when the program's caps exceed the grants. |
+
+<Warning>
+Host tools cannot be served: a program declaring a host tool needs an embedding host that supplies the binding ([`include_program!`](/docs/components/runtime) plus your own code, or a sandboxed `js` tool instead). The load surfaces that refusal with a hint rather than a bare unbound-tool error.
+</Warning>
+
+### HTTP endpoints
+
+| Endpoint | What it returns |
+|---|---|
+| `POST /run` | Body is a JSON object of input fields; the response is `{"output": ...}`. With `?trace=1` (or `?trace=true`) the run executes inside a capture scope and the response adds `"trace_jsonl"`, the exact trace artifact text with `param_ids` attached. |
+| `GET /schema` | The program's external interface: `{"program", "program_hash", "signature", "types"}`, the main signature and the type table in their serde forms. |
+| `GET /program` | The canonical `.dsrs` text, as `text/plain; charset=utf-8`. |
+| `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
+
+Error responses are always `{"error": ...}` with the interpreter's own message: a non-object request body and input-surface rejections are 400, everything else (LM failures, parse failures, budget, routing) is 500.
+
+## From code to endpoint
+
+The full workflow: print a program out of your code, check it, format it, serve it.
+
+### 1. Print the program
+
+Every [`#[module]`](/docs/components/module-macro) exposes `program()`. Call `to_dsrs()` on it to get the canonical text, then save it:
+
+```rust
+let text = qa::program().to_dsrs();
+std::fs::write("qa.dsrs", text)?;
+```
+
+One note before serving: a file printed from a `#[module]` holds a placeholder model line like `model default = "unbound:default"`, because the real model was bound in your code. Open the file and point each model line at a real model, for example:
+
+```
+model default = "openai:gpt-4o-mini"
+```
+
+### 2. Check it
+
+Errors come with line and column positions, so `check` works as a pre-commit gate:
+
+```bash
+dsrs check qa.dsrs
+# ok: program `qa` (3f9c...) - 4 nodes, 4 sigs, 1 models, 0 tools
+```
+
+### 3. Format it
+
+```bash
+dsrs fmt qa.dsrs           # print the canonical form to stdout
+dsrs fmt qa.dsrs --write   # rewrite the file in place
+```
+
+A file that does not parse does not format; fix `check` errors first.
+
+### 4. Serve it
+
+```bash
+dsrs serve qa.dsrs --port 8080
+```
+
+Model API keys come from the usual provider environment variables (for example `OPENAI_API_KEY`). The flag table above lists `--host`, `--port`, `--overlay`, and `--allow`.
+
+### 5. Call it
+
+```bash
+curl -s localhost:8080/run \
+  -H 'content-type: application/json' \
+  -d '{"question": "What is DSRs?"}'
+# {"output": {"answer": "...", "upper": "..."}}
+```
+
+Add `?trace=1` to `POST /run` to also get a full trace of the run; the endpoint table above lists `/schema`, `/program`, and `/healthz`.
+
+## Capabilities: needs versus allows
+
+The program states what it needs in its `caps { ... }` block. The host states what it allows with `--allow`. Serving refuses to start when the program asks for more than the host allows, and it prints the missing set. This is on purpose: a program can never quietly get more access than you granted.
+
+Two more refusals to know about:
+
+- A program with host [holes](/docs/components/holes) cannot be served by `dsrs serve`, because the Rust code lives in the binary that defined it. Embed the program with `include_program!` instead; see [Runtime](/docs/components/runtime).
+- Same story for host tools: the server has no implementation to bind. Sandboxed JavaScript tools serve fine, because their code travels inside the file.
+
+## Common mistakes
+
+**Serving a file with an unbound placeholder model.** Edit the `model` lines to real models first.
+
+**Forgetting `--allow`.** If the file declares `caps { net:search }`, serving without `--allow net:search` refuses at startup. That is the design working, not a bug.
+
+**Editing the file by hand and skipping `dsrs check`.** Always check after hand edits. The parser's error messages carry positions and are meant to be followed.
+
+## See also
+
+- [The .dsrs file](/docs/components/dsrs-file): the artifact format the toolchain operates on.
+- [Program and nodes](/docs/components/program-and-nodes): what `check` validates, what `fmt` prints, and how `bake` produces new files.
+- [Runtime](/docs/components/runtime): `Interpreter`, `RuntimeEnv`, capability grants, overlays, and embedding with `include_program!`.
+- [Traces](/docs/components/traces): the trace artifact `POST /run?trace=1` returns.

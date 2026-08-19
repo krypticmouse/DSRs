@@ -1,8 +1,7 @@
 use crate::Augmentation;
 use crate::augmentation::Augmented;
-use crate::core::{Module, Signature};
-use crate::predictors::{Example, Predict, PredictBuilder};
-use crate::{PredictError, Predicted, Schema};
+use crate::core::Signature;
+use crate::predictors::Predict;
 
 /// Augmentation that prepends a `reasoning: String` field to a signature's output.
 ///
@@ -22,10 +21,11 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 
 /// Asks the LM to reason step-by-step before producing the answer.
 ///
-/// The simplest strategy upgrade from bare [`Predict`]. Internally
-/// just `Predict<Augmented<S, Reasoning>>` — the prompt includes a `reasoning` field
-/// before the regular output fields, and the LM fills it in. The reasoning text is a
-/// real output field, not hidden metadata.
+/// The simplest strategy upgrade from bare [`Predict`]. This is pure sugar:
+/// `ChainOfThought<S>` *is* `Predict<Augmented<S, Reasoning>>` — the augmentation is
+/// the one chain-of-thought mechanism, and this alias just names the common case.
+/// The prompt includes a `reasoning` field before the regular output fields, and the
+/// LM fills it in. The reasoning text is a real output field, not hidden metadata.
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), dspy_rs::PredictError> {
@@ -40,6 +40,10 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 /// # }
 /// ```
 ///
+/// Configure demos, instruction, and tools through the regular
+/// [`Predict::builder`] — demos are `Demo<Augmented<S, Reasoning>>`, so they
+/// must include reasoning, showing the LM what good chain-of-thought looks like.
+///
 /// Swapping `Predict<QA>` → `ChainOfThought<QA>` changes the output type from
 /// `QAOutput` to [`WithReasoning<QAOutput>`]. The compiler catches every downstream
 /// site that needs updating — that's the strategy swap working as designed.
@@ -51,126 +55,4 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 ///
 /// This is not multi-turn conversation. Reasoning and answer are produced in a single
 /// LM call. The LM is simply asked to show its work before answering.
-#[derive(Default, facet::Facet)]
-#[facet(crate = facet)]
-pub struct ChainOfThought<S: Signature> {
-    predictor: Predict<Augmented<S, Reasoning>>,
-}
-
-impl<S: Signature> ChainOfThought<S> {
-    /// Creates a new `ChainOfThought` with no demos and the signature's default instruction.
-    pub fn new() -> Self {
-        Self {
-            predictor: Predict::<Augmented<S, Reasoning>>::new(),
-        }
-    }
-
-    /// Creates a `ChainOfThought` wrapping an existing augmented predictor.
-    ///
-    /// Use this when you've configured a `Predict<Augmented<S, Reasoning>>` via its
-    /// builder and want to wrap it in the `ChainOfThought` module interface.
-    pub fn with_predict(predictor: Predict<Augmented<S, Reasoning>>) -> Self {
-        Self { predictor }
-    }
-
-    /// Returns a builder for configuring demos, instruction, and tools.
-    pub fn builder() -> ChainOfThoughtBuilder<S> {
-        ChainOfThoughtBuilder::new()
-    }
-
-    pub async fn call(
-        &self,
-        input: S::Input,
-    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
-    where
-        S::Input: Schema,
-        S::Output: Schema,
-    {
-        self.forward(input).await
-    }
-
-    pub async fn forward(
-        &self,
-        input: S::Input,
-    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError>
-    where
-        S::Input: Schema,
-        S::Output: Schema,
-    {
-        self.predictor.call(input).await
-    }
-}
-
-impl<S> Module for ChainOfThought<S>
-where
-    S: Signature + Clone,
-    S::Input: Schema,
-    S::Output: Schema,
-{
-    type Input = S::Input;
-    type Output = WithReasoning<S::Output>;
-
-    async fn forward(
-        &self,
-        input: S::Input,
-    ) -> Result<Predicted<WithReasoning<S::Output>>, PredictError> {
-        ChainOfThought::forward(self, input).await
-    }
-}
-
-/// Builder for [`ChainOfThought`] with demos, tools, and instruction override.
-///
-/// Demos must include reasoning — they're `Example<Augmented<S, Reasoning>>`, not
-/// `Example<S>`. The reasoning field shows the LM what good chain-of-thought looks like.
-pub struct ChainOfThoughtBuilder<S: Signature> {
-    inner: PredictBuilder<Augmented<S, Reasoning>>,
-}
-
-impl<S: Signature> ChainOfThoughtBuilder<S> {
-    fn new() -> Self {
-        Self {
-            inner: Predict::builder(),
-        }
-    }
-
-    pub fn demo(mut self, demo: Example<Augmented<S, Reasoning>>) -> Self {
-        self.inner = self.inner.demo(demo);
-        self
-    }
-
-    pub fn with_demos(
-        mut self,
-        demos: impl IntoIterator<Item = Example<Augmented<S, Reasoning>>>,
-    ) -> Self {
-        self.inner = self.inner.with_demos(demos);
-        self
-    }
-
-    pub fn add_tool(mut self, tool: impl rig::tool::ToolDyn + 'static) -> Self {
-        self.inner = self.inner.add_tool(tool);
-        self
-    }
-
-    pub fn with_tools(
-        mut self,
-        tools: impl IntoIterator<Item = std::sync::Arc<dyn rig::tool::ToolDyn>>,
-    ) -> Self {
-        self.inner = self.inner.with_tools(tools);
-        self
-    }
-
-    pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
-        self.inner = self.inner.instruction(instruction);
-        self
-    }
-
-    /// Sets a per-instance LM, bypassing the global. See [`PredictBuilder::lm`].
-    pub fn lm(mut self, lm: crate::core::LM) -> Self {
-        self.inner = self.inner.lm(lm);
-        self
-    }
-
-    pub fn build(self) -> ChainOfThought<S> {
-        ChainOfThought::with_predict(self.inner.build())
-    }
-}
+pub type ChainOfThought<S> = Predict<Augmented<S, Reasoning>>;

@@ -93,8 +93,7 @@ pub trait Module: Send + Sync {
 ///
 /// Returns `Vec<Result<...>>`, not `Result<Vec<...>>` — individual failures don't
 /// abort the batch. Results preserve input order regardless of completion order.
-///
-/// Shows a progress bar on stderr. Use [`forward_all_with_progress`] to disable it.
+/// Shows a progress bar on stderr.
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -130,40 +129,15 @@ pub async fn forward_all<M>(
 where
     M: Module + ?Sized,
 {
-    forward_all_with_progress(module, inputs, max_concurrency, true).await
-}
-
-/// Like [`forward_all`], but with explicit control over the progress bar.
-#[tracing::instrument(
-    name = "dsrs.forward_all_with_progress",
-    level = "debug",
-    skip(module, inputs),
-    fields(total_inputs = inputs.len(), max_concurrency, display_progress)
-)]
-pub async fn forward_all_with_progress<M>(
-    module: &M,
-    inputs: Vec<M::Input>,
-    max_concurrency: usize,
-    display_progress: bool,
-) -> Vec<Result<Predicted<M::Output>, PredictError>>
-where
-    M: Module + ?Sized,
-{
     let total = inputs.len();
-    let mut pb = if display_progress {
-        Some(tqdm!(total = total, desc = "Processing"))
-    } else {
-        None
-    };
+    let mut pb = tqdm!(total = total, desc = "Processing");
 
     let mut indexed_results: Vec<IndexedForwardResult<M::Output>> =
         stream::iter(inputs.into_iter().enumerate())
             .map(|(idx, input)| async move { (idx, module.call(input).await) })
             .buffer_unordered(max_concurrency)
             .inspect(|_| {
-                if let Some(ref mut progress) = pb {
-                    let _ = progress.update(1);
-                }
+                let _ = pb.update(1);
             })
             .collect()
             .await;

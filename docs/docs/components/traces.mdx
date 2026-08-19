@@ -1,0 +1,229 @@
+---
+title: "Traces"
+description: "Capture a run as a trace, replay it strictly or until divergence, and export it to OpenTelemetry or RL rollout formats"
+icon: "wave-pulse"
+---
+
+A trace records what a run did: one span per `Predict` call, carrying the rendered prompt, the parsed output, and a request fingerprint. Replay serves a later run back from that recording instead of a live provider, and exports project a finished trace onto external observability and training conventions. The `dsrs` CLI that checks, formats, and serves `.dsrs` artifacts has its own page: [CLI](/docs/components/cli).
+
+## Recording and replaying a run
+
+Wrap any call in `capture` to get the run back as a value, then persist it as JSONL:
+
+```rust
+use dspy_rs::trace::capture;
+
+let (result, trace) = capture(|| pipeline(input.clone())).await;
+let result = result?;
+std::fs::write("run.jsonl", trace.to_jsonl()?)?;
+```
+
+`ReplayMode::Strict` proves the pipeline still behaves exactly as recorded: every call is served from the log, with zero provider calls.
+
+```rust
+use dspy_rs::{ReplayMode, Trace, replay};
+
+let trace = Trace::from_jsonl(&std::fs::read_to_string("run.jsonl")?)?;
+let (replayed, report) = replay(&trace, ReplayMode::Strict, || {
+    pipeline(input.clone())
+})
+.await;
+let replayed = replayed?;
+assert_eq!(report.live, 0, "strict replay never calls a provider");
+```
+
+`ReplayMode::UntilDivergence` replays the unchanged prefix free and goes live only from the first call your change actually touches:
+
+```rust
+let (out, report) = replay(&trace, ReplayMode::UntilDivergence, || {
+    pipeline(input.clone())
+})
+.await;
+println!("served {} free, {} live", report.served, report.live);
+```
+
+Each span's fingerprint covers the full rendered prompt and the model settings; divergence is detected at the first call whose fingerprint differs from its recording, and only calls from there run live.
+
+## Capture
+
+`capture` records every `Predict` call on the current task into a `Trace` while the scope is active.
+
+```rust
+let (result, trace) = dspy_rs::trace::capture(|| module.call(input)).await;
+```
+
+- `capture(f)` runs the closure and returns its result plus the recorded `Trace`.
+- `capture_with_meta(meta, f)` is the same with caller-provided rollout metadata (`TraceMeta`: rollout input, candidate hash, free-form tags). A missing `trace_id` or start time is minted at scope start.
+
+Scoping is task-local: spawned subtasks do not inherit the scope, and nested scopes are exclusive (the innermost records). With no scope active the cost is one task-local probe per call. Traces serialize to JSONL via `Trace::to_jsonl` and `Trace::from_jsonl`.
+
+## What a span records
+
+One span is one `Predict` invocation. At a high level it records:
+
+- **Who ran**: the component name (the same name the params system uses, so spans join back to tunable slots) plus a per-component sequence number; `(component, seq)` is unique per trace and is what replay keys on.
+- **What went in**: the rendered prompt (an interned system-and-demos prefix plus the live suffix), the typed input fields as JSON, and the redacted model config.
+- **What happened inside**: ordered events, one `Exchange` per provider round-trip and one `ToolRun` per tool execution.
+- **What came out**: the raw assistant text, the parsed output fields, aggregated token usage, and any error (kinds: `lm`, `parse`, `tool`, `cancelled`).
+- **A request fingerprint**: `request_hash`, a stable hash over the redacted model config plus the full rendered prompt. This is the replay key and the determinism check.
+- **Timing and completeness**: start time, duration, and a `complete` flag (false when the span was truncated or redacted; replay refuses incomplete spans).
+
+## Replay
+
+`replay` serves `Predict` calls from a recorded trace instead of a live provider: each call's `request_hash` is compared against the next recorded span for its component, and on a match the recorded output is served with zero API calls and no tool execution.
+
+```rust
+let (out, report) = dspy_rs::trace::replay(&trace, ReplayMode::Strict, || pipeline(input)).await;
+```
+
+### Modes
+
+| `ReplayMode` | Plain words |
+|---|---|
+| `Strict` | Every call must match its recording; any mismatch is a typed error. For fixtures and CI (`report.live` stays 0). |
+| `UntilDivergence` | Serve while hashes match; the first mismatching call and every call after it go to the live LM. For counterfactual replay: a mutated parameter changes only the prompts it affects, so the unchanged prefix replays free and only the changed suffix spends tokens. Once diverged, the session stays live even if a later hash happens to match again. |
+
+<svg viewBox="0 0 760 300" role="img" aria-label="Until-divergence replay: footprints follow the recorded route for free, peel off at the detected divergence point, and the meter runs only from there" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <defs>
+    <marker id="dv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ed6c13" />
+    </marker>
+  </defs>
+  <line x1="60" y1="150" x2="60" y2="118" stroke="currentColor" strokeOpacity="0.7" strokeWidth="2" />
+  <path d="M 60 118 L 92 126 L 60 134 Z" fill="#ed6c13" fillOpacity="0.9" />
+  <text x="52" y="180" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7">recorded run</text>
+  <path d="M 60 150 C 160 130, 260 165, 380 150 C 470 139, 560 155, 700 145" fill="none" stroke="currentColor" strokeOpacity="0.45" strokeWidth="2" strokeDasharray="4 7" />
+  <circle cx="180" cy="147" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+  <text x="180" y="151" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.8" textAnchor="middle">scrub</text>
+  <circle cx="300" cy="156" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.6" strokeWidth="1.5" />
+  <text x="300" y="160" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.8" textAnchor="middle">research</text>
+  <circle cx="470" cy="143" r="12" fill="currentColor" fillOpacity="0.08" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" strokeDasharray="3 3" />
+  <text x="470" y="147" fontFamily="ui-monospace, monospace" fontSize="9" fill="currentColor" fillOpacity="0.6" textAnchor="middle">draft</text>
+  <g fill="currentColor" fillOpacity="0.55">
+    <ellipse cx="110" cy="142" rx="4" ry="6" transform="rotate(12 110 142)" />
+    <ellipse cx="132" cy="152" rx="4" ry="6" transform="rotate(8 132 152)" />
+    <ellipse cx="222" cy="146" rx="4" ry="6" transform="rotate(10 222 146)" />
+    <ellipse cx="246" cy="156" rx="4" ry="6" transform="rotate(6 246 156)" />
+    <ellipse cx="340" cy="152" rx="4" ry="6" transform="rotate(8 340 152)" />
+  </g>
+  <circle cx="380" cy="150" r="17" fill="none" stroke="#ed6c13" strokeWidth="2.5" />
+  <circle cx="380" cy="150" r="5" fill="#ed6c13" />
+  <text x="380" y="105" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fontWeight="600" fill="#ed6c13" textAnchor="middle">fingerprint mismatch</text>
+  <text x="380" y="121" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65" textAnchor="middle">detected, never declared</text>
+  <path d="M 380 150 C 440 175, 520 205, 620 215" fill="none" stroke="#ed6c13" strokeWidth="2.5" markerEnd="url(#dv-arrow)" />
+  <g fill="#ed6c13" fillOpacity="0.8">
+    <ellipse cx="440" cy="175" rx="4" ry="6" transform="rotate(28 440 175)" />
+    <ellipse cx="470" cy="189" rx="4" ry="6" transform="rotate(22 470 189)" />
+    <ellipse cx="530" cy="204" rx="4" ry="6" transform="rotate(16 530 204)" />
+  </g>
+  <text x="630" y="240" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="#ed6c13" fontWeight="600" textAnchor="middle">live from here</text>
+  <path d="M 66 232 L 66 244 L 360 244 L 360 232" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" />
+  <text x="213" y="266" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.75" textAnchor="middle">served from the log: free</text>
+  <path d="M 400 232 L 400 244 L 660 244 L 660 232" fill="none" stroke="#ed6c13" strokeOpacity="0.8" strokeWidth="1.5" />
+  <text x="530" y="266" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="#ed6c13" textAnchor="middle">metered: you pay only from the turn you took</text>
+</svg>
+
+### `ReplayReport` fields
+
+| Field | Meaning |
+|---|---|
+| `served` | Calls served from the recording (zero provider calls). |
+| `live` | Calls that went to the live LM (always 0 in `Strict` mode). |
+| `diverged_at` | The recorded span at which divergence was first detected, when the mismatch could be pinned to one. |
+| `divergence` | The first mismatch, verbatim: the error `Strict` mode surfaced, or the reason `UntilDivergence` switched live. |
+
+### Replay error kinds
+
+| `ReplayError` | Plain words |
+|---|---|
+| `Divergence` | The live request's hash differs from the recorded span's; the prompt or model config changed relative to the recording. |
+| `Incomplete` | The recorded span is unusable: truncated or redacted, or it has no parsed output because the recorded call failed. |
+| `Exhausted` | The trace has no recorded span for this component and sequence; the live run makes more calls than the recording. |
+| `OutputDecode` | The recorded span matched but its stored output no longer deserializes into the signature's output type (schema drift since recording). |
+
+Replay scoping mirrors capture: task-local, not inherited by spawned subtasks, innermost scope wins. Compose replay outside with capture inside to record a counterfactual rollout while serving its unchanged prefix from the base trace.
+
+## Exports
+
+Exports are pure serialization-side projections of a finished `Trace`: no new capture machinery, no external dependencies. Both live under `dspy_rs::trace`.
+
+<Note>
+Exports serialize traces after a run finishes. For live, human-readable console output while a program runs, call `init_tracing` (documented on [Utils](/docs/components/utils)): it installs a process-global pretty `tracing` subscriber (respecting `RUST_LOG`, defaulting to `dspy_rs=debug`) and is independent of trace capture.
+</Note>
+
+### OpenTelemetry
+
+`Trace::to_otel_spans(include_content: bool)` maps a trace onto OpenTelemetry GenAI semantic conventions as plain serializable structs in the OTLP/JSON wire shape (proto3 JSON mapping: camelCase keys, 64-bit integers as decimal strings, ids as lowercase hex), with no OpenTelemetry dependency. `Trace::to_otlp_json(service_name, include_content)` wraps those spans in a complete `resourceSpans` envelope that any OTLP/HTTP collector (Jaeger, Tempo, otel-collector) accepts at `POST /v1/traces` as-is.
+
+| Trace format | OTel |
+|---|---|
+| `meta.trace_id` | Trace id: used verbatim when already 32 lowercase hex (the capture scope mints exactly this shape), otherwise stable-hashed into one. |
+| The rollout | Root span `dsrs.rollout`, kind `INTERNAL`, carrying `dsrs.trace_id`, `dsrs.candidate_hash` (when set), and one `dsrs.tag.{key}` attribute per meta tag. |
+| `Span` | One span per `Predict` invocation, name = component name, kind = `CLIENT`, parented to its recorded parent span, else the root. |
+| `started_at_us` / `duration_us` | Start and end timestamps in nanoseconds. |
+| Interned model config | `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`. |
+| `usage.prompt_tokens` / `usage.completion_tokens` | `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`. |
+| Rendered prompt (content opt-in) | One `gen_ai.prompt` event per prompt message (`gen_ai.prompt.role`, `gen_ai.prompt.content`). |
+| `raw_output` (content opt-in) | One `gen_ai.completion` event (`gen_ai.completion.content`). |
+| `SpanEvent::ToolRun` | Child span `tool:{name}`, kind `INTERNAL`, with `gen_ai.tool.name` and `gen_ai.tool.call.id`; arguments and result attributes are content opt-in. |
+| `span.error` | Status `ERROR` with message `{kind}: {message}`. |
+| `component` / `seq` / `request_hash` | `dsrs.component`, `dsrs.seq`, `dsrs.request_hash` attributes (plus `dsrs.candidate_hash` when set). |
+
+Prompt, completion, and tool payloads are opt-in via `include_content`, mirroring OTel's GenAI content-capture switch: with `include_content: false` the spans carry identity, usage, and timing attributes only, so they stay exportable to shared collectors without leaking prompt text.
+
+The emitted types, all `Serialize` structs:
+
+| Type | Shape |
+|---|---|
+| `OtelSpan` | `trace_id` (32 hex chars), `span_id` (16 hex chars), optional `parent_span_id`, `name`, `kind`, `start_time_unix_nano` and `end_time_unix_nano` (decimal strings), `attributes`, `events`, optional `status`. |
+| `OtelKeyValue` | `key` plus an `OtelValue`. |
+| `OtelValue` | The `AnyValue` oneof arms this export emits: `StringValue`, `IntValue` (a decimal string, per proto3 JSON), `DoubleValue`. |
+| `OtelEvent` | `time_unix_nano`, `name`, `attributes`. |
+| `OtelStatus` | `code`, `message` (omitted when empty). |
+
+The OTLP enum constants are exported as plain integers: `SPAN_KIND_INTERNAL = 1`, `SPAN_KIND_CLIENT = 3`, `STATUS_CODE_ERROR = 2`.
+
+<Note>
+`ToolRun` events record only their duration, so tool child spans start at their parent span's start time: durations are exact, offsets within the parent are not.
+</Note>
+
+### RL dataset
+
+`Trace::to_rl_rollout()` projects the trace onto the Agent Lightning / verifiers rollout convention: one rollout as message lists plus a reward plus per-subcall transitions. It returns `None` when no eval was recorded (`trace.outcome.eval` unset); a rollout without a reward is not trainable. Because spans keep full `Message` structure (tool-call blocks, reasoning blocks), the projection needs no lossy text munging.
+
+```rust
+let (result, mut trace) = capture(|| pipeline(input)).await;
+trace.outcome = Some(TraceOutcome { eval: Some(metric_eval), ..Default::default() });
+let rollout = trace.to_rl_rollout().expect("eval recorded");
+writeln!(dataset, "{}", rollout.to_json_line()?)?;
+```
+
+`RlRollout` serializes to a single JSON object; `RlRollout::to_json_line()` produces the one-line JSONL record RL trainers consume.
+
+| `RlRollout` field | Meaning |
+|---|---|
+| `trace_id` | The trace id. |
+| `reward` | The rollout-level reward: `trace.outcome.eval.score`. |
+| `transitions` | One `RlTransition` per surviving span, in trace order. |
+| `metadata` | The free-form run tags (`trace.meta.tags`). |
+
+| `RlTransition` field | Meaning |
+|---|---|
+| `component` | The optimizable unit this subcall belongs to; the per-agent credit assignment key. |
+| `seq` | 0-based invocation index of the component within the rollout. |
+| `messages` | The full rendered prompt as messages (interned prefix plus live suffix), provider-agnostic roles. |
+| `completion` | Everything the policy emitted for this subcall, rebuilt from the span's events: each `Exchange`'s assistant message verbatim, with `ToolRun`s as intervening tool-result context. |
+| `usage` | The span's aggregated `LmUsage` (prompt, completion, and total tokens). |
+| `model` | The model identifier from the span's interned config. |
+
+Spans whose policy emitted nothing (provider failures, cancelled spans: no `Exchange` event) are omitted; they contribute no completion to train on. Parse-failure spans keep their transition: the emitted text exists even though it did not parse.
+
+## See also
+
+- [CLI](/docs/components/cli): `dsrs serve` returns the capture-scope trace artifact from `POST /run?trace=1`
+- [Utils](/docs/components/utils): `init_tracing` for live pretty console output
+- [Optimizers](/docs/components/optimizers): traces as the evidence base for reflective optimization
+- [Evaluation](/docs/components/evaluation): the evaluation loop that hands each rollout's trace to your metric
+- Example: [24-frontdesk-replay.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/24-frontdesk-replay.rs), capture, strict replay, and until-divergence replay end to end
+- Example: [12-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/12-tracing.rs), scoped trace capture for a composed module
+- Example: [17-pretty-tracing.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/17-pretty-tracing.rs), `init_tracing` output against an offline LM

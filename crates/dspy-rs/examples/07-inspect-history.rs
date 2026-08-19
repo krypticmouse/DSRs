@@ -8,7 +8,7 @@ cargo run --example 07-inspect-history
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, Predict, Signature, configure, get_lm, init_tracing};
+use dspy_rs::{LM, Predict, Signature, configure, get_lm, init_tracing};
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
         .model("openai:gpt-4o-mini".to_string())
         .build()
         .await?;
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     let predictor = Predict::<QA>::new();
     let output = predictor

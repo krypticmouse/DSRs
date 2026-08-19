@@ -9,8 +9,9 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Example, LM, MetricOutcome, Predict, Predicted, Signature,
-    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
+    DataLoader, Example, LM, Eval, Predict, Predicted, Signature,
+    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset_with_concurrency,
+    init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -24,18 +25,40 @@ struct QA {
     answer: String,
 }
 
+/// A trainset row is a plain struct shaped like the *dataset*, not the
+/// signature. `#[derive(Example)]` projects it into `QAInput`/`QAOutput` by
+/// field name at the call site — no signature is named on the row, and extra
+/// fields are metric-only gold data the module never sees.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+struct HotpotRow {
+    question: String,
+
+    answer: String,
+
+    /// HotpotQA's difficulty label — metric-only: it rides along in the row,
+    /// invisible to the LM, and the metric reads it directly.
+    level: String,
+}
+
 struct ExactMatchMetric;
 
-impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, Predict<QA>> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QA>,
+        example: &HotpotRow,
         prediction: &Predicted<QAOutput>,
-    ) -> Result<MetricOutcome> {
-        let expected = example.output.answer.trim().to_lowercase();
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
-        Ok(MetricOutcome::score((expected == actual) as u8 as f32))
+        // The row carries gold fields the module never saw: tag each score
+        // with the question's difficulty so misses can be sliced by level.
+        Ok(Eval::with_feedback(
+            (expected == actual) as u8 as f64,
+            format!("level={}", example.level),
+        ))
     }
 }
 
@@ -43,15 +66,14 @@ impl TypedMetric<QA, Predict<QA>> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
-    let examples = DataLoader::load_hf::<QA>(
+    // Loaders are generic over the row struct: extra dataset columns land in
+    // the row's metric-only fields instead of being thrown away.
+    let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",
@@ -65,7 +87,9 @@ async fn main() -> Result<()> {
         .build();
     let metric = ExactMatchMetric;
 
-    let outcomes = evaluate_trainset(&module, &examples, &metric).await?;
+    // Evaluation runs concurrently — 32 LM calls in flight, results in trainset
+    // order. `evaluate_trainset` uses a default of 16; tune per provider limits.
+    let outcomes = evaluate_trainset_with_concurrency(&module, &examples, &metric, 32).await?;
     let score = average_score(&outcomes);
 
     println!("evaluated {} examples", outcomes.len());

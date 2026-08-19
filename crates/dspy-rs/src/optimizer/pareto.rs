@@ -1,10 +1,10 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 
+use crate::optimizer::engine::{SCORE_EPS, ScoreMatrix};
 use crate::optimizer::gepa::GEPACandidate;
 
-/// Per-example dominance frontier for [`GEPA`](crate::GEPA)'s evolutionary search.
+/// Per-example dominance frontier for candidate selection.
 ///
 /// The key insight: optimizing for average score across examples lets the optimizer
 /// overfit to easy examples while ignoring hard ones. The Pareto frontier prevents
@@ -12,35 +12,34 @@ use crate::optimizer::gepa::GEPACandidate;
 /// candidate that scores 0.3 average but is the only one to crack example #7 stays
 /// on the frontier alongside a candidate that scores 0.9 average but fails #7.
 ///
-/// [`GEPA`](crate::GEPA) samples parents from this frontier proportional to coverage
-/// (how many examples they win on), so well-rounded candidates get sampled more often
-/// but specialists aren't eliminated. Candidates that are dominated on every example
-/// get pruned automatically.
-#[derive(Debug, Clone)]
+/// This is a standalone convenience wrapper over the engine's
+/// [`ScoreMatrix`](crate::ScoreMatrix)/[`ParetoView`](crate::ParetoView)
+/// bookkeeping — one dominance implementation, two entry points.
+/// [`GEPA`](crate::GEPA) itself uses the engine's matrix directly (its scores
+/// already live there); use `ParetoFrontier` when you track candidate payloads
+/// outside an engine.
+///
+/// Parents are sampled proportional to coverage (how many examples they win
+/// on), so well-rounded candidates get sampled more often but specialists
+/// aren't eliminated. Candidates that become dominated on every example are
+/// pruned automatically.
+#[derive(Debug, Clone, Default)]
 pub struct ParetoFrontier {
-    /// All candidates currently on the frontier
+    /// All recorded scores, including rows of since-pruned candidates (their
+    /// columns' maxima are always matched by a surviving candidate, so keeping
+    /// them never changes dominance).
+    matrix: ScoreMatrix,
+    /// Surviving (frontier) candidates, in insertion order.
     candidates: Vec<GEPACandidate>,
-
-    /// Maps example index to the candidate IDs that achieve max score on it
-    /// example_id -> [candidate_ids]
-    example_to_best: HashMap<usize, Vec<usize>>,
-
-    /// Maps candidate ID to the examples it wins on
-    /// candidate_id -> [example_ids]
-    candidate_to_examples: HashMap<usize, HashSet<usize>>,
-
-    /// Next candidate ID to assign
+    /// Matrix row per surviving candidate, parallel to `candidates`.
+    rows: Vec<usize>,
+    /// Next candidate ID to assign.
     next_id: usize,
 }
 
 impl ParetoFrontier {
     pub fn new() -> Self {
-        Self {
-            candidates: Vec::new(),
-            example_to_best: HashMap::new(),
-            candidate_to_examples: HashMap::new(),
-            next_id: 0,
-        }
+        Self::default()
     }
 
     pub fn len(&self) -> usize {
@@ -61,97 +60,42 @@ impl ParetoFrontier {
     /// at least one example). Candidates already on the frontier that no longer
     /// win on any example are pruned.
     pub fn add_candidate(&mut self, mut candidate: GEPACandidate, scores: &[f32]) -> bool {
-        // Assign ID to new candidate
         candidate.id = self.next_id;
         self.next_id += 1;
+        candidate.example_scores = scores.to_vec();
 
-        // Find examples where this candidate achieves max score
-        let mut wins_on = HashSet::new();
-
-        for (example_idx, &score) in scores.iter().enumerate() {
-            let current_best = self.example_to_best.get(&example_idx).and_then(|best_ids| {
-                best_ids
-                    .iter()
-                    .filter_map(|&id| self.candidates.iter().find(|c| c.id == id))
-                    .filter_map(|c| c.example_scores.get(example_idx))
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
-                    .copied()
-            });
-
-            match current_best {
-                Some(best_score) if score > best_score => {
-                    // New best for this example
-                    wins_on.insert(example_idx);
-                }
-                Some(best_score) if (score - best_score).abs() < 1e-6 => {
-                    // Tied for best
-                    wins_on.insert(example_idx);
-                }
-                None => {
-                    // First candidate for this example
-                    wins_on.insert(example_idx);
-                }
-                _ => {}
+        // Does it win or tie anywhere against the current frontier?
+        let best = self.matrix.pareto();
+        let wins_somewhere = scores.iter().enumerate().any(|(example, &score)| {
+            match best.best_scores().get(example).copied().flatten() {
+                Some(best) => f64::from(score) + SCORE_EPS >= best,
+                None => true,
             }
-        }
-
-        // Only add if candidate wins on at least one example
-        if wins_on.is_empty() {
+        });
+        if !wins_somewhere {
             return false;
         }
 
-        // Store scores with candidate
-        candidate.example_scores = scores.to_vec();
+        let row = self.matrix.candidates();
+        for (example, &score) in scores.iter().enumerate() {
+            self.matrix.record(row, example, f64::from(score));
+        }
+        self.candidates.push(candidate);
+        self.rows.push(row);
 
-        // Update mappings
-        for &example_idx in &wins_on {
-            // Find current max score for this example
-            let max_score = scores[example_idx];
-
-            // Remove candidates that are now dominated on this example
-            if let Some(best_ids) = self.example_to_best.get_mut(&example_idx) {
-                // Keep only candidates with equal or better scores
-                best_ids.retain(|&id| {
-                    if let Some(existing) = self.candidates.iter().find(|c| c.id == id) {
-                        if let Some(&existing_score) = existing.example_scores.get(example_idx) {
-                            (existing_score - max_score).abs() < 1e-6 || existing_score > max_score
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                });
-
-                if (max_score - scores[example_idx]).abs() < 1e-6 {
-                    best_ids.push(candidate.id);
-                }
+        // Prune candidates the new arrival dominated everywhere.
+        let view = self.matrix.pareto();
+        let mut idx = 0;
+        while idx < self.candidates.len() {
+            if view.wins(self.rows[idx]) == 0 {
+                self.candidates.remove(idx);
+                self.rows.remove(idx);
             } else {
-                self.example_to_best.insert(example_idx, vec![candidate.id]);
+                idx += 1;
             }
         }
 
-        self.candidate_to_examples.insert(candidate.id, wins_on);
-
-        // Remove dominated candidates from frontier
-        self.prune_dominated();
-
-        // Add new candidate
-        self.candidates.push(candidate);
-
         true
-    }
-
-    fn prune_dominated(&mut self) {
-        let mut still_winning: HashSet<usize> = HashSet::new();
-
-        for candidate_ids in self.example_to_best.values() {
-            still_winning.extend(candidate_ids.iter());
-        }
-
-        self.candidates.retain(|c| still_winning.contains(&c.id));
-        self.candidate_to_examples
-            .retain(|id, _| still_winning.contains(id));
     }
 
     /// Samples a parent candidate, weighted by how many examples it wins on.
@@ -164,18 +108,8 @@ impl ParetoFrontier {
             return None;
         }
 
-        // Calculate coverage for each candidate
-        let coverages: Vec<usize> = self
-            .candidates
-            .iter()
-            .map(|c| {
-                self.candidate_to_examples
-                    .get(&c.id)
-                    .map(|examples| examples.len())
-                    .unwrap_or(0)
-            })
-            .collect();
-
+        let view = self.matrix.pareto();
+        let coverages: Vec<usize> = self.rows.iter().map(|&row| view.wins(row)).collect();
         let total_coverage: usize = coverages.iter().sum();
 
         if total_coverage == 0 {
@@ -183,7 +117,6 @@ impl ParetoFrontier {
             return self.candidates.first();
         }
 
-        // Sample proportional to coverage
         let mut rng = rand::thread_rng();
         let mut target = rng.gen_range(0..total_coverage);
 
@@ -200,31 +133,20 @@ impl ParetoFrontier {
 
     /// Returns the candidate with the highest average score across all examples.
     ///
-    /// This is what [`GEPA`](crate::GEPA) installs as the final instruction — the
-    /// Pareto frontier preserves diversity during search, but the winner is still
-    /// picked by average.
+    /// The Pareto frontier preserves diversity during search, but the winner is
+    /// still picked by average.
     pub fn best_by_average(&self) -> Option<&GEPACandidate> {
         self.candidates.iter().max_by(|a, b| {
             let avg_a = a.average_score();
             let avg_b = b.average_score();
-            avg_a.partial_cmp(&avg_b).unwrap()
+            avg_a.partial_cmp(&avg_b).unwrap_or(std::cmp::Ordering::Equal)
         })
     }
 
     pub fn statistics(&self) -> ParetoStatistics {
-        let num_candidates = self.candidates.len();
-        let num_examples_covered = self.example_to_best.len();
-
-        let coverage_per_candidate: Vec<usize> = self
-            .candidates
-            .iter()
-            .map(|c| {
-                self.candidate_to_examples
-                    .get(&c.id)
-                    .map(|examples| examples.len())
-                    .unwrap_or(0)
-            })
-            .collect();
+        let view = self.matrix.pareto();
+        let coverage_per_candidate: Vec<usize> =
+            self.rows.iter().map(|&row| view.wins(row)).collect();
 
         let avg_coverage = if !coverage_per_candidate.is_empty() {
             coverage_per_candidate.iter().sum::<usize>() as f32
@@ -233,22 +155,17 @@ impl ParetoFrontier {
             0.0
         };
 
-        let max_coverage = coverage_per_candidate.iter().copied().max().unwrap_or(0);
-        let min_coverage = coverage_per_candidate.iter().copied().min().unwrap_or(0);
-
         ParetoStatistics {
-            num_candidates,
-            num_examples_covered,
+            num_candidates: self.candidates.len(),
+            num_examples_covered: view
+                .best_scores()
+                .iter()
+                .filter(|best| best.is_some())
+                .count(),
             avg_coverage,
-            max_coverage,
-            min_coverage,
+            max_coverage: coverage_per_candidate.iter().copied().max().unwrap_or(0),
+            min_coverage: coverage_per_candidate.iter().copied().min().unwrap_or(0),
         }
-    }
-}
-
-impl Default for ParetoFrontier {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

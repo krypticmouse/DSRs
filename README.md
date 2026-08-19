@@ -49,7 +49,7 @@ Here's a simple example to get you started:
 
 ```rust
 use anyhow::Result;
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
+use dspy_rs::{configure, init_tracing, LM, Predict, Signature};
 
 #[derive(Signature, Clone)]
 struct SentimentAnalyzer {
@@ -73,7 +73,6 @@ async fn main() -> Result<()> {
             .temperature(0.5)
             .build()
             .await?,
-        ChatAdapter,
     );
 
     // Create a predictor
@@ -389,7 +388,7 @@ println!("Answer: {}", result.answer);
 
 ### Tracing System
 
-DSRs includes a tracing system that captures the dataflow through modules as a Directed Acyclic Graph (DAG). Wrap any execution in `trace::trace()` to capture the graph, then inspect nodes, replay with new inputs via `trace::Executor`, or modify the graph structure.
+DSRs includes a tracing system that captures the dataflow through modules as a Directed Acyclic Graph (DAG). Wrap any execution in `trace::trace()` to capture the graph, then inspect its nodes and edges.
 
 See `examples/12-tracing.rs` for a complete example.
 

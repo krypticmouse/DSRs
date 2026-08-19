@@ -10,7 +10,7 @@ OPENAI_API_KEY=your_key cargo run --example 10-gepa-llm-judge
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, Example, FeedbackMetric, GEPA, LM, MetricOutcome, Module, Optimizer, Predict,
+    Eval, GEPA, LM, Module, Optimizer, Predict,
     PredictError, Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset,
     init_tracing,
 };
@@ -28,6 +28,10 @@ struct MathWordProblem {
     #[output]
     answer: String,
 }
+
+/// A labeled trainset row: `(input, gold output)` tuples are rows out of the
+/// box — no dedicated struct needed for a small inline trainset.
+type MathRow = (MathWordProblemInput, MathWordProblemOutput);
 
 #[derive(Signature, Clone, Debug)]
 struct MathJudge {
@@ -72,14 +76,16 @@ struct LlmJudgeMetric {
     judge: Predict<MathJudge>,
 }
 
-impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
+impl TypedMetric<MathRow, MathSolver> for LlmJudgeMetric {
     async fn evaluate(
         &self,
-        example: &Example<MathWordProblem>,
+        example: &MathRow,
         prediction: &Predicted<MathWordProblemOutput>,
-    ) -> Result<MetricOutcome> {
-        let problem = example.input.problem.clone();
-        let expected = example.output.answer.clone();
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let (input, gold) = example;
+        let problem = input.problem.clone();
+        let expected = gold.answer.clone();
 
         let student_answer = prediction.answer.clone();
         let student_reasoning = prediction.reasoning.clone();
@@ -119,23 +125,21 @@ impl TypedMetric<MathWordProblem, MathSolver> for LlmJudgeMetric {
                 let fallback = format!(
                     "judge call failed: {err}; expected={expected}; predicted={student_answer}"
                 );
-                ((exact_match as u8 as f32), fallback)
+                ((exact_match as u8 as f64), fallback)
             }
         };
 
-        let feedback = FeedbackMetric::new(
+        Ok(Eval::with_feedback(
             score,
             format!(
                 "problem={problem}\nexpected={expected}\npredicted={student_answer}\njudge={evaluation_text}"
             ),
-        );
-
-        Ok(MetricOutcome::with_feedback(score, feedback))
+        ))
     }
 }
 
-fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordProblem> {
-    Example::new(
+fn training_example(problem: &str, expected_answer: &str) -> MathRow {
+    (
         MathWordProblemInput {
             problem: problem.to_string(),
         },
@@ -150,7 +154,7 @@ fn training_example(problem: &str, expected_answer: &str) -> Example<MathWordPro
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder().temperature(0.7).build().await?, ChatAdapter);
+    configure(LM::builder().temperature(0.7).build().await?);
 
     let trainset = vec![
         training_example(
@@ -177,10 +181,16 @@ async fn main() -> Result<()> {
     let baseline = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);
     println!("Baseline score: {baseline:.3}");
 
+    // The judge grades outputs; a separate reflection LM rewrites the module's
+    // instruction from the judge's feedback each generation.
+    let reflection_lm = LM::builder().temperature(1.0).build().await?;
+
     let gepa = GEPA::builder()
         .num_iterations(3)
         .minibatch_size(2)
-        .temperature(0.9)
+        .prompt_model(reflection_lm)
+        .seed(42)
+        .eval_concurrency(4)
         .track_stats(true)
         .build();
 
@@ -199,12 +209,12 @@ async fn main() -> Result<()> {
         })
         .await?;
     let test_example = training_example(test_problem, "2");
-    let test_metric = metric.evaluate(&test_example, &test_predicted).await?;
+    let test_metric = metric.evaluate(&test_example, &test_predicted, None).await?;
 
     println!("Test answer: {}", test_predicted.answer);
     println!("Test score: {:.3}", test_metric.score);
     if let Some(feedback) = test_metric.feedback {
-        println!("Judge feedback:\n{}", feedback.feedback);
+        println!("Judge feedback:\n{feedback}");
     }
 
     Ok(())

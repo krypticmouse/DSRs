@@ -1,4 +1,4 @@
-use dspy_rs::{ChatAdapter, Example, Signature};
+use dspy_rs::{ChatAdapter, Demo, Signature};
 
 #[derive(Signature, Clone, Debug)]
 /// Answer the prompt using the provided context.
@@ -187,7 +187,7 @@ fn typed_and_schema_user_builders_match_and_append_requirements() {
 #[test]
 fn demo_format_composes_user_and_assistant_parts() {
     let adapter = ChatAdapter;
-    let demo = Example::<PromptPartsSig>::new(
+    let demo = Demo::<PromptPartsSig>::new(
         PromptPartsSigInput {
             question: "Question?".to_string(),
             context: "Context.".to_string(),

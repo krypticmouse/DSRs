@@ -1,0 +1,54 @@
+dsrs 1
+program qa
+
+caps { net:search }
+
+model fast = "openai:gpt-4o-mini"
+model deep = "anthropic:claude-sonnet-4-5"
+
+sig Main {
+  in  question: string
+  out answer: string
+  out sources: string[]
+}
+
+sig Draft {
+  "Draft a thorough, factual answer."
+  in  question: string
+  out answer: string
+}
+
+sig Research {
+  "Verify the draft against sources; collect URLs."
+  in  question: string
+  in  draft: string
+  out evidence: string[]
+}
+
+sig CiteCheck {
+  in  draft: string
+  in  evidence: string[]
+  out answer: string
+  out sources: string[]
+}
+
+tool search "Web search; returns result snippets with URLs" caps [net:search] {
+  in  query: string
+  out results: string[]
+}
+
+main: Main = seq {
+  drafter = cot Draft @deep (question = $.question)
+  researcher = agent Research @fast (question = $.question, draft = drafter.answer) {
+    tools [search]
+    max_turns 6
+    budget { tokens 40000 on_exhausted finalize }
+  }
+  checker = hole CiteCheck (draft = drafter.answer, evidence = researcher.evidence) caps [] js```
+(a) => ({
+  answer: a.draft,
+  sources: a.evidence.filter(e => e.startsWith("http")),
+})
+```
+  out { answer = checker.answer, sources = checker.sources }
+}

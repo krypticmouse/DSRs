@@ -1,0 +1,224 @@
+---
+title: "Data"
+description: "Trainset rows as plain structs: #[derive(Example)], ToInput/ToOutput, DataLoader, TypedLoadOptions, RowRecord, and DataLoadError"
+icon: "database"
+---
+
+A trainset is `Vec<E>` where `E` is any struct you define: the row. Rows are the unit of trainsets and of metric ground truth, and they are signature-independent — a row can carry gold labels and metric-only fields the module never sees (HotpotQA supporting facts, difficulty tags, source ids). The connection between a row and a module is the `ToInput<I>` trait: the evaluation loop and optimizers project each row into the module's input with `to_input()` and hand the full row to your metric. `DataLoader` is the ingestion path that produces `Vec<E>` from JSON, CSV, Parquet, and HuggingFace sources. There is no untyped row type in the public contract: custom mappers work with `RowRecord` at the load boundary.
+
+```rust
+use dspy_rs::{DataLoader, Example, ToInput, ToOutput, TypedLoadOptions, UnknownFieldPolicy};
+```
+
+Few-shot demos are a separate type: `Demo<S>` is the signature-bound input/output pair rendered into the prompt, and it lives with the predictor. See [Predict](/docs/components/predict) for `Demo<S>`, `.demo(...)`, and `.with_demos(...)`.
+
+## Row structs
+
+A row struct is plain data. It names no signature and marks no fields: which fields matter is decided at the call site, by name.
+
+```rust
+#[derive(Example, Clone, Debug, serde::Serialize)]
+struct HotpotRow {
+    question: String,              // fills QAInput.question
+    answer: String,                // fills QAOutput.answer when seeding demos
+    supporting_facts: Vec<String>, // matches nothing in QA: metric-only
+}
+```
+
+A field is used when the target type declares a field of that name; fields the target does not declare are ignored. `supporting_facts` above is metric-only for `QA` not because it is marked, but because `QAInput` and `QAOutput` have no such field. The same row type serves any signature whose input it can fill.
+
+The same row type flows through the whole loop:
+
+| Consumer | Signature | Row bound |
+|---|---|---|
+| [`evaluate_trainset`](/docs/components/evaluation) | `evaluate_trainset(&module, &[E], &metric)` | `E: ToInput<M::Input> + Sync` |
+| [`Optimizer::compile`](/docs/components/optimizers) | `optimizer.compile(&mut module, Vec<E>, &metric)` | `E: ToInput<M::Input> + serde::Serialize + Send + Sync` |
+| [`TypedMetric<E, M>`](/docs/components/evaluation) | `evaluate(&self, example: &E, prediction, trace)` | none — the metric receives the full row |
+| [`EvalEngine::new`](/docs/components/optimizer-engine) | `EvalEngine::new(Vec<E>, &metric, config)` | `E: Serialize` (rollout-cache uids are content hashes of the whole row) |
+| Demo seeding | `Demo::new(row.to_input()?, row.to_output()?)` | `E: ToInput<S::Input> + ToOutput<S::Output>` |
+
+Because the metric sees the row rather than a signature-shaped pair, ground truth does not have to fit the module's output type: a metric can score a `QAOutput` prediction against supporting facts the module never produced.
+
+## ToInput and ToOutput
+
+```rust
+pub trait ToInput<I> {
+    fn to_input(&self) -> anyhow::Result<I>;
+}
+
+pub trait ToOutput<O> {
+    fn to_output(&self) -> anyhow::Result<O>;
+}
+```
+
+`ToInput` projects a row into a module's input type. `ToOutput` is its counterpart for gold output, used to seed labeled few-shot demos (`Demo::new(row.to_input()?, row.to_output()?)`); optimizers that harvest demos from traces do not need it. Both are fallible because the derived impl resolves fields by name at runtime; the tuple impls never fail. Three ways to get an impl:
+
+| Source | Provides | Use when |
+|---|---|---|
+| `#[derive(Example)]` | `ToInput<I>`/`ToOutput<O>` for every `I`/`O` the row can fill, by field name | The row's field names line up with the target's |
+| `(I, O)` tuples | `ToInput<I>` and `ToOutput<O>` | Inline trainsets with no extra fields |
+| Hand-written impl | Whatever you write | Field names or shapes that do not line up |
+
+Tuple rows make zero-boilerplate inline trainsets:
+
+```rust
+let trainset = vec![(
+    QAInput { question: "What is 2+2?".into() },
+    QAOutput { answer: "4".into() },
+)];
+```
+
+## `#[derive(Example)]`
+
+The derive marks a struct as a trainset row. It takes no arguments and no field attributes, and generates blanket `ToInput<I>`/`ToOutput<O>` impls: the row projects into *any* target type by serializing itself and deserializing the target out of it, matching fields by name.
+
+```rust
+#[derive(Example, Clone, Debug, serde::Serialize)]
+struct HotpotRow {
+    question: String,
+    answer: String,
+    supporting_facts: Vec<String>,
+}
+```
+
+Requirements and behavior:
+
+- The row must be a struct with named fields and must implement `serde::Serialize` (derive it alongside `Example`).
+- Fields the target type does not declare are ignored, so one row type can serve several signatures and carry metric-only columns.
+- Resolution happens at runtime, not compile time. A field the target requires but the row lacks — or one whose type does not deserialize — returns an error naming both types, propagated as an evaluation or compile error. Use tuple rows where you want the check at compile time.
+
+Because the impls are blanket, the target type comes from the call site: the module's `Input` for `to_input()`, the signature's `Output` for `to_output()`. Nothing on the row names a signature.
+
+```rust
+let row = HotpotRow { /* … */ };
+
+let input: QAInput = row.to_input()?;      // target inferred from the binding
+let demo = Demo::<QA>::new(row.to_input()?, row.to_output()?);
+```
+
+A row whose gold fields do not line up with the signature's `Output` needs no special handling: nothing is generated per-signature, so `to_input()` works regardless and only a `to_output()` call that cannot be satisfied fails. Metrics read gold fields from the row directly, so rows labeling a subset of a multi-field output (a dataset with a gold answer against a signature that also outputs `reasoning`) simply never call `to_output()`.
+
+`dspy_rs::core::example::project` is the underlying helper (`project::<T, U>(&T) -> Result<U>`) if you need the same field-name projection outside a row impl.
+
+## DataLoader
+
+`DataLoader` is a unit struct whose associated functions load JSON, CSV, Parquet, and HuggingFace sources. All loaders are generic over the row struct and return `anyhow::Result<Vec<E>>` where `E: serde::de::DeserializeOwned + facet::Facet`. The row's Facet shape determines required fields and drives type-aware coercion; derive it alongside `Deserialize`:
+
+```rust
+#[derive(Example, Clone, Debug, facet::Facet, serde::Serialize, serde::Deserialize)]
+#[facet(crate = facet)]
+struct HotpotRow {
+    question: String,
+    answer: String,
+    supporting_facts: Vec<String>,
+}
+
+let trainset: Vec<HotpotRow> =
+    DataLoader::load_json("data/train.jsonl", true, TypedLoadOptions::default())?;
+```
+
+| Method | Parameters | Source notes |
+|---|---|---|
+| `load_json::<E>` | `(path, lines: bool, opts)` | JSON array/object, or JSONL when `lines = true`. `path` may be a local file or an HTTP(S) URL |
+| `load_csv::<E>` | `(path, delimiter: char, has_headers: bool, opts)` | Local file or HTTP(S) URL. Without headers, fields surface as `column_{idx}` |
+| `load_parquet::<E>` | `(path, opts)` | Local Parquet file only |
+| `load_hf::<E>` | `(dataset_name, subset, split, verbose: bool, opts)` | HuggingFace Hub dataset repo. `subset` and `split` are substring filters on artifact filenames. Supports `.parquet`, `.json`, `.jsonl`, and `.csv` artifacts |
+| `load_hf_from_parquet::<E>` | `(parquet_files: Vec<PathBuf>, opts)` | Local Parquet set; deterministic/offline stand-in for `load_hf`. No mapper variant |
+
+A source field missing from a row is `DataLoadError::MissingField` unless the row field is `Option<_>`, in which case it deserializes as `None`.
+
+Each of `load_json`, `load_csv`, `load_parquet`, and `load_hf` has a `_with` mapper overload (`load_json_with`, `load_csv_with`, `load_parquet_with`, `load_hf_with`) that takes the same parameters plus a closure `Fn(&RowRecord) -> anyhow::Result<E>`, with no `Deserialize` or `Facet` bound on `E`. Mapper overloads bypass shape-driven conversion entirely: `opts` is accepted for API parity but is not applied, so `field_map` and `unknown_fields` have no effect on `_with` calls.
+
+## TypedLoadOptions
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `field_map` | `HashMap<String, String>` | empty | Remaps row-struct fields to source columns. Key: row struct field name. Value: source field/column name |
+| `unknown_fields` | `UnknownFieldPolicy` | `Ignore` | Policy for extra source fields |
+
+```rust
+let mut field_map = HashMap::new();
+field_map.insert("question".to_string(), "prompt".to_string());
+
+let trainset = DataLoader::load_csv::<HotpotRow>(
+    "data/custom.csv", ',', true,
+    TypedLoadOptions { field_map, unknown_fields: UnknownFieldPolicy::Ignore },
+)?;
+```
+
+`UnknownFieldPolicy` variants:
+
+| Variant | Behavior |
+|---|---|
+| `Ignore` (default) | Extra source fields not consumed by the row struct are dropped |
+| `Error` | Any unconsumed source field fails the load with `DataLoadError::UnknownField { row, field }` |
+
+The shape-driven path also applies tolerant scalar coercion before strict serde deserialization, driven by the row's Facet shape: a `"4"` cell fills a `String` field as `"4"` and an `i64` field as `4`; string cells convert to declared `Int`, `Float`, and `Bool` (`"true"`/`"false"`, case-insensitive) fields when they parse cleanly. Values that do not convert pass through unchanged so serde surfaces a precise `TypeMismatch`.
+
+## RowRecord
+
+`RowRecord` is the public raw-row type passed to `_with` mapper closures.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `row_index` | `usize` | 1-based row index in the loaded stream after filtering empty rows |
+| `values` | `HashMap<String, serde_json::Value>` | Parsed key-value payload for the row |
+
+`RowRecord::get::<T>(key)` deserializes a typed value from a field, where `T: DeserializeOwned + 'static`. It returns `DataLoadError::MissingField` when the key is absent and `DataLoadError::TypeMismatch` on deserialization failure. `String` reads coerce scalar JSON numbers and booleans into strings for ergonomic CSV mapping.
+
+```rust
+let trainset = DataLoader::load_json_with(
+    "data/train.jsonl", true, TypedLoadOptions::default(),
+    |row| Ok(HotpotRow {
+        question: row.get::<String>("prompt")?,
+        answer: row.get::<String>("gold")?,
+        supporting_facts: row.get::<Vec<String>>("facts")?,
+    }),
+)?;
+```
+
+Mapper closure errors are wrapped as `DataLoadError::Mapper` with the failing row index.
+
+## DataLoadError
+
+`DataLoadError` implements `std::error::Error` via `thiserror`. Public loaders return `anyhow::Result`, with `DataLoadError` as the wrapped source.
+
+| Variant | Payload | Meaning |
+|---|---|---|
+| `Io` | `anyhow::Error` | Source read or download failure |
+| `Csv` | `anyhow::Error` | CSV parser failure |
+| `Json` | `anyhow::Error` | JSON/JSONL parser failure |
+| `Parquet` | `anyhow::Error` | Parquet parser failure |
+| `Hf` | `anyhow::Error` | HuggingFace Hub listing or file retrieval failure |
+| `MissingField` | `{ row: usize, field: String }` | Required row-struct field absent from a row |
+| `UnknownField` | `{ row: usize, field: String }` | Extra source field under `UnknownFieldPolicy::Error` |
+| `TypeMismatch` | `{ row, field, message }` | Field existed but could not convert to the required type |
+| `Mapper` | `{ row: usize, message: String }` | Custom mapper closure returned an error |
+
+The module also exposes `is_url(path: &str) -> bool`, the helper the loaders use to decide between filesystem and HTTP(S) fetching.
+
+## Versioning
+
+Data loading is versioned under `data::v1`. The module tree is `data::v1::dataloader` and `data::v1::utils`; `data/mod.rs` re-exports `v1::*`, so unversioned paths (`dspy_rs::data::DataLoader`) and versioned paths (`dspy_rs::data::v1::dataloader::DataLoader`) both resolve to the same items. The crate root flattens further: `dspy_rs::DataLoader` is the conventional import. Unversioned paths always track the current version.
+
+### Migration note
+
+The signature-bound pair `Example<S> { input, output }` was removed. Trainset rows are now plain structs that project into a signature's types through `ToInput`/`ToOutput` (this page), and few-shot demos are `Demo<S>` on [Predict](/docs/components/predict). Loaders that took a signature (`load_json::<Sig>`) now take the row struct (`load_json::<Row>`); `TypedLoadOptions::field_map` keys are row-struct field names instead of signature field names.
+
+The pre-v1 raw loaders were also removed. Use the typed `load_*` / `load_*_with` APIs instead of:
+
+- `load_json(path, input_keys, output_keys)`
+- `load_csv(path, delimiter, has_headers, input_keys, output_keys)`
+- `load_parquet(path, input_keys, output_keys)`
+- `load_hf(dataset_name, subset, split, input_keys, output_keys, verbose)`
+- `save_json(...)` and `save_csv(...)`
+
+## See also
+
+- [Signatures](/docs/components/signatures) for `Signature`, `Schema`, and the generated `Input`/`Output` structs
+- [Predict](/docs/components/predict) for `Demo<S>` and demos on the leaf module
+- [Evaluation](/docs/components/evaluation) for `evaluate_trainset` and `TypedMetric`
+- [Optimizers](/docs/components/optimizers) for `Optimizer::compile` over a trainset
+- [Example: evaluate on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs)
+- [Example: optimize on HotpotQA](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs)
+- [Example: MIPROv2 optimization](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs)

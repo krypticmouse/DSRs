@@ -1,0 +1,272 @@
+---
+title: "Optimizers"
+description: "The Optimizer trait, every optimizer configuration, and every report type: COPRO, MIPROv2, GEPA, SIMBA, and BootstrapFewShot"
+icon: "sliders"
+---
+
+An optimizer proposes candidates (instruction or demo overlays), evaluates them with your metric on your trainset, and keeps the best. `compile` is the entry point: it takes a module, a training set, and a metric, then searches for better instructions, and in some cases demos, for each `Predict` leaf. The module is mutated in place: after `compile` returns, calling the module produces better results with no code changes.
+
+```rust
+use dspy_rs::{COPRO, Optimizer};
+
+let optimizer = COPRO::builder()
+    .breadth(10)
+    .depth(1)
+    .eval_concurrency(16)
+    .build();
+optimizer
+    .compile(&mut module, examples.clone(), &metric)
+    .await?;
+```
+
+All five optimizers are thin strategies over the shared evaluation engine. Candidates are overlays evaluated through a cached, budget-metered, bounded-concurrency fan-out, and winners are installed through the `apply_candidate` seam. The engine types (`EvalEngine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
+
+<svg viewBox="0 0 760 420" role="img" aria-label="Three translucent tracing-paper overlays fanned above the base map, each changing one grid-referenced dial; the base program is never marked" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
+  <rect x="90" y="210" width="580" height="180" rx="8" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
+  <g stroke="currentColor" strokeOpacity="0.12" strokeWidth="1">
+    <line x1="90" y1="255" x2="670" y2="255" />
+    <line x1="90" y1="300" x2="670" y2="300" />
+    <line x1="90" y1="345" x2="670" y2="345" />
+    <line x1="235" y1="210" x2="235" y2="390" />
+    <line x1="380" y1="210" x2="380" y2="390" />
+    <line x1="525" y1="210" x2="525" y2="390" />
+  </g>
+  <text x="112" y="238" fontFamily="ui-monospace, monospace" fontSize="11" fill="currentColor" fillOpacity="0.8">program frontdesk  (base, hash 9f3a...)</text>
+  <circle cx="180" cy="322" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="180" y="352" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">sum</text>
+  <circle cx="330" cy="322" r="13" fill="#ed6c13" fillOpacity="0.15" stroke="#ed6c13" strokeWidth="1.5" />
+  <text x="330" y="352" fontFamily="ui-monospace, monospace" fontSize="9.5" fill="currentColor" fillOpacity="0.7" textAnchor="middle">drafter</text>
+  <line x1="193" y1="322" x2="317" y2="322" stroke="#ed6c13" strokeWidth="1.5" />
+  <rect x="422" y="310" width="188" height="24" rx="5" fill="none" stroke="currentColor" strokeOpacity="0.5" strokeWidth="1.5" strokeDasharray="4 3" />
+  <text x="516" y="326" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.85" textAnchor="middle">drafter.instruction</text>
+  <line x1="343" y1="318" x2="420" y2="320" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" />
+  <g transform="rotate(-6 260 110)">
+    <rect x="120" y="40" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="140" y="66" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.7">overlay c41</text>
+    <path d="M 150 96 C 190 86, 240 104, 300 92" fill="none" stroke="#ed6c13" strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
+    <text x="150" y="130" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">warmth 0.91</text>
+  </g>
+  <g transform="rotate(1 400 100)">
+    <rect x="240" y="26" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.4" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="260" y="52" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.75">overlay c58</text>
+    <path d="M 270 84 C 320 72, 380 94, 440 80" fill="none" stroke="#ed6c13" strokeOpacity="0.7" strokeWidth="2" strokeLinecap="round" />
+    <text x="270" y="118" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">warmth 0.82, brevity 0.78</text>
+  </g>
+  <g transform="rotate(7 540 120)">
+    <rect x="370" y="48" width="280" height="120" rx="6" fill="currentColor" fillOpacity="0.03" stroke="currentColor" strokeOpacity="0.35" strokeWidth="1.5" strokeDasharray="6 4" />
+    <text x="390" y="74" fontFamily="ui-monospace, monospace" fontSize="10.5" fill="currentColor" fillOpacity="0.7">overlay c62</text>
+    <path d="M 400 106 C 450 96, 500 114, 560 100" fill="none" stroke="#ed6c13" strokeOpacity="0.6" strokeWidth="2" strokeLinecap="round" />
+    <text x="400" y="140" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10" fill="currentColor" fillOpacity="0.55">brevity 0.93</text>
+  </g>
+  <line x1="500" y1="172" x2="512" y2="306" stroke="#ed6c13" strokeOpacity="0.5" strokeWidth="1.5" strokeDasharray="3 4" />
+  <text x="560" y="196" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65">each sheet rewrites</text>
+  <text x="560" y="211" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="10.5" fill="currentColor" fillOpacity="0.65">the same named dial</text>
+  <text x="380" y="412" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">candidates are overlays; the base program is never mutated</text>
+</svg>
+
+Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), and [GEPA](/docs/optimizers/gepa).
+
+## The Optimizer trait
+
+```rust
+#[allow(async_fn_in_trait)]
+pub trait Optimizer {
+    type Report;
+
+    async fn compile<E, M, MT>(
+        &self,
+        module: &mut M,
+        trainset: Vec<E>,
+        metric: &MT,
+    ) -> Result<Self::Report>
+    where
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>;
+}
+```
+
+`compile` takes exclusive `&mut` access to the module: no concurrent `call()` during optimization. The trainset is `Vec<E>` for any [row type](/docs/components/data) that projects into the module's input via `ToInput` — a `#[derive(Example)]` struct, an `(Input, Output)` tuple, or a hand-written impl; the `Serialize` bound feeds rollout-cache uids, which content-hash the whole row. All type parameters are inferred from the arguments, so no turbofish is needed: `optimizer.compile(&mut module, trainset, &metric)`. The `Facet` bound is what lets the optimizer discover `Predict` leaves by reflection and address them by dotted path. `compile` returns an error when no optimizable predictors are found, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
+
+Each optimizer declares its own `Report`:
+
+| Optimizer | `Report` type |
+|-----------|---------------|
+| `COPRO` | `()` |
+| `MIPROv2` | `()` |
+| `GEPA` | `GEPAResult` |
+| `SIMBA` | `SimbaReport` |
+| `BootstrapFewShot` | `BootstrapReport` |
+
+## Choosing an optimizer
+
+| Optimizer | Strategy | Needs feedback? | Cost |
+|-----------|----------|-----------------|------|
+| `BootstrapFewShot` | One-shot demo harvesting from a teacher pass | No | Low (2 × trainset) |
+| `COPRO` | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
+| `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
+| `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
+| `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+
+GEPA is the only optimizer that requires textual feedback from the metric. The others use numerical scores alone.
+
+## COPRO
+
+Breadth-first instruction search: generates `breadth` candidate instructions per predictor, evaluates each on the trainset, installs the best, and repeats for `depth` rounds. The base instruction always competes in every round. How-to: [COPRO](/docs/optimizers/copro).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `breadth` | `usize` | `10` | Candidates per round per predictor. Must be greater than 1; `compile` errors otherwise. |
+| `depth` | `usize` | `3` | Optimization rounds; each refines the previous best. |
+| `init_temperature` | `f32` | `1.4` | Currently unused. Reserved for LM-generated candidate diversity. |
+| `track_stats` | `bool` | `false` | Per-round statistics flag. The report type is `()`, so nothing is returned either way. |
+| `prompt_model` | `Option<LM>` | `None` | Separate LM for generating candidate instructions. |
+| `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
+
+Cost: approximately `breadth × depth × num_predictors × trainset_size` LM calls, minus rollout-cache hits. Runs with an unlimited engine budget.
+
+## MIPROv2
+
+Trace-guided instruction and demo optimizer. Four phases: one traced teacher pass over the trainset; demo bootstrapping from successful spans via the trace name-join; generation of `num_candidates` instruction variants per predictor seeded by prompting tips; evaluation of up to `num_trials` candidates per predictor on one sampled minibatch, keeping the best. Demos are installed before instruction search so candidates are scored against the module as it will actually run. How-to: [MIPROv2](/docs/optimizers/miprov2).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_candidates` | `usize` | `10` | Instruction variants generated per predictor. |
+| `num_trials` | `usize` | `20` | Maximum candidates evaluated per predictor. When lower than `num_candidates`, only the first `num_trials` are evaluated. |
+| `minibatch_size` | `usize` | `25` | Examples per candidate evaluation. |
+| `max_bootstrapped_demos` | `usize` | `4` | Demos installed per predictor from successful traces. |
+| `min_demo_score` | `f64` | `0.0` | Minimum whole-program score for a trace to qualify as a demo source. |
+| `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling. `None` is nondeterministic. |
+
+Public helper types: `PromptCandidate` (an instruction with its evaluated `score: f64`) and `PromptingTips` (the rotation of prompting best practices appended to candidates, `default_tips()` and `format_for_prompt()`). Public methods on `MIPROv2`: `select_best_traces`, `create_prompt_candidates`, `format_schema_fields`. The report is `()`.
+
+## GEPA
+
+Genetic-Pareto instruction evolution driven by per-example feedback. Each generation samples a parent proportional to Pareto coverage, re-evaluates it on a trainset minibatch, has a reflection LM (`prompt_model`) rewrite the instruction from the feedback and the mutated component's execution trace, then scores the child on the validation columns. Without a `prompt_model`, mutation degrades to deterministic feedback concatenation. Only instruction space is searched: no demo mutation, no crossover. How-to: [GEPA](/docs/optimizers/gepa).
+
+<Warning>
+GEPA errors if any `Eval` from the metric has `feedback: None`. Build metrics with `Eval::with_feedback`.
+</Warning>
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_iterations` | `usize` | `20` | Evolutionary generations. |
+| `minibatch_size` | `usize` | `25` | Examples per parent re-evaluation within each generation. |
+| `num_trials` | `usize` | `10` | Currently unused. Reserved for multi-child evolution. |
+| `temperature` | `f32` | `1.0` | Currently unused. Reserved for mutation diversity control. |
+| `track_stats` | `bool` | `true` | Record all candidates, evolution history, and frontier history in the result. |
+| `track_best_outputs` | `bool` | `false` | Re-run the best instruction on the eval set and record outputs. |
+| `max_rollouts` | `Option<usize>` | `None` | Hard cap on evaluation rollouts. |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM calls (rollouts plus generation). |
+| `prompt_model` | `Option<LM>` | `None` | Reflection LM that rewrites instructions from feedback. Strongly recommended. |
+| `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling and parent selection. |
+
+GEPA additionally exposes `compile_with_valset(module, trainset, valset, metric)`. With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile` does).
+
+### GEPAResult
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `best_candidate` | `GEPACandidate` | Best average score on the Pareto frontier; installed on the module. |
+| `all_candidates` | `Vec<GEPACandidate>` | Every evaluated candidate. Empty unless `track_stats`. |
+| `total_rollouts` | `usize` | Evaluation rollouts consumed. |
+| `total_lm_calls` | `usize` | LM calls consumed (rollouts plus candidate generation). |
+| `evolution_history` | `Vec<(usize, f32)>` | `(generation, best_average_score)` pairs for plotting convergence. |
+| `highest_score_achieved_per_val_task` | `Vec<f32>` | Best score per validation example across all candidates. |
+| `best_outputs_valset` | `Option<Vec<serde_json::Value>>` | Best outputs on the eval set. `Some` only with `track_best_outputs`. |
+| `frontier_history` | `Vec<ParetoStatistics>` | Frontier snapshot per generation (see [Optimizer engine](/docs/components/optimizer-engine)). |
+
+`GEPACandidate` carries `id`, `instruction`, `module_name`, `example_scores: Vec<f32>`, `parent_id: Option<usize>`, and `generation`, plus `average_score()` and `mutate(new_instruction, generation)`.
+
+## SIMBA
+
+Stochastic Introspective Mini-Batch Ascent, the cheap agentic default. SIMBA keeps one current program as a candidate overlay and hill-climbs. Each step: sample a seeded trainset minibatch; pick the best and worst rollout of the current program on it (served from engine bookkeeping, no extra rollouts); propose exactly one move; accept it through the engine's minibatch gate. A child is promoted to a full-trainset evaluation only when its minibatch mean strictly beats the current program's, so rejected moves never pay for a full pass. The winner is installed when `compile` returns.
+
+The two moves, in order of preference:
+
+| Move | Trigger | Effect |
+|------|---------|--------|
+| `SimbaMove::AppendDemo` | Best rollout scored at least `min_demo_score` and yields new demos | Appends one harvested demo per predictor, capped at `max_demos`, oldest dropped, duplicates skipped. |
+| `SimbaMove::AppendRule` | Otherwise | A reflection LM distills one rule from the best and worst rollouts, appended to the instruction of the predictor with the most spans in the worst rollout. Without `prompt_model`, the worst rollout's metric feedback is appended verbatim. |
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_steps` | `usize` | `8` | Ascent steps to attempt. |
+| `minibatch_size` | `usize` | `8` | Examples sampled per step. |
+| `max_demos` | `usize` | `4` | Demo-set cap per predictor. |
+| `min_demo_score` | `f64` | `1.0` | Rollout score needed to qualify as a demo source; below it the step falls back to append-rule. |
+| `prompt_model` | `Option<LM>` | `None` | Reflection LM for append-rule moves. Strongly recommended. |
+| `max_metric_calls` | `Option<usize>` | `None` | Hard cap on metric calls (rollouts). |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units (rollouts plus reflection). |
+| `eval_concurrency` | `usize` | `16` | Rollouts in flight during evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling. |
+
+Cost: `trainset_size` for the baseline pass, then `minibatch_size` rollouts per step, plus the remaining `trainset_size - minibatch_size` only on promotion and one reflection call per rule move. The run stops cleanly when the budget no longer fits a step.
+
+### SimbaStep and SimbaReport
+
+Each `SimbaStep` records one step:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `step` | `usize` | Step index, 0-based. |
+| `move_kind` | `SimbaMove` | `AppendDemo` or `AppendRule`. |
+| `parent_minibatch_score` | `f64` | Current program's minibatch mean, the gate threshold. |
+| `child_minibatch_score` | `f64` | Proposed child's mean on the same minibatch. |
+| `accepted` | `bool` | Whether the gate promoted the child. |
+| `full_score` | `Option<f64>` | Full-trainset mean of the child; `Some` only when promoted. |
+
+The `SimbaReport` summarizes the run:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `baseline_score` | `f64` | Mean metric score of the unmodified module over the trainset. |
+| `final_score` | `f64` | Full-trainset mean of the final program; equals the baseline when nothing was accepted. |
+| `steps` | `Vec<SimbaStep>` | Per-step outcomes, in order. |
+| `accepted` | `usize` | Steps promoted by the gate. |
+| `rejected` | `usize` | Steps rejected by the gate. |
+| `spend` | `Spend` | Engine spend for the whole run, reflection calls included. |
+
+## BootstrapFewShot
+
+The simplest complete optimizer: one teacher pass, one candidate, one comparison. It runs the module over the trainset under trace capture, harvests few-shot demos from successful spans of rollouts scoring at least `min_demo_score`, evaluates the demo candidate on the same engine (teacher rollouts already sit in the rollout cache, so the baseline never re-runs), and installs the demos only when the candidate's mean beats the baseline.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_demos` | `usize` | `4` | Maximum demos installed per predictor. |
+| `min_demo_score` | `f64` | `1.0` | Minimum whole-rollout score for a rollout's spans to qualify as demos. The default assumes a 0 to 1 metric; lower it for graded metrics. |
+| `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
+| `max_metric_calls` | `Option<usize>` | `None` | Hard cap on metric calls (rollouts). |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units. |
+
+### BootstrapReport
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `baseline_score` | `f64` | Mean metric score of the unmodified module over the trainset. |
+| `candidate_score` | `Option<f64>` | Mean score with demos attached. `None` when no demos were harvested or the budget stopped before the candidate evaluation. |
+| `adopted` | `bool` | Whether the demo candidate beat the baseline and was installed. |
+| `demos_per_predictor` | `BTreeMap<String, usize>` | Demos harvested per predictor, keyed by dotted path. |
+| `spend` | `Spend` | Engine spend for the whole run. |
+
+<Note>
+`adopted: false` with a populated `demos_per_predictor` means demos were harvested but did not beat the baseline; the module is left unchanged.
+</Note>
+
+## Demo harvesting
+
+Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the same dotted-path component name the mutation seam addresses, so successful spans (parsed output present) from rollouts scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are ranked by whole-rollout score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
+
+## See also
+
+- [Optimizer engine](/docs/components/optimizer-engine): `EvalEngine`, `Candidate`, `Budget`, `Spend`, `ParetoView`, and checkpointing
+- [Evaluation](/docs/components/evaluation): `TypedMetric`, `Eval`, and `Eval::with_feedback`
+- [Traces](/docs/components/traces): the span capture that feeds demo harvesting and reflection
+- How-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa)
+- Runnable examples:
+  - COPRO: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs and https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs
+  - MIPROv2: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs
+  - GEPA: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/09-gepa-sentiment.rs and https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/10-gepa-llm-judge.rs
+  - Optimizer interface smoke test: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs

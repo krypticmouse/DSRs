@@ -11,8 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use dspy_rs::{
-    Chat, ChatAdapter, Example, LM, LMClient, Message, Predict, Signature, SignatureSchema,
-    TestCompletionModel,
+    Chat, ChatAdapter, Demo, LM, LMClient, Message, Predict, Signature, SignatureSchema,
+    TestCompletionModel, configure, fx,
 };
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::message::Text;
@@ -140,8 +140,8 @@ fn bench_input() -> BenchQAInput {
     }
 }
 
-fn demo(idx: usize) -> Example<BenchQA> {
-    Example::new(
+fn demo(idx: usize) -> Demo<BenchQA> {
+    Demo::new(
         BenchQAInput {
             question: format!("Demo question {idx}?"),
             context: format!("Demo context {idx} with enough text to look like a real retrieval chunk for the benchmark."),
@@ -251,7 +251,7 @@ async fn main() {
     let plain = Predict::<BenchQA>::builder().lm(lm).build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(plain.forward(bench_input()).await.unwrap());
+        std::hint::black_box(plain.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (0 demos, test LM)", iters, s);
 
@@ -265,7 +265,7 @@ async fn main() {
         .build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(demoed.forward(bench_input()).await.unwrap());
+        std::hint::black_box(demoed.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (2 demos, test LM)", iters, s);
 
@@ -312,7 +312,44 @@ async fn main() {
     let tooled = Predict::<BenchQA>::builder().lm(lm).add_tool(NoopTool).build();
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(tooled.forward(bench_input()).await.unwrap());
+        std::hint::black_box(tooled.call(bench_input()).await.unwrap());
     }
     report("forward end-to-end (1 tool, unused)", iters, s);
+
+    // --- 10. fx::predict vs struct (same signature, global LM) ---------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await);
+    let s = snap();
+    for _ in 0..iters {
+        std::hint::black_box(
+            fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+        );
+    }
+    report("fx::predict (0 demos, default params)", iters, s);
+
+    // --- 11. fx::predict under a with_params scope ----------------------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await);
+    let mut params = fx::Params::new();
+    params.set_instruction("bench_fx", "Answer concisely with high confidence.");
+    let s = snap();
+    fx::with_params(params, async {
+        for _ in 0..iters {
+            std::hint::black_box(
+                fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+            );
+        }
+    })
+    .await;
+    report("fx::predict (with_params override)", iters, s);
+
+    // --- 12. Struct Predict through the same global-LM path -------------------
+    let iters = 50_000u64;
+    configure(make_lm(iters, false).await);
+    let global_predict = Predict::<BenchQA>::new();
+    let s = snap();
+    for _ in 0..iters {
+        std::hint::black_box(global_predict.call(bench_input()).await.unwrap());
+    }
+    report("struct Predict (0 demos, global LM)", iters, s);
 }

@@ -10,9 +10,9 @@ cargo run --example 08-optimize-mipro --features dataloaders
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    ChatAdapter, DataLoader, Example, LM, MIPROv2, MetricOutcome, Module, Optimizer, Predict,
-    PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
-    evaluate_trainset, init_tracing,
+    DataLoader, Example, LM, MIPROv2, Eval, Module, ModuleState, Optimizer,
+    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
+    configure, evaluate_trainset, init_tracing,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -23,6 +23,16 @@ struct QuestionAnswering {
     question: String,
 
     #[output]
+    answer: String,
+}
+
+/// The trainset row, shaped like the dataset and wired to the signature by
+/// field name via `#[derive(Example)]`.
+#[derive(Example, facet::Facet, serde::Deserialize, serde::Serialize, Clone, Debug)]
+#[facet(crate = facet)]
+struct HotpotRow {
+    question: String,
+
     answer: String,
 }
 
@@ -47,13 +57,14 @@ impl Module for SimpleQA {
 
 struct ExactMatchMetric;
 
-impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
+impl TypedMetric<HotpotRow, SimpleQA> for ExactMatchMetric {
     async fn evaluate(
         &self,
-        example: &Example<QuestionAnswering>,
+        example: &HotpotRow,
         prediction: &Predicted<QuestionAnsweringOutput>,
-    ) -> Result<MetricOutcome> {
-        let expected = example.output.answer.trim().to_lowercase();
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let expected = example.answer.trim().to_lowercase();
         let actual = prediction.answer.trim().to_lowercase();
 
         let score = if expected == actual {
@@ -64,7 +75,7 @@ impl TypedMetric<QuestionAnswering, SimpleQA> for ExactMatchMetric {
             0.0
         };
 
-        Ok(MetricOutcome::score(score))
+        Ok(Eval::score(score))
     }
 }
 
@@ -74,10 +85,10 @@ async fn main() -> Result<()> {
 
     println!("=== MIPROv2 Optimizer Example ===\n");
 
-    configure(LM::default(), ChatAdapter);
+    configure(LM::default());
 
     println!("Loading training data from HuggingFace...");
-    let train_examples = DataLoader::load_hf::<QuestionAnswering>(
+    let train_examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",
         "fullwiki",
         "validation",
@@ -100,12 +111,31 @@ async fn main() -> Result<()> {
         .num_candidates(8)
         .num_trials(15)
         .minibatch_size(10)
+        // Demo bootstrapping: trainset runs are traced per-predictor, and
+        // input/output pairs from runs scoring >= min_demo_score are installed
+        // as few-shot demos (top N by score, deduplicated on inputs).
+        .max_bootstrapped_demos(3)
+        .min_demo_score(1.0)
+        .seed(42) // reproducible minibatch sampling
+        .eval_concurrency(8) // LM calls in flight during candidate evaluation
         .build();
 
     println!("Starting MIPROv2 optimization...");
     optimizer
         .compile(&mut qa_module, train_subset.clone(), &metric)
         .await?;
+
+    // Inspect what the optimizer installed: instructions + bootstrapped demos.
+    let state = ModuleState::from_module(&mut qa_module)?;
+    for (predictor, predictor_state) in &state.predictors {
+        println!(
+            "Predictor `{predictor}`: {} bootstrapped demos, instruction override: {}",
+            predictor_state.demos.len(),
+            predictor_state.instruction_override.as_deref().unwrap_or("<none>"),
+        );
+    }
+    state.save("optimized-qa.json")?;
+    println!("Saved optimized module state to optimized-qa.json\n");
 
     println!("Evaluating optimized performance...");
     let optimized_score =

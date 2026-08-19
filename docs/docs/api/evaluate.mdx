@@ -1,0 +1,78 @@
+---
+title: "dspy_rs::evaluate"
+description: "Evaluation and metrics for measuring module performance."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+Evaluation and metrics for measuring module performance.
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| `evaluator::*` | Glob re-export. |
+| `feedback_helpers::*` | Glob re-export. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`evaluator`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/index.html) |  |
+| [`feedback_helpers`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/index.html) |  |
+
+## `evaluate::evaluator`
+
+### Re-exports
+
+| Item | Description |
+|---|---|
+| [`Eval`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/struct.Eval.html) | Re-export of `crate::trace::Eval`. |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`TypedMetric`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/trait.TypedMetric.html) | How you tell the optimizer what "good" means. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`average_score`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/fn.average_score.html) | Arithmetic mean of scores from a slice of `Eval`s. |
+| [`evaluate_trainset_with_concurrency`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/fn.evaluate_trainset_with_concurrency.html) | `evaluate_trainset` with an explicit concurrency level. |
+| [`evaluate_trainset`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/fn.evaluate_trainset.html) | Runs a module on every example in a trainset and scores each with a metric. |
+
+### Type aliases
+
+| Item | Description |
+|---|---|
+| [`Rollout`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/type.Rollout.html) | One evaluated rollout: the metric result plus the execution trace that produced it (with `Trace::outcome` filled in). |
+
+### Constants
+
+| Item | Description |
+|---|---|
+| [`DEFAULT_EVAL_CONCURRENCY`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/evaluator/constant.DEFAULT_EVAL_CONCURRENCY.html) | Default number of examples evaluated concurrently by `evaluate_trainset`. |
+
+## `evaluate::feedback_helpers`
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`CodeStage`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/enum.CodeStage.html) | Stage in code execution pipeline |
+| [`StageResult`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/enum.StageResult.html) | Result of a code stage |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`classification_feedback`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/fn.classification_feedback.html) | Create feedback for classification tasks |
+| [`code_pipeline_feedback`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/fn.code_pipeline_feedback.html) | Create feedback for code generation pipelines |
+| [`multi_objective_feedback`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/fn.multi_objective_feedback.html) | Create feedback for multi-objective optimization |
+| [`retrieval_feedback`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/fn.retrieval_feedback.html) | Create feedback for document retrieval tasks |
+| [`string_similarity_feedback`](https://docs.rs/dspy-rs/latest/dspy_rs/evaluate/feedback_helpers/fn.string_similarity_feedback.html) | Create feedback for string similarity tasks |

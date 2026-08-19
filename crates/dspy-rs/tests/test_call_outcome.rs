@@ -16,7 +16,7 @@ fn parse_error_preserves_raw_response_and_usage() {
             raw_response: "raw response".to_string(),
         },
         raw_response: "raw response".to_string(),
-        lm_usage: usage.clone(),
+        lm_usage: usage,
     };
 
     match err {

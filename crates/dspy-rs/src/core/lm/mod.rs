@@ -15,25 +15,31 @@ use rig::{
 };
 
 use bon::Builder;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
-use tracing::{Instrument, debug, trace, warn};
+use tracing::{debug, trace, warn};
 
+use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::{Cache, Prediction, RawExample, ResponseCache};
+use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
     /// Assistant message chosen by the provider.
     pub output: Message,
-    /// Token usage reported by the provider for this call.
+    /// Token usage reported by the provider for this call (aggregate).
     pub usage: LmUsage,
     /// Chat history including the freshly appended assistant response.
     pub chat: Chat,
-    /// Tool calls made by the provider.
+    /// Tool calls made by the provider. Deprecated by `events`.
     pub tool_calls: Vec<ToolCall>,
-    /// Tool executions made by the provider.
+    /// Tool executions made by the provider. Deprecated by `events`.
     pub tool_executions: Vec<String>,
+    /// Ordered per-round-trip record: one `Exchange` per provider call with
+    /// that round-trip's own usage, `ToolRun` entries interleaved in execution
+    /// order. Cache-served responses synthesize a single `Exchange`.
+    pub events: Vec<SpanEvent>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -74,6 +80,34 @@ impl ToolSet {
         }
     }
 
+    /// Builds a `ToolSet` from pre-built definitions with **no executors** —
+    /// for caller-managed loops where the caller executes tools itself (the IR
+    /// interpreter's `AgentLoop` builds definitions from declared tool
+    /// signatures and overlay-resolved descriptions).
+    pub fn from_definitions(definitions: Vec<rig::completion::ToolDefinition>) -> Self {
+        Self {
+            definitions,
+            by_name: HashMap::new(),
+        }
+    }
+
+    /// Collapses `tools` into a single sandboxed `run_js` tool (Code Mode):
+    /// instead of emitting one JSON tool call per step, the model writes
+    /// JavaScript against the tools as a JS API and composes their results in
+    /// one execution. Drop the returned set into any tool loop
+    /// ([`LM::call_with_toolset`], `Predict`) exactly like a normal `ToolSet`.
+    ///
+    /// Errors if two tool names mangle to the same JS identifier (see
+    /// [`dsrs_tools::js_identifier`]).
+    #[cfg(feature = "code-mode")]
+    pub async fn code_mode(
+        tools: Vec<Arc<dyn ToolDyn>>,
+        config: dsrs_tools::SandboxConfig,
+    ) -> Result<Self> {
+        let tool = dsrs_tools::CodeModeTool::new(tools, config).await?;
+        Ok(Self::build(&[Arc::new(tool) as Arc<dyn ToolDyn>]).await)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.definitions.is_empty()
     }
@@ -83,10 +117,18 @@ impl ToolSet {
     }
 }
 
-#[derive(Builder)]
+/// The data half of an LM: every generation parameter, no live state.
+///
+/// This is the serializable artifact — what a program file records, what an
+/// optimizer can hash, diff, and mutate. The live half ([`LM`]) is built from
+/// it with [`LM::from_config`]. `api_key` is deliberately `#[serde(skip)]`:
+/// secrets never serialize, and on load the key is resolved from provider env
+/// vars at client initialization.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
-pub struct LM {
+pub struct LMConfig {
     pub base_url: Option<String>,
+    #[serde(skip)]
     pub api_key: Option<String>,
     #[builder(default = "openai:gpt-4o-mini".to_string())]
     pub model: String,
@@ -106,8 +148,20 @@ pub struct LM {
     pub retry_base_delay_ms: u64,
     #[builder(default = false)]
     pub cache: bool,
+}
+
+impl Default for LMConfig {
+    fn default() -> Self {
+        LMConfig::builder().__internal_build()
+    }
+}
+
+/// The live half: an [`LMConfig`] plus the initialized provider client and
+/// response cache. Constructed via [`LM::builder()`] or [`LM::from_config`].
+#[derive(Clone)]
+pub struct LM {
+    pub config: LMConfig,
     pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
-    #[builder(skip)]
     client: Option<Arc<LMClient>>,
 }
 
@@ -117,27 +171,15 @@ impl Default for LM {
     }
 }
 
-impl Clone for LM {
-    fn clone(&self) -> Self {
-        Self {
-            base_url: self.base_url.clone(),
-            api_key: self.api_key.clone(),
-            model: self.model.clone(),
-            temperature: self.temperature,
-            max_tokens: self.max_tokens,
-            max_tool_iterations: self.max_tool_iterations,
-            max_retries: self.max_retries,
-            retry_base_delay_ms: self.retry_base_delay_ms,
-            cache: self.cache,
-            cache_handler: self.cache_handler.clone(),
-            client: self.client.clone(),
-        }
-    }
-}
-
 impl LM {
-    /// Finalizes construction of an [`LM`], initializing the HTTP client and
-    /// optional response cache based on provided parameters.
+    /// Entry point for fluent construction: `LM::builder().model(...).build().await`.
+    /// The builder collects an [`LMConfig`]; `build()` initializes the live client.
+    pub fn builder() -> LMConfigBuilder {
+        LMConfig::builder()
+    }
+
+    /// Builds the live [`LM`] from a config, initializing the provider client and
+    /// optional response cache.
     ///
     /// Supports 3 build cases:
     /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
@@ -147,22 +189,22 @@ impl LM {
     /// 3. Provider via model string: no `base_url`, model in "provider:model" format
     ///    → Uses provider-specific client (openai, anthropic, gemini, etc.)
     #[tracing::instrument(
-        name = "dsrs.lm.initialize_client",
+        name = "dsrs.lm.from_config",
         level = "debug",
-        skip(self),
+        skip(config),
         fields(
-            model = %self.model,
-            base_url_present = self.base_url.is_some(),
-            api_key_present = self.api_key.is_some(),
-            cache_enabled = self.cache,
-            max_tokens = self.max_tokens,
-            temperature = self.temperature,
-            max_tool_iterations = self.max_tool_iterations
+            model = %config.model,
+            base_url_present = config.base_url.is_some(),
+            api_key_present = config.api_key.is_some(),
+            cache_enabled = config.cache,
+            max_tokens = config.max_tokens,
+            temperature = config.temperature,
+            max_tool_iterations = config.max_tool_iterations
         )
     )]
-    async fn initialize_client(mut self) -> Result<Self> {
+    pub async fn from_config(config: LMConfig) -> Result<Self> {
         // Determine which build case based on what's provided
-        let client = match (&self.base_url, &self.api_key, &self.model) {
+        let client = match (&config.base_url, &config.api_key, &config.model) {
             // Case 1: OpenAI-compatible with authentication (base_url + api_key)
             // For custom OpenAI-compatible APIs that require API keys
             (Some(base_url), Some(api_key), _) => {
@@ -170,14 +212,14 @@ impl LM {
                 Arc::new(LMClient::from_openai_compatible(
                     base_url,
                     api_key,
-                    &self.model,
+                    &config.model,
                 )?)
             }
             // Case 2: Local OpenAI-compatible server (base_url only, no api_key)
             // For vLLM, text-generation-inference, and other local OpenAI-compatible servers
             (Some(base_url), None, _) => {
                 debug!(build_case = 2, "using local openai-compatible client");
-                Arc::new(LMClient::from_local(base_url, &self.model)?)
+                Arc::new(LMClient::from_local(base_url, &config.model)?)
             }
             // Case 3: Provider via model string (no base_url, model in "provider:model" format)
             // Uses provider-specific clients
@@ -197,16 +239,19 @@ impl LM {
             }
         };
 
-        self.client = Some(client);
-
-        // Initialize cache if enabled
-        if self.cache && self.cache_handler.is_none() {
+        let cache_handler = if config.cache {
             debug!("initializing response cache");
-            self.cache_handler = Some(Arc::new(Mutex::new(ResponseCache::new().await)));
-        }
+            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
+        } else {
+            None
+        };
 
         debug!("lm client initialized");
-        Ok(self)
+        Ok(LM {
+            config,
+            cache_handler,
+            client: Some(client),
+        })
     }
 
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
@@ -218,24 +263,19 @@ impl LM {
 }
 
 // Implement build() for all builder states since optional fields don't require setting
-impl<S: l_m_builder::State> LMBuilder<S> {
-    /// Builds the LM instance with proper client initialization
-    ///
-    /// Supports 3 build cases:
-    /// 1. OpenAI-compatible with auth: `base_url` + `api_key` provided
-    /// 2. Local OpenAI-compatible: `base_url` only (for vLLM, etc.)
-    /// 3. Provider via model string: model in "provider:model" format
+impl<S: l_m_config_builder::State> LMConfigBuilder<S> {
+    /// Finishes the config and initializes the live client — see [`LM::from_config`].
     #[tracing::instrument(name = "dsrs.lm.build", level = "debug", skip(self))]
     pub async fn build(self) -> Result<LM> {
-        let lm = self.__internal_build();
+        let config = self.__internal_build();
         debug!(
-            model = %lm.model,
-            base_url_present = lm.base_url.is_some(),
-            api_key_present = lm.api_key.is_some(),
-            cache_enabled = lm.cache,
+            model = %config.model,
+            base_url_present = config.base_url.is_some(),
+            api_key_present = config.api_key.is_some(),
+            cache_enabled = config.cache,
             "building lm"
         );
-        lm.initialize_client().await
+        LM::from_config(config).await
     }
 }
 
@@ -244,6 +284,38 @@ struct ToolLoopResult {
     chat_history: Vec<rig::message::Message>,
     tool_calls: Vec<ToolCall>,
     tool_executions: Vec<String>,
+    events: Vec<SpanEvent>,
+}
+
+/// One executed tool call with the details the trace format records.
+struct ToolRunRecord {
+    call: ToolCall,
+    result: String,
+    duration_us: u64,
+    /// Failure reported back to the model as text (e.g. tool not found).
+    error: Option<String>,
+}
+
+impl ToolRunRecord {
+    fn to_event(&self) -> SpanEvent {
+        SpanEvent::ToolRun {
+            id: self.call.id.clone(),
+            name: self.call.function.name.clone(),
+            args: self.call.function.arguments.clone(),
+            result: self.result.clone(),
+            duration_us: self.duration_us,
+            error: self.error.clone(),
+        }
+    }
+}
+
+/// Converts grouped rig assistant content into a single [`Message`] for event
+/// recording, preserving reasoning and tool-call blocks.
+fn assistant_message_from_content(content: &rig::OneOrMany<AssistantContent>) -> Message {
+    Message::from(rig::message::Message::Assistant {
+        id: None,
+        content: content.clone(),
+    })
 }
 
 /// What the model actually wants to do, extracted from a potentially multi-block response.
@@ -343,24 +415,18 @@ impl LM {
     /// history plus every generation parameter that changes the completion.
     /// Demos and instructions live inside the messages, so they are covered
     /// automatically. Hashing streams through the `Debug` representation — no
-    /// intermediate JSON tree or string is materialized.
+    /// intermediate JSON tree or string is materialized. Uses the same stable
+    /// hasher as the trace format's `request_hash`.
     fn cache_key_for(&self, messages: &Chat) -> u64 {
+        use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
 
-        struct FmtHasher<'a>(&'a mut std::hash::DefaultHasher);
-        impl std::fmt::Write for FmtHasher<'_> {
-            fn write_str(&mut self, s: &str) -> std::fmt::Result {
-                self.0.write(s.as_bytes());
-                Ok(())
-            }
-        }
-
-        let mut hasher = std::hash::DefaultHasher::new();
-        hasher.write(self.model.as_bytes());
-        hasher.write(&self.temperature.to_bits().to_le_bytes());
-        hasher.write(&self.max_tokens.to_le_bytes());
+        let mut hasher = StableHasher::new();
+        hasher.write(self.config.model.as_bytes());
+        hasher.write(&self.config.temperature.to_bits().to_le_bytes());
+        hasher.write(&self.config.max_tokens.to_le_bytes());
         use std::fmt::Write as _;
-        let _ = write!(FmtHasher(&mut hasher), "{messages:?}");
+        let _ = write!(HashWriter(&mut hasher), "{messages:?}");
         hasher.finish()
     }
 
@@ -398,8 +464,8 @@ impl LM {
             },
             documents: Vec::new(),
             tools: tool_definitions.to_vec(),
-            temperature: Some(self.temperature as f64),
-            max_tokens: Some(self.max_tokens as u64),
+            temperature: Some(self.config.temperature as f64),
+            max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
             additional_params: None,
             output_schema: None,
@@ -423,8 +489,9 @@ impl LM {
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.max_retries && is_retryable_completion_error(&err) => {
+                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
                     let backoff = self
+                        .config
                         .retry_base_delay_ms
                         .saturating_mul(1u64 << attempt.min(16));
                     // Scope the RNG so it drops before the await (thread_rng is !Send).
@@ -435,7 +502,7 @@ impl LM {
                     let delay = Duration::from_millis(backoff.saturating_add(jitter));
                     warn!(
                         attempt = attempt + 1,
-                        max_retries = self.max_retries,
+                        max_retries = self.config.max_retries,
                         delay_ms = delay.as_millis() as u64,
                         error = %err,
                         "retrying transient lm completion failure"
@@ -454,29 +521,39 @@ impl LM {
         tools_by_name: &HashMap<String, Arc<dyn ToolDyn>>,
         calls: &[ToolCall],
         context: &str,
-    ) -> Result<Vec<(ToolCall, String)>> {
+    ) -> Result<Vec<ToolRunRecord>> {
         let executions = calls.iter().map(|tc| {
             let tool = tools_by_name.get(&tc.function.name).cloned();
             async move {
-                let result = match tool {
-                    Some(tool) => tool
-                        .call(tc.function.arguments.to_string())
-                        .await
-                        .map_err(|err| {
-                            anyhow::anyhow!(
-                                "tool `{}` execution failed ({}): {:?}",
-                                tc.function.name,
-                                context,
-                                err
-                            )
-                        })?,
+                let started = std::time::Instant::now();
+                let (result, error) = match tool {
+                    Some(tool) => {
+                        let result = tool
+                            .call(tc.function.arguments.to_string())
+                            .await
+                            .map_err(|err| {
+                                anyhow::anyhow!(
+                                    "tool `{}` execution failed ({}): {:?}",
+                                    tc.function.name,
+                                    context,
+                                    err
+                                )
+                            })?;
+                        (result, None)
+                    }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        format!("Tool '{}' not found", tc.function.name)
+                        let message = format!("Tool '{}' not found", tc.function.name);
+                        (message.clone(), Some(message))
                     }
                 };
                 trace!(tool = %tc.function.name, result_len = result.len(), "tool executed");
-                Ok::<_, anyhow::Error>((tc.clone(), result))
+                Ok::<_, anyhow::Error>(ToolRunRecord {
+                    call: tc.clone(),
+                    result,
+                    duration_us: started.elapsed().as_micros() as u64,
+                    error,
+                })
             }
         });
 
@@ -484,24 +561,25 @@ impl LM {
     }
 
     /// Push tool results into chat history as a single User message.
-    fn push_tool_results(
-        chat_history: &mut Vec<rig::message::Message>,
-        results: &[(ToolCall, String)],
-    ) {
+    fn push_tool_results(chat_history: &mut Vec<rig::message::Message>, results: &[ToolRunRecord]) {
         use rig::OneOrMany;
         use rig::message::UserContent;
 
         let tool_result_contents: Vec<UserContent> = results
             .iter()
-            .map(|(tc, result)| {
+            .map(|record| {
+                let tc = &record.call;
                 if let Some(call_id) = &tc.call_id {
                     UserContent::tool_result_with_call_id(
                         tc.id.clone(),
                         call_id.clone(),
-                        OneOrMany::one(result.clone().into()),
+                        OneOrMany::one(record.result.clone().into()),
                     )
                 } else {
-                    UserContent::tool_result(tc.id.clone(), OneOrMany::one(result.clone().into()))
+                    UserContent::tool_result(
+                        tc.id.clone(),
+                        OneOrMany::one(record.result.clone().into()),
+                    )
                 }
             })
             .collect();
@@ -525,28 +603,35 @@ impl LM {
         ),
         fields(
             initial_tool_count = initial_calls.len(),
-            max_iterations = self.max_tool_iterations as usize
+            max_iterations = self.config.max_tool_iterations as usize
         )
     )]
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool_loop(
         &self,
         initial_calls: &[ToolCall],
         initial_assistant_content: rig::OneOrMany<AssistantContent>,
+        initial_usage: LmUsage,
         tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
-        let max_iterations = self.max_tool_iterations as usize;
+        let max_iterations = self.config.max_tool_iterations as usize;
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
+        let mut events = vec![SpanEvent::Exchange {
+            message: assistant_message_from_content(&initial_assistant_content),
+            usage: initial_usage,
+        }];
 
         // Execute the initial tool call batch
         debug!(count = initial_calls.len(), "executing initial tool calls");
         let results = Self::execute_tool_batch(&tools.by_name, initial_calls, "initial").await?;
-        for (tc, result) in &results {
-            all_tool_calls.push(tc.clone());
-            all_tool_executions.push(result.clone());
+        for record in &results {
+            all_tool_calls.push(record.call.clone());
+            all_tool_executions.push(record.result.clone());
+            events.push(record.to_event());
         }
 
         // Add initial assistant turn to history, preserving ALL content blocks
@@ -571,6 +656,7 @@ impl LM {
                 })
                 .await?;
 
+            let round_usage = LmUsage::from(response.usage);
             accumulated_usage.prompt_tokens += response.usage.input_tokens;
             accumulated_usage.completion_tokens += response.usage.output_tokens;
             accumulated_usage.total_tokens += response.usage.total_tokens;
@@ -587,11 +673,17 @@ impl LM {
             match classify_choice(response.choice) {
                 ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
+                    let message = Message::assistant(&text);
+                    events.push(SpanEvent::Exchange {
+                        message: message.clone(),
+                        usage: round_usage,
+                    });
                     return Ok(ToolLoopResult {
-                        message: Message::assistant(&text),
+                        message,
                         chat_history,
                         tool_calls: all_tool_calls,
                         tool_executions: all_tool_executions,
+                        events,
                     });
                 }
                 ChoiceAction::ToolCalls {
@@ -599,12 +691,17 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    events.push(SpanEvent::Exchange {
+                        message: assistant_message_from_content(&full_content),
+                        usage: round_usage,
+                    });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
                     let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
-                    for (tc, result) in &results {
-                        all_tool_calls.push(tc.clone());
-                        all_tool_executions.push(result.clone());
+                    for record in &results {
+                        all_tool_calls.push(record.call.clone());
+                        all_tool_executions.push(record.result.clone());
+                        events.push(record.to_event());
                     }
 
                     // Preserve full content (reasoning + tool calls) in history
@@ -649,10 +746,10 @@ impl LM {
         level = "debug",
         skip(self, messages, tools),
         fields(
-            model = %self.model,
+            model = %self.config.model,
             message_count = messages.len(),
             tool_count = tools.definitions.len(),
-            cache_enabled = self.cache,
+            cache_enabled = self.config.cache,
             tool_loop_mode = ?tool_loop_mode
         )
     )]
@@ -667,7 +764,7 @@ impl LM {
 
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
-        let cache_key = if self.cache && self.cache_handler.is_some() && tools.is_empty() {
+        let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
             Some(self.cache_key_for(&messages))
         } else {
             None
@@ -681,11 +778,15 @@ impl LM {
             let mut chat = messages;
             chat.push_message(output.clone());
             return Ok(LMResponse {
-                output,
-                usage: entry.prediction.lm_usage,
+                output: output.clone(),
+                usage: entry.usage,
                 chat,
                 tool_calls: Vec::new(),
                 tool_executions: Vec::new(),
+                events: vec![SpanEvent::Exchange {
+                    message: output,
+                    usage: entry.usage,
+                }],
             });
         }
 
@@ -721,7 +822,8 @@ impl LM {
             "lm completion received"
         );
 
-        let mut accumulated_usage = LmUsage::from(response.usage);
+        let first_usage = LmUsage::from(response.usage);
+        let mut accumulated_usage = first_usage;
 
         // Scan ALL content blocks in the response — don't just look at .first().
         // Responses can be [Reasoning, ToolCall] or [Reasoning, Text].
@@ -729,9 +831,17 @@ impl LM {
         let mut returned_tool_calls = Vec::new();
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
+        let mut events: Vec<SpanEvent> = Vec::new();
         let classified = classify_choice(response.choice);
         let first_choice = match classified {
-            ChoiceAction::Text(text) => Message::assistant(&text),
+            ChoiceAction::Text(text) => {
+                let message = Message::assistant(&text);
+                events.push(SpanEvent::Exchange {
+                    message: message.clone(),
+                    usage: first_usage,
+                });
+                message
+            }
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -742,6 +852,7 @@ impl LM {
                     .execute_tool_loop(
                         &calls,
                         *full_content,
+                        first_usage,
                         tools,
                         chat_history,
                         system_prompt.clone(),
@@ -759,12 +870,17 @@ impl LM {
                 let names: Vec<_> = calls.iter().map(|tc| tc.function.name.as_str()).collect();
                 warn!(?names, "tools requested but no tools available");
                 let msg = format!("Tool calls requested: {:?}, but no tools available", names);
-                assistant_content_for_history = Some(rig::OneOrMany::many(
+                let content = rig::OneOrMany::many(
                     calls
                         .into_iter()
                         .map(AssistantContent::ToolCall)
                         .collect::<Vec<_>>(),
-                )?);
+                )?;
+                events.push(SpanEvent::Exchange {
+                    message: assistant_message_from_content(&content),
+                    usage: first_usage,
+                });
+                assistant_content_for_history = Some(content);
                 append_output_after_history = true;
                 Message::assistant(&msg)
             }
@@ -773,6 +889,10 @@ impl LM {
                 assistant_text,
                 full_content,
             } => {
+                events.push(SpanEvent::Exchange {
+                    message: assistant_message_from_content(&full_content),
+                    usage: first_usage,
+                });
                 returned_tool_calls = calls;
                 assistant_content_for_history = Some(*full_content);
                 Message::assistant(assistant_text.unwrap_or_default())
@@ -789,7 +909,7 @@ impl LM {
         {
             let entry = CacheEntry {
                 prompt: messages.to_json().to_string(),
-                prediction: Prediction::new(HashMap::new(), accumulated_usage),
+                usage: accumulated_usage,
                 raw_output: Some(first_choice.content()),
             };
             cache.lock().await.insert_entry(key, entry);
@@ -836,8 +956,12 @@ impl LM {
                 .map(|result| result.tool_calls.clone())
                 .unwrap_or(returned_tool_calls),
             tool_executions: tool_loop_result
-                .map(|result| result.tool_executions)
+                .as_ref()
+                .map(|result| result.tool_executions.clone())
                 .unwrap_or_default(),
+            events: tool_loop_result
+                .map(|result| result.events)
+                .unwrap_or(events),
         })
     }
 
@@ -846,117 +970,6 @@ impl LM {
     /// Panics if caching is disabled for this `LM`.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
-        level = "trace",
-        skip(self),
-        fields(n)
-    )]
-    pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler
-            .as_ref()
-            .unwrap()
-            .lock()
-            .await
-            .get_history(n)
-            .await
-            .unwrap()
-    }
-}
-
-/// In-memory LM used for deterministic tests and examples.
-#[derive(Clone, Builder, Default)]
-pub struct DummyLM {
-    pub api_key: String,
-    #[builder(default = "https://api.openai.com/v1".to_string())]
-    pub base_url: String,
-    #[builder(default = 0.7)]
-    pub temperature: f32,
-    #[builder(default = 512)]
-    pub max_tokens: u32,
-    #[builder(default = true)]
-    pub cache: bool,
-    /// Cache backing storage shared with the real implementation.
-    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
-}
-
-impl DummyLM {
-    /// Creates a new [`DummyLM`] with an enabled in-memory cache.
-    pub async fn new() -> Self {
-        let cache_handler = Arc::new(Mutex::new(ResponseCache::new().await));
-        Self {
-            api_key: "".into(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            temperature: 0.7,
-            max_tokens: 512,
-            cache: true,
-            cache_handler: Some(cache_handler),
-        }
-    }
-
-    /// Mimics [`LM::call`] without hitting a remote provider.
-    ///
-    /// The provided `prediction` becomes the assistant output and is inserted
-    /// into the shared cache when caching is enabled.
-    #[tracing::instrument(
-        name = "dsrs.lm.dummy_call",
-        level = "debug",
-        skip(self, example, messages, prediction),
-        fields(
-            cache_enabled = self.cache,
-            cache_handler_present = self.cache_handler.is_some(),
-            message_count = messages.len()
-        )
-    )]
-    pub async fn call(
-        &self,
-        example: RawExample,
-        messages: Chat,
-        prediction: String,
-    ) -> Result<LMResponse> {
-        let mut full_chat = messages.clone();
-        full_chat.push_message(Message::assistant(prediction.clone()));
-
-        if self.cache
-            && let Some(cache) = self.cache_handler.as_ref()
-        {
-            let (tx, rx) = tokio::sync::mpsc::channel(1);
-            let cache_clone = cache.clone();
-            let example_clone = example.clone();
-
-            // Spawn the cache insert operation to avoid deadlock
-            tokio::spawn(
-                async move {
-                    let _ = cache_clone.lock().await.insert(example_clone, rx).await;
-                }
-                .instrument(tracing::Span::current()),
-            );
-            debug!("spawned async cache insert");
-
-            // Send the result to the cache
-            tx.send(CacheEntry {
-                prompt: messages.to_json().to_string(),
-                prediction: Prediction::new(
-                    HashMap::from([("prediction".to_string(), prediction.clone().into())]),
-                    LmUsage::default(),
-                ),
-                raw_output: Some(prediction.clone()),
-            })
-            .await
-            .map_err(|_| anyhow::anyhow!("Failed to send to cache"))?;
-            trace!("sent dummy response to cache task");
-        }
-
-        Ok(LMResponse {
-            output: Message::assistant(prediction.clone()),
-            usage: LmUsage::default(),
-            chat: full_chat,
-            tool_calls: Vec::new(),
-            tool_executions: Vec::new(),
-        })
-    }
-
-    /// Returns cached entries just like [`LM::inspect_history`].
-    #[tracing::instrument(
-        name = "dsrs.lm.dummy.inspect_history",
         level = "trace",
         skip(self),
         fields(n)
@@ -1188,15 +1201,17 @@ mod tests {
 
     fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
-            base_url: None,
-            api_key: None,
-            model: "openai:gpt-4o-mini".to_string(),
-            temperature: 0.0,
-            max_tokens: 128,
-            max_tool_iterations: 4,
-            max_retries: 0,
-            retry_base_delay_ms: 1,
-            cache: false,
+            config: LMConfig {
+                base_url: None,
+                api_key: None,
+                model: "openai:gpt-4o-mini".to_string(),
+                temperature: 0.0,
+                max_tokens: 128,
+                max_tool_iterations: 4,
+                max_retries: 0,
+                retry_base_delay_ms: 1,
+                cache: false,
+            },
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
         }
@@ -1250,5 +1265,31 @@ mod tests {
         assert!(response.chat.messages[1].has_tool_calls());
         assert!(response.chat.messages[2].has_tool_results());
         assert_eq!(response.chat.messages[3].role, Role::Assistant);
+
+        // Ordered per-round-trip record: tool-call exchange, tool run, final text.
+        assert_eq!(response.events.len(), 3);
+        assert!(
+            matches!(&response.events[0], SpanEvent::Exchange { message, .. } if message.has_tool_calls())
+        );
+        // rig's ToolDyn::call JSON-encodes the output, hence contains not equals.
+        assert!(
+            matches!(&response.events[1], SpanEvent::ToolRun { name, result, .. } if name == "counter" && result.contains("counted"))
+        );
+        assert!(
+            matches!(&response.events[2], SpanEvent::Exchange { message, .. } if message.content() == "done")
+        );
+    }
+
+    #[tokio::test]
+    async fn plain_text_call_records_single_exchange_event() {
+        let model = TestCompletionModel::new([make_text("hello")]);
+        let lm = test_lm_with_model(model);
+
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let response = lm.call(chat, vec![]).await.expect("call should succeed");
+
+        assert!(
+            matches!(response.events.as_slice(), [SpanEvent::Exchange { message, .. }] if message.content() == "hello")
+        );
     }
 }

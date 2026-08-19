@@ -1,6 +1,6 @@
 use std::{error::Error as StdError, time::Duration};
 
-use crate::{BamlValue, LmUsage};
+use crate::LmUsage;
 
 /// Error from the jsonish coercion layer when LM output can't be parsed as a typed value.
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub enum ErrorClass {
 /// 2. **[`Parse`](PredictError::Parse)** — the LM responded, but we couldn't extract
 ///    the expected fields from its output. Prompt-engineering problem. Retryable (the
 ///    LM might produce different output). Includes the raw response for debugging.
-/// 3. **[`Conversion`](PredictError::Conversion)** — we parsed a valid `BamlValue`
+/// 3. **[`Conversion`](PredictError::Conversion)** — we parsed a valid `serde_json::Value`
 ///    from the response, but it doesn't fit the Rust output type. Code bug or schema
 ///    mismatch. **Not retryable** — the same parsed value will fail the same way.
 ///
@@ -80,7 +80,7 @@ pub enum PredictError {
         lm_usage: LmUsage,
     },
 
-    /// The response parsed into a `BamlValue` but doesn't match the typed output struct.
+    /// The response parsed into a `serde_json::Value` but doesn't match the typed output struct.
     ///
     /// "Understood the LM, but the value doesn't fit the Rust type." Usually a code bug
     /// or schema mismatch — not something retrying will fix.
@@ -88,8 +88,19 @@ pub enum PredictError {
     Conversion {
         #[source]
         source: ConversionError,
-        /// The successfully parsed `BamlValue` that failed type conversion.
-        parsed: BamlValue,
+        /// The successfully parsed `serde_json::Value` that failed type conversion.
+        parsed: serde_json::Value,
+    },
+
+    /// A strict [`replay`](crate::trace::replay) scope refused the call: the live
+    /// request diverged from its recording (or the recorded span is unusable).
+    ///
+    /// The fixture and the code disagree — re-record the trace or fix the drift.
+    /// **Not retryable**: the same request diverges the same way.
+    #[error("strict replay refused the call")]
+    Replay {
+        #[source]
+        source: crate::trace::ReplayError,
     },
 }
 
@@ -99,6 +110,7 @@ impl PredictError {
             Self::Lm { source } => source.class(),
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
+            Self::Replay { .. } => ErrorClass::Internal,
         }
     }
 
@@ -107,6 +119,7 @@ impl PredictError {
             Self::Lm { source } => source.is_retryable(),
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
+            Self::Replay { .. } => false,
         }
     }
 }
@@ -146,7 +159,7 @@ pub enum ParseError {
         field: String,
         label: String,
         expression: String,
-        value: BamlValue,
+        value: serde_json::Value,
     },
 
     /// Multiple fields failed to parse. Contains all individual errors.
@@ -154,7 +167,7 @@ pub enum ParseError {
     Multiple {
         errors: Vec<ParseError>,
         /// Partially parsed output (fields that did succeed), if any.
-        partial: Option<BamlValue>,
+        partial: Option<serde_json::Value>,
     },
 }
 
@@ -177,13 +190,13 @@ impl ParseError {
     }
 }
 
-/// A parsed `BamlValue` doesn't match the expected Rust output type.
+/// A parsed `serde_json::Value` doesn't match the expected Rust output type.
 ///
 /// This is distinct from [`ParseError`]: `ParseError` means "couldn't understand the LM text",
 /// `ConversionError` means "understood it, but it doesn't fit the typed output struct."
 #[derive(Debug, thiserror::Error)]
 pub enum ConversionError {
-    /// Expected one BamlValue variant, got another (e.g. expected String, got Int).
+    /// Expected one serde_json::Value variant, got another (e.g. expected String, got Int).
     #[error("expected {expected}, got {actual}")]
     TypeMismatch {
         expected: &'static str,

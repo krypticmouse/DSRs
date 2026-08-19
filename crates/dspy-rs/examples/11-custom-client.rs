@@ -8,7 +8,7 @@ cargo run --example 11-custom-client
 */
 
 use anyhow::Result;
-use dspy_rs::{ChatAdapter, LM, LMClient, Predict, Signature, configure, init_tracing};
+use dspy_rs::{LM, LMClient, Predict, Signature, configure, init_tracing};
 use rig::providers::azure;
 use std::env;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
         .with_client(custom_lm_client)
         .await?;
 
-    configure(lm, ChatAdapter);
+    configure(lm);
 
     let predictor = Predict::<QA>::new();
     let prediction = predictor

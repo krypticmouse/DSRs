@@ -3,6 +3,7 @@ use std::ops::Deref;
 use indexmap::IndexMap;
 use rig::message::ToolCall;
 
+use crate::trace::SpanId;
 use crate::{Flag, LmUsage};
 
 /// Per-field details from parsing an LM response.
@@ -53,8 +54,8 @@ pub struct CallMetadata {
     pub tool_calls: Vec<ToolCall>,
     /// Results from executing tool calls.
     pub tool_executions: Vec<String>,
-    /// Trace node ID, if tracing is active.
-    pub node_id: Option<usize>,
+    /// Trace span id, when the call ran inside a capture scope.
+    pub span_id: Option<SpanId>,
     /// Per-field parse details, keyed by field name.
     pub field_meta: IndexMap<String, FieldMeta>,
 }
@@ -66,7 +67,7 @@ impl Default for CallMetadata {
             lm_usage: LmUsage::default(),
             tool_calls: Vec::new(),
             tool_executions: Vec::new(),
-            node_id: None,
+            span_id: None,
             field_meta: IndexMap::new(),
         }
     }
@@ -78,7 +79,7 @@ impl CallMetadata {
         lm_usage: LmUsage,
         tool_calls: Vec<ToolCall>,
         tool_executions: Vec<String>,
-        node_id: Option<usize>,
+        span_id: Option<SpanId>,
         field_meta: IndexMap<String, FieldMeta>,
     ) -> Self {
         Self {
@@ -86,7 +87,7 @@ impl CallMetadata {
             lm_usage,
             tool_calls,
             tool_executions,
-            node_id,
+            span_id,
             field_meta,
         }
     }

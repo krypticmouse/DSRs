@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use dspy_rs::{ChatAdapter, LM, PredictError, ReAct, Signature, configure, forward_all};
+use dspy_rs::{LM, PredictError, ReAct, Signature, configure, forward_all};
 use serde_json::Value;
 
 #[derive(Signature, Clone, Debug)]
@@ -35,13 +35,10 @@ fn extract_first_integer(text: &str) -> Option<i64> {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Smoke Label: Slice 4 ReAct + Operational
-    configure(
-        LM::builder()
+    configure(LM::builder()
             .model("openai:gpt-5.2".to_string())
             .build()
-            .await?,
-        ChatAdapter,
-    );
+            .await?);
 
     let module = ReAct::<SmokeSig>::builder()
         .max_steps(6)

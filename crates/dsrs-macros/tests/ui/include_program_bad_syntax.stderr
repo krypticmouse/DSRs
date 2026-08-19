@@ -1,0 +1,5 @@
+error: include_program!("include_program_bad.dsrs"): line 4, column 1: unknown top-level keyword `widget`: expected one of `caps`, `model`, `sig`, `class`, `enum`, `tool`, `lineage`, `main`
+ --> tests/ui/include_program_bad_syntax.rs:3:31
+  |
+3 | dsrs_macros::include_program!("include_program_bad.dsrs");
+  |                               ^^^^^^^^^^^^^^^^^^^^^^^^^^

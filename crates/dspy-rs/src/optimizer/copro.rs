@@ -2,12 +2,13 @@ use anyhow::{Result, anyhow};
 use bon::Builder;
 
 use crate::core::DynPredictor;
-use crate::evaluate::{TypedMetric, average_score};
-use crate::optimizer::{
-    Optimizer, evaluate_module_with_metric, predictor_names, with_named_predictor,
+use crate::evaluate::TypedMetric;
+use crate::optimizer::engine::{
+    Budget, Candidate, EngineConfig, EvalEngine, EvalOutcome, apply_candidate,
 };
-use crate::predictors::Example;
-use crate::{Facet, Module, Signature};
+use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
+use crate::core::ToInput;
+use crate::{Facet, Module};
 
 /// Breadth-first instruction optimizer.
 ///
@@ -15,6 +16,13 @@ use crate::{Facet, Module, Signature};
 /// per predictor, evaluates each on the trainset, keeps the best, then repeats for
 /// `depth` rounds. Simple and predictable — good for quick iteration when you want
 /// better instructions without complex search.
+///
+/// COPRO is a thin strategy over the shared [`EvalEngine`]: each candidate
+/// instruction is an overlay [`Candidate`] evaluated through the engine's
+/// cached bounded-concurrency fan-out, and each round's winner is installed
+/// permanently through the one candidate seam ([`apply_candidate`]). Repeated
+/// candidates within a round (the base instruction always competes) are
+/// deduplicated by content hash and served from the rollout cache.
 ///
 /// Does not use feedback from the metric — only the numerical score matters. If you
 /// have rich textual feedback, use [`GEPA`](crate::GEPA) instead.
@@ -71,63 +79,6 @@ impl COPRO {
         })
     }
 
-    fn set_instruction<M>(module: &mut M, predictor_name: &str, instruction: String) -> Result<()>
-    where
-        M: for<'a> Facet<'a>,
-    {
-        with_named_predictor(module, predictor_name, |predictor| {
-            predictor.set_instruction(instruction);
-            Ok(())
-        })
-    }
-
-    async fn score_candidate<S, M, MT>(
-        &self,
-        module: &mut M,
-        predictor_name: &str,
-        candidate_instruction: &str,
-        trainset: &[Example<S>],
-        metric: &MT,
-    ) -> Result<f32>
-    where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
-    {
-        // Instruction-only save/restore — no demo serialization round-trip.
-        let original_instruction = with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.instruction_override())
-        })?;
-
-        Self::set_instruction(module, predictor_name, candidate_instruction.to_string())?;
-        let evaluation =
-            evaluate_module_with_metric(&*module, trainset, metric, self.eval_concurrency).await;
-
-        match evaluation {
-            Ok(outcomes) => {
-                with_named_predictor(module, predictor_name, |predictor| {
-                    predictor.restore_instruction(original_instruction);
-                    Ok(())
-                })?;
-                Ok(average_score(&outcomes))
-            }
-            Err(eval_err) => {
-                if let Err(restore_err) =
-                    with_named_predictor(module, predictor_name, |predictor| {
-                        predictor.restore_instruction(original_instruction.clone());
-                        Ok(())
-                    })
-                {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore predictor state: {restore_err}"
-                    ));
-                }
-                Err(eval_err)
-            }
-        }
-    }
-
     fn candidate_instructions(
         &self,
         base_instruction: &str,
@@ -160,17 +111,16 @@ impl COPRO {
 impl Optimizer for COPRO {
     type Report = ();
 
-    async fn compile<S, M, MT>(
+    async fn compile<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<Example<S>>,
+        trainset: Vec<E>,
         metric: &MT,
     ) -> Result<Self::Report>
     where
-        S: Signature,
-        S::Input: Clone,
-        M: Module<Input = S::Input> + for<'a> Facet<'a>,
-        MT: TypedMetric<S, M>,
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + for<'a> Facet<'a>,
+        MT: TypedMetric<E, M>,
     {
         if self.breadth <= 1 {
             return Err(anyhow!("breadth must be greater than 1"));
@@ -182,6 +132,16 @@ impl Optimizer for COPRO {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
+        let mut engine = EvalEngine::new(
+            trainset,
+            metric,
+            EngineConfig {
+                concurrency: self.eval_concurrency,
+                budget: Budget::unlimited(),
+                cache_salt: 0,
+            },
+        );
+
         for depth in 0..self.depth {
             for predictor_name in &predictor_names {
                 let base_instruction = Self::current_instruction(module, predictor_name)?;
@@ -190,26 +150,33 @@ impl Optimizer for COPRO {
                     Ok(self.candidate_instructions(&base_instruction, predictor, depth))
                 })?;
 
-                let mut best_instruction = base_instruction.clone();
-                let mut best_score = f32::MIN;
-
-                for candidate in candidates {
-                    let score = self
-                        .score_candidate::<S, _, _>(
-                            module,
-                            predictor_name,
-                            &candidate,
-                            &trainset,
-                            metric,
-                        )
-                        .await?;
-                    if score > best_score {
-                        best_score = score;
-                        best_instruction = candidate;
+                let mut best: Option<(f64, String)> = None;
+                for instruction in candidates {
+                    let row =
+                        engine.register(Candidate::with_instruction(predictor_name, &instruction));
+                    let eval = match engine.evaluate(module, row, None).await? {
+                        EvalOutcome::Complete(eval) => eval,
+                        EvalOutcome::BudgetExhausted { needed } => {
+                            return Err(anyhow!(
+                                "unexpected budget exhaustion ({needed} rollouts) with an unlimited budget"
+                            ));
+                        }
+                    };
+                    let score = eval.mean();
+                    if best.as_ref().is_none_or(|(top, _)| score > *top) {
+                        best = Some((score, instruction));
                     }
                 }
 
-                Self::set_instruction(module, predictor_name, best_instruction)?;
+                let (_, best_instruction) =
+                    best.expect("breadth > 1 guarantees at least one candidate");
+                // Permanent install through the one candidate seam. The engine's
+                // baseline hash changes with it, correctly invalidating cached
+                // rollouts recorded against the previous round's skeleton.
+                let _undo = apply_candidate(
+                    module,
+                    &Candidate::with_instruction(predictor_name, best_instruction),
+                )?;
             }
         }
 
@@ -222,7 +189,8 @@ mod tests {
     use anyhow::{Result, anyhow};
 
     use super::*;
-    use crate::evaluate::{MetricOutcome, TypedMetric};
+    use crate::evaluate::{Eval, TypedMetric};
+    use crate::trace::Trace;
     use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
 
     #[derive(Signature, Clone, Debug)]
@@ -259,18 +227,21 @@ mod tests {
 
     struct AlwaysFailMetric;
 
-    impl TypedMetric<CoproStateSig, CoproStateModule> for AlwaysFailMetric {
+    type CoproRow = (CoproStateSigInput, CoproStateSigOutput);
+
+    impl TypedMetric<CoproRow, CoproStateModule> for AlwaysFailMetric {
         async fn evaluate(
             &self,
-            _example: &Example<CoproStateSig>,
+            _example: &CoproRow,
             _prediction: &Predicted<CoproStateSigOutput>,
-        ) -> Result<MetricOutcome> {
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
         }
     }
 
-    fn trainset() -> Vec<Example<CoproStateSig>> {
-        vec![Example::new(
+    fn trainset() -> Vec<CoproRow> {
+        vec![(
             CoproStateSigInput {
                 prompt: "one".to_string(),
             },
@@ -281,7 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn score_candidate_restores_state_when_metric_errors() {
+    async fn compile_restores_state_when_metric_errors() {
         let optimizer = COPRO::builder().breadth(2).depth(1).build();
         let mut module = CoproStateModule {
             predictor: Predict::<CoproStateSig>::builder()
@@ -290,13 +261,7 @@ mod tests {
         };
 
         let err = optimizer
-            .score_candidate::<CoproStateSig, _, _>(
-                &mut module,
-                "predictor",
-                "candidate instruction",
-                &trainset(),
-                &AlwaysFailMetric,
-            )
+            .compile(&mut module, trainset(), &AlwaysFailMetric)
             .await
             .expect_err("candidate scoring should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));

@@ -34,7 +34,7 @@ cargo add dspy-rs tokio anyhow
 Tell DSRs which model to use. This sets a global default that all predictors will use:
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM};
+use dspy_rs::{configure, init_tracing, LM};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -45,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,  // handles prompt formatting and response parsing
     );
 
     Ok(())
@@ -60,7 +59,7 @@ Set `OPENAI_API_KEY` in your environment. For other providers, use the appropria
 
 <Step title="Define a signature">
 
-A [signature](/docs/building-blocks/signature) declares your task's inputs and outputs:
+A [signature](/docs/components/signatures) declares your task's inputs and outputs:
 
 ```rust
 use dspy_rs::Signature;
@@ -86,7 +85,7 @@ The doc comments become:
 
 <Step title="Call the LM">
 
-Create a [predictor](/docs/building-blocks/predictors) and call it:
+Create a [predictor](/docs/components/predict) and call it:
 
 ```rust
 use dspy_rs::Predict;
@@ -109,7 +108,7 @@ The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields
 ## Complete example
 
 ```rust
-use dspy_rs::{configure, init_tracing, ChatAdapter, LM, Predict, Signature};
+use dspy_rs::{configure, init_tracing, LM, Predict, Signature};
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
@@ -130,7 +129,6 @@ async fn main() -> anyhow::Result<()> {
             .model("openai:gpt-4o-mini".to_string())
             .build()
             .await?,
-        ChatAdapter,
     );
 
     let predict = Predict::<QA>::new();
@@ -148,17 +146,17 @@ async fn main() -> anyhow::Result<()> {
 ## Next steps
 
 <CardGroup cols={2}>
-<Card title="Signatures" icon="pen-to-square" href="/docs/building-blocks/signature">
-Define task contracts with typed inputs/outputs
+<Card title="How DSRs thinks" icon="compass" href="/docs/getting-started/how-dsrs-thinks">
+The mental model behind the library
 </Card>
-<Card title="Custom Types" icon="shapes" href="/docs/building-blocks/types">
-Use your own structs and enums in signatures
+<Card title="Signatures" icon="pen-ruler" href="/docs/components/signatures">
+Every attribute, every supported type, constraints
 </Card>
-<Card title="Predictors" icon="robot" href="/docs/building-blocks/predictors">
-Call LMs with typed signatures, add demos
+<Card title="Predict" icon="robot" href="/docs/components/predict">
+Builder surface, demos, metadata, errors
 </Card>
-<Card title="Modules" icon="circle-nodes" href="/docs/building-blocks/module">
-Compose multi-step pipelines
+<Card title="Modules" icon="circle-nodes" href="/docs/components/modules">
+ChainOfThought, ReAct, composition
 </Card>
 </CardGroup>
 
@@ -166,17 +164,17 @@ Compose multi-step pipelines
 
 ### Input formatting and rendering
 
-Use `#[format("json" | "yaml" | "toon")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
-See the full attribute reference in [Signatures](/docs/building-blocks/signature) and runtime behavior in [Adapter](/docs/building-blocks/adapter).
+Use `#[format("json")]` for serialization, or `#[render(jinja = "...")]` for custom field text.
+See the full attribute reference in [Signatures & types](/docs/components/signatures) and runtime behavior in [Adapters](/docs/components/adapters).
 
 ### Custom types
 
-When you need more than primitives, add [`#[BamlType]`](/docs/building-blocks/types):
+When you need more than primitives, add [`#[Schema]`](/docs/components/signatures):
 
 ```rust
-use dspy_rs::{Signature, BamlType};
+use dspy_rs::{Signature, Schema};
 
-#[BamlType]
+#[Schema]
 #[derive(Clone, Debug)]
 enum Sentiment {
     Positive,
@@ -203,10 +201,10 @@ struct SentimentAnalysis {
 Add examples to guide the LM:
 
 ```rust
-use dspy_rs::Example;
+use dspy_rs::Demo;
 
 let predict = Predict::<QA>::builder()
-    .demo(Example::<QA>::new(
+    .demo(Demo::<QA>::new(
         QAInput { question: "What is 2+2?".into() },
         QAOutput { answer: "4".into() },
     ))
@@ -215,7 +213,7 @@ let predict = Predict::<QA>::builder()
 
 ### Constraints
 
-Validate outputs with [`#[check]` and `#[assert]`](/docs/building-blocks/constraints):
+Validate outputs with [`#[check]` and `#[assert]`](/docs/components/signatures):
 
 ```rust
 #[derive(Signature, Clone, Debug)]
@@ -231,7 +229,7 @@ struct Rating {
 
 ### Multi-step pipelines
 
-Chain [predictors](/docs/building-blocks/predictors) for complex workflows:
+Chain [predictors](/docs/components/predict) for complex workflows:
 
 ```rust
 struct SummarizeAndRate {
@@ -250,4 +248,4 @@ impl SummarizeAndRate {
 }
 ```
 
-See [Modules](/docs/building-blocks/module) for how to make this optimizer-compatible.
+See [Modules](/docs/components/modules) for how to make this optimizer-compatible.

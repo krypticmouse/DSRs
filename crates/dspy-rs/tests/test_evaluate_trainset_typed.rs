@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    CallMetadata, Example, MetricOutcome, Module, PredictError, Predicted, Signature, TypedMetric,
-    average_score, evaluate_trainset,
+    CallMetadata, Eval, Module, PredictError, Predicted, Signature, TypedMetric, average_score,
+    evaluate_trainset,
 };
 use std::sync::{Arc, Mutex};
 
@@ -34,37 +34,39 @@ struct RecordingMetric {
     seen_answers: Arc<Mutex<Vec<String>>>,
 }
 
-impl TypedMetric<EvalSig, EchoModule> for RecordingMetric {
+impl TypedMetric<(EvalSigInput, EvalSigOutput), EchoModule> for RecordingMetric {
     async fn evaluate(
         &self,
-        example: &Example<EvalSig>,
+        example: &(EvalSigInput, EvalSigOutput),
         prediction: &Predicted<<EchoModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         self.seen_answers
             .lock()
             .expect("metric lock should not be poisoned")
             .push(prediction.answer.clone());
 
-        let score = (prediction.answer == example.output.answer) as u8 as f32;
-        Ok(MetricOutcome::score(score))
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
+        Ok(Eval::score(score))
     }
 }
 
 struct FailingMetric;
 
-impl TypedMetric<EvalSig, EchoModule> for FailingMetric {
+impl TypedMetric<(EvalSigInput, EvalSigOutput), EchoModule> for FailingMetric {
     async fn evaluate(
         &self,
-        _example: &Example<EvalSig>,
+        _example: &(EvalSigInput, EvalSigOutput),
         _prediction: &Predicted<<EchoModule as Module>::Output>,
-    ) -> Result<MetricOutcome> {
+        _trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
         Err(anyhow!("typed metric failure"))
     }
 }
 
-fn trainset() -> Vec<Example<EvalSig>> {
+fn trainset() -> Vec<(EvalSigInput, EvalSigOutput)> {
     vec![
-        Example::new(
+        (
             EvalSigInput {
                 prompt: "one".to_string(),
             },
@@ -72,7 +74,7 @@ fn trainset() -> Vec<Example<EvalSig>> {
                 answer: "one".to_string(),
             },
         ),
-        Example::new(
+        (
             EvalSigInput {
                 prompt: "two".to_string(),
             },
@@ -90,7 +92,7 @@ async fn evaluate_trainset_runs_typed_rows_and_metric() {
         seen_answers: Arc::clone(&seen_answers),
     };
 
-    let outcomes = evaluate_trainset::<EvalSig, _, _>(&EchoModule, &trainset(), &metric)
+    let outcomes = evaluate_trainset(&EchoModule, &trainset(), &metric)
         .await
         .expect("typed evaluate_trainset should succeed");
 
@@ -105,7 +107,7 @@ async fn evaluate_trainset_runs_typed_rows_and_metric() {
 
 #[tokio::test]
 async fn evaluate_trainset_propagates_typed_metric_errors() {
-    let err = evaluate_trainset::<EvalSig, _, _>(&EchoModule, &trainset(), &FailingMetric)
+    let err = evaluate_trainset(&EchoModule, &trainset(), &FailingMetric)
         .await
         .expect_err("typed metric errors should propagate");
 

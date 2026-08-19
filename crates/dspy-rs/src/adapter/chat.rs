@@ -8,14 +8,16 @@ use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, RwLock};
 use tracing::{debug, trace};
 
-use super::Adapter;
 use crate::CallMetadata;
+use crate::ir::{RenderSpec, SignatureDef};
+use crate::trace::JsonMap;
 use crate::typesys::coerce::coerce;
-use crate::typesys::constraint::evaluate_constraint_expression;
+use crate::typesys::constraint::{evaluate_constraint_expression, evaluate_expression};
 use crate::typesys::render::{schema_block, type_name};
+use crate::typesys::{FieldType, TypeTable};
 use crate::{
-    ConstraintKind, ConstraintResult, FieldMeta, FieldSchema, InputRenderSpec,
-    JsonishError, Message, ParseError, PredictError, Predicted, Schema, Signature,
+    ConstraintKind, ConstraintResult, FieldMeta, FieldSchema, InputRenderSpec, JsonishError,
+    Message, ParseError, PredictError, Predicted, Schema, Signature,
 };
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
@@ -109,7 +111,7 @@ fn truncate_filter(
     Ok(format!("{truncated}{end}"))
 }
 
-fn build_input_render_environment() -> minijinja::Environment<'static> {
+fn build_input_render_environment<'source>() -> minijinja::Environment<'source> {
     let mut env = minijinja::Environment::new();
     env.set_formatter(|output, state, value| {
         let value = if value.is_none() {
@@ -129,57 +131,182 @@ fn build_input_render_environment() -> minijinja::Environment<'static> {
     env
 }
 
-impl ChatAdapter {
-    fn format_task_description_schema(
-        &self,
-        schema: &crate::SignatureSchema,
-        instruction_override: Option<&str>,
-    ) -> String {
-        let instruction = instruction_override.unwrap_or(schema.instruction());
-        let instruction = if instruction.is_empty() {
-            let input_fields = schema
-                .input_fields()
-                .iter()
-                .map(|field| format!("`{}`", field.lm_name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let output_fields = schema
-                .output_fields()
-                .iter()
-                .map(|field| format!("`{}`", field.lm_name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("Given the fields {input_fields}, produce the fields {output_fields}.")
-        } else {
-            instruction.to_string()
-        };
+/// A borrowed, lane-neutral view of one signature field: everything the prompt
+/// builders need, whether the source is a `'static` [`FieldSchema`] or an owned
+/// [`ir::FieldDef`](crate::ir::FieldDef). Both lanes render through the same
+/// view-based functions, so their prompt sections are equal by construction.
+struct FieldView<'a> {
+    lm_name: &'a str,
+    docs: &'a str,
+    ty: &'a FieldType,
+}
 
-        let mut indented = String::new();
-        for line in instruction.lines() {
-            indented.push('\n');
-            indented.push_str("        ");
-            indented.push_str(line);
+impl<'a> FieldView<'a> {
+    fn of_schema(field: &'a FieldSchema) -> Self {
+        Self {
+            lm_name: field.lm_name,
+            docs: &field.docs,
+            ty: &field.type_ir,
         }
-
-        format!("In adhering to this structure, your objective is: {indented}")
     }
 
-    fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
-        let mut output_fields = schema.output_fields().iter();
-        let Some(first_field) = output_fields.next() else {
-            return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
-        };
-
-        let mut message = format!(
-            "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
-            first_field.lm_name
-        );
-        for field in output_fields {
-            message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.lm_name));
+    fn of_def(field: &'a crate::ir::FieldDef) -> Self {
+        Self {
+            lm_name: &field.lm_name,
+            docs: field.docs.as_deref().unwrap_or(""),
+            ty: &field.ty,
         }
-        message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
+    }
+}
 
-        message
+fn schema_views(fields: &[FieldSchema]) -> Vec<FieldView<'_>> {
+    fields.iter().map(FieldView::of_schema).collect()
+}
+
+fn def_views(fields: &[crate::ir::FieldDef]) -> Vec<FieldView<'_>> {
+    fields.iter().map(FieldView::of_def).collect()
+}
+
+fn format_task_description_view(
+    inputs: &[FieldView<'_>],
+    outputs: &[FieldView<'_>],
+    instruction: &str,
+    instruction_override: Option<&str>,
+) -> String {
+    let instruction = instruction_override.unwrap_or(instruction);
+    let instruction = if instruction.is_empty() {
+        let input_fields = inputs
+            .iter()
+            .map(|field| format!("`{}`", field.lm_name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let output_fields = outputs
+            .iter()
+            .map(|field| format!("`{}`", field.lm_name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("Given the fields {input_fields}, produce the fields {output_fields}.")
+    } else {
+        instruction.to_string()
+    };
+
+    let mut indented = String::new();
+    for line in instruction.lines() {
+        indented.push('\n');
+        indented.push_str("        ");
+        indented.push_str(line);
+    }
+
+    format!("In adhering to this structure, your objective is: {indented}")
+}
+
+fn format_response_instructions_view(outputs: &[FieldView<'_>]) -> String {
+    let mut output_fields = outputs.iter();
+    let Some(first_field) = output_fields.next() else {
+        return "Respond with the marker for `[[ ## completed ## ]]`.".to_string();
+    };
+
+    let mut message = format!(
+        "Respond with the corresponding output fields, starting with the field `[[ ## {} ## ]]`,",
+        first_field.lm_name
+    );
+    for field in output_fields {
+        message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.lm_name));
+    }
+    message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
+
+    message
+}
+
+fn format_field_descriptions_view(
+    inputs: &[FieldView<'_>],
+    outputs: &[FieldView<'_>],
+    types: &TypeTable,
+) -> String {
+    let mut lines = Vec::new();
+    lines.push("Your input fields are:".to_string());
+    for (i, field) in inputs.iter().enumerate() {
+        let type_name = type_name(field.ty, None);
+        let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+        if !field.docs.is_empty() {
+            line.push_str(": ");
+            line.push_str(field.docs);
+        }
+        lines.push(line);
+    }
+
+    lines.push(String::new());
+    lines.push("Your output fields are:".to_string());
+    for (i, field) in outputs.iter().enumerate() {
+        let type_name = type_name(field.ty, Some(types));
+        let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
+        if !field.docs.is_empty() {
+            line.push_str(": ");
+            line.push_str(field.docs);
+        }
+        lines.push(line);
+    }
+
+    lines.join("\n")
+}
+
+fn format_field_structure_view(
+    inputs: &[FieldView<'_>],
+    outputs: &[FieldView<'_>],
+    types: &TypeTable,
+) -> String {
+    let mut lines = vec![
+        "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
+        String::new(),
+    ];
+
+    for field in inputs {
+        lines.push(format!("[[ ## {} ## ]]", field.lm_name));
+        lines.push(field.lm_name.to_string());
+        lines.push(String::new());
+    }
+
+    for field in outputs {
+        let type_name = type_name(field.ty, Some(types));
+        let rendered_schema = schema_block(field.ty, types);
+        lines.push(format!("[[ ## {} ## ]]", field.lm_name));
+        lines.push(format!(
+            "Output field `{}` should be of type: {type_name}",
+            field.lm_name
+        ));
+        if !rendered_schema.is_empty() && rendered_schema != type_name {
+            lines.push(String::new());
+            lines.push(rendered_schema);
+        }
+        lines.push(String::new());
+    }
+
+    lines.push("[[ ## completed ## ]]".to_string());
+    lines.join("\n")
+}
+
+fn build_system_view(
+    inputs: &[FieldView<'_>],
+    outputs: &[FieldView<'_>],
+    types: &TypeTable,
+    instruction: &str,
+    instruction_override: Option<&str>,
+) -> String {
+    let parts = [
+        format_field_descriptions_view(inputs, outputs, types),
+        format_field_structure_view(inputs, outputs, types),
+        format_response_instructions_view(outputs),
+        format_task_description_view(inputs, outputs, instruction, instruction_override),
+    ];
+
+    let system = parts.join("\n\n");
+    trace!(system_len = system.len(), "formatted schema system prompt");
+    system
+}
+
+impl ChatAdapter {
+    fn format_response_instructions_schema(&self, schema: &crate::SignatureSchema) -> String {
+        format_response_instructions_view(&schema_views(schema.output_fields()))
     }
 
     /// Builds the system message for a signature using its default instruction.
@@ -222,78 +349,35 @@ impl ChatAdapter {
         schema: &crate::SignatureSchema,
         instruction_override: Option<&str>,
     ) -> Result<String> {
-        let parts = [
-            self.format_field_descriptions_schema(schema),
-            self.format_field_structure_schema(schema)?,
-            self.format_response_instructions_schema(schema),
-            self.format_task_description_schema(schema, instruction_override),
-        ];
-
-        let system = parts.join("\n\n");
-        trace!(system_len = system.len(), "formatted schema system prompt");
-        Ok(system)
+        Ok(build_system_view(
+            &schema_views(schema.input_fields()),
+            &schema_views(schema.output_fields()),
+            &schema.output_schema().types,
+            schema.instruction(),
+            instruction_override,
+        ))
     }
 
-    fn format_field_descriptions_schema(&self, schema: &crate::SignatureSchema) -> String {
-        let output_schema = schema.output_schema();
-
-        let mut lines = Vec::new();
-        lines.push("Your input fields are:".to_string());
-        for (i, field) in schema.input_fields().iter().enumerate() {
-            let type_name = type_name(&field.type_ir, None);
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
-            if !field.docs.is_empty() {
-                line.push_str(": ");
-                line.push_str(&field.docs);
-            }
-            lines.push(line);
-        }
-
-        lines.push(String::new());
-        lines.push("Your output fields are:".to_string());
-        for (i, field) in schema.output_fields().iter().enumerate() {
-            let type_name = type_name(&field.type_ir, Some(output_schema));
-            let mut line = format!("{}. `{}` ({type_name})", i + 1, field.lm_name);
-            if !field.docs.is_empty() {
-                line.push_str(": ");
-                line.push_str(&field.docs);
-            }
-            lines.push(line);
-        }
-
-        lines.join("\n")
-    }
-
-    fn format_field_structure_schema(&self, schema: &crate::SignatureSchema) -> Result<String> {
-        let mut lines = vec![
-            "All interactions will be structured in the following way, with the appropriate values filled in.".to_string(),
-            String::new(),
-        ];
-
-        for field in schema.input_fields() {
-            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
-            lines.push(field.lm_name.to_string());
-            lines.push(String::new());
-        }
-
-        let output_schema = schema.output_schema();
-        for field in schema.output_fields() {
-            let type_name = type_name(&field.type_ir, Some(output_schema));
-            let rendered_schema = schema_block(&field.type_ir, output_schema);
-            lines.push(format!("[[ ## {} ## ]]", field.lm_name));
-            lines.push(format!(
-                "Output field `{}` should be of type: {type_name}",
-                field.lm_name
-            ));
-            if !rendered_schema.is_empty() && rendered_schema != type_name {
-                lines.push(String::new());
-                lines.push(rendered_schema);
-            }
-            lines.push(String::new());
-        }
-
-        lines.push("[[ ## completed ## ]]".to_string());
-        Ok(lines.join("\n"))
+    /// Builds a system message from an owned [`SignatureDef`] — the dynamic-lane
+    /// twin of [`build_system`](ChatAdapter::build_system), with no `'static`
+    /// requirement anywhere. `types` resolves the def's class/enum references
+    /// (for derive-bridged defs, [`SignatureDef::types_of`]).
+    ///
+    /// Renders through the same view-based builders as the schema path, so a def
+    /// bridged via [`SignatureDef::of`] produces byte-identical prompt sections.
+    pub fn build_system_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        instruction_override: Option<&str>,
+    ) -> String {
+        build_system_view(
+            &def_views(&def.inputs),
+            &def_views(&def.outputs),
+            types,
+            &def.instruction,
+            instruction_override,
+        )
     }
 
     /// Formats a typed input value as a user message with `[[ ## field ## ]]` delimiters.
@@ -344,8 +428,32 @@ impl ChatAdapter {
         }
 
         result.push_str(
-            schema.response_instructions_cached(|| self.format_response_instructions_schema(schema)),
+            schema
+                .response_instructions_cached(|| self.format_response_instructions_schema(schema)),
         );
+        result
+    }
+
+    /// Formats a value-level input from an owned [`SignatureDef`] — the
+    /// dynamic-lane twin of [`format_input`](ChatAdapter::format_input), with no
+    /// `'static` requirement anywhere.
+    ///
+    /// Fields absent from `input` are skipped, mirroring the static lane's
+    /// relaxed path navigation. Jinja render templates are compiled per call —
+    /// dynamic defs own their template strings, and a process-global cache keyed
+    /// on them would reintroduce the leak-per-load RFC 0002 IR-1 removed.
+    pub fn format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
+        let mut result = String::new();
+        for field in def.inputs.iter() {
+            let Some(value) = input.get(&*field.name) else {
+                continue;
+            };
+            result.push_str(&format!("[[ ## {} ## ]]\n", field.lm_name));
+            result.push_str(&render_input_field_def(def, field, value, input));
+            result.push_str("\n\n");
+        }
+
+        result.push_str(&format_response_instructions_view(&def_views(&def.outputs)));
         result
     }
 
@@ -385,13 +493,35 @@ impl ChatAdapter {
         result
     }
 
+    /// Formats a value-level output map as an assistant message — the
+    /// dynamic-lane twin of [`format_output`](ChatAdapter::format_output),
+    /// used to render demo assistant turns from [`SignatureDef`]s.
+    ///
+    /// Fields absent from `output` are skipped, mirroring the static lane's
+    /// relaxed path navigation.
+    pub fn format_output_def(&self, def: &SignatureDef, output: &JsonMap) -> String {
+        let mut sections = Vec::new();
+        for field in def.outputs.iter() {
+            if let Some(value) = output.get(&*field.name) {
+                sections.push(format!(
+                    "[[ ## {} ## ]]\n{}",
+                    field.lm_name,
+                    format_json_value_for_prompt(value)
+                ));
+            }
+        }
+        let mut result = sections.join("\n\n");
+        result.push_str("\n\n[[ ## completed ## ]]\n");
+        result
+    }
+
     /// Formats a demo example as a (user_message, assistant_message) pair.
     ///
     /// Convenience method that calls [`format_user_message_typed`](ChatAdapter::format_user_message_typed)
     /// and [`format_assistant_message_typed`](ChatAdapter::format_assistant_message_typed).
     pub fn format_demo_typed<S: Signature>(
         &self,
-        demo: &crate::predictors::Example<S>,
+        demo: &crate::predictors::Demo<S>,
     ) -> (String, String)
     where
         S::Input: Schema,
@@ -473,10 +603,10 @@ impl ChatAdapter {
                 }
             };
 
-            let coerced = match coerce(raw_text, field_type, output_schema) {
+            let coerced = match coerce(raw_text, field_type, &output_schema.types) {
                 Ok(value) => value,
                 Err(err) => {
-                    let expected_type = type_name(field_type, Some(output_schema));
+                    let expected_type = type_name(field_type, Some(&output_schema.types));
                     debug!(
                         field = %rust_name,
                         expected_type = %expected_type,
@@ -573,10 +703,11 @@ impl ChatAdapter {
 
         // Deserialize straight from the coerced field pairs — the historical
         // `Value::Object` assembly + `from_value` re-walk is skipped entirely.
-        let typed_output = O::deserialize(serde::de::value::MapDeserializer::<
-            _,
-            serde_json::Error,
-        >::new(output_fields.into_iter()))
+        let typed_output = O::deserialize(
+            serde::de::value::MapDeserializer::<_, serde_json::Error>::new(
+                output_fields.into_iter(),
+            ),
+        )
         .map_err(|err| ParseError::ExtractionFailed {
             field: "<all>".to_string(),
             raw_response: content.to_string(),
@@ -588,6 +719,111 @@ impl ChatAdapter {
         );
 
         Ok((typed_output, metas))
+    }
+
+    #[allow(clippy::result_large_err)]
+    /// Parses an LM response against an owned [`SignatureDef`] into a value-level
+    /// output map — the dynamic-lane twin of
+    /// [`parse_output_with_meta`](ChatAdapter::parse_output_with_meta), with no
+    /// `'static` requirement anywhere.
+    ///
+    /// The returned [`JsonMap`] is keyed by canonical field name
+    /// (`FieldDef::name`); `types` resolves class/enum references during
+    /// coercion. Constraint expressions are compiled per call (owned strings —
+    /// no global cache, no leak).
+    pub fn parse_output_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        response: &Message,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.text_content_cow();
+        let sections = parse_sections_cow(&content);
+
+        let mut metas = IndexMap::new();
+        let mut errors = Vec::new();
+        let mut output = JsonMap::new();
+
+        for field in def.outputs.iter() {
+            let raw_text: &str = match sections.get(&*field.lm_name) {
+                Some(text) => text.as_ref(),
+                None => {
+                    debug!(field = %field.name, "missing output field in response");
+                    errors.push(ParseError::MissingField {
+                        field: field.name.to_string(),
+                        raw_response: content.to_string(),
+                    });
+                    continue;
+                }
+            };
+
+            let coerced = match coerce(raw_text, &field.ty, types) {
+                Ok(value) => value,
+                Err(err) => {
+                    let expected_type = type_name(&field.ty, Some(types));
+                    debug!(
+                        field = %field.name,
+                        expected_type = %expected_type,
+                        raw_text_len = raw_text.len(),
+                        "value-level coercion failed"
+                    );
+                    errors.push(ParseError::CoercionFailed {
+                        field: field.name.to_string(),
+                        expected_type,
+                        raw_text: raw_text.to_string(),
+                        source: JsonishError::from(err),
+                    });
+                    continue;
+                }
+            };
+
+            let mut checks = Vec::new();
+            for constraint in field.constraints.iter() {
+                let passed = evaluate_expression(&constraint.expr, &coerced.value);
+                match constraint.kind {
+                    ConstraintKind::Assert => {
+                        if !passed {
+                            debug!(field = %field.name, label = %constraint.label, "value-level assert constraint failed");
+                            errors.push(ParseError::AssertFailed {
+                                field: field.name.to_string(),
+                                label: constraint.label.to_string(),
+                                expression: constraint.expr.to_string(),
+                                value: coerced.value.clone(),
+                            });
+                        }
+                    }
+                    ConstraintKind::Check => {
+                        checks.push(ConstraintResult {
+                            label: constraint.label.to_string(),
+                            expression: constraint.expr.to_string(),
+                            passed,
+                        });
+                    }
+                }
+            }
+
+            metas.insert(
+                field.name.to_string(),
+                FieldMeta {
+                    raw_text: raw_text.to_string(),
+                    flags: coerced.flags,
+                    checks,
+                },
+            );
+            output.insert(field.name.to_string(), coerced.value);
+        }
+
+        if !errors.is_empty() {
+            debug!(errors = errors.len(), "value-level parse returned errors");
+            let partial = if output.is_empty() {
+                None
+            } else {
+                Some(Value::Object(output))
+            };
+            return Err(ParseError::Multiple { errors, partial });
+        }
+
+        Ok((output, metas))
     }
 
     #[allow(clippy::result_large_err)]
@@ -693,7 +929,12 @@ fn parse_sections_cow(content: &str) -> IndexMap<&str, std::borrow::Cow<'_, str>
             let slice = content[start..end].trim();
             let text = if slice.contains('\r') {
                 std::borrow::Cow::Owned(
-                    slice.lines().collect::<Vec<_>>().join("\n").trim().to_string(),
+                    slice
+                        .lines()
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .trim()
+                        .to_string(),
                 )
             } else {
                 std::borrow::Cow::Borrowed(slice)
@@ -764,6 +1005,75 @@ fn render_input_field(
             render_input_field_jinja(template, field_spec, value, input, vars)
         }
     }
+}
+
+/// Renders one input field of a [`SignatureDef`], honoring its [`RenderSpec`].
+///
+/// The Jinja arm compiles the template per call: dynamic templates are owned
+/// strings, so the process-global template cache (keyed on `&'static str`)
+/// deliberately stays static-lane-only.
+fn render_input_field_def(
+    def: &SignatureDef,
+    field: &crate::ir::FieldDef,
+    value: &Value,
+    input: &JsonMap,
+) -> String {
+    match &field.render {
+        RenderSpec::Default => match value {
+            Value::String(s) => s.clone(),
+            _ => serde_json::to_string(value).unwrap_or_else(|_| "<error>".to_string()),
+        },
+        RenderSpec::Format(format) => crate::typesys::format_value(value, format),
+        RenderSpec::Jinja(template) => {
+            let mut env = build_input_render_environment();
+            env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to compile input render template for `{}` ({}): {err}",
+                        field.lm_name, field.name
+                    )
+                });
+            let compiled = env
+                .get_template(INPUT_RENDER_TEMPLATE_NAME)
+                .expect("template registered above");
+
+            let context = json!({
+                "this": value,
+                "input": build_input_context_def(def, input),
+                "field": {
+                    "name": field.lm_name,
+                    "rust_name": field.name,
+                    "type": type_name(&field.ty, None),
+                },
+                "vars": Value::Object(Map::new()),
+            });
+
+            compiled
+                .render(minijinja::Value::from_serialize(context))
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to render input field `{}` (rust `{}`) with jinja template `{}`: {err}",
+                        field.lm_name, field.name, template
+                    )
+                })
+        }
+    }
+}
+
+/// Alias-augmented input context for def-lane Jinja templates: templates can
+/// address a field by canonical name (`input.question`) or LM alias
+/// (`input.query`), mirroring [`build_input_context_value`].
+fn build_input_context_def(def: &SignatureDef, input: &JsonMap) -> Value {
+    let mut root = input.clone();
+    for field in def.inputs.iter() {
+        if field.lm_name == field.name {
+            continue;
+        }
+        if let Some(value) = root.get(&*field.name).cloned() {
+            root.entry(field.lm_name.to_string()).or_insert(value);
+        }
+    }
+    Value::Object(root)
 }
 
 fn build_input_context_value(schema: &crate::SignatureSchema, root: &Value) -> Value {
@@ -855,5 +1165,3 @@ fn render_input_field_jinja(
             )
         })
 }
-
-impl Adapter for ChatAdapter {}

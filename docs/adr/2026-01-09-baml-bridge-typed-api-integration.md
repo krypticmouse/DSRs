@@ -93,7 +93,7 @@ Context: Optimizers need to work generically across signatures.
 Decision: Use `BamlValue` as the untyped interchange format.
 
 Rationale:
-- Single conversion layer (typed <-> BamlValue).
+- Single conversion layer (`typed <-> BamlValue`).
 - Optimizers can inspect and modify field values uniformly.
 - Avoids leaking `serde_json::Value` into user-facing APIs.
 
