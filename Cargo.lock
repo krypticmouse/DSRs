@@ -1018,6 +1018,7 @@ dependencies = [
  "bon",
  "cranelift-entity",
  "csv",
+ "dsrs-syntax",
  "dsrs-tools",
  "dsrs_macros",
  "enum_dispatch",
@@ -1060,6 +1061,13 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "dsrs-syntax"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

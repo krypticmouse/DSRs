@@ -29,6 +29,8 @@ facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03
 facet-reflect = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }
 thiserror = "2.0.17"
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
+# Shared .dsrs lexer/structural grammar (also what include_program! validates with).
+dsrs-syntax = { version = "0.1.0", path = "../dsrs-syntax" }
 csv = { version = "1.3.1" }
 hf-hub = { version = "0.4.3", features = ["tokio"] }
 parquet = { version = "56.1.0" }

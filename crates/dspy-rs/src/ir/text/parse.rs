@@ -21,7 +21,7 @@ use crate::ir::validate::ValidateError;
 use crate::typesys::{ClassDef, EnumDef, EnumValueDef, FieldType, TypeTable};
 
 use super::ParseError;
-use super::lex::{Lexed, Lexer, Span, Tok};
+use dsrs_syntax::lex::{Lexed, Lexer, Span, Tok};
 
 /// Words that cannot be used as node/sig/tool/model/class/enum names.
 const RESERVED: &[&str] = &[
