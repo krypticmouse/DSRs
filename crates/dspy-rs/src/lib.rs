@@ -172,7 +172,8 @@ pub mod prelude {
     pub use crate::evaluate::{
         TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
     };
-    pub use crate::trace::Eval;
+    // `SpanId` keys per-span evals (`TypedMetric::evaluate_spans`).
+    pub use crate::trace::{Eval, SpanId};
 
     // Optimization: the trait, the six strategies, and the engine surface.
     pub use crate::optimizer::{

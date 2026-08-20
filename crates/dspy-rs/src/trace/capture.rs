@@ -144,6 +144,7 @@ impl TraceSink {
             output: None,
             usage: LmUsage::default(),
             error: None,
+            eval: None,
             started_at_us: now_us(),
             duration_us: 0,
             complete: true,

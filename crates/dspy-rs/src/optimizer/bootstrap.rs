@@ -23,9 +23,11 @@ use crate::{Module, Predictors};
 /// 1. **Teacher pass** — runs the target over the trainset under trace
 ///    capture (via the shared [`Engine`]), scoring each rollout with the
 ///    metric.
-/// 2. **Harvest** — successful `Predict` spans from rollouts scoring at least
+/// 2. **Harvest** — successful `Predict` spans scoring at least
 ///    `min_demo_score` become few-shot demo rows, joined to their predictor
-///    purely by trace component name (the [`Predictors`] contract name).
+///    purely by trace component name (the [`Predictors`] contract name). A
+///    span scores as the rollout does unless the metric attached a span-level
+///    eval ([`TypedMetric::evaluate_spans`]), which then takes precedence.
 /// 3. **Candidate eval** — the harvested demos form a demo [`Candidate`],
 ///    evaluated ambiently on the same engine (teacher rollouts already sit in
 ///    the rollout cache, so the baseline never re-runs).
@@ -45,9 +47,10 @@ pub struct BootstrapFewShot {
     #[builder(default = 4)]
     pub max_demos: usize,
 
-    /// Minimum whole-rollout metric score for a rollout's spans to qualify as
-    /// demos. Defaults to `1.0` — full-credit rollouts only, assuming a 0–1
-    /// metric; lower it for graded metrics.
+    /// Minimum score for a span to qualify as a demo: the span's own eval
+    /// when the metric attached one ([`TypedMetric::evaluate_spans`]), the
+    /// whole-rollout metric score otherwise. Defaults to `1.0` — full-credit
+    /// only, assuming a 0–1 metric; lower it for graded metrics.
     #[builder(default = 1.0)]
     pub min_demo_score: f64,
 

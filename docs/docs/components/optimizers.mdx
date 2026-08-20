@@ -142,7 +142,7 @@ Trace-guided instruction and demo optimizer. Four phases: one traced teacher pas
 | `num_trials` | `usize` | `20` | Maximum candidates evaluated per predictor. When lower than `num_candidates`, only the first `num_trials` are evaluated. |
 | `minibatch_size` | `usize` | `25` | Examples per candidate evaluation. |
 | `max_bootstrapped_demos` | `usize` | `4` | Demos installed per predictor from successful traces. |
-| `min_demo_score` | `f64` | `0.0` | Minimum whole-program score for a trace to qualify as a demo source. |
+| `min_demo_score` | `f64` | `0.0` | Minimum score for a span to qualify as a demo source: its own span eval when present, the whole-program score otherwise. |
 | `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
 | `seed` | `Option<u64>` | `None` | Fixes minibatch sampling. `None` is nondeterministic. |
 
@@ -243,7 +243,7 @@ The simplest complete optimizer: one teacher pass, one candidate, one comparison
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_demos` | `usize` | `4` | Maximum demos installed per predictor. |
-| `min_demo_score` | `f64` | `1.0` | Minimum whole-rollout score for a rollout's spans to qualify as demos. The default assumes a 0 to 1 metric; lower it for graded metrics. |
+| `min_demo_score` | `f64` | `1.0` | Minimum score for a span to qualify as a demo: its own span eval when the metric attached one, the whole-rollout score otherwise. The default assumes a 0 to 1 metric; lower it for graded metrics. |
 | `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
 | `max_metric_calls` | `Option<usize>` | `None` | Hard cap on metric calls (rollouts). |
 | `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units. |
@@ -309,7 +309,9 @@ The `StructuralReport` summarizes the run:
 
 ## Demo harvesting
 
-Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the leaf name the module declares via `Predictors` (stamped by the target's naming pass), so successful spans (parsed output present) from rollouts scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are ranked by whole-rollout score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
+Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the leaf name the module declares via `Predictors` (stamped by the target's naming pass), so successful spans (parsed output present) scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are gated and ranked by their effective score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
+
+A span's effective score is the whole-rollout metric score unless the metric attached a span-level eval through `TypedMetric::evaluate_spans` (see [Evaluation](/docs/components/evaluation)), which then takes precedence in both directions: a span scored down stays out of the demo pool even when its rollout won, and a span scored up qualifies even when its rollout lost. Without span evals the behavior is exactly the whole-rollout join described above.
 
 ## See also
 

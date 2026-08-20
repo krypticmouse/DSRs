@@ -18,7 +18,7 @@ One traced teacher pass over the trainset. Every example runs through your modul
 
 ### Phase 2: Demo bootstrapping
 
-Successful spans from rollouts scoring at least `min_demo_score` become few-shot demos on the predictor that produced them (top `max_bootstrapped_demos` by score, deduplicated on inputs). Demos are installed before instruction search, so candidates are scored against the module as it will actually run.
+Successful spans scoring at least `min_demo_score` become few-shot demos on the predictor that produced them (top `max_bootstrapped_demos` by score, deduplicated on inputs). A span scores as its rollout does, unless the metric attached a span-level eval via `TypedMetric::evaluate_spans` — that score then takes precedence (see [Evaluation](/docs/components/evaluation#per-span-credit)). Demos are installed before instruction search, so candidates are scored against the module as it will actually run.
 
 ### Phase 3: Candidate generation
 
@@ -47,7 +47,7 @@ let optimizer = MIPROv2::builder()
     .num_trials(20)              // Max candidates evaluated per predictor
     .minibatch_size(25)          // Examples per candidate evaluation
     .max_bootstrapped_demos(4)   // Demos installed per predictor
-    .min_demo_score(0.0)         // Score gate for demo-eligible traces
+    .min_demo_score(0.0)         // Score gate for demo-eligible spans
     .build();
 ```
 
