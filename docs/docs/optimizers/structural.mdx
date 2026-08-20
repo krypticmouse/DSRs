@@ -1,0 +1,212 @@
+---
+title: 'Structural'
+description: 'LM-guided graph edits over the edit calculus: config, usage, and when to use it'
+icon: 'diagram-project'
+---
+
+import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
+
+**Structural** is the structural optimizer: where the other five strategies tune parameter values (instructions, demos) through overlays, Structural rewrites the program graph itself. Each generation it gathers the [`legal_edits`](/docs/components/edit-calculus#legal_edits-the-proposer-menu) menu, has a reflection LM choose one edit from the serialized menu plus the incumbent's evaluation feedback, applies it with `Program::edited`, carries the tuned overlay across the change with `migrate_overlay`, and keeps the child only if it beats the parent on a shared minibatch.
+
+Structural runs on the **program lane only**: it needs an interpreter-loaded [`Program`](/docs/components/program-and-nodes) whose skeleton is data. Typed modules have no editable skeleton, so there is no `compile_module` here.
+
+## Overview
+
+The [edit calculus](/docs/components/edit-calculus) makes structural mutation safe: edits are serde values, `Program::edited` is pure and re-validates, and `migrate_overlay` re-mints tuned slot values against the child. Structural is the search loop on top: a GEPA-style reflection step chooses *which* edit to try, and the engine's minibatch gate decides whether to keep the result. The moves it can propose:
+
+| Move | Effect |
+|------|--------|
+| `AugmentSig` | Prepend the chain-of-thought `reasoning` output field to a leaf's signature (the CoT move). |
+| `SwapToAgent` / `SwapToPredict` | Swap a `predict` leaf into a tool-using `agent` loop over the program's declared tools, or back. |
+| `WrapRetry` | Wrap a node in a `Retry` (2 attempts, feedback on). |
+| `Remove` | Remove a step from its `seq`. |
+| `AddTool { tool }` / `RemoveTool { tool }` | Declare or undeclare a program tool on an agent leaf. |
+
+`SetStop` and `SetInstructionDefault` appear in `legal_edits` but are excluded from Structural's menu: they need free-form values, which is value-level work the other optimizers already own.
+
+## Quick start
+
+### 1. Load a program and implement a `ProgramMetric`
+
+```rust
+use dspy_rs::ir::{DemoRow, Interpreter, Program, RuntimeEnv};
+use dspy_rs::trace::JsonMap;
+use dspy_rs::{Eval, ProgramMetric, Trace};
+
+let program = Program::load_dsrs("qa.dsrs")?;
+let interp = Interpreter::load(program, RuntimeEnv::new()).await?;
+
+struct ExactMatch;
+
+impl ProgramMetric for ExactMatch {
+    async fn evaluate(
+        &self,
+        example: &DemoRow,
+        output: &JsonMap,
+        _trace: Option<&Trace>,
+    ) -> anyhow::Result<Eval> {
+        let correct = output.get("answer") == example.output.get("answer");
+        Ok(Eval::with_feedback(
+            correct as u8 as f64,
+            if correct { "correct".into() } else { format!("expected {:?}", example.output.get("answer")) },
+        ))
+    }
+}
+```
+
+Feedback is optional for Structural, but whatever the metric returns is what the reflection LM reads when choosing an edit, so specific feedback buys better proposals.
+
+### 2. Configure and run
+
+```rust
+use dspy_rs::Structural;
+
+let reflection_lm = LM::builder().model("openai:gpt-4o".to_string()).build().await?;
+
+let structural = Structural::builder()
+    .num_iterations(8)
+    .minibatch_size(8)
+    .prompt_model(reflection_lm)
+    .max_rollouts(400)   // every child is a fresh program: cap the spend
+    .seed(42)
+    .build();
+
+let report = structural
+    .compile_program(&interp, &examples, &ExactMatch, || {
+        // A fresh RuntimeEnv per child load: the same model/tool/sandbox
+        // bindings the incumbent was loaded with.
+        RuntimeEnv::new()
+    })
+    .await?;
+
+println!("{:.3} -> {:.3}", report.baseline_score, report.final_score);
+```
+
+The closure argument supplies a fresh [`RuntimeEnv`](/docs/components/runtime) every time an edited child needs loading. Only the host knows the live bindings (models, host tools, sandbox, capability grants), so child loading cannot be implicit; return the same bindings you loaded the incumbent with.
+
+### 3. Keep the winner
+
+The winner is returned, never installed: the interpreter you passed in is untouched. Bake the migrated overlay into the winning program to get a single self-contained artifact:
+
+```rust
+use dspy_rs::ir::Lineage;
+
+let baked = report.program.bake(&report.overlay, Lineage::default())?;
+baked.save_dsrs("qa-structural.dsrs")?;
+```
+
+If you ran a value-level optimizer first (GEPA, COPRO), pass its winning overlay in and Structural carries it across every accepted edit:
+
+```rust
+let report = structural
+    .compile_program_with_overlay(&interp, Some(tuned_overlay), &examples, &ExactMatch, env)
+    .await?;
+assert_eq!(report.overlay.base, report.program.meta.program_hash);
+```
+
+## Configuration options
+
+```rust
+Structural::builder()
+    .num_iterations(8)           // Structural generations to attempt
+    .minibatch_size(8)           // Shared minibatch for the parent/child gate
+    .prompt_model(reflection_lm) // Reflection LM that chooses edits (recommended)
+    .max_rollouts(400)           // Budget: max evaluation rollouts
+    .max_lm_calls(500)           // Budget: max LM calls (rollouts + reflection)
+    .eval_concurrency(16)        // Rollouts in flight during evaluation
+    .seed(42)                    // Reproducible sampling and fallback choice
+    .build()
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_iterations` | `usize` | `8` | Generations to attempt; each proposes exactly one edit. |
+| `minibatch_size` | `usize` | `8` | Examples in the shared minibatch parent and child are compared on. |
+| `prompt_model` | `Option<LM>` | `None` | Reflection LM that chooses an edit from the menu. Without it the choice is a seeded-uniform pick. |
+| `max_rollouts` | `Option<usize>` | `None` | Hard cap on evaluation rollouts. |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units (rollouts plus reflection). |
+| `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling and the fallback edit choice. |
+
+## Understanding Structural results
+
+`compile_program` returns a `StructuralReport`:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `program` | `Arc<Program>` | The winning program (the input program when nothing was accepted). |
+| `overlay` | `Overlay` | The incumbent overlay re-minted against the winner at every accepted edit. |
+| `baseline_score` | `f64` | Mean metric score of the input program (plus overlay) over the examples. |
+| `final_score` | `f64` | Full-set mean of the final program; equals the baseline when nothing was accepted. |
+| `edits` | `Vec<Edit>` | The accepted edits, in order. Node ids are handles against each step's parent (`parent_hash`), so this is a lineage, not one batch. |
+| `steps` | `Vec<StructuralStep>` | Per-generation outcomes, in order. |
+| `accepted` / `rejected` | `usize` | Generations promoted / not promoted by the gate. |
+| `spend` | `Spend` | Engine spend for the whole run, reflection calls included. |
+
+Each `StructuralStep` records `generation`, the targeted `leaf`, the concrete `edit` (serde data, replayable against `parent_hash`), `parent_minibatch_score`, `child_minibatch_score` (`None` when the child never scored), `accepted`, `full_score` (`Some` only when accepted), and `rejection` (why a child never scored, when it didn't).
+
+```rust
+for step in &report.steps {
+    println!(
+        "gen {}: {:?} on `{}` — parent {:.2}, child {:?}, accepted: {}",
+        step.generation, step.edit, step.leaf,
+        step.parent_minibatch_score, step.child_minibatch_score, step.accepted,
+    );
+}
+```
+
+## The loop
+
+1. **Baseline** the incumbent (plus overlay) over the full example set. This seeds the engine's rollout cache, so every later parent minibatch read costs nothing.
+2. Each generation:
+   - **Sample** a shared minibatch (seeded RNG). The incumbent's minibatch mean is the gate threshold.
+   - **Menu**: gather `legal_edits` for every leaf; keep the materializable kinds.
+   - **Choose**: the reflection LM reads the program's canonical `.dsrs` text, the menu (one JSON object per line, each with an `option` number), and the incumbent's per-example feedback, and answers with one option number.
+   - **Apply**: `Program::edited` mints the child; `migrate_overlay` re-mints the incumbent overlay against it; the child loads through your `RuntimeEnv` factory.
+   - **Gate**: the child is scored on the same minibatch. Only a strict win promotes it to a full-set evaluation and makes it the new incumbent.
+3. **Return** the incumbent program and its overlay.
+
+Every rejection path degrades gracefully: an edit that fails to apply (`EditError`), a child that fails validation or loading, or a reflection reply that does not parse is recorded in the step and skipped. A run only errors on the engine's own failure modes (a metric error, an LM error during evaluation, a budget too small for the baseline pass).
+
+## Cost model
+
+Every child is a fresh program: its hash keys fresh rollout-cache rows, so nothing it does is served from the parent's cache. Per run:
+
+- `examples.len()` rollouts for the baseline pass;
+- per generation, `minibatch_size` rollouts for the gate, plus the remaining `examples.len() - minibatch_size` only on promotion, plus one reflection call when a `prompt_model` is set.
+
+Cap the spend with `max_rollouts` / `max_lm_calls`; the run stops cleanly when the next batch would not fit.
+
+## When to use Structural
+
+- The program's *shape* is the bottleneck: a leaf that should reason step by step, a step that should be an agent with tools (or should not be), a flaky node that needs a retry.
+- After a value-level pass: tune instructions first, then let Structural search structure while `migrate_overlay` preserves the tuned text.
+- You have a labeled example set and budget for whole-program re-evaluation.
+
+Prefer the value-level optimizers when instructions and demos are the lever: they are cheaper (cache-friendly, no program reloads) and search a denser space.
+
+## Troubleshooting
+
+### The run accepts nothing
+
+The gate requires a strict minibatch win. Small minibatches are noisy; raise `minibatch_size` for a better signal, and set a `prompt_model` so choices are informed rather than uniform.
+
+### Steps show `rejection: Some("edit failed: ...")`
+
+Normal. The menu is structural, and data-flow legality is the validator's call: removing a step whose outputs a later binding still references, for example, is refused by `Program::edited` and skipped. See [the edit calculus](/docs/components/edit-calculus#errors).
+
+### The run errors with "budget too small for the baseline pass"
+
+The baseline needs `examples.len()` rollouts before the loop can start. Raise `max_rollouts` or shrink the example set.
+
+## Comparison with other optimizers
+
+<OptimizerComparison />
+
+## See also
+
+- [The edit calculus](/docs/components/edit-calculus): `Edit`, `Program::edited`, `legal_edits`, `migrate_overlay`
+- [Optimizers](/docs/components/optimizers): the full configuration and report tables
+- [Optimizer engine](/docs/components/optimizer-engine): the shared evaluation core Structural gates through
+- [Runtime](/docs/components/runtime): `Interpreter::load` and `RuntimeEnv`, which child loading goes through
+- [Program and nodes](/docs/components/program-and-nodes): `Overlay` and `Program::bake` for keeping the winner
