@@ -391,13 +391,22 @@ impl<S: Signature> Predict<S> {
             .clone())
     }
 
-    /// The overlay a run reads through: instance state composed with any
-    /// ambient optimizer overlay
-    /// ([`ir::current_overlay`](crate::ir::current_overlay)). Ambient entries
-    /// win over instance entries for the same slot — optimizer param
-    /// injection overrides instance state, exactly as the mutation seam did.
-    /// An ambient overlay minted against a *different* program is ignored
-    /// (one scope can span several modules; only the matching one accepts it).
+    /// The overlay a run reads through: instance state composed with the
+    /// ambient candidate scopes, later layers winning per slot:
+    ///
+    /// 1. instance state (instruction override + demos);
+    /// 2. an ambient optimizer overlay
+    ///    ([`ir::current_overlay`](crate::ir::current_overlay)) — ignored when
+    ///    minted against a *different* program (one scope can span several
+    ///    modules; only the matching one accepts it);
+    /// 3. the ambient [`fx::Params`](crate::fx::Params) entry matching this
+    ///    predictor's component name ([`fx::with_params`](crate::fx::with_params)
+    ///    — the optimizer's candidate-injection scope). Explicit clears
+    ///    resolve to the program slot defaults, so a candidate can reset a
+    ///    slot past instance state.
+    ///
+    /// Ambient entries winning over instance entries preserves exactly the
+    /// precedence the old apply/restore mutation seam had.
     #[allow(clippy::result_large_err)]
     fn effective_overlay(
         &self,
@@ -410,10 +419,18 @@ impl<S: Signature> Predict<S> {
         let instance = self.instance_overlay(program)?;
         let ambient = crate::ir::bridge::current_overlay()
             .filter(|overlay| overlay.base == program.meta.program_hash);
-        Ok(match (instance, ambient) {
+        let params_values = match crate::fx::ambient_entry(self.component_name()) {
+            Some(entry) => crate::ir::bridge::entry_slot_values(program, self.component_name(), &entry)
+                .map_err(|err| {
+                    internal_error(format!("failed to bind ambient params: {err}"))
+                })?,
+            None => Vec::new(),
+        };
+
+        let mut merged: Option<Overlay> = match (instance, ambient) {
             (None, None) => None,
-            (Some(instance), None) => Some(instance),
-            (None, Some(ambient)) => Some(ambient),
+            (Some(instance), None) => Some((*instance).clone()),
+            (None, Some(ambient)) => Some((*ambient).clone()),
             (Some(instance), Some(ambient)) => {
                 let mut merged = (*instance).clone();
                 for (id, value) in ambient.entries() {
@@ -421,9 +438,21 @@ impl<S: Signature> Predict<S> {
                         internal_error(format!("failed to compose ambient overlay: {err}"))
                     })?;
                 }
-                Some(Arc::new(merged))
+                Some(merged)
             }
-        })
+        };
+
+        if !params_values.is_empty() {
+            let mut overlay = merged.take().unwrap_or_else(|| Overlay::new(program));
+            for (id, value) in params_values {
+                overlay.set(program, id, value).map_err(|err| {
+                    internal_error(format!("failed to compose ambient params: {err}"))
+                })?;
+            }
+            merged = Some(overlay);
+        }
+
+        Ok(merged.map(Arc::new))
     }
 
     /// Resolves the LM this call uses: instance LM > global
@@ -1532,16 +1561,97 @@ where
     }
 
     fn set_trace_name(&mut self, name: &str) {
+        Predict::assign_trace_name(self, name);
+    }
+}
+
+impl<S: Signature> Predict<S> {
+    /// Assigns the component name recorded on this predictor's trace spans.
+    ///
+    /// The leaf name is part of the 1-node program (and its hash), so the
+    /// cached program, the overlay minted against it, and the loaded
+    /// interpreter are all invalidated when the name changes.
+    pub(crate) fn assign_trace_name(&mut self, name: &str) {
         if self.trace_name.as_deref() == Some(name) {
             return;
         }
         self.trace_name = Some(name.to_string());
-        // The leaf name is part of the program (and its hash), so the cached
-        // program, the overlay minted against it, and the loaded interpreter
-        // are all stale.
         self.program = OnceLock::new();
         self.instance_overlay = OnceLock::new();
         *self.engine.get_mut() = None;
+    }
+}
+
+impl<S> crate::core::PredictorInfo for Predict<S>
+where
+    S: Signature,
+    S::Input: Schema,
+    S::Output: Schema,
+{
+    fn schema(&self) -> &'static SignatureSchema {
+        S::schema()
+    }
+
+    fn instruction(&self) -> String {
+        self.instruction_override
+            .clone()
+            .unwrap_or_else(|| S::instruction().to_string())
+    }
+
+    fn default_instruction(&self) -> String {
+        S::instruction().to_string()
+    }
+
+    fn demos_as_json(&self) -> Vec<Map<String, Value>> {
+        self.demos
+            .iter()
+            .map(|example| {
+                json_from_demo::<S>(example)
+                    .expect("typed Predict demo conversion should succeed")
+            })
+            .collect()
+    }
+
+    fn dump_state(&self) -> PredictState {
+        PredictState {
+            demos: crate::core::PredictorInfo::demos_as_json(self),
+            instruction_override: self.instruction_override.clone(),
+        }
+    }
+
+    fn load_state(&mut self, state: PredictState) -> Result<()> {
+        // Convert demos before touching any state so a schema mismatch leaves
+        // the predictor unchanged.
+        let demos = state
+            .demos
+            .iter()
+            .map(demo_from_json::<S>)
+            .collect::<Result<Vec<_>>>()?;
+        self.apply_state(Some(state.instruction_override), Some(demos));
+        Ok(())
+    }
+
+    fn set_trace_name(&mut self, name: &str) {
+        Predict::assign_trace_name(self, name);
+    }
+}
+
+impl<S> crate::core::Predictors for Predict<S>
+where
+    S: Signature,
+    S::Input: Schema,
+    S::Output: Schema,
+{
+    /// A bare `Predict` used as a module is itself the one leaf. Its name is
+    /// the assigned trace name when present, else `"self"`.
+    fn predictors(&self) -> Vec<(String, &dyn crate::core::PredictorInfo)> {
+        let name = self.trace_name.clone().unwrap_or_else(|| "self".to_string());
+        vec![(name, self as &dyn crate::core::PredictorInfo)]
+    }
+
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn crate::core::PredictorInfo)> {
+        let name = self.trace_name.clone().unwrap_or_else(|| "self".to_string());
+        vec![(name, self as &mut dyn crate::core::PredictorInfo)]
     }
 }
 

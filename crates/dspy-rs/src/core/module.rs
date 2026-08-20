@@ -1,9 +1,144 @@
+use anyhow::Result as AnyResult;
 use futures::stream::{self, StreamExt};
 use tracing::debug;
 
-use crate::{Facet, PredictError, Predicted, Schema};
+use crate::core::PredictState;
+use crate::trace::JsonMap;
+use crate::{Facet, PredictError, Predicted, Schema, SignatureSchema};
 
 type IndexedForwardResult<T> = (usize, Result<Predicted<T>, PredictError>);
+
+/// What optimizers read from — and, at explicit boundaries, write to — a
+/// [`Predict`](crate::Predict) leaf.
+///
+/// This is the typed, object-safe view a module exposes through
+/// [`Predictors::predictors`]. Optimizers only ever *read* through it during a
+/// run (schema for reflection prompts, current instruction, demos as JSON);
+/// the two mutating methods are boundary operations:
+///
+/// - [`set_trace_name`](PredictorInfo::set_trace_name) — the naming pass, run
+///   once per optimization run (and by [`ModuleState`](crate::ModuleState))
+///   so trace spans record the same name the module declared for the leaf;
+/// - [`load_state`](PredictorInfo::load_state) — the install seam, called by
+///   `ModuleState::apply` and by the optimizer's final one-shot install of the
+///   winning candidate. Candidate *evaluation* never calls it: candidates are
+///   injected ambiently per call tree, not written into the module.
+pub trait PredictorInfo: Send + Sync {
+    /// The [`SignatureSchema`] for this predictor's signature — field names
+    /// and docs for optimizer reflection prompts.
+    fn schema(&self) -> &'static SignatureSchema;
+
+    /// The current effective instruction (override if set, else the
+    /// signature's default).
+    fn instruction(&self) -> String;
+
+    /// The signature's default instruction (ignoring any override).
+    fn default_instruction(&self) -> String;
+
+    /// Current demos as flat JSON rows (input and output fields merged into
+    /// one object per row).
+    fn demos_as_json(&self) -> Vec<JsonMap>;
+
+    /// Snapshot of the optimizable state (instruction override + demos).
+    fn dump_state(&self) -> PredictState;
+
+    /// Restores optimizable state from a snapshot — the one mutation seam.
+    ///
+    /// This is a *full* overwrite: `instruction_override: None` clears the
+    /// override, `demos` replaces the demo set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the demos can't be converted to the predictor's
+    /// typed `Demo<S>` form (schema mismatch).
+    fn load_state(&mut self, state: PredictState) -> AnyResult<()>;
+
+    /// Assigns the component name this predictor records on trace spans.
+    ///
+    /// Part of the trace-name contract (see [`Predictors`]): the optimizer
+    /// stamps each leaf with the name the module declared before any traced
+    /// pass, so spans join back to the same names candidates address.
+    fn set_trace_name(&mut self, name: &str);
+}
+
+/// Explicit predictor-leaf discovery: a module *names* its optimizable
+/// [`Predict`](crate::Predict) leaves.
+///
+/// This replaces the old reflection walker. A module that wants to be
+/// optimizable (or persistable via [`ModuleState`](crate::ModuleState))
+/// declares its leaves explicitly — no derive magic, no pointer casts:
+///
+/// ```ignore
+/// struct TwoStepQA {
+///     retrieve: Predict<RetrieveSig>,
+///     answer: ChainOfThought<AnswerSig>,
+/// }
+///
+/// dspy_rs::predictors!(TwoStepQA { retrieve, answer });
+/// // or by hand:
+/// impl Predictors for TwoStepQA {
+///     fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)> {
+///         vec![("retrieve".into(), &self.retrieve), ("answer".into(), &self.answer)]
+///     }
+///     fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)> {
+///         vec![("retrieve".into(), &mut self.retrieve), ("answer".into(), &mut self.answer)]
+///     }
+/// }
+/// ```
+///
+/// # The trace-name contract
+///
+/// The names returned here are the *canonical identity* of each leaf:
+///
+/// 1. they become the leaf's trace-span component name (the optimizer stamps
+///    them via [`PredictorInfo::set_trace_name`] once per run);
+/// 2. optimizer candidates address leaves by these names (ambient
+///    [`fx::Params`](crate::fx::Params) entries bind per leaf at call time);
+/// 3. [`ModuleState`](crate::ModuleState) persists per-leaf state under them.
+///
+/// Names must be unique within a module and stable across
+/// [`predictors`](Predictors::predictors) / [`predictors_mut`](Predictors::predictors_mut).
+pub trait Predictors {
+    /// The module's predictor leaves, `(name, read view)` in declaration order.
+    fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)>;
+
+    /// The module's predictor leaves, `(name, mutable view)` in declaration
+    /// order. Only the boundary operations (naming pass, state install) go
+    /// through this.
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)>;
+}
+
+/// Implements [`Predictors`] for a module struct from a list of predictor
+/// fields, using each field's identifier as its leaf name.
+///
+/// ```ignore
+/// struct Pipeline { draft: Predict<Draft>, refine: ChainOfThought<Refine> }
+/// dspy_rs::predictors!(Pipeline { draft, refine });
+/// ```
+#[macro_export]
+macro_rules! predictors {
+    ($ty:ty { $($field:ident),* $(,)? }) => {
+        impl $crate::Predictors for $ty {
+            fn predictors(&self) -> ::std::vec::Vec<(::std::string::String, &dyn $crate::PredictorInfo)> {
+                ::std::vec![$(
+                    (
+                        ::std::string::String::from(::core::stringify!($field)),
+                        &self.$field as &dyn $crate::PredictorInfo,
+                    )
+                ),*]
+            }
+
+            fn predictors_mut(&mut self) -> ::std::vec::Vec<(::std::string::String, &mut dyn $crate::PredictorInfo)> {
+                ::std::vec![$(
+                    (
+                        ::std::string::String::from(::core::stringify!($field)),
+                        &mut self.$field as &mut dyn $crate::PredictorInfo,
+                    )
+                ),*]
+            }
+        }
+    };
+}
 
 /// Strategy-swapping interface for prompting modules.
 ///

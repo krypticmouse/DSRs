@@ -100,6 +100,71 @@ async fn with_params_injects_instruction_ambiently() {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
+async fn with_params_drives_struct_held_predict_leaves_by_component_name() {
+    use dspy_rs::Predict;
+
+    let _lock = SETTINGS_LOCK.lock().await;
+    let (lm, client) = make_test_lm(vec![
+        response_with_fields(&[("answer", "instance")]),
+        response_with_fields(&[("answer", "ambient")]),
+        response_with_fields(&[("answer", "cleared")]),
+    ])
+    .await;
+
+    // A struct-held leaf with instance state, named "leaf".
+    let predictor = Predict::<FxQA>::builder()
+        .named("leaf")
+        .instruction("INSTANCE-INSTRUCTION")
+        .lm(lm)
+        .build();
+
+    // No params scope: instance override renders.
+    predictor
+        .call(FxQAInput {
+            question: "q1".to_string(),
+        })
+        .await
+        .expect("instance call should succeed");
+    let preamble = client.last_request().unwrap().preamble.unwrap_or_default();
+    assert!(preamble.contains("INSTANCE-INSTRUCTION"));
+
+    // Ambient params keyed by the component name win over instance state.
+    let mut params = fx::Params::new();
+    params.set_instruction("leaf", "AMBIENT-INSTRUCTION");
+    fx::with_params(
+        params,
+        predictor.call(FxQAInput {
+            question: "q2".to_string(),
+        }),
+    )
+    .await
+    .expect("ambient call should succeed");
+    let preamble = client.last_request().unwrap().preamble.unwrap_or_default();
+    assert!(
+        preamble.contains("AMBIENT-INSTRUCTION") && !preamble.contains("INSTANCE-INSTRUCTION"),
+        "ambient candidate must win over instance state: {preamble}"
+    );
+
+    // Explicit clear resets past the instance override to the signature default.
+    let mut params = fx::Params::new();
+    params.clear_instruction("leaf");
+    fx::with_params(
+        params,
+        predictor.call(FxQAInput {
+            question: "q3".to_string(),
+        }),
+    )
+    .await
+    .expect("cleared call should succeed");
+    let preamble = client.last_request().unwrap().preamble.unwrap_or_default();
+    assert!(
+        preamble.contains("Answer the question.") && !preamble.contains("INSTANCE-INSTRUCTION"),
+        "explicit clear must reset to the signature default: {preamble}"
+    );
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
 async fn capture_names_spans_after_fx_slots() {
     let _lock = SETTINGS_LOCK.lock().await;
     let (lm, _client) = make_test_lm(vec![

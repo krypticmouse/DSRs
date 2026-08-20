@@ -56,6 +56,21 @@ task_local! {
     static CURRENT_PARAMS: Arc<Params>;
 }
 
+/// One named parameter slot inside [`Params`]: a [`PredictState`] plus the
+/// explicit-clear markers that make "reset to the signature default"
+/// expressible (plain `PredictState` semantics are "None/empty = leave the
+/// incumbent alone").
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct ParamsEntry {
+    pub state: PredictState,
+    /// Explicitly clear the instruction override back to the signature
+    /// default (wins over any instance override when injected ambiently).
+    pub clear_instruction: bool,
+    /// `state.demos` is an explicit *set* — an empty vec means "no demos",
+    /// overriding any instance demos — rather than "non-empty means set".
+    pub explicit_demos: bool,
+}
+
 /// The optimizable state of a functional harness: named [`PredictState`]s —
 /// instructions and demos keyed by the names passed to [`predict`].
 ///
@@ -63,11 +78,18 @@ task_local! {
 /// with respect to its `Params`: evaluating a different candidate means
 /// injecting a different `Params` value via [`with_params`], never mutating a
 /// module in place.
+///
+/// Struct-held [`Predict`](crate::Predict) leaves consult the ambient
+/// `Params` too: each leaf binds the entry matching its component name (the
+/// name stamped by [`Predictors`](crate::Predictors) discovery or
+/// [`PredictBuilder::named`](crate::predictors::PredictBuilder::named)) at
+/// call time, with ambient values winning over instance state per slot. This
+/// is the optimizer's candidate-injection currency.
 #[derive(Clone, Debug, Default)]
 pub struct Params {
-    /// (config hash, state) per predictor name. The hash keys the predictor
+    /// (config hash, entry) per predictor name. The hash keys the predictor
     /// instance cache so unchanged configs reuse fully-warmed `Predict`s.
-    entries: BTreeMap<String, (u64, PredictState)>,
+    entries: BTreeMap<String, (u64, ParamsEntry)>,
 }
 
 impl Params {
@@ -75,28 +97,67 @@ impl Params {
         Self::default()
     }
 
+    fn upsert(&mut self, name: String, mutate: impl FnOnce(&mut ParamsEntry)) {
+        let mut entry = self
+            .entries
+            .remove(&name)
+            .map(|(_, entry)| entry)
+            .unwrap_or_default();
+        mutate(&mut entry);
+        let hash = hash_entry(&entry);
+        self.entries.insert(name, (hash, entry));
+    }
+
     /// Sets the full state (instruction + demos) for a named predictor.
+    ///
+    /// `PredictState` semantics: `instruction_override: None` and empty
+    /// `demos` mean "leave the incumbent alone". For explicit resets use
+    /// [`clear_instruction`](Params::clear_instruction) /
+    /// [`set_demos`](Params::set_demos).
     pub fn set(&mut self, name: impl Into<String>, state: PredictState) {
-        let hash = hash_state(&state);
-        self.entries.insert(name.into(), (hash, state));
+        self.upsert(name.into(), |entry| {
+            *entry = ParamsEntry {
+                state,
+                clear_instruction: false,
+                explicit_demos: false,
+            };
+        });
     }
 
     /// Convenience: overrides just the instruction for a named predictor,
     /// preserving any demos already set.
     pub fn set_instruction(&mut self, name: impl Into<String>, instruction: impl Into<String>) {
-        let name = name.into();
-        let mut state = self
-            .entries
-            .remove(&name)
-            .map(|(_, state)| state)
-            .unwrap_or_default();
-        state.instruction_override = Some(instruction.into());
-        self.set(name, state);
+        let instruction = instruction.into();
+        self.upsert(name.into(), |entry| {
+            entry.state.instruction_override = Some(instruction);
+            entry.clear_instruction = false;
+        });
+    }
+
+    /// Explicitly clears the instruction override back to the signature
+    /// default, preserving any demos already set. Unlike leaving the
+    /// instruction unset (which lets an instance override read through), this
+    /// wins over instance state when injected ambiently.
+    pub fn clear_instruction(&mut self, name: impl Into<String>) {
+        self.upsert(name.into(), |entry| {
+            entry.state.instruction_override = None;
+            entry.clear_instruction = true;
+        });
+    }
+
+    /// Explicitly sets the demo set for a named predictor, preserving any
+    /// instruction already set. An empty vec means "no demos" and wins over
+    /// instance demos when injected ambiently.
+    pub fn set_demos(&mut self, name: impl Into<String>, demos: Vec<crate::trace::JsonMap>) {
+        self.upsert(name.into(), |entry| {
+            entry.state.demos = demos;
+            entry.explicit_demos = true;
+        });
     }
 
     /// Returns the state configured for `name`, if any.
     pub fn get(&self, name: &str) -> Option<&PredictState> {
-        self.entries.get(name).map(|(_, state)| state)
+        self.entries.get(name).map(|(_, entry)| &entry.state)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -110,7 +171,7 @@ impl Params {
             predictors: self
                 .entries
                 .iter()
-                .map(|(name, (_, state))| (name.clone(), state.clone()))
+                .map(|(name, (_, entry))| (name.clone(), entry.state.clone()))
                 .collect(),
         }
     }
@@ -124,8 +185,8 @@ impl Params {
         params
     }
 
-    fn entry(&self, name: &str) -> Option<(u64, &PredictState)> {
-        self.entries.get(name).map(|(hash, state)| (*hash, state))
+    fn entry(&self, name: &str) -> Option<(u64, &ParamsEntry)> {
+        self.entries.get(name).map(|(hash, entry)| (*hash, entry))
     }
 
     /// All named states, for the IR bridge (`Params::bind`).
@@ -133,21 +194,33 @@ impl Params {
     pub(crate) fn iter_states(&self) -> impl Iterator<Item = (&str, &PredictState)> {
         self.entries
             .iter()
-            .map(|(name, (_, state))| (name.as_str(), state))
+            .map(|(name, (_, entry))| (name.as_str(), &entry.state))
     }
 }
 
-fn hash_state(state: &PredictState) -> u64 {
+fn hash_entry(entry: &ParamsEntry) -> u64 {
     let mut hasher = DefaultHasher::new();
-    if let Some(instruction) = &state.instruction_override {
+    if let Some(instruction) = &entry.state.instruction_override {
         hasher.write(instruction.as_bytes());
     }
-    for demo in &state.demos {
+    for demo in &entry.state.demos {
         let serialized = serde_json::to_string(demo).unwrap_or_default();
         hasher.write(serialized.as_bytes());
     }
-    hasher.write_usize(state.demos.len());
+    hasher.write_usize(entry.state.demos.len());
+    hasher.write_u8(entry.clear_instruction as u8);
+    hasher.write_u8(entry.explicit_demos as u8);
     hasher.finish()
+}
+
+/// The ambient [`ParamsEntry`] for `name`, if a [`with_params`] scope is
+/// active on this task. Read by struct-held [`Predict`](crate::Predict)
+/// leaves at call time (each leaf binds only its own entry).
+pub(crate) fn ambient_entry(name: &str) -> Option<ParamsEntry> {
+    CURRENT_PARAMS
+        .try_with(|params| params.entry(name).map(|(_, entry)| entry.clone()))
+        .ok()
+        .flatten()
 }
 
 /// Runs a future with `params` as the ambient parameter set for every
@@ -158,6 +231,13 @@ fn hash_state(state: &PredictState) -> u64 {
 /// inherit them. Nesting replaces the outer scope for the inner future.
 pub async fn with_params<Fut: Future>(params: Params, fut: Fut) -> Fut::Output {
     CURRENT_PARAMS.scope(Arc::new(params), fut).await
+}
+
+/// [`with_params`] without re-wrapping: scopes an already-shared `Params`.
+/// Used by the optimizer engine, which evaluates many rollouts under one
+/// candidate concurrently.
+pub(crate) async fn with_params_shared<Fut: Future>(params: Arc<Params>, fut: Fut) -> Fut::Output {
+    CURRENT_PARAMS.scope(params, fut).await
 }
 
 type PredictorCacheKey = (TypeId, String, u64);
@@ -185,7 +265,7 @@ where
         .try_with(|params| {
             params
                 .entry(name)
-                .map(|(hash, state)| (hash, Some(state.clone())))
+                .map(|(hash, entry)| (hash, Some(entry.state.clone())))
         })
         .ok()
         .flatten()
