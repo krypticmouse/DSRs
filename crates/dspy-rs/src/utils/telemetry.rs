@@ -21,9 +21,13 @@ pub enum TelemetryInitError {
 /// Behavior:
 /// - Uses `RUST_LOG` when present.
 /// - Falls back to `dspy_rs=debug` when `RUST_LOG` is unset/invalid.
-/// - Is idempotent: repeated calls are no-ops after first successful init.
+/// - Is idempotent: repeated calls are no-ops after the first one, including
+///   concurrent calls (initialization is claimed atomically up front, so a
+///   racing loser returns `Ok` instead of a spurious `SetGlobalDefault` error).
 pub fn init_tracing() -> Result<(), TelemetryInitError> {
-    if TRACING_INITIALIZED.get().is_some() {
+    // Claim initialization before doing any work: exactly one caller wins the
+    // `set`, every other (possibly concurrent) caller no-ops with Ok.
+    if TRACING_INITIALIZED.set(()).is_err() {
         return Ok(());
     }
 
@@ -39,7 +43,6 @@ pub fn init_tracing() -> Result<(), TelemetryInitError> {
         .finish();
 
     tracing::subscriber::set_global_default(subscriber)?;
-    let _ = TRACING_INITIALIZED.set(());
     Ok(())
 }
 

@@ -1,3 +1,5 @@
+> Archived 2026-08-19: superseded by docs/v1-vision-report.md and docs/rfcs/. Retained for history.
+
 > Status Update (2026-02-08): **Superseded historical plan**.
 >
 > Phase 1 (Bridge Root Excision) is now the active baseline: legacy bridge crates are removed from the workspace.
