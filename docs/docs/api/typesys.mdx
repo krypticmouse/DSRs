@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `1e37260`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_types`,
@@ -21,10 +21,8 @@ In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_ty
 | [`Constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.Constraint.html) | Re-export of `constraint::Constraint`. |
 | [`ConstraintKind`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/enum.ConstraintKind.html) | Re-export of `constraint::ConstraintKind`. |
 | [`ConstraintLevel`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/type.ConstraintLevel.html) | Re-export of `constraint::ConstraintLevel`. |
-| [`ConstraintOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ConstraintOutcome.html) | Re-export of `constraint::ConstraintOutcome`. |
 | [`EnumDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumDef.html) | Re-export of `schema::EnumDef`. |
 | [`EnumValueDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumValueDef.html) | Re-export of `schema::EnumValueDef`. |
-| [`evaluate_constraints`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraints.html) | Re-export of `constraint::evaluate_constraints`. |
 | [`evaluate_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_expression.html) | Re-export of `constraint::evaluate_expression`. |
 | [`field_type_from_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.field_type_from_shape.html) | Re-export of `schema::field_type_from_shape`. |
 | [`FieldDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.FieldDef.html) | Re-export of `schema::FieldDef`. |
@@ -32,7 +30,6 @@ In-house type system that replaces the vendored BAML stack (`bamltype`, `baml_ty
 | [`Flag`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/coerce/enum.Flag.html) | Re-export of `coerce::Flag`. |
 | [`internal_name_for_shape`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/fn.internal_name_for_shape.html) | Re-export of `schema::internal_name_for_shape`. |
 | [`OutputSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.OutputSchema.html) | Re-export of `schema::OutputSchema`. |
-| [`ResponseCheck`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ResponseCheck.html) | Re-export of `constraint::ResponseCheck`. |
 | [`schema_block`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.schema_block.html) | Re-export of `render::schema_block`. |
 | [`Schema`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/trait.Schema.html) | Re-export of `schema::Schema`. |
 | [`type_name`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/render/fn.type_name.html) | Re-export of `render::type_name`. |
@@ -84,8 +81,6 @@ In-house constraint model + evaluation, replacing BAML's `Constraint` / `run_use
 | Item | Description |
 |---|---|
 | [`Constraint`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.Constraint.html) | A single `#check`/`#assert` constraint attached to a field. |
-| [`ConstraintOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ConstraintOutcome.html) | The outcome of evaluating a constraint against a value. |
-| [`ResponseCheck`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/struct.ResponseCheck.html) | A reported check result, mirroring the old `ResponseCheck` shape used by GEPA/optimizers. |
 
 ### Enums
 
@@ -98,7 +93,6 @@ In-house constraint model + evaluation, replacing BAML's `Constraint` / `run_use
 | Item | Description |
 |---|---|
 | [`evaluate_constraint_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraint_expression.html) | Evaluates a `'static` constraint expression against `value`, compiling it at most once per process. |
-| [`evaluate_constraints`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_constraints.html) | Evaluates every constraint against `value`, binding it as `this` in a jinja expression. |
 | [`evaluate_expression`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/constraint/fn.evaluate_expression.html) | Evaluates a runtime (non-`'static`) constraint expression against `value`, binding it as `this`. |
 
 ### Type aliases

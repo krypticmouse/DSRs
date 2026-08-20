@@ -1,10 +1,10 @@
 ---
 title: 'Modules'
-description: 'The Module trait, batch execution, combinators, ChainOfThought, ReAct, and signature augmentation'
+description: 'The Module trait, batch execution, predictor discovery via Predictors, ChainOfThought, and signature augmentation'
 icon: 'circle-nodes'
 ---
 
-A module is a prompting strategy over a signature. Everything callable in dsrs implements `Module`: the bare LM call ([`Predict<S>`](/docs/components/predict)), `ChainOfThought<S>`, `ReAct<S>`, and any struct you compose from them. Swapping `Predict<QA>` for `ChainOfThought<QA>` changes the output type, and the compiler surfaces every downstream site that must change.
+A module is a prompting strategy over a signature. Everything callable in dsrs implements `Module`: the bare LM call ([`Predict<S>`](/docs/components/predict)), `ChainOfThought<S>`, and any struct you compose from them. Swapping `Predict<QA>` for `ChainOfThought<QA>` changes the output type, and the compiler surfaces every downstream site that must change.
 
 ## Usage
 
@@ -54,12 +54,12 @@ struct Answer {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct Rag {
     condense: Predict<Condense>,
     answer: ChainOfThought<Answer>,
 }
+
+dspy_rs::predictors!(Rag { condense, answer });
 
 impl Module for Rag {
     type Input = CondenseInput;
@@ -78,9 +78,9 @@ impl Module for Rag {
 let rag = Rag { condense: Predict::new(), answer: ChainOfThought::new() };
 ```
 
-The `facet::Facet` derive is what lets optimizer discovery find the `Predict` leaves inside the struct. `forward` is plain async Rust, so branching, loops, and early returns between the LM calls need no framework support.
+The `predictors!` line is what makes the module optimizable and persistable: it names the `Predict` leaves for optimizer discovery (see [Predictor discovery](#predictor-discovery-predictors) below). `forward` is plain async Rust, so branching, loops, and early returns between the LM calls need no framework support.
 
-Source: `crates/dspy-rs/src/core/module.rs`, `core/module_ext.rs`, `modules/chain_of_thought.rs`, `modules/react.rs`, `augmentation.rs`. All items below are re-exported at the crate root unless noted.
+Source: `crates/dspy-rs/src/core/module.rs`, `modules/chain_of_thought.rs`, `augmentation.rs`. All items below are re-exported at the crate root unless noted.
 
 ## The `Module` trait
 
@@ -108,7 +108,32 @@ Every call returns [`Predicted<Output>`](/docs/components/predict): the output s
 
 `forward` takes `input` by value. This is deliberate: pipeline authors move fields into sub-module inputs with zero clones. The cost is one input clone per example in evaluation loops that reuse a trainset.
 
-To author a module: define a struct holding `Predict`/`ChainOfThought` fields, derive `facet::Facet` so the optimizer's walker can discover the `Predict` leaves, and implement `forward`, as in the usage example above.
+To author a module: define a struct holding `Predict`/`ChainOfThought` fields, declare those fields with `predictors!` so optimizers and `ModuleState` can address them by name, and implement `forward`, as in the usage example above.
+
+## Predictor discovery: `Predictors`
+
+Optimizable leaves are declared **explicitly** — there is no reflection walker and no derive magic. A module that wants to be optimizable (or persistable via [`ModuleState`](/docs/components/state)) implements the `Predictors` trait, almost always through the `predictors!` macro:
+
+```rust
+dspy_rs::predictors!(Rag { condense, answer });
+```
+
+expands to
+
+```rust
+impl Predictors for Rag {
+    fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)> { /* ("condense", &self.condense), ... */ }
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)> { /* ... */ }
+}
+```
+
+Each field's identifier becomes its leaf name. The names are the *canonical identity* of each leaf — the trace-name contract:
+
+1. They become the leaf's trace-span component name (the optimizer stamps them via `PredictorInfo::set_trace_name` once per run).
+2. Optimizer candidates address leaves by these names (ambient `fx::Params` entries bind per leaf at call time).
+3. `ModuleState` persists per-leaf state under them.
+
+Names must be unique within a module and stable across `predictors()`/`predictors_mut()`. `PredictorInfo` is the typed, object-safe per-leaf view: read methods (`schema()`, `instruction()`, `default_instruction()`, `demos_as_json()`, `dump_state()`) plus two boundary mutations — `set_trace_name` (the naming pass) and `load_state` (the install seam, used by `ModuleState::apply` and the optimizer's one-shot install of the winning candidate; candidate *evaluation* never calls it). See [Optimizers](/docs/components/optimizers).
 
 ## Batch execution: `forward_all`
 
@@ -127,19 +152,7 @@ pub async fn forward_all<M: Module + ?Sized>(
 | Concurrency | Bounded by `max_concurrency` (`buffer_unordered`). |
 | Failure isolation | Returns `Vec<Result<...>>`; one failure does not abort the batch. |
 | Ordering | Results preserve input order regardless of completion order. |
-| Progress | Renders a progress bar on stderr. |
 | Tracing | Instrumented as `dsrs.forward_all` at debug level. |
-
-## Combinators: `ModuleExt`
-
-`ModuleExt` is blanket-implemented for every `Module`. It post-processes output without a full `impl Module`.
-
-| Method | Wrapper | Closure | Semantics |
-|--------|---------|---------|-----------|
-| `.map(f)` | `Map<M, T>` | `Fn(M::Output) -> T` | Infallible output transform. |
-| `.and_then(f)` | `AndThen<M, T>` | `Fn(M::Output) -> Result<T, PredictError>` | Fallible output transform; an `Err` propagates. |
-
-Both wrappers keep `Input = M::Input`, set `Output = T`, and pass `CallMetadata` through unchanged. The wrapper structs derive `Facet` with the inner module as a real field (the closure is `#[facet(opaque, skip)]`), so the inner `Predict` leaves remain visible to optimizer discovery through the wrapper.
 
 ## `ChainOfThought<S>`
 
@@ -164,39 +177,9 @@ pub type ChainOfThoughtOutput<S> = WithReasoning<<S as Signature>::Output>;
 For reasoning models (o1, o3, DeepSeek-R1) prefer bare `Predict`. An explicit `reasoning` field on top of internal thinking is redundant and can hurt quality.
 </Note>
 
-## `ReAct<S>`
+## Agent loops
 
-`ReAct<S>` runs a thought, action, observation loop over a set of tools, then extracts a typed answer. Bounds: `S: Signature`, `S::Input: Schema + Clone`, `S::Output: Schema`. As a `Module`: `Input = S::Input`, `Output = S::Output` (no wrapper type).
-
-Internally it holds two `Predict` leaves: an action step (inputs `input`, `trajectory`; outputs `thought`, `action`, `action_input`, all strings) and an extract step (inputs `input`, `trajectory`; output `S::Output`). Both are visible to optimizer discovery.
-
-### Loop semantics
-
-1. The input struct is serialized to JSON and becomes the `input` field of both internal signatures.
-2. The trajectory is seeded with a tool manifest (`Available tools:` with each tool's name and description, or `(none)`).
-3. Each step, up to `max_steps` (default 4): the action predictor produces `thought`, `action`, `action_input`. The action name is trimmed of whitespace and surrounding quotes.
-4. If the action is `finish`, `final`, or `done` (case insensitive), the loop stops.
-5. Otherwise the named tool runs with `action_input` as its argument string. Matching is case insensitive: exact name, or substring containment in either direction. An unknown name yields the observation `tool_not_found: {name}`; a tool error yields `tool_error: {err}`. The step (thought, action, input, observation) is appended to the trajectory.
-6. After the loop ends (terminal action or steps exhausted), the extract predictor reads the full trajectory and returns `S::Output`.
-
-Metadata: each executed tool is recorded in `CallMetadata::tool_calls` with id `react-step-{n}`, and the manifest plus formatted per-step traces appear in `CallMetadata::tool_executions`, merged with the extract call's metadata.
-
-### Builder
-
-`ReAct::<S>::new()` equals `ReAct::<S>::builder().build()`. The builder type is `ReActBuilder<S>`; it is not re-exported at the crate root (full path `dspy_rs::modules::react::ReActBuilder`), so obtain it through `ReAct::<S>::builder()`.
-
-| Method | Signature | Effect |
-|--------|-----------|--------|
-| `action_instruction` | `(impl Into<String>) -> Self` | Instruction override for the action predictor. |
-| `extract_instruction` | `(impl Into<String>) -> Self` | Instruction override for the extract predictor. |
-| `max_steps` | `(usize) -> Self` | Loop bound; clamped to at least 1. Default 4. |
-| `add_tool` | `(impl ToolDyn + 'static) -> Self` | Registers one rig tool. |
-| `with_tools` | `(impl IntoIterator<Item = Arc<dyn ToolDyn>>) -> Self` | Registers many tools. |
-| `tool` | `(name, description, Fn(String) -> Future<Output = String>) -> Self` | Registers a closure as a tool; arguments arrive as a raw string (typically JSON). |
-| `lm` | `(LM) -> Self` | Per-instance LM for both predictors, bypassing the global. |
-| `build` | `() -> ReAct<S>` | Constructs the module. |
-
-Tools implement rig's `ToolDyn`. See [Tools and agents](/docs/components/tools-and-agents).
+There is no `ReAct` module. The tool-loop strategy lives in the IR instead: attach tools to a `Predict` (which executes as a 1-node `agent` program, see [Predict](/docs/components/predict)), or declare the loop as a first-class `AgentLoop` node with the `#[agent]` macro inside a `#[module]`. See [Tools and agents](/docs/components/tools-and-agents).
 
 ## Augmentation
 
@@ -231,5 +214,4 @@ The derive generates a `With{Name}<O>` wrapper struct: the augmentation fields p
 - [How DSRs thinks](/docs/getting-started/how-dsrs-thinks) for the call path from module to LM
 - [ChainOfThought smoke example](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/91-smoke-slice2-chain-of-thought.rs)
 - [Module authoring smoke example](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/92-smoke-slice3-module-authoring.rs)
-- [ReAct operational smoke example](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/93-smoke-slice4-react-operational.rs)
 - [Module iteration example](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs)

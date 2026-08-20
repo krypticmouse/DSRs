@@ -4,16 +4,16 @@ description: 'Turn signatures into prompts and parse LM responses'
 icon: 'arrows-turn-to-dots'
 ---
 
-An adapter sits between a [signature](/docs/components/signatures) and the LM: it formats typed inputs into the prompt the model sees and parses the LM's response back into typed outputs. The default adapter is `ChatAdapter`, and [Predict](/docs/components/predict) drives it for you, so you touch it directly only to inspect what the model sees.
+An adapter sits between a signature and the LM: it formats inputs into the prompt the model sees and parses the LM's response back into typed outputs. The default adapter is `ChatAdapter`, and [Predict](/docs/components/predict) drives it for you (via the IR interpreter), so you touch it directly only to inspect what the model sees.
 
 ## What adapters do
 
 ```
-Signature + Input → Adapter.format() → Prompt for LM
+SignatureDef + Input → Adapter.format() → Prompt for LM
 LM Response → Adapter.parse() → Typed Output
 ```
 
-`ChatAdapter` handles both formatting and parsing.
+`ChatAdapter` handles both formatting and parsing. It has one lane: every method is parameterized by an owned [`SignatureDef`](/docs/components/program-and-nodes) — the IR's value-level signature — whether the def came from a derived `Signature` type (`SignatureDef::of::<S>()`) or from a loaded `.dsrs` program. There is no separate "static" formatting path.
 
 ## ChatAdapter
 
@@ -132,22 +132,28 @@ ParseError::Multiple {
 
 ## Using the adapter directly
 
-Usually you do not touch the adapter - `Predict` handles it. But for debugging:
+Usually you do not touch the adapter - `Predict` handles it. The public surface is five building blocks, all parameterized by `&SignatureDef`:
+
+| Method | Produces |
+|--------|----------|
+| `build_system_def(def, types, instruction_override)` | The system message (field descriptions, structure template, response instructions, task description) |
+| `format_input_def(def, input)` | The user message: input fields with `[[ ## field ## ]]` markers plus response instructions. `input` is a `JsonMap`; absent fields are skipped |
+| `format_output_def(def, output)` | An assistant message for few-shot demos, ending with `[[ ## completed ## ]]` |
+| `parse_output_def(def, types, response)` | `(JsonMap, IndexMap<String, FieldMeta>)` — the parsed output map plus per-field parse metadata |
+| `ChatAdapter::parse_sections(content)` | Ordered map of `field_name → section_content` split by the delimiters |
+
+For debugging what the LM sees from a derived signature:
 
 ```rust
-use dspy_rs::ChatAdapter;
+use dspy_rs::{ChatAdapter, ir::SignatureDef};
 
 let adapter = ChatAdapter;
+let def = SignatureDef::of::<MySignature>();
+let types = SignatureDef::types_of::<MySignature>();
 
-// See what prompt would be generated
-let system = adapter.format_system_message_typed::<MySignature>()?;
-let user = adapter.format_user_message_typed::<MySignature>(&input);
-
+let system = adapter.build_system_def(def, types, None);
 println!("System:\n{system}");
-println!("User:\n{user}");
 ```
-
-This is useful for understanding what the LM sees.
 
 ## Input formatting options
 
@@ -189,7 +195,7 @@ Available filters include:
 - `truncate` for length-limited string rendering
 
 If template rendering fails at runtime (for example, missing variables), `ChatAdapter` panics.
-Compiled templates are cached process-wide by template string.
+Templates are compiled per call — defs own their template strings, so there is no process-global template cache to leak per loaded program.
 
 ## Real example: Insurance claim extraction
 
