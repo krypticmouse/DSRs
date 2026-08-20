@@ -1,59 +1,50 @@
 ---
 title: "dspy_rs::data"
-description: "Data loading, versioned under `v1`."
+description: "Data loading."
 icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `1e37260`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
-
-Data loading, versioned under [`v1`].
-
-## Re-exports
-
-| Item | Description |
-|---|---|
-| `v1::*` | Glob re-export. |
-
-## Modules
-
-| Item | Description |
-|---|---|
-| [`v1`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/index.html) | Data loading. |
-
-## `data::v1`
 
 Data loading.
 
-### Re-exports
+## Re-exports
 
 | Item | Description |
 |---|---|
 | `dataloader::*` | Glob re-export. |
 | `utils::*` | Glob re-export. |
 
-## `data::v1::dataloader`
+## Modules
+
+| Item | Description |
+|---|---|
+| [`dataloader`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/index.html) |  |
+| [`utils`](https://docs.rs/dspy-rs/latest/dspy_rs/data/utils/index.html) |  |
+
+## `data::dataloader`
 
 ### Structs
 
 | Item | Description |
 |---|---|
-| [`DataLoader`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/dataloader/struct.DataLoader.html) | Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources. |
-| [`RowRecord`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/dataloader/struct.RowRecord.html) | Raw parsed row passed to custom mapper closures in `load_*_with` APIs. |
-| [`TypedLoadOptions`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/dataloader/struct.TypedLoadOptions.html) | Options for shape-driven typed loading. |
+| [`DataLoader`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/struct.DataLoader.html) | Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources. |
+| [`RowRecord`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/struct.RowRecord.html) | Raw parsed row passed to custom mapper closures in `load_*_with` APIs. |
+| [`TypedLoadOptions`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/struct.TypedLoadOptions.html) | Options for shape-driven typed loading. |
 
 ### Enums
 
 | Item | Description |
 |---|---|
-| [`DataLoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/dataloader/enum.DataLoadError.html) | Row-aware errors produced by typed data loading. |
-| [`UnknownFieldPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/dataloader/enum.UnknownFieldPolicy.html) | Controls how typed loaders handle source fields that are not part of the target row struct. |
+| [`DataLoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/enum.DataLoadError.html) | Row-aware errors produced by typed data loading. |
+| [`UnknownFieldPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/data/dataloader/enum.UnknownFieldPolicy.html) | Controls how typed loaders handle source fields that are not part of the target row struct. |
 
-## `data::v1::utils`
+## `data::utils`
 
 ### Functions
 
 | Item | Description |
 |---|---|
-| [`is_url`](https://docs.rs/dspy-rs/latest/dspy_rs/data/v1/utils/fn.is_url.html) | Returns `true` if the string looks like an HTTP(S) URL. |
+| [`is_url`](https://docs.rs/dspy-rs/latest/dspy_rs/data/utils/fn.is_url.html) | Returns `true` if the string looks like an HTTP(S) URL. |

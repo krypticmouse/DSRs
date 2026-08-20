@@ -6,9 +6,10 @@ Usage (from the repository root):
     RUSTC_BOOTSTRAP=1 cargo rustdoc -p dspy-rs --lib --all-features -- -Z unstable-options --output-format json
     RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-tools --lib -- -Z unstable-options --output-format json
     RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs_macros --lib -- -Z unstable-options --output-format json
+    RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-syntax --lib -- -Z unstable-options --output-format json
     python3 docs/scripts/gen_api.py
 
-Reads target/doc/{dspy_rs,dsrs_tools,dsrs_macros}.json and rewrites
+Reads target/doc/{dspy_rs,dsrs_tools,dsrs_macros,dsrs_syntax}.json and rewrites
 docs/docs/api/*.mdx. Every page is fully generated; do not edit them by
 hand. The item inventory and doc summaries come from the compiler, so
 the pages cannot drift from the code. Full signatures, methods, and
@@ -30,6 +31,7 @@ CRATES = [
     ("dspy_rs.json", "dspy-rs", "dspy_rs", None),
     ("dsrs_tools.json", "dsrs-tools", "dsrs_tools", "dsrs-tools"),
     ("dsrs_macros.json", "dsrs-macros", "dsrs_macros", "dsrs-macros"),
+    ("dsrs_syntax.json", "dsrs-syntax", "dsrs_syntax", "dsrs-syntax"),
 ]
 
 KIND_LABELS = [

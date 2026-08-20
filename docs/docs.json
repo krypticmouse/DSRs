@@ -107,7 +107,8 @@
             "group": "Companion crates",
             "pages": [
               "docs/api/dsrs-tools",
-              "docs/api/dsrs-macros"
+              "docs/api/dsrs-macros",
+              "docs/api/dsrs-syntax"
             ]
           }
         ]
