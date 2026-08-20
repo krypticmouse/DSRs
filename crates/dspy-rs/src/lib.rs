@@ -65,8 +65,8 @@
 //!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
 //!   Everything here is statically typed, which is both the strength and the constraint.
 //! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
-//!   The module trait and augmentation system are designed for them, but nobody's built
-//!   them yet.
+//!   Agentic tool loops live in the IR instead (`AgentLoopNode` via the `#[agent]` macro);
+//!   the module trait and augmentation system could host the rest, but nobody's built them.
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
