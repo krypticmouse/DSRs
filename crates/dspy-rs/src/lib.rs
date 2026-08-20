@@ -159,41 +159,4 @@ pub mod __macro_support {
     pub use tokio;
 }
 
-#[macro_export]
-macro_rules! sign {
-    // Example Usage: signature! {
-    //     question: String, random: bool -> answer: String
-    // }
-    //
-    // Example Output:
-    //
-    // #[derive(Signature, Clone)]
-    // struct InlineSignature {
-    //     #[input]
-    //     question: String,
-    //     #[input]
-    //     random: bool,
-    //     #[output]
-    //     answer: String,
-    // }
-    //
-    // Predict::<InlineSignature>::new()
-
-    // Pattern: input fields -> output fields
-    { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        #[derive($crate::Signature, Clone)]
-        struct __InlineSignature {
-            $(
-                #[input]
-                $input_name: $input_type,
-            )*
-            $(
-                #[output]
-                $output_name: $output_type,
-            )*
-        }
-
-        $crate::Predict::<__InlineSignature>::new()
-    }};
-}
 
