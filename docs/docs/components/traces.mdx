@@ -65,6 +65,7 @@ One span is one `Predict` invocation. At a high level it records:
 - **What went in**: the rendered prompt (an interned system-and-demos prefix plus the live suffix), the typed input fields as JSON, and the redacted model config.
 - **What happened inside**: ordered events, one `Exchange` per provider round-trip and one `ToolRun` per tool execution.
 - **What came out**: the raw assistant text, the parsed output fields, aggregated token usage, and any error (kinds: `lm`, `parse`, `tool`, `cancelled`).
+- **What it was worth** (optional): a span-level `Eval`, present only when a metric assigned per-span credit through `TypedMetric::evaluate_spans` (see [Evaluation](/docs/components/evaluation)). Demo harvesting prefers it over the whole-rollout score; the field is omitted from the JSONL entirely when absent, so eval-free traces serialize exactly as before.
 - **A request fingerprint**: `request_hash`, a stable hash over the redacted model config plus the full rendered prompt. This is the replay key and the determinism check.
 - **Timing and completeness**: start time, duration, and a `complete` flag (false when the span was truncated or redacted; replay refuses incomplete spans).
 

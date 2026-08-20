@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    BootstrapFewShot, Eval, LM, LMClient, Module, ModuleState, Predict, PredictError,
-    Predicted, Signature, TestCompletionModel, TypedMetric,
+    BootstrapFewShot, Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted,
+    Signature, SpanId, TestCompletionModel, Trace, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -193,6 +193,166 @@ async fn bootstrap_without_qualifying_rollouts_skips_candidate_eval() {
     assert!(!report.adopted);
     assert!(report.demos_per_predictor.is_empty());
     assert_eq!(report.spend.metric_calls, 3, "only the teacher pass ran");
+}
+
+// ---------------------------------------------------------------------------
+// Per-span credit assignment (RFC 0004 §4): a draft/refine pipeline where the
+// refine step recovers from a bad draft. Whole-rollout credit harvests the bad
+// drafts as demos; a metric that attaches span evals keeps them out.
+// ---------------------------------------------------------------------------
+
+struct TwoStepModule {
+    draft: Predict<BootSig>,
+    refine: Predict<BootSig>,
+}
+
+dspy_rs::predictors!(TwoStepModule { draft, refine });
+
+impl Module for TwoStepModule {
+    type Input = BootSigInput;
+    type Output = BootSigOutput;
+
+    async fn forward(&self, input: BootSigInput) -> Result<Predicted<BootSigOutput>, PredictError> {
+        let draft = self.draft.call(input).await?;
+        self.refine
+            .call(BootSigInput {
+                prompt: draft.answer.clone(),
+            })
+            .await
+    }
+}
+
+/// Whole-rollout exact match, no span hook — the pre-RFC-0004 behavior.
+struct TwoStepExactMatch;
+
+impl TypedMetric<(BootSigInput, BootSigOutput), TwoStepModule> for TwoStepExactMatch {
+    async fn evaluate(
+        &self,
+        example: &(BootSigInput, BootSigOutput),
+        prediction: &Predicted<BootSigOutput>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
+        Ok(Eval::score(score))
+    }
+}
+
+/// Same rollout score, plus span-level credit: each draft span is scored on
+/// its own answer, so a recovered-from draft gets 0.0 while the rollout
+/// still gets full credit.
+struct SpanAwareExactMatch;
+
+impl TypedMetric<(BootSigInput, BootSigOutput), TwoStepModule> for SpanAwareExactMatch {
+    async fn evaluate(
+        &self,
+        example: &(BootSigInput, BootSigOutput),
+        prediction: &Predicted<BootSigOutput>,
+        _trace: Option<&Trace>,
+    ) -> Result<Eval> {
+        let score = (prediction.answer == example.1.answer) as u8 as f64;
+        Ok(Eval::score(score))
+    }
+
+    async fn evaluate_spans(
+        &self,
+        example: &(BootSigInput, BootSigOutput),
+        _prediction: &Predicted<BootSigOutput>,
+        trace: &Trace,
+    ) -> Result<Vec<(SpanId, Eval)>> {
+        Ok(trace
+            .for_component("draft")
+            .filter_map(|span| {
+                let answer = span.output.as_ref()?.get("answer")?.as_str()?;
+                let score = (answer == example.1.answer) as u8 as f64;
+                Some((span.id, Eval::score(score)))
+            })
+            .collect())
+    }
+}
+
+async fn two_step_module(client: TestCompletionModel) -> TwoStepModule {
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
+    )
+    .await
+    .unwrap()
+    .with_client(LMClient::Test(client))
+    .await
+    .unwrap();
+    TwoStepModule {
+        draft: Predict::<BootSig>::builder().lm(lm.clone()).build(),
+        refine: Predict::<BootSig>::builder().lm(lm).build(),
+    }
+}
+
+/// Every rollout: draft answers wrong (`a0`/`a1`/`a2`), refine recovers with
+/// the gold answer. Teacher pass then candidate pass, sequential.
+fn recovery_responses() -> TestCompletionModel {
+    TestCompletionModel::new([
+        // Teacher pass: (draft, refine) per example.
+        answer_response("a0"),
+        answer_response("0"),
+        answer_response("a1"),
+        answer_response("1"),
+        answer_response("a2"),
+        answer_response("2"),
+        // Candidate pass: same shape.
+        answer_response("a0"),
+        answer_response("0"),
+        answer_response("a1"),
+        answer_response("1"),
+        answer_response("a2"),
+        answer_response("2"),
+    ])
+}
+
+#[tokio::test]
+async fn whole_rollout_metric_harvests_recovered_from_drafts() {
+    // Control: without span evals, the winning rollouts vouch for every span
+    // — the wrong drafts become draft demos.
+    let mut module = two_step_module(recovery_responses()).await;
+
+    let bootstrap = BootstrapFewShot::builder()
+        .min_demo_score(1.0)
+        .eval_concurrency(1)
+        .build();
+
+    let report = bootstrap
+        .compile_module(&mut module, &trainset(), &TwoStepExactMatch)
+        .await
+        .unwrap();
+
+    assert!((report.baseline_score - 1.0).abs() < 1e-9);
+    assert_eq!(report.demos_per_predictor.get("draft"), Some(&3));
+    assert_eq!(report.demos_per_predictor.get("refine"), Some(&3));
+}
+
+#[tokio::test]
+async fn span_evals_keep_recovered_from_drafts_out_of_the_demo_pool() {
+    // Same rollouts, but the metric attaches per-span credit: draft spans
+    // score 0.0, so only the refine step's demos are harvested.
+    let mut module = two_step_module(recovery_responses()).await;
+
+    let bootstrap = BootstrapFewShot::builder()
+        .min_demo_score(1.0)
+        .eval_concurrency(1)
+        .build();
+
+    let report = bootstrap
+        .compile_module(&mut module, &trainset(), &SpanAwareExactMatch)
+        .await
+        .unwrap();
+
+    assert!((report.baseline_score - 1.0).abs() < 1e-9);
+    assert_eq!(
+        report.demos_per_predictor.get("draft"),
+        None,
+        "a span the metric scored 0.0 must not become a demo, even from a full-credit rollout"
+    );
+    assert_eq!(report.demos_per_predictor.get("refine"), Some(&3));
 }
 
 #[tokio::test]

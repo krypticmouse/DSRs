@@ -81,6 +81,13 @@ pub struct Span {
     /// Aggregated across all exchanges.
     pub usage: LmUsage,
     pub error: Option<SpanError>,
+    /// Span-level metric result, when the metric attached one after the
+    /// rollout ran (see `TypedMetric::evaluate_spans`). `None` means no
+    /// per-span credit was assigned — demo harvesting then falls back to the
+    /// whole-rollout score in [`TraceOutcome::eval`]. Additive under §5.1's
+    /// rules — no format version bump; absent on the wire when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval: Option<Eval>,
 
     // ---- timing ----
     /// Microseconds since UNIX epoch.

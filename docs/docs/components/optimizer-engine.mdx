@@ -152,7 +152,7 @@ Public surface: `get`, `insert`, `len`, `is_empty`.
 
 ## Rollout mechanics
 
-Each program-lane rollout runs `interp.run(input, Some(overlay), Budget::unlimited())` under its own capture scope with `TraceMeta.candidate_hash` set to the candidate's hash and a `program` tag carrying the program hash. Each module-lane rollout scopes the candidate's `fx::Params` ambiently around the whole traced rollout (`rollout_traced`), so every `Predict` leaf binds its own entry at call time. Every pending `(candidate, example)` pair — across all candidates, in both lanes — joins one `buffer_unordered` stream bounded by `EngineConfig::concurrency`.
+Each program-lane rollout runs `interp.run(input, Some(overlay), Budget::unlimited())` under its own capture scope with `TraceMeta.candidate_hash` set to the candidate's hash and a `program` tag carrying the program hash. Each module-lane rollout scopes the candidate's `fx::Params` ambiently around the whole traced rollout (`rollout_traced`), so every `Predict` leaf binds its own entry at call time. After the metric scores a module-lane rollout, any span-level evals it returns from `TypedMetric::evaluate_spans` are stamped onto the trace's spans; demo-harvesting optimizers prefer these over the rollout score (see [Evaluation](/docs/components/evaluation)). Every pending `(candidate, example)` pair — across all candidates, in both lanes — joins one `buffer_unordered` stream bounded by `EngineConfig::concurrency`.
 
 ## See also
 

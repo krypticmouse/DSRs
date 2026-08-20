@@ -60,6 +60,16 @@ where
         prediction: &Predicted<M::Output>,
         trace: Option<&Trace>,
     ) -> Result<Eval>;
+
+    // Optional; the default returns no span scores.
+    async fn evaluate_spans(
+        &self,
+        example: &E,
+        prediction: &Predicted<M::Output>,
+        trace: &Trace,
+    ) -> Result<Vec<(SpanId, Eval)>> {
+        Ok(Vec::new())
+    }
 }
 ```
 
@@ -70,6 +80,32 @@ where
 | `trace` | The rollout's execution [`Trace`](/docs/components/traces) when the caller captured one. The evaluation loop always passes `Some`; direct callers may pass `None`. Slice it per component with `trace.for_component("retriever")` |
 
 Return `Eval::score(f64)` for a numerical score, `Eval::with_feedback(f64, text)` to also explain why. Scores are 0.0 to 1.0 by convention.
+
+## Per-span credit
+
+`evaluate` assigns one score to the whole rollout. For a multi-step module that single score over-credits: a good final answer marks every intermediate `Predict` call as good, including a step a later call had to recover from. `evaluate_spans` is the optional hook for per-span credit. The evaluation loop calls it once per traced rollout, after `evaluate`, and stamps each returned `Eval` onto its span (`Span::eval`); pairs whose id is not in the trace are ignored.
+
+```rust
+async fn evaluate_spans(
+    &self,
+    example: &QARow,
+    _prediction: &Predicted<QAOutput>,
+    trace: &Trace,
+) -> Result<Vec<(SpanId, Eval)>> {
+    // Score each draft call on its own answer; the refine step may have
+    // recovered from a bad one.
+    Ok(trace
+        .for_component("draft")
+        .filter_map(|span| {
+            let answer = span.output.as_ref()?.get("answer")?.as_str()?;
+            let score = (answer == example.answer) as u8 as f64;
+            Some((span.id, Eval::score(score)))
+        })
+        .collect())
+}
+```
+
+Demo harvesting (`BootstrapFewShot`, `MIPROv2`, `SIMBA`) prefers a span's own eval over the rollout score when gating and ranking demo candidates, so a scored-down span stays out of the demo pool even when its rollout won, and a scored-up span qualifies even when its rollout lost. Spans you leave out keep whole-rollout credit, and a metric that implements only `evaluate` behaves exactly as before. See [Optimizers](/docs/components/optimizers) for the harvesting semantics.
 
 ## Eval and Rollout
 

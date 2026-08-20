@@ -89,10 +89,12 @@ fn format_leaf_fields(leaf: &LeafInfo) -> String {
 /// 1. **Trace collection** — one traced teacher pass over the trainset (the
 ///    engine's baseline candidate), collecting whole-program scores plus
 ///    per-`Predict` input/output spans
-/// 2. **Demo bootstrapping** — successful spans from rollouts scoring at least
-///    `min_demo_score` become few-shot demos on the predictor that produced
-///    them via the trace name-join (top `max_bootstrapped_demos` by score,
-///    deduplicated on inputs), folded into the accumulating winner candidate
+/// 2. **Demo bootstrapping** — successful spans scoring at least
+///    `min_demo_score` (their own span eval when the metric attached one,
+///    the rollout score otherwise) become few-shot demos on the predictor
+///    that produced them via the trace name-join (top
+///    `max_bootstrapped_demos` by score, deduplicated on inputs), folded
+///    into the accumulating winner candidate
 /// 3. **Candidate generation** — uses the traces and prompting tips to generate
 ///    `num_candidates` instruction variants per predictor
 /// 4. **Trial evaluation** — evaluates up to `num_trials` candidates on a sampled
@@ -112,7 +114,8 @@ fn format_leaf_fields(leaf: &LeafInfo) -> String {
 ///   If `num_trials` < `num_candidates`, only the first `num_trials` are evaluated.
 /// - **`minibatch_size`** (default: 25) — examples per candidate evaluation.
 /// - **`max_bootstrapped_demos`** (default: 4) — demos installed per predictor.
-/// - **`min_demo_score`** (default: 0.0) — score gate for demo-eligible traces.
+/// - **`min_demo_score`** (default: 0.0) — score gate for demo-eligible spans
+///   (span eval when present, rollout score otherwise).
 /// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
 /// - **`seed`** — fixes minibatch sampling for reproducible runs.
 ///
@@ -152,8 +155,10 @@ pub struct MIPROv2 {
     #[builder(default = 4)]
     pub max_bootstrapped_demos: usize,
 
-    /// Minimum whole-program score a trace needs for its per-predictor
-    /// input/output pairs to qualify as bootstrapped demos.
+    /// Minimum score a span needs to qualify as a bootstrapped demo: its own
+    /// eval when the metric attached one
+    /// ([`TypedMetric::evaluate_spans`](crate::evaluate::TypedMetric::evaluate_spans)),
+    /// the whole-program score otherwise.
     #[builder(default = 0.0)]
     pub min_demo_score: f64,
 

@@ -2,7 +2,7 @@ use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 
 use crate::core::{Module, ToInput};
-use crate::trace::{Trace, TraceMeta, TraceOutcome, capture_with_meta};
+use crate::trace::{SpanId, Trace, TraceMeta, TraceOutcome, capture_with_meta};
 use crate::Predicted;
 
 pub use crate::trace::Eval;
@@ -58,6 +58,32 @@ where
         prediction: &Predicted<M::Output>,
         trace: Option<&Trace>,
     ) -> Result<Eval>;
+
+    /// Optional per-span credit assignment (RFC 0004 §4).
+    ///
+    /// Called once per traced rollout, after [`evaluate`](TypedMetric::evaluate),
+    /// with the same example and prediction. Return `(SpanId, Eval)` pairs for
+    /// the spans you can score in isolation ("did the retriever return the
+    /// gold doc?"); every span you leave out keeps whole-rollout credit. Demo
+    /// harvesting ([`BootstrapFewShot`](crate::BootstrapFewShot),
+    /// [`MIPROv2`](crate::MIPROv2), [`SIMBA`](crate::SIMBA)) prefers a span's
+    /// own eval over the rollout score, so a good rollout's recovered-from
+    /// missteps stay out of the demo pool — and a failed rollout's good steps
+    /// can still make it in.
+    ///
+    /// The default returns no span scores: implementing only
+    /// [`evaluate`](TypedMetric::evaluate) keeps whole-rollout behavior
+    /// exactly. Pairs whose id is not in the trace are ignored; duplicate ids
+    /// keep the last eval.
+    async fn evaluate_spans(
+        &self,
+        example: &E,
+        prediction: &Predicted<M::Output>,
+        trace: &Trace,
+    ) -> Result<Vec<(SpanId, Eval)>> {
+        let _ = (example, prediction, trace);
+        Ok(Vec::new())
+    }
 }
 
 /// Runs a module on every example in a trainset and scores each with a metric.
@@ -132,7 +158,8 @@ fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<cr
 /// The one traced-rollout primitive: runs `module` on one example under a
 /// capture scope seeded with `meta`, scores the result with the metric
 /// *outside* the scope (LM-as-judge metrics don't pollute the execution
-/// trace), and records the eval into the trace outcome.
+/// trace), and records the eval into the trace outcome — plus any span-level
+/// evals the metric attaches via [`TypedMetric::evaluate_spans`].
 ///
 /// Both the public evaluation entry points and the optimizer engine compose
 /// this — there is exactly one traced-rollout loop in the crate.
@@ -155,6 +182,13 @@ where
     let (result, mut trace) = capture_with_meta(meta, || module.call(input)).await;
     let predicted = result.map_err(|err| anyhow!("{err}"))?;
     let eval = metric.evaluate(example, &predicted, Some(&trace)).await?;
+    // Per-span credit (RFC 0004 §4): stamp any span-level evals the metric
+    // attaches; demo harvesting prefers these over the rollout score.
+    for (span_id, span_eval) in metric.evaluate_spans(example, &predicted, &trace).await? {
+        if let Some(span) = trace.spans.get_mut(span_id.0 as usize) {
+            span.eval = Some(span_eval);
+        }
+    }
     trace.outcome = Some(TraceOutcome {
         output: json_object(serde_json::to_value(&*predicted)),
         error: None,

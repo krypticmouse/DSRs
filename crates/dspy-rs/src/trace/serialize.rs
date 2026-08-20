@@ -225,6 +225,7 @@ mod tests {
             output: None,
             usage: LmUsage::default(),
             error: None,
+            eval: None,
             started_at_us: 1,
             duration_us: 2,
             complete: true,
@@ -268,6 +269,28 @@ mod tests {
         let jsonl = trace.to_jsonl().expect("serialize");
         let err = Trace::from_jsonl(&jsonl).expect_err("should reject v99");
         assert!(err.to_string().contains("newer than supported"));
+    }
+
+    #[test]
+    fn span_eval_roundtrips_and_stays_off_the_wire_when_absent() {
+        use crate::trace::span::Eval;
+
+        // Absent span eval: the span line carries no `eval` key at all, so
+        // pre-RFC-0004 traces and eval-free traces serialize byte-identically.
+        let trace = test_trace(test_span("hi"));
+        let jsonl = trace.to_jsonl().expect("serialize");
+        let span_line = jsonl.lines().nth(1).expect("span line");
+        assert!(!span_line.contains("\"eval\""));
+
+        // Present span eval: survives a write/read cycle intact.
+        let mut span = test_span("hi");
+        span.eval = Some(Eval::with_feedback(0.25, "partial credit"));
+        let trace = test_trace(span);
+        let parsed = Trace::from_jsonl(&trace.to_jsonl().expect("serialize")).expect("deserialize");
+        assert_eq!(
+            parsed.spans[0].eval,
+            Some(Eval::with_feedback(0.25, "partial credit"))
+        );
     }
 
     #[test]

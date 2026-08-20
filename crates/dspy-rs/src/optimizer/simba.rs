@@ -111,7 +111,8 @@ pub struct SimbaReport {
 /// 3. **Move** — exactly one of:
 ///    - **append-demo**: when the best rollout reached `min_demo_score`, its
 ///      successful `Predict` spans become one new few-shot demo per predictor
-///      via the shared harvest name-join, appended to the current demo set
+///      via the shared harvest name-join (spans the metric gave their own
+///      sub-threshold eval are excluded), appended to the current demo set
 ///      (capped at `max_demos`, oldest dropped, duplicates skipped);
 ///    - **append-rule**: otherwise, a reflection LM (`prompt_model`) reads the
 ///      contrasting rollouts and distills one rule, appended to the target
@@ -167,7 +168,10 @@ pub struct SIMBA {
     pub max_demos: usize,
 
     /// Minimum rollout score for its spans to qualify as demos; below it the
-    /// step proposes a rule instead.
+    /// step proposes a rule instead. Within a qualifying rollout, a span the
+    /// metric gave its own eval
+    /// ([`TypedMetric::evaluate_spans`](crate::evaluate::TypedMetric::evaluate_spans))
+    /// is gated on that score instead.
     #[builder(default = 1.0)]
     pub min_demo_score: f64,
 
