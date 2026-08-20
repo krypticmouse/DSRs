@@ -75,7 +75,7 @@ where
 /// One `Predict` = one prompt template = one LM call. It takes a [`Signature`]'s fields
 /// and instruction, formats them into a prompt (with any demos and tools), calls the
 /// configured LM, and parses the response back into `S::Output`. Every other module —
-/// [`ChainOfThought`](crate::ChainOfThought), `ReAct`, custom pipelines — ultimately
+/// [`ChainOfThought`](crate::ChainOfThought), custom pipelines — ultimately
 /// delegates to one or more `Predict` leaves.
 ///
 /// This is also the unit of optimization. When an optimizer tunes your program, it's

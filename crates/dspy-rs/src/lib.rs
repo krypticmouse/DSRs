@@ -63,11 +63,13 @@
 //!
 //! - **No structural optimization.** The [`ir`] layer ships a dynamic program
 //!   graph ([`ir::Program`], default-on behind the `ir` feature) with an
-//!   interpreter and the `.dsrs` text format, but optimizers only tune
-//!   instructions and demos — none of them rewrite graph structure.
+//!   interpreter, an edit calculus ([`ir::Edit`]), and the `.dsrs` text format,
+//!   but the shipped optimizers only tune instructions and demos — none of them
+//!   rewrite graph structure yet.
 //! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
-//!   [`ChainOfThought`] and [`ReAct`]. The module trait and augmentation system
-//!   are designed for them, but nobody's built them yet.
+//!   [`ChainOfThought`]. Agentic tool loops live in the IR instead
+//!   (`AgentLoopNode` via the `#[agent]` macro); the module trait and
+//!   augmentation system could host the rest, but nobody's built them.
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.

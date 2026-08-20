@@ -1,5 +1,4 @@
 use futures::stream::{self, StreamExt};
-use kdam::{BarExt, tqdm};
 use tracing::debug;
 
 use crate::{Facet, PredictError, Predicted, Schema};
@@ -93,7 +92,6 @@ pub trait Module: Send + Sync {
 ///
 /// Returns `Vec<Result<...>>`, not `Result<Vec<...>>` — individual failures don't
 /// abort the batch. Results preserve input order regardless of completion order.
-/// Shows a progress bar on stderr.
 ///
 /// ```no_run
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
@@ -129,16 +127,10 @@ pub async fn forward_all<M>(
 where
     M: Module + ?Sized,
 {
-    let total = inputs.len();
-    let mut pb = tqdm!(total = total, desc = "Processing");
-
     let mut indexed_results: Vec<IndexedForwardResult<M::Output>> =
         stream::iter(inputs.into_iter().enumerate())
             .map(|(idx, input)| async move { (idx, module.call(input).await) })
             .buffer_unordered(max_concurrency)
-            .inspect(|_| {
-                let _ = pb.update(1);
-            })
             .collect()
             .await;
 

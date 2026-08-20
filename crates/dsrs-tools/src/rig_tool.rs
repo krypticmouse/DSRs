@@ -1,5 +1,5 @@
 //! Bridge from sandboxed tools to [`rig::tool::ToolDyn`], the trait DSRs
-//! already threads through `Predict`, `ChainOfThought`, and `ReAct`. A
+//! already threads through `Predict` and `ChainOfThought`. A
 //! graduated ephemeral tool is indistinguishable from a hand-written one.
 
 use std::sync::Arc;

@@ -31,7 +31,7 @@ use crate::{
 ///   `parse_output`, `parse_sections` — parameterized by `&SignatureSchema`, not a Signature type.
 ///
 /// The building blocks exist so module authors can compose custom prompt flows (e.g.
-/// ReAct's action/extract loop) without reimplementing the delimiter protocol.
+/// an agent's action/extract loop) without reimplementing the delimiter protocol.
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
