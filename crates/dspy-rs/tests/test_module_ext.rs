@@ -1,15 +1,15 @@
-use dspy_rs::{BamlType, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted};
+use dspy_rs::{Schema, CallMetadata, Module, ModuleExt, ParseError, PredictError, Predicted};
 
 struct MaybeFails;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[BamlType]
+#[Schema]
 struct IntPayload {
     value: i32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[BamlType]
+#[Schema]
 struct TextPayload {
     value: String,
 }

@@ -3,10 +3,10 @@
     reason = "Signature derive emits multi-field constructors for schema coverage tests."
 )]
 
-use dspy_rs::{BamlType, ChatAdapter, Signature};
+use dspy_rs::{Schema, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 /// A citation reference.
 struct Citation {
     /// Document identifier
@@ -16,7 +16,7 @@ struct Citation {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 /// Sentiment classification.
 enum Sentiment {
     Positive,

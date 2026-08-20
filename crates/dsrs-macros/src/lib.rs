@@ -176,22 +176,10 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
 ///
 /// Expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` (plus the
 /// crate-path attrs), which is all a type needs to satisfy the blanket `Schema` impl.
-/// Replaces the old BAML `#[BamlType]` attribute.
+/// Replaced the old BAML `#[BamlType]` attribute (the compat alias is gone).
 #[proc_macro_attribute]
 #[allow(non_snake_case)]
 pub fn Schema(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_schema_attr(item)
-}
-
-/// Backwards-compatible alias for [`macro@Schema`].
-///
-/// The old vendored BAML integration exposed a `#[BamlType]` attribute that derived the
-/// type-system plumbing. BAML is gone, but this alias keeps existing signatures/tests that
-/// still spell it `#[BamlType]` compiling — it expands to exactly the same facet + serde
-/// derives as `#[Schema]`.
-#[proc_macro_attribute]
-#[allow(non_snake_case)]
-pub fn BamlType(_attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_schema_attr(item)
 }
 

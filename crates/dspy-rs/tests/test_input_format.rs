@@ -1,7 +1,7 @@
-use dspy_rs::{BamlType, ChatAdapter, Signature};
+use dspy_rs::{Schema, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct Document {
     text: String,
 }

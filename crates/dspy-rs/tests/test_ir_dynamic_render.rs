@@ -10,7 +10,7 @@
 use dspy_rs::ChatAdapter;
 use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SignatureDef, TypeTable};
 use dspy_rs::typesys::{ClassDef, EnumDef, EnumValueDef, FieldDef as TypeFieldDef};
-use dspy_rs::{BamlType, Message, ParseError, Signature};
+use dspy_rs::{Schema, Message, ParseError, Signature};
 
 #[derive(Signature, Clone, Debug)]
 /// Grade an answer against a question.
@@ -34,14 +34,14 @@ struct Graded {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct Citation {
     url: String,
     title: String,
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 enum Stance {
     Support,
     Refute,

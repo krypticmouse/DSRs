@@ -1,19 +1,19 @@
 use std::time::Duration;
 
-use dspy_rs::{BamlType, CallMetadata, Module, PredictError, Predicted, forward_all};
+use dspy_rs::{Schema, CallMetadata, Module, PredictError, Predicted, forward_all};
 use tokio::time::sleep;
 
 struct DelayEcho;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[BamlType]
+#[Schema]
 struct DelayInput {
     value: i64,
     delay_ms: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[BamlType]
+#[Schema]
 struct DelayOutput {
     value: i64,
 }
