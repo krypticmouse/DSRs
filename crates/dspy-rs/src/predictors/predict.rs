@@ -1007,7 +1007,8 @@ impl<S: Signature> PredictBuilder<S> {
     }
 
     /// Builds the [`Predict`], routing state through the same applicator the
-    /// mutation seam uses.
+    /// install seam ([`PredictorInfo::load_state`](crate::core::PredictorInfo::load_state))
+    /// uses.
     pub fn build(self) -> Predict<S> {
         let mut predict = Predict {
             tools: self.tools,

@@ -1,8 +1,9 @@
 //! Demo harvesting from rollout traces — the trace name-join.
 //!
 //! A rollout trace records one span per `Predict` invocation under the same
-//! component name the mutation seam addresses (the dotted path assigned by
-//! `predictor_names`). Harvesting is therefore a pure name join: successful
+//! component name candidates address (the leaf name declared through the
+//! [`Predictors`](crate::Predictors) contract and stamped by the target's
+//! naming pass). Harvesting is therefore a pure name join: successful
 //! spans from well-scored rollouts become few-shot demo rows for the predictor
 //! that produced them — no pointer identity, works identically for fx and
 //! struct harnesses. Shared by [`BootstrapFewShot`](crate::BootstrapFewShot)
