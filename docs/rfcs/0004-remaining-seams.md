@@ -8,6 +8,8 @@ suggested shape for whoever closes it.
 
 ## 1. Conversation surface — `TODO(dsrs-phase4-conversation)`
 
+> Status update (2026-08-20): an implementation landed in merge `f7d67a6` on `v1-program-unification` (`Interpreter::run_conversation`; `build_chat`/`call_and_parse` demoted to wrappers; the prompt-prefix cache and the `TODO(dsrs-phase4-conversation)` marker are gone). Not yet reviewed — see docs/handoff-v1-unification.md §6.
+
 **What:** multi-turn conversations still run on the LM-layer compat path.
 `Predict::build_chat` / `call_and_parse` hand a caller-owned `Chat` to the LM
 client directly, bypassing the interpreter, because the interpreter's only
@@ -25,6 +27,8 @@ the `AgentLoop` machinery reused for turn bookkeeping. `build_chat` /
 in `Predict` can be deleted.
 
 ## 2. Caller-managed tool loop — `TODO(dsrs-phase4-caller-managed)`
+
+> Status update (2026-08-20): an implementation landed in merge `f7d67a6` (`run_conversation_caller_managed` / `resume_conversation` — the loop suspends on tool calls with a process-local resumption token; the `TODO(dsrs-phase4-caller-managed)` marker is gone; the LM-layer `ToolLoopMode::CallerManaged` survives as the one-exchange primitive the interpreter itself uses). Not yet reviewed — see docs/handoff-v1-unification.md §6.
 
 **What:** `ToolLoopMode::CallerManaged` (the "return me the tool calls, I'll
 execute them" pattern) lives on the LM-layer path

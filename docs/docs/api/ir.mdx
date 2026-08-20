@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `78e63aa`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `f7d67a6`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 The intermediate representation (RFC 0002).
@@ -35,6 +35,7 @@ The intermediate representation (RFC 0002).
 | [`ConstraintDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.ConstraintDef.html) | Re-export of `sig::ConstraintDef`. |
 | [`ContextK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ContextK.html) | Re-export of `params::ContextK`. |
 | [`ContextPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ContextPolicy.html) | Re-export of `params::ContextPolicy`. |
+| [`ConversationTurn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.ConversationTurn.html) | Re-export of `interp::ConversationTurn`. |
 | [`cot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.cot.html) | Re-export of `builder::cot`. |
 | [`current_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.current_overlay.html) | Re-export of `bridge::current_overlay`. |
 | [`default_lm`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.default_lm.html) | Re-export of `module_build::default_lm`. |
@@ -125,7 +126,9 @@ The intermediate representation (RFC 0002).
 | [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) | Re-export of `params::ToolDesc`. |
 | [`ToolId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolId.html) | Re-export of `graph::ToolId`. |
 | [`ToolKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.ToolKind.html) | Re-export of `graph::ToolKind`. |
+| [`ToolSetK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolSetK.html) | Re-export of `params::ToolSetK`. |
 | [`ToolStepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.ToolStepDef.html) | Re-export of `step::ToolStepDef`. |
+| [`ToolSuspension`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.ToolSuspension.html) | Re-export of `interp::ToolSuspension`. |
 | [`TypeTable`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.TypeTable.html) | Re-export of `crate::typesys::TypeTable`. |
 | [`unbound_model_config`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.unbound_model_config.html) | Re-export of `module_build::unbound_model_config`. |
 | [`ValidateError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/validate/enum.ValidateError.html) | Re-export of `validate::ValidateError`. |
@@ -304,11 +307,13 @@ The IR interpreter (RFC 0002 §3): async evaluation of a loaded `Program`.
 | [`LeafOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.LeafOutcome.html) | Parse/coercion metadata from one successful `Predict`-leaf evaluation, collected by `Interpreter::run_collecting` in execution order. |
 | [`RunOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RunOutput.html) | Program output plus per-leaf metadata, returned by `Interpreter::run_collecting`. |
 | [`RuntimeEnv`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RuntimeEnv.html) | What the host supplies at load: live models, host tool bindings, the sandbox, and the capability grants. |
+| [`ToolSuspension`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.ToolSuspension.html) | A caller-managed agent turn suspended on pending tool calls (RFC 0004 §2). |
 
 ### Enums
 
 | Item | Description |
 |---|---|
+| [`ConversationTurn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.ConversationTurn.html) | One caller-driven conversation turn, returned by `Interpreter::run_conversation_caller_managed` and `Interpreter::resume_conversation`. |
 | [`LoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.LoadError.html) |  |
 | [`RunError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.RunError.html) |  |
 
@@ -381,6 +386,7 @@ Parameters (RFC 0002 §2.4): every mutable thing is a named, addressable slot; a
 | [`ParamOwner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamOwner.html) |  |
 | [`ParamValue`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamValue.html) |  |
 | [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) |  |
+| [`ToolSetK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolSetK.html) |  |
 
 ### Traits
 

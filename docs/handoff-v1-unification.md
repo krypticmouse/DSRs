@@ -21,6 +21,7 @@ and what the next owner must do before trusting or merging it.
 | Seam 6 (`ca14e08`) | `Structural` — sixth optimizer, LM-guided edit proposals over `ir::Edit` | **session B — NOT reviewed by session A** |
 | Seam 4 (`109c571`) | Per-span credit assignment in demo harvesting | **session B — NOT reviewed by session A** |
 | Seam 5 (`16f2b27`) | Tool membership as a `ParamSlot` (`ParamKind::ToolSet`, touches `.dsrs` parse/print) | **session B — NOT reviewed by session A** |
+| Seams 1+2 (`f7d67a6`) | Interpreter conversation surface (`run_conversation`) + caller-managed suspend/resume; `Predict` compat shims deleted | **session B — NOT reviewed by session A** |
 
 ## 2. What is verified, and how
 
@@ -108,6 +109,8 @@ and what the next owner must do before trusting or merging it.
 - **Compat shims still bypass the interpreter**: conversation seam
   (`TODO(dsrs-phase4-conversation)`) and caller-managed tool loop
   (`TODO(dsrs-phase4-caller-managed)`) — RFC 0004 §1–2 has suggested shapes.
+  *(Stale as of merge `f7d67a6`: both shims are gone — see §6. Kept for the
+  record of what session A observed.)*
 
 ## 5. Findings from the original architecture review that were NEVER fixed
 
@@ -167,12 +170,27 @@ Verified by session B:
   review, no workspace-wide suite by session B at `16f2b27` (session A's §3
   item 0 run covers that).
 
-**IN FLIGHT: seams 1+2 are not merged yet.** A fourth agent is implementing
-the interpreter conversation surface (`run_conversation`) + caller-managed
-tool loop as a suspending `AgentLoop` on branch
-`worktree-agent-a5e33e674b89edb65`. If this document is the last word and
-those seams look untouched at HEAD, check that branch before redoing the
-work. When it lands, §1's table, RFC 0004 §1–2, and this section need rows.
+**Seams 1+2 landed after the sections above were written**: merge `f7d67a6`
+(agent commit `139fba6`, +2,064/−520). Its agent ran the full
+`cargo test -p dspy-rs` suite green (427 passed, 64 binaries) and clippy
+clean-for-touched-files in its worktree before committing; session B re-ran
+the full workspace suite + clippy after the merge (result recorded in the
+commit history — verify at HEAD yourself). Both `TODO(dsrs-phase4-*)`
+markers are gone repo-wide.
+
+**This was the one conflicted merge, and the resolution is
+orchestrator-authored code — review it specifically** (it is in merge commit
+`f7d67a6` itself, not in `139fba6`): the seam-1+2 branch factored
+`eval_agent`'s inline tool-surface build into `build_agent_surface(...)`,
+written against the pre-ToolSet tree; seam 5 had meanwhile made that build
+ToolSet-aware. The resolution keeps the factored helper and moves the
+selection into it: `p_tool_set` picks the surface, `build_code_mode_surface`
+receives the *selected* `&[ToolId]`, and `by_name` is built from the same
+selection — so both the dispatching loop and the caller-managed suspended
+surface honor the ToolSet gene. The `tool_set_overlay_selects_the_tool_surface`
+test plus the 11 conversation tests all pass on the merged tree, but no test
+exercises ToolSet *through* the suspending path specifically — worth adding
+during review.
 
 ### 6.2 Answers to §3 item 2's specific questions
 
@@ -242,7 +260,35 @@ Seam 5 (ToolSet gene, `16f2b27`):
   full declared table (conservative superset; the overlay isn't known at
   load).
 
-All three agents independently hit the same wall: the repo is not
+Seams 1+2 (conversation surface + caller-managed, `f7d67a6`):
+
+- `run_conversation(chat, input, overlay, budget) -> (RunOutput, Chat)` plus
+  a separate caller-managed pair: `run_conversation_caller_managed` returns
+  `ConversationTurn::{Complete, Suspended(ToolSuspension)}` and
+  `resume_conversation(suspension, results)` feeds tool results back. The
+  split (vs a mode flag) makes `Suspended` unrepresentable on the
+  dispatching entry, keeping the RFC's exact return shape there.
+- `input` is `Option<JsonMap>`: continuations have no typed input;
+  empty-chat + `Some` renders the opening, non-empty + `Some` appends a
+  typed turn. Conversation surface is restricted to single-leaf programs
+  (`RunError::Input` otherwise).
+- The `ToolSuspension` token holds **live state** (open `SpanGuard`, budget
+  meters, turn cursor) — required for span/budget parity across modes, so it
+  is process-local and NOT serializable; no cross-process resume. Dropping
+  it records the span `Cancelled`.
+- LM-layer `ToolLoopMode::CallerManaged` was deliberately kept: it is the
+  one-exchange primitive the interpreter's own loop uses, and
+  `LM::call_with_tool_loop_mode` stays public.
+- Code Mode is intentionally not applied in suspending mode (the caller
+  executes tools). Resume records tool `duration_us` as time-suspended;
+  caller-fed results always record `error: None` (feed error text as the
+  result for LATM-style repair).
+- `Predict::build_chat` is now `async` and needs a resolvable LM (it loads
+  the interpreter); ~370 lines of compat path deleted
+  (`call_and_parse_with_input`, `serve_recorded_span`, the prompt-prefix
+  cache).
+
+All four agents independently hit the same wall: the repo is not
 rustfmt-clean (repo-wide `cargo fmt` reformats ~80 pre-existing files). Each
 scoped formatting to its own diff and reverted the churn. Add "deliberate
 repo-wide fmt pass" to §3 item 7's version-bump chore.
