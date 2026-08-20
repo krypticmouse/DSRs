@@ -9,17 +9,17 @@
 //! parser dispatches on the string (the RFC grammar is keyword-led, so one
 //! token of lookahead suffices).
 
-use super::ParseError;
+use crate::ParseError;
 
 /// A source position, 1-based.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Span {
+pub struct Span {
     pub line: u32,
     pub col: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Tok {
+pub enum Tok {
     /// Identifier or keyword (the parser decides).
     Ident(String),
     /// JSON string literal, unescaped.
@@ -54,7 +54,7 @@ pub(crate) enum Tok {
 
 impl Tok {
     /// Human-readable token description for error messages.
-    pub(crate) fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             Tok::Ident(s) => format!("`{s}`"),
             Tok::Str(_) => "a string".to_string(),
@@ -86,7 +86,7 @@ impl Tok {
 
 /// One lexed token with its source position and byte extent.
 #[derive(Clone, Debug)]
-pub(crate) struct Lexed {
+pub struct Lexed {
     pub tok: Tok,
     pub span: Span,
     /// Byte offset of the first byte of the token (raw-mode scans restart
@@ -94,7 +94,7 @@ pub(crate) struct Lexed {
     pub start: usize,
 }
 
-pub(crate) struct Lexer<'a> {
+pub struct Lexer<'a> {
     src: &'a str,
     bytes: &'a [u8],
     pos: usize,
@@ -103,7 +103,7 @@ pub(crate) struct Lexer<'a> {
 }
 
 impl<'a> Lexer<'a> {
-    pub(crate) fn new(src: &'a str) -> Self {
+    pub fn new(src: &'a str) -> Self {
         Self {
             src,
             bytes: src.as_bytes(),
@@ -157,7 +157,7 @@ impl<'a> Lexer<'a> {
     }
 
     /// Repositions the cursor (used by the parser after raw-mode scans).
-    pub(crate) fn seek(&mut self, pos: usize, span: Span) {
+    pub fn seek(&mut self, pos: usize, span: Span) {
         self.pos = pos;
         self.line = span.line;
         self.col = span.col;
@@ -165,7 +165,7 @@ impl<'a> Lexer<'a> {
 
     /// Line/col of an arbitrary byte offset (computed by rescanning; raw-mode
     /// scans are rare, so this stays off every hot path).
-    pub(crate) fn span_at(&self, pos: usize) -> Span {
+    pub fn span_at(&self, pos: usize) -> Span {
         let mut line = 1u32;
         let mut col = 1u32;
         for &b in &self.bytes[..pos.min(self.bytes.len())] {
@@ -179,7 +179,7 @@ impl<'a> Lexer<'a> {
         Span { line, col }
     }
 
-    pub(crate) fn next_token(&mut self) -> Result<Lexed, ParseError> {
+    pub fn next_token(&mut self) -> Result<Lexed, ParseError> {
         self.skip_trivia();
         let span = self.span();
         let start = self.pos;
@@ -386,7 +386,7 @@ impl<'a> Lexer<'a> {
     /// backticks followed by a newline; the source is every byte up to (not
     /// including) the newline that precedes a line consisting of exactly `k`
     /// backticks and nothing else.
-    pub(crate) fn scan_code_fence(&self, from: usize) -> Result<(String, usize), ParseError> {
+    pub fn scan_code_fence(&self, from: usize) -> Result<(String, usize), ParseError> {
         let span = self.span_at(from);
         let bytes = self.bytes;
         let mut i = from;
@@ -454,7 +454,7 @@ impl<'a> Lexer<'a> {
 
     /// Scans one raw JSON value starting at byte `from`. Returns the parsed
     /// value and the byte offset one past its end.
-    pub(crate) fn scan_json(&self, from: usize) -> Result<(serde_json::Value, usize), ParseError> {
+    pub fn scan_json(&self, from: usize) -> Result<(serde_json::Value, usize), ParseError> {
         let span = self.span_at(from);
         let rest = &self.src[from..];
         let mut de = serde_json::Deserializer::from_str(rest).into_iter::<serde_json::Value>();

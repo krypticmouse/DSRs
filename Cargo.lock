@@ -1018,6 +1018,7 @@ dependencies = [
  "bon",
  "cranelift-entity",
  "csv",
+ "dsrs-syntax",
  "dsrs-tools",
  "dsrs_macros",
  "enum_dispatch",
@@ -1063,6 +1064,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsrs-syntax"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "dsrs-tools"
 version = "0.1.0"
 dependencies = [
@@ -1082,11 +1090,11 @@ name = "dsrs_macros"
 version = "0.7.2"
 dependencies = [
  "dspy-rs",
+ "dsrs-syntax",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.106",
  "trybuild",
 ]

@@ -6,7 +6,7 @@
 
 use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SigError, SignatureDef};
 use dspy_rs::modules::Reasoning;
-use dspy_rs::{Augmented, BamlType, Schema, Signature};
+use dspy_rs::{Augmented, Schema, Signature};
 
 #[derive(Signature, Clone, Debug)]
 /// Answer questions accurately and concisely.
@@ -39,7 +39,7 @@ struct Graded {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct Citation {
     /// Source URL.
     url: String,
@@ -47,7 +47,7 @@ struct Citation {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 enum Stance {
     Support,
     Refute,
@@ -66,7 +66,7 @@ struct Structured {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct DetailOutput {
     answer: String,
 }

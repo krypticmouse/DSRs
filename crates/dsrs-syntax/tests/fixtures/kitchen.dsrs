@@ -1,0 +1,130 @@
+// Kitchen sink: every node kind, classes/enums, exotic types, sandboxed
+// tools, demos, context/budget/stop options, lineage. Not canonical —
+// exercised by the parse/print round-trip property.
+dsrs 1
+program kitchen
+
+caps { fs:read net:fetch }
+
+model core = "openai:gpt-4o-mini" { temperature 0.2 max_tokens 1024 cache true }
+
+class Profile {
+  "A user profile."
+  name: string "display name"
+  age: int? check("this|int >= 0", "non-negative")
+  tags: string[]?
+  meta: map<string>
+  kind: "gold" | "basic"
+}
+
+enum Severity {
+  Low "minor"
+  High
+}
+
+sig Main {
+  in ticket: string
+  in profile: Profile
+  out reply: string
+  out audit: string
+}
+
+sig Classify {
+  "Classify the ticket."
+  in ticket: string
+  out severity: Severity
+}
+
+sig Reply {
+  in ticket: string
+  out reply: string
+}
+
+sig Draft {
+  in ticket: string
+  in feedback: string
+  out reply: string
+}
+
+sig Judge {
+  in reply: string
+  out score: float
+  out feedback: string
+}
+
+sig Summarize {
+  in ticket: string
+  in profile: Profile
+  out summary: string alias "final_summary"
+}
+
+sig Improve {
+  in ticket: string
+  out better: string
+  out keep_going: bool
+}
+
+sig Audit {
+  in reply: string
+  out audit: string
+}
+
+sig Redact {
+  in text: string
+  out redacted: string
+}
+
+tool fetch "Fetch a URL" caps [net:fetch] {
+  in url: string
+  out body: string
+}
+
+tool shout "Uppercase" {
+  in text: string
+  out loud: string
+} js```
+(a) => ({ loud: a.text.toUpperCase() })
+```
+
+lineage {
+  optimizer "gepa-0.3"
+  trainset "tickets@v1"
+  budget "100 rollouts"
+  parent "00000000deadbeef"
+  date "2026-08-14"
+}
+
+main: Main = seq {
+  classifier = predict Classify (ticket = $.ticket)
+  router = route classifier.severity {
+    Low -> low = predict Reply (ticket = $.ticket)
+    else -> high = agent Reply (ticket = $.ticket) {
+      tools [fetch shout]
+      stop_tools [shout]
+      max_turns 3
+      until_parse false
+      budget { calls 5 tokens 2000 deadline_ms 60000 on_exhausted finalize }
+      context { max_history_turns 4 tool_result_max_bytes 2048 playbook "Be brief." }
+      instruction "Escalate."
+      demos [{"input":{"ticket":"x"},"output":{"reply":"y"}}]
+    }
+  }
+  forked = fork {
+    summarizer = predict Summarize (ticket = $.ticket, profile = $.profile)
+    refined = refine (threshold 0.5 max_rounds 2 feedback_field feedback) {
+      body = drafter = predict Draft (ticket = $.ticket, feedback = "start")
+      judge = grader = predict Judge (reply = drafter.reply)
+    }
+  } join { summary = summarizer.summary, refined_reply = refined.reply }
+  looped = loop (max_iters 3) {
+    improver = predict Improve (ticket = ^ticket)
+    while improver.keep_going
+    carry { ticket = improver.better }
+    join { improved = improver.better }
+  }
+  audited = retry (attempts 2 backoff_ms 50 feedback true) auditor = predict Audit (reply = router.reply)
+  redactor = hole Redact (text = audited.audit) caps [fs:read] js```
+(a) => ({ redacted: a.text })
+```
+  out { reply = router.reply, audit = redactor.redacted }
+}

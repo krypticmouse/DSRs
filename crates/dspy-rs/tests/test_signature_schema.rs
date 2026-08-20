@@ -1,13 +1,13 @@
-use dspy_rs::{BamlType, Schema, Signature, SignatureSchema};
+use dspy_rs::{Schema, Signature, SignatureSchema};
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct DetailInput {
     note: String,
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 struct DetailOutput {
     answer: String,
 }

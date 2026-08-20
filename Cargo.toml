@@ -10,6 +10,7 @@ members = [
 # In-workspace crates
 dspy-rs = { version = "0.7.3", path = "crates/dspy-rs" }
 dsrs-tools = { version = "0.1.0", path = "crates/dsrs-tools" }
+dsrs-syntax = { version = "0.1.0", path = "crates/dsrs-syntax" }
 
 # Shared third-party crates
 anyhow = "1.0.99"

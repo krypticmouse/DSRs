@@ -18,7 +18,8 @@ syn   = { version = "2", features = ["full", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3.2"
-serde_json = { workspace = true }
+# Shared .dsrs lexer/structural grammar — include_program!'s build-time syntax gate.
+dsrs-syntax = { workspace = true }
 minijinja = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
