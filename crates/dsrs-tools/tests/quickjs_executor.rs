@@ -362,7 +362,22 @@ async fn tool_can_catch_capability_errors() {
 
 #[test]
 fn reserved_and_invalid_capability_names_are_rejected() {
-    for bad in ["__dsrs_cap_x", "has space", "1starts_with_digit", ""] {
+    for bad in [
+        "__dsrs_cap_x",
+        "has space",
+        "1starts_with_digit",
+        "",
+        // Injection attempt: must never reach the sandbox bootstrap.
+        "x; globalThis.leak = 1; //",
+        // Reserved globals/words: shadowing them breaks the runtime's shims.
+        "JSON",
+        "Object",
+        "Promise",
+        "globalThis",
+        "undefined",
+        "class",
+        "eval",
+    ] {
         let err = QuickJsExecutor::builder()
             .capability(Capability::new(
                 bad,
@@ -376,6 +391,69 @@ fn reserved_and_invalid_capability_names_are_rejected() {
             "{bad:?} -> {err:?}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn capability_call_is_bounded_by_the_deadline() {
+    // The interrupt handler cannot fire while host code runs; the executor
+    // must bound the capability call itself with the remaining deadline.
+    let executor = QuickJsExecutor::builder()
+        .deadline(Duration::from_millis(100))
+        .capability(Capability::new(
+            "stall",
+            "never returns within the deadline",
+            |_| async move {
+                tokio::time::sleep(Duration::from_secs(3600)).await;
+                Ok(json!(null))
+            },
+        ))
+        .build()
+        .expect("build");
+    executor
+        .register(schemaless("stuck", "(args) => stall({})"))
+        .await
+        .expect("register");
+
+    let start = Instant::now();
+    let err = executor
+        .execute(ToolInvocation::new("stuck", json!({})))
+        .await
+        .expect_err("must time out");
+    let elapsed = start.elapsed();
+
+    match &err {
+        ExecError::Timeout { name, deadline_ms } => {
+            assert_eq!(name, "stuck");
+            assert_eq!(*deadline_ms, 100);
+        }
+        other => panic!("expected Timeout, got {other:?}"),
+    }
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "capability call was not bounded: {elapsed:?}"
+    );
+}
+
+#[tokio::test]
+async fn capabilities_work_on_a_current_thread_runtime() {
+    // Capability calls are bridged via spawn + channel (not
+    // `Handle::block_on`), so a current-thread runtime must work too.
+    let executor = QuickJsExecutor::builder()
+        .capability(Capability::new("double", "double a number", |args| async move {
+            let n = args["n"].as_f64().ok_or("expected {n: number}")?;
+            Ok(json!(n * 2.0))
+        }))
+        .build()
+        .expect("build");
+    executor
+        .register(schemaless("via_cap", "(args) => double({n: args.n})"))
+        .await
+        .expect("register");
+    let result = executor
+        .execute(ToolInvocation::new("via_cap", json!({"n": 21})))
+        .await
+        .expect("execute");
+    assert_eq!(result.as_f64(), Some(42.0), "{result:?}");
 }
 
 // ----------------------------------------------------- validate-then-register
@@ -574,6 +652,72 @@ async fn identical_sources_share_cached_bytecode() {
         .expect("register c");
     let stats = executor.cache_stats();
     assert_eq!((stats.entries, stats.misses), (2, 2));
+}
+
+#[tokio::test]
+async fn deregister_evicts_bytecode_unless_shared() {
+    let executor = QuickJsExecutor::new();
+    let js = "(args) => args.x * 3";
+    executor
+        .register(schemaless("triple_a", js))
+        .await
+        .expect("register a");
+    executor
+        .register(schemaless("triple_b", js))
+        .await
+        .expect("register b");
+    // Two tools, one shared cache entry.
+    assert_eq!(executor.cache_stats().entries, 1);
+
+    // Still referenced by triple_b: the entry must survive.
+    assert!(executor.deregister("triple_a"));
+    assert_eq!(executor.cache_stats().entries, 1);
+    assert_eq!(
+        executor
+            .execute(ToolInvocation::new("triple_b", json!({"x": 2})))
+            .await
+            .expect("execute"),
+        json!(6)
+    );
+
+    // Last reference gone: the bytecode is evicted with it.
+    assert!(executor.deregister("triple_b"));
+    assert_eq!(executor.cache_stats().entries, 0);
+    assert!(!executor.deregister("triple_b"), "already gone");
+}
+
+#[tokio::test]
+async fn bytecode_cache_is_bounded() {
+    // The cache is capped (cap-and-clear); an optimizer generating many
+    // candidate sources must not grow it without bound, and registered tools
+    // must keep working after eviction (they hold their own bytecode Arc).
+    let executor = QuickJsExecutor::new();
+    let count = 140; // > the 128-entry cap
+    for i in 0..count {
+        executor
+            .register(schemaless(
+                &format!("cand_{i}"),
+                &format!("(args) => args.x + {i}"),
+            ))
+            .await
+            .expect("register");
+    }
+    let stats = executor.cache_stats();
+    assert!(
+        stats.entries <= 128,
+        "cache exceeded its bound: {} entries",
+        stats.entries
+    );
+    // Tools registered before the clear still execute.
+    for i in [0, count - 1] {
+        assert_eq!(
+            executor
+                .execute(ToolInvocation::new(format!("cand_{i}"), json!({"x": 1})))
+                .await
+                .expect("execute"),
+            json!(1 + i)
+        );
+    }
 }
 
 #[tokio::test]

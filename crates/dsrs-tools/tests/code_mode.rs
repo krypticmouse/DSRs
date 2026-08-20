@@ -246,6 +246,13 @@ fn js_identifier_mangling_rule() {
     assert_eq!(js_identifier("__dsrs_evil"), "___dsrs_evil");
     assert_eq!(js_identifier("emoji🔥name"), "emoji_name");
     assert_eq!(js_identifier("$ok"), "$ok");
+    // Reserved globals and words are suffixed rather than shadowed.
+    assert_eq!(js_identifier("JSON"), "JSON_tool");
+    assert_eq!(js_identifier("Object"), "Object_tool");
+    assert_eq!(js_identifier("class"), "class_tool");
+    assert_eq!(js_identifier("undefined"), "undefined_tool");
+    // Only exact collisions are mangled.
+    assert_eq!(js_identifier("JSONish"), "JSONish");
 }
 
 #[tokio::test]
@@ -276,6 +283,58 @@ async fn run_script_returns_and_chains_capabilities() {
     .expect("script");
     assert_eq!(result, json!({"temps": [21, 21]}));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn run_script_rejects_capability_name_injection() {
+    // `run_script` installs caller-supplied capabilities without going
+    // through `add_capability`; a hostile name must still be refused before
+    // it can reach the sandbox bootstrap.
+    let evil = Capability::new(
+        "x; globalThis.leak = 1; //",
+        "injection attempt",
+        |_| async move { Ok(json!(null)) },
+    );
+    let err = run_script("return typeof leak;", vec![evil], SandboxConfig::default())
+        .await
+        .expect_err("must reject the capability");
+    match err {
+        ExecError::Internal { message } => {
+            assert!(message.contains("capability"), "{message}");
+        }
+        other => panic!("expected Internal (host misconfiguration), got {other:?}"),
+    }
+
+    // Reserved names are refused on the same path.
+    let shadow = Capability::new("JSON", "shadows JSON", |_| async move { Ok(json!(null)) });
+    let err = run_script("return 1;", vec![shadow], SandboxConfig::default())
+        .await
+        .expect_err("must reject the capability");
+    assert!(matches!(err, ExecError::Internal { .. }), "{err:?}");
+}
+
+#[tokio::test]
+async fn json_named_tool_is_mangled_and_does_not_break_other_capabilities() {
+    // A tool named `JSON` must not shadow `globalThis.JSON` (every capability
+    // shim depends on it); it is installed as `JSON_tool` instead, and other
+    // capabilities keep working.
+    let tools: Vec<Arc<dyn ToolDyn>> = vec![Arc::new(NamedTool("JSON")), Arc::new(NamedTool("beta"))];
+    let tool = CodeModeTool::new(tools, SandboxConfig::default())
+        .await
+        .expect("build");
+    let definition = tool.definition(String::new()).await;
+    assert!(definition.description.contains("JSON_tool(args)"));
+
+    let args = json!({
+        "code": "const a = JSON_tool({});\n\
+                 const b = beta({});\n\
+                 return {a: a.from, b: b.from, json_intact: typeof JSON.stringify === 'function'};"
+    });
+    let result = tool.call(args.to_string()).await.expect("call");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        json!({"a": "JSON", "b": "beta", "json_intact": true})
+    );
 }
 
 #[tokio::test]
@@ -372,6 +431,51 @@ async fn code_mode_deadline_kills_runaway_script() {
     assert!(
         elapsed < Duration::from_secs(5),
         "deadline enforced, not hung: {elapsed:?}"
+    );
+}
+
+/// A tool whose call never finishes within any sane deadline.
+struct StallTool;
+
+impl rig::tool::Tool for StallTool {
+    const NAME: &'static str = "stall";
+    type Error = CannedError;
+    type Args = serde_json::Value;
+    type Output = serde_json::Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Never returns".to_string(),
+            parameters: json!({"type": "object"}),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        Ok(json!(null))
+    }
+}
+
+#[tokio::test]
+async fn code_mode_deadline_bounds_capability_calls() {
+    // In Code Mode every tool call is a capability call; the wall-clock
+    // deadline must bound the host future too, not just JS execution.
+    let tool = CodeModeTool::new(vec![Arc::new(StallTool) as Arc<dyn ToolDyn>], tight_config())
+        .await
+        .expect("build");
+    let started = Instant::now();
+    let result = tool
+        .call(json!({"code": "return stall({});"}).to_string())
+        .await
+        .expect("repairable errors come back as Ok results");
+    let elapsed = started.elapsed();
+    let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(parsed["kind"], "timeout", "typed timeout error: {result}");
+    assert_eq!(parsed["name"], RUN_JS_TOOL_NAME);
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "capability call was not bounded by the deadline: {elapsed:?}"
     );
 }
 
