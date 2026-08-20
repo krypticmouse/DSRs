@@ -84,7 +84,7 @@
 //! - [`core`] — [`Module`] trait, [`Signature`] trait, [`SignatureSchema`], error types,
 //!   LM client, [`Predicted`] and [`CallMetadata`]
 //! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Demo`]
-//! - [`modules`] — [`ChainOfThought`], [`ReAct`], and augmentation types
+//! - [`modules`] — [`ChainOfThought`] and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
 //! - [`ir`] — dynamic program graph, interpreter, and the `.dsrs` text format

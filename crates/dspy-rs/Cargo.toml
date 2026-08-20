@@ -23,7 +23,7 @@ tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
 bon = "3.7.0"
-# Keep this direct pin in sync with workspace [patch.crates-io] for self-sufficient external path consumers.
+# Upstream crates.io facet (the reflection-walker fork pin was removed in phase 3).
 facet = { version = "0.43", default-features = false, features = ["std", "doc"] }
 thiserror = { workspace = true }
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
