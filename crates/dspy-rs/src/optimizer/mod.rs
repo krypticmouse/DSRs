@@ -40,7 +40,6 @@ pub mod engine;
 pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
-pub mod pareto;
 #[cfg(feature = "ir")]
 pub mod program_engine;
 pub mod simba;
@@ -50,7 +49,6 @@ pub use copro::*;
 pub use engine::*;
 pub use gepa::*;
 pub use mipro::*;
-pub use pareto::*;
 #[cfg(feature = "ir")]
 pub use program_engine::*;
 pub use simba::*;

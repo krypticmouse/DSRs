@@ -65,7 +65,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{ModuleState, PredictState, StateUpdate};
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval, TypedMetric};
-use crate::optimizer::pareto::ParetoStatistics;
 use crate::optimizer::with_named_predictor;
 use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
 use crate::utils::hash::StableHasher;
@@ -571,6 +570,28 @@ impl ParetoView {
             min_coverage: coverage.iter().copied().min().unwrap_or(0),
         }
     }
+}
+
+/// Snapshot of the Pareto frontier at a point in the search.
+///
+/// Useful for plotting convergence. A healthy search has `num_candidates` growing
+/// slowly (diversity is maintained) while `avg_coverage` increases (candidates are
+/// getting more robust). If `num_candidates` is 1, the search has collapsed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParetoStatistics {
+    /// Candidates currently on the frontier. 1 means the search has converged
+    /// (or collapsed) to a single instruction.
+    pub num_candidates: usize,
+    /// Examples where at least one frontier candidate is the best. Should approach
+    /// total eval set size as the search progresses.
+    pub num_examples_covered: usize,
+    /// Mean examples won per candidate. Higher means candidates are more robust;
+    /// lower means more specialization.
+    pub avg_coverage: f32,
+    /// Most examples won by any single candidate.
+    pub max_coverage: usize,
+    /// Fewest examples won by any frontier candidate (always >= 1 by construction).
+    pub min_coverage: usize,
 }
 
 // ---------------------------------------------------------------------------
