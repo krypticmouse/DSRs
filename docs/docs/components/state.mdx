@@ -54,7 +54,7 @@ A saved file therefore looks like:
 
 ## The install seam
 
-State loading reaches predictors through the object-safe per-leaf view `PredictorInfo` (see [Modules](/docs/components/modules#predictor-discovery-predictors)). Its `load_state` method is the install seam: a **full** overwrite of the leaf's optimizable state (`instruction_override: None` clears the override, `demos` replaces the demo set), used by `ModuleState::apply` and by the optimizer's one-shot install of the winning candidate. Candidate *evaluation* never calls it — candidates are injected ambiently per call tree (see [Optimizers](/docs/components/optimizers)). Every `load_state` invalidates the leaf's cached prompt prefix and instance overlay, so a candidate is data applied through the seam, never ad hoc field mutation.
+State loading reaches predictors through the object-safe per-leaf view `PredictorInfo` (see [Modules](/docs/components/modules#predictor-discovery-predictors)). Its `load_state` method is the install seam: a **full** overwrite of the leaf's optimizable state (`instruction_override: None` clears the override, `demos` replaces the demo set), used by `ModuleState::apply` and by the optimizer's one-shot install of the winning candidate. Candidate *evaluation* never calls it — candidates are injected ambiently per call tree (see [Optimizers](/docs/components/optimizers)). Every `load_state` invalidates the leaf's cached instance overlay, so a candidate is data applied through the seam, never ad hoc field mutation.
 
 ## Compatibility behavior
 

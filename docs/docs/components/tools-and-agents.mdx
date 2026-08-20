@@ -127,6 +127,10 @@ Code Mode is the many-tools-to-one-script alternative. Instead of advertising N 
 
 Which tools a loop carries is a tuned value, not just structure. The agent node's `tools` list is the *declaration* — the loop's capability footprint, checked against the program ceiling at load. Which of those tools the loop actually presents to the model is the `ToolSet` parameter (`"<leaf>.tool_set"`), a slot like `instruction` or `demos`: an optimizer's candidate can drop a distracting tool or bring a declared one back, and the descriptions the model sees are themselves `ToolDesc` slots. The alphabet is closed — a candidate can never smuggle in a tool the declaration doesn't cover; that is refused at load, not at call time. Absent selection means the full declared list, so nothing changes until an optimizer says so. See [Program and nodes](/docs/components/program-and-nodes) for the slot machinery.
 
+## Executing tool calls yourself
+
+To execute tool calls yourself instead of letting the loop dispatch them (a REPL the agent drives, tools that need caller-side state), run the agent through the interpreter's caller-managed conversation surface: `Interpreter::run_conversation_caller_managed` suspends the loop on tool calls and `resume_conversation` feeds your results back, with the same spans, budgets, and stop-tool behavior as the dispatching loop. The suspended surface presents the ToolSet-selected tools per call, same as the dispatching loop. See [Runtime](/docs/components/runtime).
+
 ## Common mistakes
 
 **Forgetting the body on a host tool.** `#[tool]` needs a real function with a body. A bodyless function is a step, not a tool.

@@ -144,7 +144,9 @@ fn demo(idx: usize) -> Demo<BenchQA> {
     Demo::new(
         BenchQAInput {
             question: format!("Demo question {idx}?"),
-            context: format!("Demo context {idx} with enough text to look like a real retrieval chunk for the benchmark."),
+            context: format!(
+                "Demo context {idx} with enough text to look like a real retrieval chunk for the benchmark."
+            ),
         },
         BenchQAOutput {
             answer: format!("Demo answer {idx}."),
@@ -180,8 +182,7 @@ fn report(name: &str, iters: u64, s: Snapshot) {
 }
 
 async fn make_lm(responses: u64, cache: bool) -> LM {
-    let client =
-        TestCompletionModel::new((0..responses).map(|_| assistant_content()));
+    let client = TestCompletionModel::new((0..responses).map(|_| assistant_content()));
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("bench"))],
         LM::builder()
@@ -218,16 +219,19 @@ async fn main() {
     report("schema(): global RwLock map path", iters, s);
 
     // --- 2. Prompt build (system + 2 demos + user) --------------------------
+    // `build_chat` renders through the loaded interpreter (conversation
+    // surface), so the predictor needs a bound LM even though no call is made.
     let predict = Predict::<BenchQA>::builder()
         .demo(demo(1))
         .demo(demo(2))
+        .lm(make_lm(0, false).await)
         .build();
     let input = bench_input();
 
     let iters = 100_000u64;
     let s = snap();
     for _ in 0..iters {
-        std::hint::black_box(predict.build_chat(&input).unwrap());
+        std::hint::black_box(predict.build_chat(&input).await.unwrap());
     }
     report("build_chat (system + 2 demos + user)", iters, s);
 
@@ -317,7 +321,10 @@ async fn main() {
     // --- 9. Forward with 1 tool attached (never called) -----------------------
     let iters = 50_000u64;
     let lm = make_lm(iters, false).await;
-    let tooled = Predict::<BenchQA>::builder().lm(lm).add_tool(NoopTool).build();
+    let tooled = Predict::<BenchQA>::builder()
+        .lm(lm)
+        .add_tool(NoopTool)
+        .build();
     let s = snap();
     for _ in 0..iters {
         std::hint::black_box(tooled.call(bench_input()).await.unwrap());
@@ -330,7 +337,9 @@ async fn main() {
     let s = snap();
     for _ in 0..iters {
         std::hint::black_box(
-            fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+            fx::predict::<BenchQA>("bench_fx", bench_input())
+                .await
+                .unwrap(),
         );
     }
     report("fx::predict (0 demos, default params)", iters, s);
@@ -344,7 +353,9 @@ async fn main() {
     fx::with_params(params, async {
         for _ in 0..iters {
             std::hint::black_box(
-                fx::predict::<BenchQA>("bench_fx", bench_input()).await.unwrap(),
+                fx::predict::<BenchQA>("bench_fx", bench_input())
+                    .await
+                    .unwrap(),
             );
         }
     })

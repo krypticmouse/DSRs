@@ -40,11 +40,6 @@ pub mod text;
 pub mod validate;
 
 pub use bridge::{current_overlay, with_ambient_overlay, with_overlay};
-pub use module_build::{
-    ModuleBuildError, ModuleSpec, ModuleStep, ModuleStepKind, PortSpec, build_module_program,
-    default_lm, unbound_model_config,
-};
-pub use step::{AgentStepOpts, HoleReport, StepDef, StepKind, ToolStepDef};
 pub use builder::{
     AsNodeName, BuildError, NodeSpec, Port, ProgramBuilder, agent, carried, cot, extern_hole, fork,
     hole, input, lit, loop_, out, predict, refine, retry, route, seq,
@@ -52,19 +47,23 @@ pub use builder::{
 pub use edit::{ApplyError, Edit, EditError, EditKind, SwapTarget, migrate_overlay};
 pub use graph::{
     AgentLoopNode, BakeError, Binding, BudgetPolicy, CapSet, ForkJoinNode, HoleImpl, HoleNode,
-    Interner,
-    Lineage, LoopNode, ModelDef, ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode, Program,
-    ProgramMeta, RefineNode, RetryNode, RouteNode, SeqNode, SigId, StopSpec, Sym, ToolDef, ToolId,
-    ToolKind,
+    Interner, Lineage, LoopNode, ModelDef, ModelId, Node, NodeBudget, NodeId, PortRef, PredictNode,
+    Program, ProgramMeta, RefineNode, RetryNode, RouteNode, SeqNode, SigId, StopSpec, Sym, ToolDef,
+    ToolId, ToolKind,
 };
 pub use interp::{
-    Budget, BudgetMeter, Exhausted, HostHoleFn, Interpreter, LeafOutcome, LoadError, RunError,
-    RunOutput, RuntimeEnv, input_schema_of,
+    Budget, BudgetMeter, ConversationTurn, Exhausted, HostHoleFn, Interpreter, LeafOutcome,
+    LoadError, RunError, RunOutput, RuntimeEnv, ToolSuspension, input_schema_of,
+};
+pub use module_build::{
+    ModuleBuildError, ModuleSpec, ModuleStep, ModuleStepKind, PortSpec, build_module_program,
+    default_lm, unbound_model_config,
 };
 pub use params::{
     CodeK, CodeLang, ContextK, ContextPolicy, DemoRow, Demos, Instruction, KindTag, ModelRefK,
     Overlay, OverlayError, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, Slot, ToolDesc,
     ToolSetK, code_hash,
 };
+pub use step::{AgentStepOpts, HoleReport, StepDef, StepKind, ToolStepDef};
 pub use text::{DsrsFileError, ParseError};
 pub use validate::ValidateError;
