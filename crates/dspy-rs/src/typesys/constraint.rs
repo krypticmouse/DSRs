@@ -41,72 +41,11 @@ pub struct Constraint {
     pub expression: String,
 }
 
-impl Constraint {
-    pub fn new_check(label: impl Into<String>, expression: impl Into<String>) -> Self {
-        Self {
-            level: ConstraintKind::Check,
-            label: Some(label.into()),
-            expression: expression.into(),
-        }
-    }
-
-    pub fn new_assert(label: impl Into<String>, expression: impl Into<String>) -> Self {
-        Self {
-            level: ConstraintKind::Assert,
-            label: Some(label.into()),
-            expression: expression.into(),
-        }
-    }
-}
-
-/// The outcome of evaluating a constraint against a value.
-#[derive(Debug, Clone)]
-pub struct ConstraintOutcome {
-    pub level: ConstraintKind,
-    pub label: String,
-    pub expression: String,
-    pub passed: bool,
-}
-
-/// A reported check result, mirroring the old `ResponseCheck` shape used by GEPA/optimizers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseCheck {
-    pub name: String,
-    pub expression: String,
-    pub status: String,
-}
-
-/// Evaluates every constraint against `value`, binding it as `this` in a jinja expression.
-///
-/// A constraint that fails to evaluate (bad expression, wrong type) is treated as not
-/// passing rather than erroring, matching the tolerant spirit of the old pipeline.
-pub fn evaluate_constraints(value: &Value, constraints: &[Constraint]) -> Vec<ConstraintOutcome> {
-    constraints
-        .iter()
-        .map(|constraint| {
-            let passed = eval_expression(&constraint.expression, value).unwrap_or(false);
-            let label = constraint
-                .label
-                .clone()
-                .unwrap_or_else(|| match constraint.level {
-                    ConstraintKind::Assert => "assert".to_string(),
-                    ConstraintKind::Check => "check".to_string(),
-                });
-            ConstraintOutcome {
-                level: constraint.level,
-                label,
-                expression: constraint.expression.clone(),
-                passed,
-            }
-        })
-        .collect()
-}
-
 /// Evaluates a runtime (non-`'static`) constraint expression against `value`,
 /// binding it as `this`. Compiles per call — dynamic-lane constraints are owned
 /// strings, and caching them process-wide would reintroduce the leak-per-load
-/// that RFC 0002 IR-1 removed. Failed evaluations return `false`, matching
-/// [`evaluate_constraints`].
+/// that RFC 0002 IR-1 removed. Failed evaluations (bad expression, wrong type)
+/// return `false`.
 pub fn evaluate_expression(expression: &str, value: &Value) -> bool {
     eval_expression(expression, value).unwrap_or(false)
 }
@@ -124,7 +63,7 @@ fn eval_expression(expression: &str, value: &Value) -> Result<bool, minijinja::E
 /// This is the parse hot path: signature constraints arrive as `&'static str`
 /// from the derive macro, so the compiled expression is cached by pointer-stable
 /// key. Failed evaluations (bad expression, wrong type) return `false`, matching
-/// [`evaluate_constraints`].
+/// [`evaluate_expression`].
 pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -> bool {
     {
         let cache = COMPILED_EXPRESSIONS

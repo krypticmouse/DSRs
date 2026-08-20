@@ -133,10 +133,7 @@ pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
 pub mod typesys;
 pub use dsrs_macros::*;
 pub use facet::{Facet, Shape};
-pub use typesys::{
-    Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
-    Schema, evaluate_constraints,
-};
+pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Schema};
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
