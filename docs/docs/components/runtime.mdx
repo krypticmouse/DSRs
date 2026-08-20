@@ -67,6 +67,12 @@ let out: JsonMap = interp.run(input, overlay, budget).await?;
 - `overlay` is `Option<Arc<Overlay>>`. When present, its `base` must equal the program's hash or the run fails with `RunError::Overlay` before anything executes.
 - `budget` caps spend for this run.
 
+### `Interpreter::run_collecting`
+
+`run_collecting(input, overlay, budget)` is `run` with per-leaf metadata: it returns a `RunOutput` — the same output map plus one `LeafOutcome` per successful `Predict`-leaf evaluation, in execution order (`ForkJoin` branches append in declared branch order). This is the seam `Predict<S>` uses to reassemble `CallMetadata` when it executes through the interpreter.
+
+Each `LeafOutcome` carries: `name` (the program-unique leaf name, the trace span component), `raw_response`, `field_meta` (per-field jsonish coercion flags and `#[check]` results, keyed by canonical field name), `usage`, `model_config_hash`, `span_id` (when a capture scope was active), and — for `AgentLoop` leaves — `tool_calls` and `tool_executions`. Scope rules: `Predict` and `AgentLoop` leaves report, `Hole` leaves do not; only *successful* evaluations report (a failed `Retry` attempt leaves no outcome, the succeeding one reports); an agent whose final output came from stop-tool args has empty `field_meta`; a replay-served leaf reports the recorded raw text and usage with empty `field_meta`.
+
 ## `Budget`
 
 Run-level spend limits; `None` means unlimited. `Budget::default()` and `Budget::unlimited()` are the same: no limits.
@@ -126,7 +132,7 @@ The macro creates a module named after the file stem (`qa.dsrs` becomes `mod qa`
 - `qa::try_program()`: the same, but returns a `Result`.
 - A generated test, so `cargo test` fails if the file ever becomes invalid.
 
-The file is parsed and validated while your crate compiles, so a broken artifact breaks your build, not a running process. This is the shipping path for programs with host tools or host holes, which `dsrs serve` cannot bind: embed the file, bind your implementations with `bind_host_tool` and `bind_host_hole`, and serve from your own binary.
+Validation is layered. **Syntax** is checked at macro expansion through `dsrs-syntax` — the shared `.dsrs` lexer and structural grammar both the macro and the full parser read from — so a malformed file breaks your build. **Semantics** (types, dataflow, capability rules) are checked by the full parser at first use of `program()`, and forced at CI time by the generated test — the sqlx-offline analogue. This is the shipping path for programs with host tools or host holes, which `dsrs serve` cannot bind: embed the file, bind your implementations with `bind_host_tool` and `bind_host_hole`, and serve from your own binary.
 
 ## See also
 

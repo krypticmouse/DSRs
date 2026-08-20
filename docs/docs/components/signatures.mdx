@@ -122,7 +122,7 @@ Every field requires exactly one of `#[input]` or `#[output]`, and the signature
 `#[Schema]` marks a struct or enum as usable inside signature fields. It accepts no arguments. It expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` with crate-path attributes; enums additionally receive `#[repr(u8)]` when no explicit `repr` is present.
 
 <Note>
-`#[BamlType]` survives as a backwards-compatible alias with identical expansion. The old vendored BAML stack, including its `#[baml(...)]` attribute grammar, was removed. The schema layer now reads facet metadata instead.
+The old vendored BAML stack, including its `#[baml(...)]` attribute grammar and the `#[BamlType]` compat alias, was removed. The schema layer reads facet metadata instead.
 </Note>
 
 What the schema builder honors on `#[Schema]` types:

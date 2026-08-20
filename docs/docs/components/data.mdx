@@ -32,9 +32,9 @@ The same row type flows through the whole loop:
 | Consumer | Signature | Row bound |
 |---|---|---|
 | [`evaluate_trainset`](/docs/components/evaluation) | `evaluate_trainset(&module, &[E], &metric)` | `E: ToInput<M::Input> + Sync` |
-| [`Optimizer::compile`](/docs/components/optimizers) | `optimizer.compile(&mut module, Vec<E>, &metric)` | `E: ToInput<M::Input> + serde::Serialize + Send + Sync` |
+| [`compile_module`](/docs/components/optimizers) | `optimizer.compile_module(&mut module, &[E], &metric)` | `E: ToInput<M::Input> + serde::Serialize + Send + Sync` |
 | [`TypedMetric<E, M>`](/docs/components/evaluation) | `evaluate(&self, example: &E, prediction, trace)` | none — the metric receives the full row |
-| [`EvalEngine::new`](/docs/components/optimizer-engine) | `EvalEngine::new(Vec<E>, &metric, config)` | `E: Serialize` (rollout-cache uids are content hashes of the whole row) |
+| [`OptimizeTarget::module`](/docs/components/optimizer-engine) | `OptimizeTarget::module(&mut module, &[E], &metric)` | `E: ToInput<M::Input> + Serialize + Sync` (rollout-cache uids are content hashes of the whole row) |
 | Demo seeding | `Demo::new(row.to_input()?, row.to_output()?)` | `E: ToInput<S::Input> + ToOutput<S::Output>` |
 
 Because the metric sees the row rather than a signature-shaped pair, ground truth does not have to fit the module's output type: a metric can score a `QAOutput` prediction against supporting facts the module never produced.
@@ -197,9 +197,9 @@ Mapper closure errors are wrapped as `DataLoadError::Mapper` with the failing ro
 
 The module also exposes `is_url(path: &str) -> bool`, the helper the loaders use to decide between filesystem and HTTP(S) fetching.
 
-## Versioning
+## Module layout
 
-Data loading is versioned under `data::v1`. The module tree is `data::v1::dataloader` and `data::v1::utils`; `data/mod.rs` re-exports `v1::*`, so unversioned paths (`dspy_rs::data::DataLoader`) and versioned paths (`dspy_rs::data::v1::dataloader::DataLoader`) both resolve to the same items. The crate root flattens further: `dspy_rs::DataLoader` is the conventional import. Unversioned paths always track the current version.
+Data loading lives at `data::dataloader` and `data::utils`, re-exported from `data/mod.rs`. The crate root flattens further: `dspy_rs::DataLoader` is the conventional import. (The transitional `data::v1` path alias is gone.)
 
 ### Migration note
 

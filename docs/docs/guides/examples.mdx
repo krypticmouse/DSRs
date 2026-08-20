@@ -17,7 +17,7 @@ Some examples need a feature flag (noted in the file header), for example `--fea
 | Example | What it shows | Key APIs |
 |---------|---------------|----------|
 | [01-simple.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs) | Typed signatures, chain-of-thought via a `reasoning` field, and module composition | `Signature`, `Predict`, `Module` |
-| [02-module-iteration-and-updation.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs) | Optimizing a module end to end with the typed optimizer API | `COPRO`, `Optimizer::compile`, `TypedMetric` |
+| [02-module-iteration-and-updation.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs) | Optimizing a module end to end with the typed optimizer API | `COPRO`, `compile_module`, `TypedMetric` |
 | [03-evaluate-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs) | Evaluating a typed QA predictor on a HotpotQA sample | `DataLoader`, `evaluate_trainset`, `Eval` |
 | [04-optimize-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs) | COPRO optimization of a QA module on HotpotQA, then saving the result | `COPRO`, `ModuleState`, `average_score` |
 | [05-heterogenous-examples.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/05-heterogenous-examples.rs) | Feeding a typed predictor from messy JSON rows; extra fields ignored, missing ones loud | serde boundary, generated input structs |
@@ -36,12 +36,11 @@ Some examples need a feature flag (noted in the file header), for example `--fea
 
 ## The front desk examples
 
-These nine exercise a small support-desk pipeline end to end. Each maps to a component page and is kept compiling by CI.
+These exercise a small support-desk pipeline end to end. Each maps to a component page and is kept compiling by CI.
 
 | Example | Component page | What it shows |
 |---------|---------------------|---------------|
 | [18-code-mode.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/18-code-mode.rs) | [Tools & agents](/docs/components/tools-and-agents) | Two tools collapsed into the `run_js` meta-tool via `ToolSet::code_mode` |
-| [19-react.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/19-react.rs) | [Tools & agents](/docs/components/tools-and-agents) | `ReAct` with a closure tool and a step cap, trajectory read from metadata |
 | [20-frontdesk-contract.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/20-frontdesk-contract.rs) | [Signatures](/docs/components/signatures) | Enums, nested types, constraints, demos, per-predictor models, the printed prompt |
 | [21-frontdesk-pipeline.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/21-frontdesk-pipeline.rs) | [Modules](/docs/components/modules) | The pipeline as a struct with a `Module` impl, plus the `fx` variant |
 | [22-frontdesk-module.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/22-frontdesk-module.rs) | [Module macro](/docs/components/module-macro) | `#[module]` with a hole; prints the real `.dsrs` artifact and `OPACITY` (offline) |
@@ -51,5 +50,5 @@ These nine exercise a small support-desk pipeline end to end. Each maps to a com
 | [26-frontdesk-tune.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/26-frontdesk-tune.rs) | [Optimizers](/docs/components/optimizers) | Overlay by param path, ambient overlay run, `bake` with lineage (offline path included) |
 
 <Note>
-The `9x-` files ([90](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/90-smoke-slice1-typed-predict.rs) through [94](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs), plus the `97`-`99` benches) are CI surfaces: smoke slices that exercise typed predict, chain of thought, module authoring, ReAct, and the optimizer interface, and a few performance benchmarks. They are kept deliberately boring and stable; read them as compatibility contracts rather than tutorials.
+The `9x-` files ([90](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/90-smoke-slice1-typed-predict.rs) through [94](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/94-smoke-slice5-optimizer-interface.rs), plus the `97`-`99` benches) are CI surfaces: smoke slices that exercise typed predict, chain of thought, module authoring, and the optimizer interface, and a few performance benchmarks. They are kept deliberately boring and stable; read them as compatibility contracts rather than tutorials.
 </Note>

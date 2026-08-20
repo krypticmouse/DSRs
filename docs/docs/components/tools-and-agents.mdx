@@ -119,7 +119,7 @@ Because the code is inside the file, the program is fully portable: anyone who c
 
 ## Related surfaces
 
-`ReAct<S>` is the struct-lane equivalent of `#[agent]`: a thought, action, observation loop over a set of tools that extracts a typed answer, built and configured as a Rust struct rather than declared as a bodyless function. See [Modules](/docs/components/modules).
+The struct-lane way to give a model tools is to attach them to a `Predict` (`PredictBuilder::add_tool`/`with_tools`): a tooled predictor executes as a 1-node `agent` program through the interpreter, with the default stop behavior (`until_parse`, `max_turns = 8`). See [Predict](/docs/components/predict). There is no separate `ReAct` module.
 
 Code Mode is the many-tools-to-one-script alternative. Instead of advertising N tool schemas and paying one round trip per call, the model sees a single `run_js` meta-tool whose description lists your tools as a JavaScript API; it writes one script that calls them as plain functions and returns one value. See [Code Mode](/docs/components/code-mode).
 
@@ -135,6 +135,6 @@ Code Mode is the many-tools-to-one-script alternative. Instead of advertising N 
 
 - [Capabilities](/docs/components/capabilities) for tool needs, program ceilings, and host grants
 - [Code Mode](/docs/components/code-mode) for presenting many tools as one script surface
-- [Modules](/docs/components/modules) for `ReAct<S>` and the other struct-lane strategies
+- [Modules](/docs/components/modules) for the struct-lane strategies
 - [The module macro](/docs/components/module-macro) for the body rules that lower agent calls
 - [The .dsrs file](/docs/components/dsrs-file) for sandboxed tool syntax in the artifact

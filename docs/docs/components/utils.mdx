@@ -16,14 +16,14 @@ let id: u64 = stable_hash_debug(&value);
 
 ## `ResponseCache`
 
-A hybrid memory plus disk LM response cache built on [foyer](https://docs.rs/foyer): 256MB in memory and 1GB on disk in a per-process temp directory. It also maintains a sliding window of the 100 most recent entries for `LM::inspect_history`. The cache is created automatically by `LM`; you do not construct it directly. Caching is per LM instance, and entries are not shared across instances.
+A hybrid memory plus disk LM response cache built on [foyer](https://docs.rs/foyer): 256MB in memory and 1GB on disk in a per-process temp directory (if the disk tier cannot be initialized, the cache degrades to memory-only with a warning instead of panicking). It also maintains a sliding window of the 100 most recent entries for `LM::inspect_history`. The cache is created automatically by `LM`; you do not construct it directly. Caching is per LM instance, and entries are not shared across instances. All methods take `&self`: the foyer cache is internally synchronized and the history ring sits behind its own small mutex, so concurrent LM calls never serialize on a cache-wide lock.
 
 | Method | Signature | Behavior |
 |---|---|---|
 | `new` | `async fn new() -> Self` | Builds the hybrid cache and its disk tier. |
 | `get_entry` | `async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>>` | Fetches the full cached entry, including raw output. |
-| `insert_entry` | `fn insert_entry(&mut self, key: CacheKey, entry: CacheEntry)` | Synchronous insert, the direct path used by `LM::call`. Also pushes the entry into the history window. |
-| `get_history` | `async fn get_history(&self, n: usize) -> Result<Vec<CacheEntry>>` | Returns the `n` most recent entries, newest first. |
+| `insert_entry` | `fn insert_entry(&self, key: CacheKey, entry: CacheEntry)` | Synchronous insert, the direct path used by `LM::call`. Also pushes the entry into the history window. |
+| `get_history` | `fn get_history(&self, n: usize) -> Vec<CacheEntry>` | Returns the `n` most recent entries, newest first. |
 
 ### `CacheEntry` and `CacheKey`
 

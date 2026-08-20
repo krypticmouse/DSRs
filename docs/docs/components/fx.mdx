@@ -44,12 +44,18 @@ Internally, resolved predictors are cached by `(signature type, name, config has
 | `new()` | Empty parameter set. |
 | `set(name, state)` | Sets the full `PredictState` (instruction plus demos) for a named predictor. |
 | `set_instruction(name, instruction)` | Overrides just the instruction, preserving any demos already set for that name. |
+| `clear_instruction(name)` | Explicitly resets the name's instruction to the signature default — wins over any instance override when injected ambiently. |
+| `set_demos(name, rows)` | Sets the demo rows (flat JSON objects) as an explicit set: an empty vec means "no demos", overriding instance demos. |
 | `get(name)` | Returns `Option<&PredictState>` for the name. |
 | `is_empty()` | True when no entries are set. |
 | `to_module_state()` | Converts to `ModuleState`, the persistence format shared with struct-based modules. |
 | `from_module_state(state)` | Builds `Params` from a saved `ModuleState`. |
+| `bind(program)` (`ir` feature) | Binds name-keyed params against a compiled `Program` into an `ir::Overlay` — how a module-lane `Candidate` becomes evaluable on a program target. |
+| `from_overlay(program, overlay)` (`ir` feature) | The inverse: unbinds an `ir::Overlay` into `Params`. |
 
 Because `Params` round-trips losslessly through `ModuleState::save` and `ModuleState::load`, persistence works across both authoring styles.
+
+`Params` is also the optimizer's candidate-injection currency for struct-held modules: each `Predict` leaf consults the ambient `Params` at call time and binds the entry matching its component name (the name stamped by `Predictors` discovery or `PredictBuilder::named`), with ambient values winning over instance state per slot. See [Optimizers](/docs/components/optimizers).
 
 ## `with_params`
 
