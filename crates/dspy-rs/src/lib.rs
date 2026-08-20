@@ -61,12 +61,13 @@
 //!
 //! # What doesn't work (yet)
 //!
-//! - **No dynamic graph / structural optimization.** The type-erased `ProgramGraph`,
-//!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
-//!   Everything here is statically typed, which is both the strength and the constraint.
-//! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
-//!   The module trait and augmentation system are designed for them, but nobody's built
-//!   them yet.
+//! - **No structural optimization.** The [`ir`] layer ships a dynamic program
+//!   graph ([`ir::Program`], default-on behind the `ir` feature) with an
+//!   interpreter and the `.dsrs` text format, but optimizers only tune
+//!   instructions and demos — none of them rewrite graph structure.
+//! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
+//!   [`ChainOfThought`] and [`ReAct`]. The module trait and augmentation system
+//!   are designed for them, but nobody's built them yet.
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
@@ -81,9 +82,10 @@
 //! - [`core`] — [`Module`] trait, [`Signature`] trait, [`SignatureSchema`], error types,
 //!   LM client, [`Predicted`] and [`CallMetadata`]
 //! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Demo`]
-//! - [`modules`] — [`ChainOfThought`] and augmentation types
+//! - [`modules`] — [`ChainOfThought`], [`ReAct`], and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
+//! - [`ir`] — dynamic program graph, interpreter, and the `.dsrs` text format
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
 //! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
