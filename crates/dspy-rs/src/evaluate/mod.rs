@@ -18,7 +18,5 @@
 //! (`trace.for_component("retriever")`).
 
 pub mod evaluator;
-pub mod feedback_helpers;
 
 pub use evaluator::*;
-pub use feedback_helpers::*;
