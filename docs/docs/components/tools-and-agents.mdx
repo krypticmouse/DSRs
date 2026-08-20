@@ -52,7 +52,7 @@ The bodyless-fn rules match `#[predict]`: no `async`, no generics, no `self`, pl
 
 | Option | Form | Meaning |
 |---|---|---|
-| `model` | `model = "@name"` | Model reference for the loop. |
+| `model` | `model = "@name"` | Model reference for the loop. Binds only inside `#[module]` programs; setting it removes the standalone fn (calling one is a compile error). |
 | `tools` | `tools(a, b)` | The `#[tool]` functions the loop may call, in order. |
 | `stop_tools` | `stop_tools(a)` | Tools whose call ends the loop. Each must also appear in `tools(...)`. |
 | `max_turns` | `max_turns = N` | Turn bound for the lowered loop node (IR default is 8 when omitted). |
