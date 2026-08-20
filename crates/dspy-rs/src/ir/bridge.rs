@@ -29,10 +29,10 @@
 //! [`OverlayError::DemoField`] error.
 //!
 //! In the overlay → params/state direction the projection is **restricted to
-//! `Instruction` and `Demos` kinds** (RFC 0002 §2.4): `ToolDesc`, `ModelRef`,
-//! `ContextPolicy`, and `Code` entries have no fx/ModuleState representation
-//! and are skipped, never errors — the static lane simply has no slot for
-//! them.
+//! `Instruction` and `Demos` kinds** (RFC 0002 §2.4): `ToolDesc`, `ToolSet`,
+//! `ModelRef`, `ContextPolicy`, and `Code` entries have no fx/ModuleState
+//! representation and are skipped, never errors — the static lane simply has
+//! no slot for them.
 
 use std::collections::BTreeMap;
 
@@ -284,8 +284,9 @@ pub(crate) fn overlay_to_states(
                 states.entry(leaf.to_string()).or_default().demos =
                     rows.iter().map(flatten_demo_row).collect();
             }
-            // Restricted projection (RFC 0002 §2.4): ToolDesc / ModelRef /
-            // ContextPolicy / Code have no representation in the static lane.
+            // Restricted projection (RFC 0002 §2.4): ToolDesc / ToolSet /
+            // ModelRef / ContextPolicy / Code have no representation in the
+            // static lane.
             _ => {}
         }
     }

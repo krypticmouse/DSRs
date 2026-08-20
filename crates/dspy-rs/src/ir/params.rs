@@ -3,7 +3,7 @@
 //! mutation.
 //!
 //! Canonical `ParamPath`s: `"<leaf>.instruction"`, `"<leaf>.demos"`,
-//! `"<leaf>.model"`, `"<leaf>.context"`, `"<leaf>.code"`,
+//! `"<leaf>.model"`, `"<leaf>.context"`, `"<leaf>.tool_set"`, `"<leaf>.code"`,
 //! `"tool.<name>.desc"`, `"tool.<name>.code"`. Paths are the serde boundary;
 //! everything after load speaks [`ParamId`]s.
 
@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 use cranelift_entity::{SecondaryMap, entity_impl};
 use serde::{Deserialize, Serialize};
 
-use crate::ir::graph::{ModelId, NodeId, Program, ToolId};
+use crate::ir::graph::{ModelId, Node, NodeId, Program, ToolId};
 use crate::trace::JsonMap;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -47,6 +47,10 @@ pub enum ParamKind {
     Instruction,
     Demos,
     ToolDesc,
+    /// Tool membership as a gene (RFC 0004 §5): which of an agent node's
+    /// *declared* tools the loop carries. Declaration stays structural
+    /// (`AgentLoopNode::tools`); selection is this slot.
+    ToolSet,
     ModelRef,
     ContextPolicy,
     Code,
@@ -58,6 +62,7 @@ impl ParamKind {
             Self::Instruction => "instruction",
             Self::Demos => "demos",
             Self::ToolDesc => "tool_desc",
+            Self::ToolSet => "tool_set",
             Self::ModelRef => "model_ref",
             Self::ContextPolicy => "context_policy",
             Self::Code => "code",
@@ -76,6 +81,13 @@ pub enum ParamValue {
     },
     ToolDesc {
         text: String,
+    },
+    /// A subset of the owning agent node's declared tools, in surface order.
+    /// The legal alphabet is the declared table — [`Overlay::set`] and
+    /// load-time validation both refuse a value naming an undeclared tool, so
+    /// any accepted subset is capability-safe by construction.
+    ToolSet {
+        tools: Vec<ToolId>,
     },
     ModelRef {
         model: ModelId,
@@ -104,6 +116,7 @@ impl ParamValue {
             Self::Instruction { .. } => ParamKind::Instruction,
             Self::Demos { .. } => ParamKind::Demos,
             Self::ToolDesc { .. } => ParamKind::ToolDesc,
+            Self::ToolSet { .. } => ParamKind::ToolSet,
             Self::ModelRef { .. } => ParamKind::ModelRef,
             Self::ContextPolicy { .. } => ParamKind::ContextPolicy,
             Self::Code { .. } => ParamKind::Code,
@@ -173,6 +186,7 @@ impl<K: KindTag> Copy for Slot<K> {}
 pub enum Instruction {}
 pub enum Demos {}
 pub enum ToolDesc {}
+pub enum ToolSetK {}
 pub enum ModelRefK {}
 pub enum ContextK {}
 pub enum CodeK {}
@@ -188,6 +202,9 @@ impl KindTag for Demos {
 }
 impl KindTag for ToolDesc {
     const KIND: ParamKind = ParamKind::ToolDesc;
+}
+impl KindTag for ToolSetK {
+    const KIND: ParamKind = ParamKind::ToolSet;
 }
 impl KindTag for ModelRefK {
     const KIND: ParamKind = ParamKind::ModelRef;
@@ -215,6 +232,11 @@ pub enum OverlayError {
     },
     #[error("unknown param path `{path}`")]
     UnknownPath { path: String },
+    /// A `ToolSet` value names a tool outside the owning agent node's
+    /// declared table — the overlay would smuggle in a capability the
+    /// program's grants were never checked against.
+    #[error("tool set for `{path}` includes `{tool}`, which the owning agent does not declare")]
+    ToolSetUndeclared { path: String, tool: String },
     /// A flat demo row (fx/`ModuleState` form) carries a field the owning
     /// leaf's signature does not declare, so it cannot be split into a
     /// [`DemoRow`]'s input/output maps.
@@ -258,6 +280,30 @@ impl Overlay {
                 got: v.kind(),
             });
         }
+        // The ToolSet alphabet is the owning agent node's declared table
+        // (RFC 0004 §5): a candidate can drop declared tools, never add
+        // undeclared ones — subsets are capability-safe by construction.
+        if let ParamValue::ToolSet { tools } = &v {
+            let declared: &[ToolId] = match slot.owner {
+                ParamOwner::Node(node) => match &p.nodes[node] {
+                    Node::AgentLoop(n) => &n.tools,
+                    _ => &[],
+                },
+                ParamOwner::Tool(_) => &[],
+            };
+            for tool in tools {
+                if !declared.contains(tool) {
+                    return Err(OverlayError::ToolSetUndeclared {
+                        path: slot.path.to_string(),
+                        tool: p
+                            .tools
+                            .get(*tool)
+                            .map(|def| p.syms.get(def.name).to_string())
+                            .unwrap_or_else(|| format!("{tool}")),
+                    });
+                }
+            }
+        }
         self.values[id] = Some(v);
         Ok(())
     }
@@ -272,6 +318,19 @@ impl Overlay {
 
     pub fn set_code(&mut self, s: Slot<CodeK>, source: String) {
         self.values[s.id] = Some(ParamValue::code(CodeLang::Js, source));
+    }
+
+    /// Sets a tool-set gene. Unlike the other typed setters this one takes
+    /// the program and can fail: membership in the owning agent node's
+    /// declared tool table cannot be checked by the type system, so the value
+    /// goes through the same guard as [`Overlay::set`].
+    pub fn set_tool_set(
+        &mut self,
+        p: &Program,
+        s: Slot<ToolSetK>,
+        tools: Vec<ToolId>,
+    ) -> Result<(), OverlayError> {
+        self.set(p, s.id, ParamValue::ToolSet { tools })
     }
 
     pub fn get(&self, id: ParamId) -> Option<&ParamValue> {

@@ -769,6 +769,115 @@ fn add_tool_failure_modes() {
 }
 
 #[test]
+fn tool_edits_keep_the_tool_set_gene_in_sync() {
+    let parent = agent_program();
+    let researcher = parent.leaf_id("researcher").unwrap();
+    let search = tool_id(&parent, "search");
+    let calc = tool_id(&parent, "calc");
+
+    // AddTool grows the gene's default alongside the declaration: the tool
+    // just declared is live by default.
+    let child = parent
+        .edited(&[Edit::AddTool {
+            agent: researcher,
+            tool: calc,
+        }])
+        .unwrap();
+    let slot = child.param_id("researcher.tool_set").unwrap();
+    assert!(matches!(
+        &child.params[slot].default,
+        ParamValue::ToolSet { tools } if tools == &vec![search, calc]
+    ));
+    assert_round_trips(&child);
+
+    // RemoveTool shrinks it — the child still validates (the gene never
+    // outlives its alphabet).
+    let cleared = child
+        .edited(&[Edit::RemoveTool {
+            agent: child.leaf_id("researcher").unwrap(),
+            tool: search,
+        }])
+        .unwrap();
+    let slot = cleared.param_id("researcher.tool_set").unwrap();
+    assert!(matches!(
+        &cleared.params[slot].default,
+        ParamValue::ToolSet { tools } if tools == &vec![tool_id(&cleared, "calc")]
+    ));
+    assert_round_trips(&cleared);
+
+    // SwapLeaf Predict → Agent mints the gene (default = declared tools);
+    // swapping back collects it with the other agent-only slot.
+    let summarizer = parent.leaf_id("summarizer").unwrap();
+    let agentic = parent
+        .edited(&[Edit::SwapLeaf {
+            leaf: summarizer,
+            to: SwapTarget::Agent {
+                tools: vec![calc],
+                stop: StopSpec::default(),
+                budget: NodeBudget::default(),
+            },
+        }])
+        .unwrap();
+    let slot = agentic.param_id("summarizer.tool_set").unwrap();
+    assert_eq!(agentic.params[slot].kind, ParamKind::ToolSet);
+    assert!(matches!(
+        &agentic.params[slot].default,
+        ParamValue::ToolSet { tools } if tools == &vec![tool_id(&agentic, "calc")]
+    ));
+    let back = agentic
+        .edited(&[Edit::SwapLeaf {
+            leaf: agentic.leaf_id("summarizer").unwrap(),
+            to: SwapTarget::Predict,
+        }])
+        .unwrap();
+    assert!(back.param_id("summarizer.tool_set").is_none());
+    assert_eq!(back.meta.program_hash, parent.meta.program_hash);
+}
+
+#[test]
+fn migrate_overlay_tool_set_survives_by_intersection() {
+    // Parent: researcher declares [search, calc].
+    let base = agent_program();
+    let parent = base
+        .edited(&[Edit::AddTool {
+            agent: base.leaf_id("researcher").unwrap(),
+            tool: tool_id(&base, "calc"),
+        }])
+        .unwrap();
+    let search = tool_id(&parent, "search");
+    let calc = tool_id(&parent, "calc");
+    let slot = parent
+        .slot_of::<ir::ToolSetK>("researcher.tool_set")
+        .unwrap();
+
+    let mut both = Overlay::new(&parent);
+    both.set_tool_set(&parent, slot, vec![search, calc])
+        .unwrap();
+    let mut calc_only = Overlay::new(&parent);
+    calc_only.set_tool_set(&parent, slot, vec![calc]).unwrap();
+
+    // Child: calc undeclared again.
+    let child = parent
+        .edited(&[Edit::RemoveTool {
+            agent: parent.leaf_id("researcher").unwrap(),
+            tool: calc,
+        }])
+        .unwrap();
+    let child_slot = child.param_id("researcher.tool_set").unwrap();
+
+    // The selection carries by intersection with the child's alphabet.
+    let migrated = migrate_overlay(&parent, &both, &child);
+    assert!(matches!(
+        migrated.get(child_slot),
+        Some(ParamValue::ToolSet { tools }) if tools == &vec![tool_id(&child, "search")]
+    ));
+
+    // A selection with no survivors no longer fits and is dropped.
+    let migrated = migrate_overlay(&parent, &calc_only, &child);
+    assert!(migrated.get(child_slot).is_none());
+}
+
+#[test]
 fn set_stop_replaces_the_spec_and_is_validated() {
     let parent = agent_program();
     let researcher = parent.leaf_id("researcher").unwrap();

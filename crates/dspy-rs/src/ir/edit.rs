@@ -351,6 +351,40 @@ pub fn migrate_overlay(parent: &Program, overlay: &Overlay, child: &Program) -> 
                 };
                 ParamValue::ModelRef { model: child_model }
             }
+            // Tool sets carry ordinals into `tools`; re-mint each by name
+            // and keep the intersection with what the child's agent still
+            // declares — partial survival is the point of migration. A
+            // selection with no survivors no longer fits and is dropped.
+            ParamValue::ToolSet { tools } => {
+                let declared: &[ToolId] = match child.params[child_id].owner {
+                    ParamOwner::Node(node) => match &child.nodes[node] {
+                        Node::AgentLoop(n) => &n.tools,
+                        _ => continue,
+                    },
+                    ParamOwner::Tool(_) => continue,
+                };
+                let mut migrated: Vec<ToolId> = Vec::new();
+                for t in tools {
+                    let Some(def) = parent.tools.get(*t) else {
+                        continue;
+                    };
+                    let name = parent.syms.get(def.name);
+                    let Some((child_tool, _)) = child
+                        .tools
+                        .iter()
+                        .find(|(_, d)| child.syms.get(d.name) == name)
+                    else {
+                        continue;
+                    };
+                    if declared.contains(&child_tool) && !migrated.contains(&child_tool) {
+                        migrated.push(child_tool);
+                    }
+                }
+                if migrated.is_empty() && !tools.is_empty() {
+                    continue;
+                }
+                ParamValue::ToolSet { tools: migrated }
+            }
             other => other.clone(),
         };
         // Kind was checked above; set cannot fail, but stay total.
@@ -540,13 +574,22 @@ fn swap_leaf(work: &mut Program, leaf: NodeId, to: &SwapTarget) -> Result<(), Ap
                 declared.push(tool);
             }
             let leaf_name = work.syms.get(n.name).to_string();
-            // Same slot-creation convention as the builder: `<leaf>.context`.
+            // Same slot-creation convention as the builder: `<leaf>.context`
+            // and `<leaf>.tool_set` (default = the full declared table).
             let context_policy = work.params.push(ParamSlot {
                 path: format!("{leaf_name}.context").into(),
                 owner: ParamOwner::Node(leaf),
                 kind: ParamKind::ContextPolicy,
                 default: ParamValue::ContextPolicy {
                     policy: ContextPolicy::default(),
+                },
+            });
+            let tool_set = work.params.push(ParamSlot {
+                path: format!("{leaf_name}.tool_set").into(),
+                owner: ParamOwner::Node(leaf),
+                kind: ParamKind::ToolSet,
+                default: ParamValue::ToolSet {
+                    tools: declared.clone(),
                 },
             });
             work.nodes[leaf] = Node::AgentLoop(AgentLoopNode {
@@ -556,6 +599,7 @@ fn swap_leaf(work: &mut Program, leaf: NodeId, to: &SwapTarget) -> Result<(), Ap
                 demos: n.demos,
                 model: n.model,
                 tools: declared.into_boxed_slice(),
+                tool_set,
                 context_policy,
                 stop: stop.clone(),
                 budget: budget.clone(),
@@ -564,7 +608,8 @@ fn swap_leaf(work: &mut Program, leaf: NodeId, to: &SwapTarget) -> Result<(), Ap
             Ok(())
         }
         (Node::AgentLoop(n), SwapTarget::Predict) => {
-            // The context slot is orphaned here and collected in `edited()`.
+            // The context and tool_set slots are orphaned here and collected
+            // in `edited()`.
             work.nodes[leaf] = Node::Predict(PredictNode {
                 name: n.name,
                 sig: n.sig,
@@ -666,6 +711,14 @@ fn add_tool(work: &mut Program, agent: NodeId, tool: ToolId) -> Result<(), Apply
     let mut tools = n.tools.to_vec();
     tools.push(tool);
     n.tools = tools.into_boxed_slice();
+    // Declaring a tool makes it live: the tool_set gene's default tracks the
+    // declaration (a baked subset grows by exactly the tool just declared).
+    let tool_set = n.tool_set;
+    if let ParamValue::ToolSet { tools } = &mut work.params[tool_set].default
+        && !tools.contains(&tool)
+    {
+        tools.push(tool);
+    }
     Ok(())
 }
 
@@ -684,6 +737,12 @@ fn remove_tool(work: &mut Program, agent: NodeId, tool: ToolId) -> Result<(), Ap
         .copied()
         .filter(|t| *t != tool)
         .collect();
+    // The tool_set gene's alphabet shrank; drop the tool from the default
+    // selection too (validation would otherwise refuse the child).
+    let tool_set = n.tool_set;
+    if let ParamValue::ToolSet { tools } = &mut work.params[tool_set].default {
+        tools.retain(|t| *t != tool);
+    }
     Ok(())
 }
 
@@ -976,7 +1035,13 @@ fn gc_params(work: &mut Program, node_map: &HashMap<NodeId, NodeId>) {
         match node {
             Node::Predict(n) => used.extend([n.instruction, n.demos, n.model]),
             Node::AgentLoop(n) => {
-                used.extend([n.instruction, n.demos, n.model, n.context_policy]);
+                used.extend([
+                    n.instruction,
+                    n.demos,
+                    n.model,
+                    n.tool_set,
+                    n.context_policy,
+                ]);
             }
             Node::Hole(n) => {
                 if let HoleImpl::Sandboxed { code } = n.imp {
@@ -1020,6 +1085,7 @@ fn gc_params(work: &mut Program, node_map: &HashMap<NodeId, NodeId>) {
                 n.instruction = map[&n.instruction];
                 n.demos = map[&n.demos];
                 n.model = map[&n.model];
+                n.tool_set = map[&n.tool_set];
                 n.context_policy = map[&n.context_policy];
             }
             Node::Hole(n) => {

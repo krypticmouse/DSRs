@@ -1166,10 +1166,12 @@ impl Interpreter {
                     at: at.into(),
                     message: "host hole not bound (load should have refused)".into(),
                 })?;
-                let value = host(input.clone()).await.map_err(|message| RunError::Hole {
-                    at: at.into(),
-                    source: dsrs_tools::ExecError::Internal { message },
-                })?;
+                let value = host(input.clone())
+                    .await
+                    .map_err(|message| RunError::Hole {
+                        at: at.into(),
+                        source: dsrs_tools::ExecError::Internal { message },
+                    })?;
                 Ok((at.to_string(), value))
             }
         }
@@ -1202,13 +1204,18 @@ impl Interpreter {
         }
         let lm = self.p_model(&at, cx, n.model)?;
 
-        // Tool surface: definitions from declared signatures with
-        // overlay-resolved descriptions (ToolDesc is a first-class gene), and
-        // overlay-resolved code for sandboxed tools.
-        let mut definitions = Vec::with_capacity(n.tools.len());
+        // Tool surface: the ToolSet gene selects which *declared* tools the
+        // loop carries this run (absent overlay entry = the slot default =
+        // the full declared table). Definitions come from declared signatures
+        // with overlay-resolved descriptions (ToolDesc is a first-class
+        // gene), and overlay-resolved code for sandboxed tools. `by_name` is
+        // built from the same selection, so a deselected tool cannot execute
+        // even if the model hallucinates its name.
+        let tools = self.p_tool_set(cx, n.tool_set, &n.tools);
+        let mut definitions = Vec::with_capacity(tools.len());
         let mut by_name: HashMap<String, ToolId> = HashMap::new();
         let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
-        for &tool_id in n.tools.iter() {
+        for &tool_id in tools.iter() {
             let tool = &p.tools[tool_id];
             let name = p.syms.get(tool.name).to_string();
             definitions.push(rig::completion::ToolDefinition {
@@ -1233,7 +1240,7 @@ impl Interpreter {
         // definition (stop tools stay individual — the loop must see their
         // calls by name to end).
         let code_mode = self
-            .build_code_mode_surface(&at, n, &mut definitions, &sandbox_code, &stop_names)
+            .build_code_mode_surface(&at, &tools, &mut definitions, &sandbox_code, &stop_names)
             .await?;
         let toolset = ToolSet::from_definitions(definitions);
 
@@ -1603,7 +1610,7 @@ impl Interpreter {
     async fn build_code_mode_surface(
         &self,
         at: &str,
-        n: &AgentLoopNode,
+        tools: &[ToolId],
         definitions: &mut Vec<rig::completion::ToolDefinition>,
         sandbox_code: &HashMap<ToolId, (String, u64)>,
         stop_names: &[String],
@@ -1619,8 +1626,9 @@ impl Interpreter {
         let mut kept = Vec::new();
         let mut apis = Vec::new();
         let mut capabilities = Vec::new();
-        // `definitions[i]` was built from `n.tools[i]` — same order.
-        for (&tool_id, definition) in n.tools.iter().zip(definitions.iter()) {
+        // `definitions[i]` was built from `tools[i]` (the ToolSet-selected
+        // surface) — same order.
+        for (&tool_id, definition) in tools.iter().zip(definitions.iter()) {
             if stop_names.contains(&definition.name) {
                 kept.push(definition.clone());
                 continue;
@@ -1716,6 +1724,21 @@ impl Interpreter {
         match self.p_value(cx, id) {
             ParamValue::Demos { rows } => rows.clone(),
             other => panic!("demos slot resolved to {:?}", other.kind()),
+        }
+    }
+
+    /// The ToolSet gene's effective selection. Membership in `declared` was
+    /// enforced when the value entered ([`Overlay::set`] / load-time
+    /// validation); the filter here only keeps downstream arena indexing
+    /// total against hostile ids.
+    fn p_tool_set(&self, cx: &Cx, id: ParamId, declared: &[ToolId]) -> Box<[ToolId]> {
+        match self.p_value(cx, id) {
+            ParamValue::ToolSet { tools } => tools
+                .iter()
+                .copied()
+                .filter(|tool| declared.contains(tool))
+                .collect(),
+            other => panic!("tool_set slot resolved to {:?}", other.kind()),
         }
     }
 

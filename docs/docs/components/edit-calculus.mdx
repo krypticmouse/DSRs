@@ -15,10 +15,10 @@ An optimizer's structural proposal is data, not code — it can be logged, repla
 | `Edit` variant | Plain words |
 |---|---|
 | `AugmentSig { leaf, prepend }` | Prepend an output field to a `Predict`/`AgentLoop` leaf's signature — the CoT move (mirrors `SignatureDef::augmented_with`). Copy-on-write: a new `SigId` is created; nodes sharing the old signature keep it. |
-| `SwapLeaf { leaf, to }` | Swap a leaf's kind: `Predict` → `AgentLoop` (with tools ⊆ `program.tools`, a stop spec, and a budget) or `AgentLoop` → `Predict`. Name, signature, bindings, and the instruction/demos/model param slots are preserved; the agent direction mints a `<leaf>.context` slot, the predict direction drops it. |
+| `SwapLeaf { leaf, to }` | Swap a leaf's kind: `Predict` → `AgentLoop` (with tools ⊆ `program.tools`, a stop spec, and a budget) or `AgentLoop` → `Predict`. Name, signature, bindings, and the instruction/demos/model param slots are preserved; the agent direction mints `<leaf>.context` and `<leaf>.tool_set` slots, the predict direction drops them. |
 | `WrapRetry { node, max_attempts, backoff_ms, feedback }` | Wrap an existing node in a `Retry`, rewiring the parent reference and redirecting downstream `Out` ports to the wrapper. |
 | `Remove { node }` | Remove a node from its parent `Seq` body (subtree and its params are garbage-collected). If a later binding still references its outputs, `validate()` rejects the batch. |
-| `AddTool { agent, tool }` / `RemoveTool { agent, tool }` | Declare or undeclare an existing program tool on an agent leaf (removal also drops it from `stop_tools`). |
+| `AddTool { agent, tool }` / `RemoveTool { agent, tool }` | Declare or undeclare an existing program tool on an agent leaf. The `<leaf>.tool_set` default tracks the declaration: adding a tool makes it live, removing one also drops it from `stop_tools` and the tool-set default. |
 | `SetStop { agent, stop }` | Replace an agent leaf's `StopSpec`. |
 | `SetInstructionDefault { leaf, text }` | Set the leaf's instruction slot *default* — a bake-like change without an overlay, for structural optimizers that also seed text. |
 
@@ -73,7 +73,7 @@ This is exactly how the shipped [Structural optimizer](/docs/optimizers/structur
 pub fn migrate_overlay(parent: &Program, overlay: &Overlay, child: &Program) -> Overlay
 ```
 
-An edit changes the program hash, so overlays minted against the parent no longer apply to the child. `migrate_overlay` carries value-level progress across the structural change: for every entry in the overlay, it re-mints the entry against the child when the child has a slot at the same path and kind whose owning leaf/tool still has a *carrying* signature — inputs identical (names and types, in order) and every parent output present in the child's outputs. Outputs may widen: that is what lets instruction and demos survive `AugmentSig` (demo rows still map onto the base fields; the new field is simply absent from the row). `ModelRef` entries are re-minted by model *name*, not ordinal. Entries that no longer fit are dropped; a base-mismatched overlay yields an empty result.
+An edit changes the program hash, so overlays minted against the parent no longer apply to the child. `migrate_overlay` carries value-level progress across the structural change: for every entry in the overlay, it re-mints the entry against the child when the child has a slot at the same path and kind whose owning leaf/tool still has a *carrying* signature — inputs identical (names and types, in order) and every parent output present in the child's outputs. Outputs may widen: that is what lets instruction and demos survive `AugmentSig` (demo rows still map onto the base fields; the new field is simply absent from the row). `ModelRef` entries are re-minted by model *name*, not ordinal. `ToolSet` entries are re-minted by tool name and intersected with what the child's agent still declares — partial survival carries the selection forward; a selection with no survivors is dropped. Entries that no longer fit are dropped; a base-mismatched overlay yields an empty result.
 
 ```rust
 use dspy_rs::ir::{Edit, migrate_overlay};

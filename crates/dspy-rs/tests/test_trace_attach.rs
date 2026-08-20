@@ -257,6 +257,7 @@ async fn attach_program_resolves_the_join_for_every_leaf_span() {
             "researcher.demos",
             "researcher.model",
             "researcher.context",
+            "researcher.tool_set",
         ]
         .into_iter()
         .map(String::from)

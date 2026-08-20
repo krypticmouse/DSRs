@@ -676,6 +676,118 @@ async fn agent_loop_is_one_span_with_tool_events() {
     );
 }
 
+/// Like [`agent_program`] but with two declared tools (`search`, `calc`).
+fn two_tool_agent_program() -> Program {
+    let mut b = ProgramBuilder::new("agentic2");
+    b.cap("net:search");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .instruction("Research and answer.")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool(
+        "search",
+        "Web search; returns result snippets with URLs",
+        search_sig,
+        &["net:search"],
+    );
+    let calc = b.host_tool("calc", "Evaluate an arithmetic expression", calc_sig, &[]);
+    let researcher = ir::agent("researcher", research)
+        .bind("question", ir::input("question"))
+        .tools([search, calc])
+        .max_turns(4);
+    b.main(
+        main_sig,
+        ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn tool_set_overlay_selects_the_tool_surface() {
+    let (lm, client) = canned_lm(vec![
+        text(fields(&[("answer", "one")])),
+        text(fields(&[("answer", "two")])),
+    ])
+    .await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("calc", Arc::new(SearchTool))
+        .grant("net:search");
+    let interp = Interpreter::load(two_tool_agent_program(), env)
+        .await
+        .unwrap();
+    let program = Arc::clone(interp.program());
+
+    // Absent slot: the loop carries the full declared table.
+    interp
+        .run(obj(&[("question", json!("q"))]), None, Budget::unlimited())
+        .await
+        .unwrap();
+    let full = client.last_request().unwrap();
+    let names: Vec<&str> = full.tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["search", "calc"]);
+
+    // A ToolSet overlay entry restricts the surface to exactly the selection
+    // — read through at render time, the program untouched.
+    let search_id = program
+        .tools
+        .iter()
+        .find_map(|(id, t)| (program.syms.get(t.name) == "search").then_some(id))
+        .unwrap();
+    let slot = program
+        .slot_of::<ir::ToolSetK>("researcher.tool_set")
+        .unwrap();
+    let mut overlay = Overlay::new(&program);
+    overlay
+        .set_tool_set(&program, slot, vec![search_id])
+        .unwrap();
+    interp
+        .run(
+            obj(&[("question", json!("q"))]),
+            Some(Arc::new(overlay)),
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap();
+    let restricted = client.last_request().unwrap();
+    let names: Vec<&str> = restricted.tools.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, vec!["search"]);
+
+    // The declared table is still structural: the program defaults are
+    // untouched by the overlay run.
+    assert!(matches!(
+        &program.params[slot.id].default,
+        ParamValue::ToolSet { tools } if tools.len() == 2
+    ));
+}
+
 // ---------------------------------------------------------------------------
 // Hole via sandbox
 // ---------------------------------------------------------------------------

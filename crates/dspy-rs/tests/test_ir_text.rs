@@ -385,6 +385,120 @@ fn a_json_artifact_is_not_dsrs_text() {
 }
 
 // ---------------------------------------------------------------------------
+// The ToolSet gene in the text form
+// ---------------------------------------------------------------------------
+
+/// Two declared tools, `tool_set` restricted to `search`.
+fn two_tool_program(restrict: bool) -> Program {
+    let mut b = ProgramBuilder::new("twotools");
+    b.cap("net:search");
+    b.model("m", model_config("openai:gpt-4o-mini"));
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .instruction("Research and answer.")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool("search", "Web search", search_sig, &["net:search"]);
+    let calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
+    let mut researcher = ir::agent("researcher", research)
+        .bind("question", ir::input("question"))
+        .tools([search, calc])
+        .max_turns(4);
+    if restrict {
+        researcher = researcher.tool_set([search]);
+    }
+    b.main(
+        main_sig,
+        ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+    )
+    .unwrap()
+}
+
+#[test]
+fn tool_set_gene_round_trips_through_text() {
+    // A restricted default prints as a `tool_set [...]` line and survives
+    // print → parse → print with the same canonical text and hash.
+    let program = two_tool_program(true);
+    let text = program.to_dsrs();
+    assert!(text.contains("tool_set [search]"), "{text}");
+    let parsed = Program::from_dsrs(&text).expect("restricted tool_set parses");
+    assert_eq!(parsed.to_dsrs(), text);
+    assert_eq!(parsed.meta.program_hash, program.meta.program_hash);
+    let id = parsed.param_id("researcher.tool_set").unwrap();
+    assert!(matches!(
+        &parsed.params[id].default,
+        ParamValue::ToolSet { tools } if tools.len() == 1
+    ));
+
+    // The full-table default is elided: selection == declaration prints
+    // nothing, so pre-ToolSet canonical text (and hashes) are unchanged.
+    let full = two_tool_program(false);
+    assert!(!full.to_dsrs().contains("tool_set"));
+    assert!(!qa_program().to_dsrs().contains("tool_set"));
+}
+
+#[test]
+fn tool_set_with_undeclared_tool_fails_the_text_load() {
+    // `calc` is a program tool but not declared on the node: refused at load
+    // with the validator's own words.
+    let src = r#"dsrs 1
+program p
+
+caps { net:search }
+
+model m = "openai:gpt-4o-mini"
+
+sig Main { in question: string out answer: string }
+
+tool search "Web search" caps [net:search] {
+  in query: string
+  out results: string[]
+}
+
+tool calc "Evaluate arithmetic" {
+  in expression: string
+  out value: float
+}
+
+main: Main = seq {
+  researcher = agent Main @m (question = $.question) {
+    tools [search]
+    tool_set [calc]
+    max_turns 4
+  }
+  out { answer = researcher.answer }
+}
+"#;
+    let err = Program::from_dsrs(src).expect_err("undeclared tool_set entry must not load");
+    let message = err.to_string();
+    assert!(message.contains("tool_set includes `calc`"), "{message}");
+}
+
+// ---------------------------------------------------------------------------
 // Parse-error quality: line + problem, actionable for a generating model
 // ---------------------------------------------------------------------------
 

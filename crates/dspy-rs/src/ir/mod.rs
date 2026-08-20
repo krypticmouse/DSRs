@@ -64,7 +64,7 @@ pub use interp::{
 pub use params::{
     CodeK, CodeLang, ContextK, ContextPolicy, DemoRow, Demos, Instruction, KindTag, ModelRefK,
     Overlay, OverlayError, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, Slot, ToolDesc,
-    code_hash,
+    ToolSetK, code_hash,
 };
 pub use text::{DsrsFileError, ParseError};
 pub use validate::ValidateError;

@@ -155,6 +155,9 @@ enum SpecKind {
         instruction: Option<String>,
         demos: Vec<DemoRow>,
         tools: Vec<ToolId>,
+        /// The `tool_set` gene's default selection; `None` = the full
+        /// declared `tools` list.
+        tool_set: Option<Vec<ToolId>>,
         stop_tools: Vec<ToolId>,
         max_turns: NonZeroU32,
         until_parse: bool,
@@ -270,6 +273,17 @@ impl NodeSpec {
         match &mut self.kind {
             SpecKind::Agent { tools, .. } => tools.extend(ids),
             _ => panic!("tools() applies to agent specs"),
+        }
+        self
+    }
+
+    /// Seeds the `tool_set` gene: which declared tools the loop carries at
+    /// run time. Default (absent): the full declared `tools` list. Must be a
+    /// subset of the declared tools — validation refuses anything else.
+    pub fn tool_set(mut self, ids: impl IntoIterator<Item = ToolId>) -> Self {
+        match &mut self.kind {
+            SpecKind::Agent { tool_set, .. } => *tool_set = Some(ids.into_iter().collect()),
+            _ => panic!("tool_set() applies to agent specs"),
         }
         self
     }
@@ -460,6 +474,7 @@ pub fn agent(name: &str, sig: SigId) -> NodeSpec {
             instruction: None,
             demos: Vec::new(),
             tools: Vec::new(),
+            tool_set: None,
             stop_tools: Vec::new(),
             max_turns: StopSpec::default().max_turns,
             until_parse: true,
@@ -875,6 +890,7 @@ impl Lowering {
                 instruction,
                 demos,
                 tools,
+                tool_set,
                 stop_tools,
                 max_turns,
                 until_parse,
@@ -919,6 +935,18 @@ impl Lowering {
                     ParamKind::ContextPolicy,
                     ParamValue::ContextPolicy { policy: context },
                 );
+                // The gene defaults to the full declared table: absent
+                // selection = every declared tool, so pre-ToolSet programs
+                // print, hash, and run unchanged.
+                let tool_set = self.leaf_param(
+                    &name,
+                    "tool_set",
+                    node_id,
+                    ParamKind::ToolSet,
+                    ParamValue::ToolSet {
+                        tools: tool_set.unwrap_or_else(|| tools.clone()),
+                    },
+                );
                 let binding = self.lower_binds(binds)?;
                 Node::AgentLoop(AgentLoopNode {
                     name: name_sym,
@@ -927,6 +955,7 @@ impl Lowering {
                     demos,
                     model,
                     tools: tools.into_boxed_slice(),
+                    tool_set,
                     context_policy,
                     stop: StopSpec {
                         max_turns,

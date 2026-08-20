@@ -592,6 +592,19 @@ impl<'p> Printer<'p> {
             self.indent(level + 1);
             let _ = writeln!(self.out, "tools [{}]", names.join(" "));
         }
+        // The tool_set gene prints only when its default differs from the
+        // full declared list — pre-ToolSet programs keep their canonical
+        // text (and hash) byte-for-byte.
+        if let ParamValue::ToolSet { tools } = &self.p.params[n.tool_set].default
+            && tools.as_slice() != &*n.tools
+        {
+            let names: Vec<&str> = tools
+                .iter()
+                .map(|t| self.p.syms.get(self.p.tools[*t].name))
+                .collect();
+            self.indent(level + 1);
+            let _ = writeln!(self.out, "tool_set [{}]", names.join(" "));
+        }
         if !n.stop.stop_tools.is_empty() {
             let names: Vec<&str> = n
                 .stop
