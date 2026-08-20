@@ -105,10 +105,6 @@ async fn capture_records_inputs_edges_and_component_names() {
         "intermediate"
     );
 
-    // The second span is chained to the first.
-    assert!(first.links.is_empty());
-    assert_eq!(second.links, vec![first.id]);
-
     // Outputs are recorded.
     assert_eq!(
         first.output.as_ref().expect("first output")["answer"],

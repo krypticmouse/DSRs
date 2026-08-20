@@ -61,12 +61,13 @@
 //!
 //! # What doesn't work (yet)
 //!
-//! - **No dynamic graph / structural optimization.** The type-erased `ProgramGraph`,
-//!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
-//!   Everything here is statically typed, which is both the strength and the constraint.
-//! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
-//!   The module trait and augmentation system are designed for them, but nobody's built
-//!   them yet.
+//! - **No structural optimization.** The [`ir`] layer ships a dynamic program
+//!   graph ([`ir::Program`], default-on behind the `ir` feature) with an
+//!   interpreter and the `.dsrs` text format, but optimizers only tune
+//!   instructions and demos — none of them rewrite graph structure.
+//! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
+//!   [`ChainOfThought`] and [`ReAct`]. The module trait and augmentation system
+//!   are designed for them, but nobody's built them yet.
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
@@ -81,9 +82,10 @@
 //! - [`core`] — [`Module`] trait, [`Signature`] trait, [`SignatureSchema`], error types,
 //!   LM client, [`Predicted`] and [`CallMetadata`]
 //! - [`predictors`] — [`Predict`] (the leaf module) and typed [`Demo`]
-//! - [`modules`] — [`ChainOfThought`] and augmentation types
+//! - [`modules`] — [`ChainOfThought`], [`ReAct`], and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
+//! - [`ir`] — dynamic program graph, interpreter, and the `.dsrs` text format
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
 //! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
@@ -118,9 +120,8 @@ pub use optimizer::*;
 pub use predictors::*;
 // The unified trace format (RFC 0001).
 pub use trace::{
-    CompId, Eval, JsonMap, ModelEntry, ModelId, OtelEvent, OtelKeyValue, OtelSpan, OtelStatus,
-    OtelValue, PrefixEntry, PrefixId, ReplayError, ReplayMode, ReplayReport, RlRollout,
-    RlTransition, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
+    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, ReplayError, ReplayMode,
+    ReplayReport, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
     SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
     is_capturing, is_replaying, replay,
 };
@@ -134,10 +135,7 @@ pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
 pub mod typesys;
 pub use dsrs_macros::*;
 pub use facet::{Facet, Shape};
-pub use typesys::{
-    Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
-    Schema, evaluate_constraints,
-};
+pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Schema};
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -163,41 +161,4 @@ pub mod __macro_support {
     pub use tokio;
 }
 
-#[macro_export]
-macro_rules! sign {
-    // Example Usage: signature! {
-    //     question: String, random: bool -> answer: String
-    // }
-    //
-    // Example Output:
-    //
-    // #[derive(Signature, Clone)]
-    // struct InlineSignature {
-    //     #[input]
-    //     question: String,
-    //     #[input]
-    //     random: bool,
-    //     #[output]
-    //     answer: String,
-    // }
-    //
-    // Predict::<InlineSignature>::new()
-
-    // Pattern: input fields -> output fields
-    { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        #[derive($crate::Signature, Clone)]
-        struct __InlineSignature {
-            $(
-                #[input]
-                $input_name: $input_type,
-            )*
-            $(
-                #[output]
-                $output_name: $output_type,
-            )*
-        }
-
-        $crate::Predict::<__InlineSignature>::new()
-    }};
-}
 

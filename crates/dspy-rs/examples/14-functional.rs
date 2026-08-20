@@ -112,11 +112,10 @@ async fn main() -> Result<()> {
     // parameter is one `for_component` call.
     for span in &trace.spans {
         println!(
-            "  span {} = {:?} seq={} (links: {:?})",
+            "  span {} = {:?} seq={}",
             span.id.0,
             trace.component_name(span.component),
             span.seq,
-            span.links
         );
     }
     let refiner_calls = trace.for_component("refiner").count();

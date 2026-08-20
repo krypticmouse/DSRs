@@ -1,6 +1,6 @@
 //! Shared evaluation engine (vision §5.4) coverage: bounded-concurrency
 //! fan-out, rollout caching, budget metering, minibatch gating, matrix/Pareto
-//! bookkeeping, checkpoint/resume, and the candidate apply/restore seam.
+//! bookkeeping, and the candidate apply/restore seam.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -477,64 +477,6 @@ async fn minibatch_gate_promotes_only_above_threshold() {
 }
 
 #[tokio::test]
-async fn checkpoint_resume_skips_completed_rollouts() {
-    let client = TestCompletionModel::new([
-        answer_response("0"),
-        answer_response("1"),
-        answer_response("2"),
-    ]);
-    let metric = ExactMatch;
-    let candidate = Candidate::with_instruction("predictor", "resume-me");
-
-    let checkpoint = {
-        let mut module = lm_module(client.clone()).await;
-        let mut engine = EvalEngine::new(trainset(3), &metric, EngineConfig::default());
-        let idx = engine.register(candidate.clone());
-        let eval = engine
-            .evaluate(&mut module, idx, None)
-            .await
-            .unwrap()
-            .completed()
-            .unwrap();
-        assert!((eval.mean() - 1.0).abs() < 1e-9);
-        engine.checkpoint().unwrap()
-    };
-
-    // Fresh process: new module, EMPTY response queue — any LM call errors.
-    let mut module = lm_module(TestCompletionModel::new([])).await;
-    let mut engine =
-        EvalEngine::resume(trainset(3), &metric, EngineConfig::default(), &checkpoint).unwrap();
-    assert_eq!(engine.num_candidates(), 1);
-    assert_eq!(engine.spend().metric_calls, 3, "spend carries over");
-
-    let idx = engine.register(candidate);
-    assert_eq!(idx, 0, "re-registering dedups by content hash");
-
-    let eval = engine
-        .evaluate(&mut module, idx, None)
-        .await
-        .expect("resumed run must serve completed rollouts from cache")
-        .completed()
-        .unwrap();
-    assert!((eval.mean() - 1.0).abs() < 1e-9);
-    assert!(eval.rollouts.iter().all(|r| r.trace.is_none()));
-    assert_eq!(engine.spend().metric_calls, 3, "no new metric calls");
-    assert_eq!(engine.spend().cache_hits, 3);
-    assert_eq!(engine.matrix().mean(idx), Some(1.0));
-
-    // A checkpoint against a different example set is rejected.
-    match EvalEngine::<(EngSigInput, EngSigOutput), ExactMatch>::resume(
-        trainset(4),
-        &metric,
-        EngineConfig::default(),
-        &checkpoint,
-    ) {
-        Err(err) => assert!(err.to_string().contains("does not match")),
-        Ok(_) => panic!("mismatched examples must fail resume"),
-    }
-}
-
-#[tokio::test]
 async fn fan_out_never_exceeds_the_concurrency_bound() {
     const N: usize = 6;
     const BOUND: usize = 2;
@@ -661,35 +603,6 @@ async fn auxiliary_charges_count_against_the_budget() {
     engine.charge(0, 2);
     assert_eq!(engine.spend().lm_calls, 5);
     assert!(!engine.budget_allows(1));
-
-    // Charged spend survives checkpoint/resume.
-    let checkpoint = engine.checkpoint().unwrap();
-    let resumed =
-        EvalEngine::<(EngSigInput, EngSigOutput), IndexMetric>::resume(trainset(3), &metric, *engine.config(), &checkpoint)
-            .unwrap();
-    assert_eq!(resumed.spend().lm_calls, 5);
-    assert_eq!(resumed.spend().metric_calls, 3);
-}
-
-#[tokio::test]
-async fn checkpoint_with_unknown_version_is_rejected() {
-    let metric = IndexMetric;
-    let engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
-    let checkpoint = engine.checkpoint().unwrap();
-
-    let mut doctored: serde_json::Value = serde_json::from_str(&checkpoint).unwrap();
-    doctored["version"] = serde_json::json!(99);
-    let doctored = serde_json::to_string(&doctored).unwrap();
-
-    match EvalEngine::<(EngSigInput, EngSigOutput), IndexMetric>::resume(
-        trainset(2),
-        &metric,
-        EngineConfig::default(),
-        &doctored,
-    ) {
-        Err(err) => assert!(err.to_string().contains("version")),
-        Ok(_) => panic!("unknown checkpoint versions must fail resume"),
-    }
 }
 
 #[tokio::test]
@@ -728,64 +641,6 @@ async fn permanent_install_invalidates_the_cache_via_baseline_hash() {
     assert_eq!(engine.spend().lm_calls, 4, "new baseline means fresh rollouts");
     assert_eq!(engine.spend().cache_hits, 0);
     assert!(eval.rollouts.iter().all(|r| r.trace.is_some()));
-}
-
-#[tokio::test]
-async fn cache_salt_partitions_the_rollout_cache() {
-    let client = TestCompletionModel::new([answer_response("0"), answer_response("1")]);
-    let metric = ExactMatch;
-    let candidate = Candidate::with_instruction("predictor", "salted");
-
-    let checkpoint = {
-        let mut module = lm_module(client.clone()).await;
-        let mut engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
-        let idx = engine.register(candidate.clone());
-        engine
-            .evaluate(&mut module, idx, None)
-            .await
-            .unwrap()
-            .completed()
-            .unwrap();
-        engine.checkpoint().unwrap()
-    };
-
-    // Same checkpoint, bumped salt (the sampling-params seam): every rollout
-    // is a cache miss and needs fresh LM responses.
-    let mut module = lm_module(client.clone()).await;
-    let mut engine = EvalEngine::resume(
-        trainset(2),
-        &metric,
-        EngineConfig {
-            cache_salt: 1,
-            ..EngineConfig::default()
-        },
-        &checkpoint,
-    )
-    .unwrap();
-    client.push_response(answer_response("0"));
-    client.push_response(answer_response("1"));
-    let idx = engine.register(candidate.clone());
-    engine
-        .evaluate(&mut module, idx, None)
-        .await
-        .expect("salted evaluation must run fresh rollouts")
-        .completed()
-        .unwrap();
-    assert_eq!(engine.spend().cache_hits, 0, "bumped salt never hits the cache");
-
-    // Salt 0 again: the checkpointed entries are served with no LM calls.
-    let mut module = lm_module(TestCompletionModel::new([])).await;
-    let mut engine =
-        EvalEngine::resume(trainset(2), &metric, EngineConfig::default(), &checkpoint).unwrap();
-    let idx = engine.register(candidate);
-    let eval = engine
-        .evaluate(&mut module, idx, None)
-        .await
-        .expect("original salt must serve from the checkpointed cache")
-        .completed()
-        .unwrap();
-    assert_eq!(engine.spend().cache_hits, 2);
-    assert!(eval.rollouts.iter().all(|r| r.trace.is_none()));
 }
 
 #[tokio::test]

@@ -65,7 +65,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::{ModuleState, PredictState, StateUpdate};
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval, TypedMetric};
-use crate::optimizer::pareto::ParetoStatistics;
 use crate::optimizer::with_named_predictor;
 use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
 use crate::utils::hash::StableHasher;
@@ -224,7 +223,7 @@ impl Candidate {
     }
 
     /// Stable content hash: identical overlay content hashes identically across
-    /// processes and map orderings — the cache and checkpoint identity.
+    /// processes and map orderings — the cache identity.
     pub fn stable_hash(&self) -> u64 {
         canonical_hash(self)
     }
@@ -354,8 +353,7 @@ impl Budget {
     }
 }
 
-/// What the engine has consumed so far. Serialized into checkpoints and
-/// reported to strategies.
+/// What the engine has consumed so far. Reported to strategies.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
 pub struct Spend {
     /// Metric evaluations executed (cache hits don't re-run the metric).
@@ -378,9 +376,8 @@ pub struct Spend {
 /// In-memory rollout cache: `(baseline, candidate, example, salt)` → [`Eval`].
 ///
 /// A candidate re-evaluated on a seen example returns the cached `Eval` with
-/// no LM call and no metric call. Serialized into checkpoints so a resumed run
-/// skips completed rollouts. (Disk-backed storage can layer on later — the key
-/// is already a stable string.)
+/// no LM call and no metric call. (Disk-backed storage can layer on later —
+/// the key is already a stable string.)
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RolloutCache {
     entries: BTreeMap<String, Eval>,
@@ -573,6 +570,28 @@ impl ParetoView {
     }
 }
 
+/// Snapshot of the Pareto frontier at a point in the search.
+///
+/// Useful for plotting convergence. A healthy search has `num_candidates` growing
+/// slowly (diversity is maintained) while `avg_coverage` increases (candidates are
+/// getting more robust). If `num_candidates` is 1, the search has collapsed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParetoStatistics {
+    /// Candidates currently on the frontier. 1 means the search has converged
+    /// (or collapsed) to a single instruction.
+    pub num_candidates: usize,
+    /// Examples where at least one frontier candidate is the best. Should approach
+    /// total eval set size as the search progresses.
+    pub num_examples_covered: usize,
+    /// Mean examples won per candidate. Higher means candidates are more robust;
+    /// lower means more specialization.
+    pub avg_coverage: f32,
+    /// Most examples won by any single candidate.
+    pub max_coverage: usize,
+    /// Fewest examples won by any frontier candidate (always >= 1 by construction).
+    pub min_coverage: usize,
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
@@ -665,18 +684,6 @@ pub enum GateOutcome {
     },
 }
 
-/// Serialized engine state: candidates, score matrix, spend, and the rollout
-/// cache. A resumed run skips completed rollouts via the cache.
-#[derive(Serialize, Deserialize)]
-struct EngineCheckpoint {
-    version: u32,
-    example_uids: Vec<u64>,
-    candidates: Vec<Candidate>,
-    matrix: ScoreMatrix,
-    cache: RolloutCache,
-    spend: Spend,
-}
-
 /// The shared evaluation core (vision §5.4).
 ///
 /// Owns the example set, the candidate registry, the score matrix, the rollout
@@ -714,51 +721,6 @@ where
             cache: RolloutCache::default(),
             spend: Spend::default(),
         }
-    }
-
-    /// Rebuilds an engine from a [`checkpoint`](Self::checkpoint), validating
-    /// that `examples` matches the checkpointed set. Completed rollouts are
-    /// served from the restored cache instead of re-executing.
-    pub fn resume(
-        examples: Vec<E>,
-        metric: &'m MT,
-        config: EngineConfig,
-        checkpoint: &str,
-    ) -> Result<Self> {
-        let checkpoint: EngineCheckpoint =
-            serde_json::from_str(checkpoint).map_err(|err| anyhow!("invalid engine checkpoint: {err}"))?;
-        if checkpoint.version != 1 {
-            return Err(anyhow!(
-                "unsupported engine checkpoint version {}",
-                checkpoint.version
-            ));
-        }
-        let mut engine = Self::new(examples, metric, config);
-        if engine.example_uids != checkpoint.example_uids {
-            return Err(anyhow!(
-                "engine checkpoint does not match the provided example set"
-            ));
-        }
-        engine.candidate_hashes = checkpoint.candidates.iter().map(Candidate::stable_hash).collect();
-        engine.candidates = checkpoint.candidates;
-        engine.matrix = checkpoint.matrix;
-        engine.cache = checkpoint.cache;
-        engine.spend = checkpoint.spend;
-        engine.matrix.ensure_rows(engine.candidates.len());
-        Ok(engine)
-    }
-
-    /// Serializes engine state (candidates, matrix, spend, cache) to JSON.
-    pub fn checkpoint(&self) -> Result<String> {
-        serde_json::to_string(&EngineCheckpoint {
-            version: 1,
-            example_uids: self.example_uids.clone(),
-            candidates: self.candidates.clone(),
-            matrix: self.matrix.clone(),
-            cache: self.cache.clone(),
-            spend: self.spend,
-        })
-        .map_err(|err| anyhow!("failed to serialize engine checkpoint: {err}"))
     }
 
     pub fn examples(&self) -> &[E] {

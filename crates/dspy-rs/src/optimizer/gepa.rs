@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::evaluate::TypedMetric;
 use crate::optimizer::engine::{
-    Budget, Candidate, CandidateEval, EngineConfig, EvalEngine, EvalOutcome, ParetoView,
-    apply_candidate,
+    Budget, Candidate, CandidateEval, EngineConfig, EvalEngine, EvalOutcome, ParetoStatistics,
+    ParetoView, apply_candidate,
 };
 use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
 use crate::utils::truncate;
@@ -123,8 +123,6 @@ pub struct GEPAResult {
     /// Pareto frontier statistics per generation.
     pub frontier_history: Vec<ParetoStatistics>,
 }
-
-pub use super::pareto::ParetoStatistics;
 
 /// Genetic-Pareto instruction optimizer with feedback-driven evolution.
 ///

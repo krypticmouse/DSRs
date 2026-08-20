@@ -216,7 +216,6 @@ mod tests {
             component: CompId(0),
             seq: 0,
             parent: None,
-            links: Vec::new(),
             prefix: None,
             suffix: vec![Message::user(suffix_text)],
             input: None,

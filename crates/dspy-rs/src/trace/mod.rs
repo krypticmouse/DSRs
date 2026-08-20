@@ -26,13 +26,11 @@
 //! until divergence (counterfactual replay of mutated candidates).
 
 pub mod capture;
-pub mod export;
 pub mod replay;
 pub mod serialize;
 pub mod span;
 
 pub use capture::*;
-pub use export::*;
 pub use replay::{ReplayError, ReplayMode, ReplayReport, is_replaying, replay};
 pub use serialize::TRACE_FORMAT_VERSION;
 pub use span::*;

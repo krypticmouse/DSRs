@@ -1,7 +1,17 @@
-//! Data loading, versioned under [`v1`].
+//! Data loading.
+//!
+//! Typed ingestion is first-class:
+//!
+//! - [`DataLoader`] provides `load_*` methods that return
+//!   plain row structs directly.
+//! - Typed examples flow directly into evaluation and optimizer APIs.
+//!
+//! There is no untyped row type: custom mappers work with [`RowRecord`]
+//! (`serde_json`-valued source rows) at the load boundary, and demo rows
+//! travel as flat JSON objects (see [`crate::PredictState`]).
 
-pub mod v1;
+pub mod dataloader;
+pub mod utils;
 
-// Re-export items and submodules so both `crate::data::DataLoader` and
-// versioned paths like `crate::data::v1::dataloader::DataLoader` keep resolving.
-pub use v1::*;
+pub use dataloader::*;
+pub use utils::*;

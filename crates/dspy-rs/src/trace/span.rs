@@ -53,10 +53,6 @@ pub struct Span {
     /// execution (Predict-in-tool). Best-effort: set from the innermost open
     /// span at begin time; `None` at top level.
     pub parent: Option<SpanId>,
-    /// Dataflow predecessors. v1 records the sequential approximation the old
-    /// Graph recorded: `[previous span in this scope]`, empty for the first.
-    /// Exact for hand-written sequential pipelines; an approximation elsewhere.
-    pub links: Vec<SpanId>,
 
     // ---- request (recorded eagerly at span open) ----
     /// Interned system+demos prefix. `None` when the call had no prefix
@@ -122,9 +118,6 @@ pub enum SpanEvent {
         /// Tool-level failure that was reported back to the model as text.
         error: Option<String>,
     },
-    /// RESERVED for streaming. Not emitted in v1. A streamed predict will
-    /// interleave these before the closing `Exchange`.
-    Chunk { text: String },
     /// Unknown tag from a newer writer; preserved as a placeholder on read,
     /// dropped from the canonical JSONL on re-serialize.
     #[doc(hidden)]
@@ -313,11 +306,6 @@ impl Trace {
             .filter(move |span| Some(span.component) == id)
     }
 
-    /// Id-form overload of [`for_component`](Trace::for_component) for hot paths.
-    pub fn for_component_id(&self, id: CompId) -> impl Iterator<Item = &'_ Span> + '_ {
-        self.spans.iter().filter(move |span| span.component == id)
-    }
-
     /// Reconstructs the exact rendered prompt of a span (prefix ++ suffix).
     pub fn prompt(&self, span: &Span) -> Vec<Message> {
         let prefix = span
@@ -368,110 +356,6 @@ impl Trace {
             .collect();
     }
 
-    /// Merges another trace's spans into this one, remapping intern tables and
-    /// span ids. Spans are ordered by `started_at_us` after the merge — provided
-    /// for harnesses that fan out with `tokio::spawn` and capture per subtask.
-    pub fn absorb(&mut self, other: Trace) {
-        let comp_map: Vec<CompId> = other
-            .components
-            .iter()
-            .map(|name| match self.component_id(name) {
-                Some(id) => id,
-                None => {
-                    self.components.push(name.clone());
-                    CompId((self.components.len() - 1) as u32)
-                }
-            })
-            .collect();
-        // Keep the param_ids column parallel to the merged components,
-        // preferring already-attached entries on either side.
-        #[cfg(feature = "ir")]
-        if !self.param_ids.is_empty() || !other.param_ids.is_empty() {
-            self.param_ids.resize(self.components.len(), None);
-            for (idx, ids) in other.param_ids.iter().enumerate() {
-                let mapped = comp_map[idx].0 as usize;
-                if self.param_ids[mapped].is_none() {
-                    self.param_ids[mapped] = ids.clone();
-                }
-            }
-        }
-
-        let model_map: Vec<ModelId> = other
-            .models
-            .iter()
-            .map(|entry| {
-                match self
-                    .models
-                    .iter()
-                    .position(|existing| existing.config_hash == entry.config_hash)
-                {
-                    Some(idx) => ModelId(idx as u32),
-                    None => {
-                        self.models.push(entry.clone());
-                        ModelId((self.models.len() - 1) as u32)
-                    }
-                }
-            })
-            .collect();
-        let prefix_base = self.prefixes.len() as u32;
-        self.prefixes.extend(other.prefixes);
-
-        // Seq counters continue per component name across the merge.
-        let mut seqs: Vec<u32> = self
-            .components
-            .iter()
-            .enumerate()
-            .map(|(idx, _)| {
-                self.spans
-                    .iter()
-                    .filter(|span| span.component.0 as usize == idx)
-                    .count() as u32
-            })
-            .collect();
-
-        let id_base = self.spans.len() as u32;
-        for mut span in other.spans {
-            span.id = SpanId(span.id.0 + id_base);
-            span.parent = span.parent.map(|id| SpanId(id.0 + id_base));
-            span.links = span
-                .links
-                .into_iter()
-                .map(|id| SpanId(id.0 + id_base))
-                .collect();
-            span.component = comp_map[span.component.0 as usize];
-            span.model = model_map[span.model.0 as usize];
-            span.prefix = span.prefix.map(|id| PrefixId(id.0 + prefix_base));
-            let seq = &mut seqs[span.component.0 as usize];
-            span.seq = *seq;
-            *seq += 1;
-            self.spans.push(span);
-        }
-        self.spans.sort_by_key(|span| span.started_at_us);
-        // Ids stay unique but no longer dense after the sort; re-densify.
-        let remap: std::collections::HashMap<u32, u32> = self
-            .spans
-            .iter()
-            .enumerate()
-            .map(|(idx, span)| (span.id.0, idx as u32))
-            .collect();
-        for span in &mut self.spans {
-            span.id = SpanId(remap[&span.id.0]);
-            span.parent = span.parent.map(|id| SpanId(remap[&id.0]));
-            for link in &mut span.links {
-                *link = SpanId(remap[&link.0]);
-            }
-        }
-    }
-
-    /// Structural redaction hook: scrub span content before persisting.
-    /// Redaction invalidates `request_hash` replay, so touched spans are
-    /// marked `complete = false`.
-    pub fn redact(&mut self, mut f: impl FnMut(&mut Span)) {
-        for span in &mut self.spans {
-            f(span);
-            span.complete = false;
-        }
-    }
 }
 
 impl Span {
