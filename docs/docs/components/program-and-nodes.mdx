@@ -38,7 +38,7 @@ Nodes form a tree: one parent, one use. Fan-in happens through field references,
 | Node | Plain words | Main fields |
 |---|---|---|
 | `Predict` | One LM call, no tools. `cot` is sugar: a Predict over a reasoning-augmented signature. | `name`, `sig`, `instruction`, `demos`, `model`, `binding` |
-| `AgentLoop` | The LM plus tool loop as a first-class unit. | `name`, `sig`, `instruction`, `demos`, `model`, `tools`, `context_policy`, `stop` (max turns, stop tools, until_parse), `budget`, `binding` |
+| `AgentLoop` | The LM plus tool loop as a first-class unit. | `name`, `sig`, `instruction`, `demos`, `model`, `tools` (the declared table), `tool_set` (the selection gene), `context_policy`, `stop` (max turns, stop tools, until_parse), `budget`, `binding` |
 | `Seq` | Runs children in order and exports named fields. | `body`, `out` |
 | `ForkJoin` | Runs branches concurrently (all succeed or fail fast) and joins their outputs. | `branches`, `join` |
 | `Route` | Picks one arm by an enum-valued port. | `on`, `arms` (variant, node pairs), `default` |
@@ -60,6 +60,7 @@ Every mutable thing in a program is a named, addressable slot; a candidate is an
 | `Instruction` | The prompt's task description for a leaf. |
 | `Demos` | Few-shot demonstration rows (input map plus output map each). |
 | `ToolDesc` | A tool's description text. |
+| `ToolSet` | Which of an agent node's *declared* tools the loop carries. Declaration (`AgentLoopNode::tools`) is structural — it is the loop's capability footprint; selection is the gene. An optimizer can drop a distracting tool or bring a declared one back, never add an undeclared one: a value naming a tool outside the declared table is refused at load and on `Overlay::set`. Absent selection = the full declared table. |
 | `ModelRef` | Which declared model a leaf uses. |
 | `ContextPolicy` | The agent context policy: history window, tool-result byte cap, playbook text. |
 | `Code` | Sandboxed JS source (with a stable content hash). Hole and sandboxed-tool implementations are optimizable through this kind. |
@@ -68,7 +69,7 @@ Every mutable thing in a program is a named, addressable slot; a candidate is an
 
 Slots are addressed by canonical string paths. Node-owned slots use the leaf name as prefix; tool-owned slots use a `tool.` prefix:
 
-- `"<leaf>.instruction"`, `"<leaf>.demos"`, `"<leaf>.model"`, `"<leaf>.context"`, `"<leaf>.code"`
+- `"<leaf>.instruction"`, `"<leaf>.demos"`, `"<leaf>.model"`, `"<leaf>.context"`, `"<leaf>.tool_set"`, `"<leaf>.code"`
 - `"tool.<name>.desc"`, `"tool.<name>.code"`
 
 For example `"drafter.instruction"` or `"tool.search.desc"`. `Program::param_id(path)` resolves a path to its id; after load everything speaks ids.
@@ -85,6 +86,7 @@ An `Overlay` is one candidate: a dense set of parameter values layered over a fi
 | `set_instruction(slot, text)` | Sets an instruction through a typed `Slot<Instruction>` handle. |
 | `set_demos(slot, rows)` | Sets demo rows through a typed `Slot<Demos>` handle. |
 | `set_code(slot, source)` | Sets JS source through a typed `Slot<CodeK>` handle (hash computed automatically). |
+| `set_tool_set(&program, slot, tools)` | Sets a tool-set gene through a typed `Slot<ToolSetK>` handle. Unlike the other typed setters it takes the program and can fail: the value must be a subset of the owning agent node's declared tools, anything else is `OverlayError::ToolSetUndeclared`. |
 | `resolve(&program, id)` | The effective value: the overlay entry if set, otherwise the slot's default. |
 | `hash()` | Stable hash over the base plus the set entries in id order. This is the trace's `candidate_hash` and the rollout-cache key. |
 | `to_named(&program)` | The serde boundary: a path-keyed map (`"<path>": ParamValue`). |

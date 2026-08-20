@@ -128,6 +128,7 @@ fn param_paths_are_addressable() {
         "researcher.demos",
         "researcher.model",
         "researcher.context",
+        "researcher.tool_set",
         "checker.code",
         "tool.search.desc",
     ] {
@@ -609,6 +610,294 @@ fn overlay_hash_and_named_round_trip() {
     assert!(matches!(
         Overlay::from_named(&program, unknown),
         Err(OverlayError::UnknownPath { .. })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// The ToolSet gene (RFC 0004 §5)
+// ---------------------------------------------------------------------------
+
+/// Two declared tools; the agent declares both. Returns the program and the
+/// two tool ids in declaration order (`search`, `calc`).
+fn two_tool_program() -> (Program, ir::ToolId, ir::ToolId) {
+    let mut b = ProgramBuilder::new("twotools");
+    b.cap("net:search");
+    b.model("only", model_config("openai:gpt-4o-mini"));
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .instruction("Research and answer.")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool("search", "Web search", search_sig, &["net:search"]);
+    let calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
+    let researcher = ir::agent("researcher", research)
+        .bind("question", ir::input("question"))
+        .tools([search, calc])
+        .max_turns(4);
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+        )
+        .unwrap();
+    (program, search, calc)
+}
+
+#[test]
+fn tool_set_defaults_to_the_full_declared_table() {
+    let (program, search, calc) = two_tool_program();
+    let id = program.param_id("researcher.tool_set").unwrap();
+    assert_eq!(program.params[id].kind, ParamKind::ToolSet);
+    assert!(matches!(
+        &program.params[id].default,
+        ParamValue::ToolSet { tools } if tools == &vec![search, calc]
+    ));
+
+    // Enumerable like every other gene.
+    let paths: Vec<&str> = program
+        .slots(ParamKind::ToolSet)
+        .map(|(_, slot)| &*slot.path)
+        .collect();
+    assert_eq!(paths, vec!["researcher.tool_set"]);
+    assert!(
+        program
+            .slot_of::<ir::ToolSetK>("researcher.tool_set")
+            .is_some()
+    );
+}
+
+#[test]
+fn tool_set_subset_builds_but_undeclared_tool_is_a_build_error() {
+    // A declared subset is fine.
+    let mut b = ProgramBuilder::new("subset");
+    b.cap("net:search");
+    b.model("only", model_config("openai:gpt-4o-mini"));
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool("search", "Web search", search_sig, &["net:search"]);
+    let calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
+    let researcher = ir::agent("researcher", research)
+        .bind("question", ir::input("question"))
+        .tools([search, calc])
+        .tool_set([search])
+        .max_turns(4);
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+        )
+        .expect("a declared subset validates");
+    let id = program.param_id("researcher.tool_set").unwrap();
+    assert!(matches!(
+        &program.params[id].default,
+        ParamValue::ToolSet { tools } if tools == &vec![search]
+    ));
+
+    // A tool_set naming a tool the node does not declare is refused at build.
+    let mut b = ProgramBuilder::new("smuggle");
+    b.cap("net:search");
+    b.model("only", model_config("openai:gpt-4o-mini"));
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let research = b.sig(
+        SignatureDef::build("Research")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let search_sig = b.sig(
+        SignatureDef::build("Search")
+            .input("query", T::String)
+            .output("results", T::List(Box::new(T::String)))
+            .finish()
+            .unwrap(),
+    );
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let search = b.host_tool("search", "Web search", search_sig, &["net:search"]);
+    let calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
+    let researcher = ir::agent("researcher", research)
+        .bind("question", ir::input("question"))
+        .tools([search])
+        .tool_set([calc])
+        .max_turns(4);
+    let err = b
+        .main(
+            main_sig,
+            ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+        )
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        BuildError::Invalid(ValidateError::ToolSetUndeclared { ref at, ref tool })
+            if at == "researcher" && tool == "calc"
+    ));
+}
+
+#[test]
+fn tool_set_duplicates_are_rejected() {
+    let (program, search, _calc) = two_tool_program();
+    let mut hostile = program.clone();
+    let id = hostile.param_id("researcher.tool_set").unwrap();
+    hostile.params[id].default = ParamValue::ToolSet {
+        tools: vec![search, search],
+    };
+    let err = hostile.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ValidateError::ToolSetDuplicate { ref at, ref tool }
+            if at == "researcher" && tool == "search"
+    ));
+}
+
+#[test]
+fn overlay_tool_set_accepts_subsets_and_refuses_undeclared_tools() {
+    let (program, search, calc) = two_tool_program();
+    let slot = program
+        .slot_of::<ir::ToolSetK>("researcher.tool_set")
+        .unwrap();
+
+    // A subset of the declared table is a legal gene value.
+    let mut overlay = Overlay::new(&program);
+    overlay.set_tool_set(&program, slot, vec![search]).unwrap();
+    assert!(matches!(
+        overlay.resolve(&program, slot.id),
+        ParamValue::ToolSet { tools } if tools == &vec![search]
+    ));
+    // The empty subset too — an agent may run tool-less.
+    let mut empty = Overlay::new(&program);
+    empty.set_tool_set(&program, slot, vec![]).unwrap();
+
+    // Drop `calc` from the *node* (not the program) and the old overlay
+    // alphabet no longer applies: a value naming it is refused on set.
+    let restricted = {
+        let mut b = ProgramBuilder::new("restricted");
+        b.cap("net:search");
+        b.model("only", model_config("openai:gpt-4o-mini"));
+        let main_sig = b.sig(
+            SignatureDef::build("Main")
+                .input("question", T::String)
+                .output("answer", T::String)
+                .finish()
+                .unwrap(),
+        );
+        let research = b.sig(
+            SignatureDef::build("Research")
+                .input("question", T::String)
+                .output("answer", T::String)
+                .finish()
+                .unwrap(),
+        );
+        let search_sig = b.sig(
+            SignatureDef::build("Search")
+                .input("query", T::String)
+                .output("results", T::List(Box::new(T::String)))
+                .finish()
+                .unwrap(),
+        );
+        let calc_sig = b.sig(
+            SignatureDef::build("Calc")
+                .input("expression", T::String)
+                .output("value", T::Float)
+                .finish()
+                .unwrap(),
+        );
+        let search = b.host_tool("search", "Web search", search_sig, &["net:search"]);
+        let _calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
+        // `calc` is in the program's tool table but NOT declared on the node.
+        let researcher = ir::agent("researcher", research)
+            .bind("question", ir::input("question"))
+            .tools([search])
+            .max_turns(4);
+        b.main(
+            main_sig,
+            ir::seq([researcher]).out("answer", ir::out("researcher", "answer")),
+        )
+        .unwrap()
+    };
+    let slot = restricted
+        .slot_of::<ir::ToolSetK>("researcher.tool_set")
+        .unwrap();
+    let mut overlay = Overlay::new(&restricted);
+    let err = overlay
+        .set_tool_set(&restricted, slot, vec![calc])
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        OverlayError::ToolSetUndeclared { ref path, ref tool }
+            if path == "researcher.tool_set" && tool == "calc"
+    ));
+
+    // The serde load path (`from_named`) applies the same guard.
+    let mut named = std::collections::BTreeMap::new();
+    named.insert(
+        "researcher.tool_set".to_string(),
+        ParamValue::ToolSet { tools: vec![calc] },
+    );
+    assert!(matches!(
+        Overlay::from_named(&restricted, named),
+        Err(OverlayError::ToolSetUndeclared { .. })
     ));
 }
 

@@ -104,6 +104,12 @@ pub enum ValidateError {
     },
     #[error("agent loop `{at}`: stop tool is not in the node's tool list")]
     StopToolNotDeclared { at: String },
+    #[error(
+        "agent loop `{at}`: tool_set includes `{tool}`, which is not in the node's declared tools"
+    )]
+    ToolSetUndeclared { at: String, tool: String },
+    #[error("agent loop `{at}`: tool_set lists `{tool}` more than once")]
+    ToolSetDuplicate { at: String, tool: String },
     #[error("refine at {at}: judge must be a Predict or Hole leaf")]
     RefineJudgeNotLeaf { at: String },
     #[error("refine at {at}: judge outputs must include score: float and feedback: string")]
@@ -291,6 +297,7 @@ impl<'p> Validator<'p> {
                     param_ok(&at, n.instruction)?;
                     param_ok(&at, n.demos)?;
                     param_ok(&at, n.model)?;
+                    param_ok(&at, n.tool_set)?;
                     param_ok(&at, n.context_policy)?;
                     for t in n.tools.iter().chain(n.stop.stop_tools.iter()) {
                         if t.index() >= n_tools {
@@ -356,10 +363,18 @@ impl<'p> Validator<'p> {
                     }
                 }
             }
-            if let crate::ir::params::ParamValue::ModelRef { model } = &slot.default
-                && model.index() >= n_models
-            {
-                return Err(err(&at, format!("{model}")));
+            match &slot.default {
+                crate::ir::params::ParamValue::ModelRef { model } if model.index() >= n_models => {
+                    return Err(err(&at, format!("{model}")));
+                }
+                crate::ir::params::ParamValue::ToolSet { tools } => {
+                    for t in tools {
+                        if t.index() >= n_tools {
+                            return Err(err(&at, format!("{t}")));
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -492,6 +507,7 @@ impl<'p> Validator<'p> {
                 )?;
                 self.check_param_ref(&at, n.demos, ParamKind::Demos, ParamOwner::Node(id))?;
                 self.check_param_ref(&at, n.model, ParamKind::ModelRef, ParamOwner::Node(id))?;
+                self.check_param_ref(&at, n.tool_set, ParamKind::ToolSet, ParamOwner::Node(id))?;
                 self.check_param_ref(
                     &at,
                     n.context_policy,
@@ -501,6 +517,29 @@ impl<'p> Validator<'p> {
                 for stop in n.stop.stop_tools.iter() {
                     if !n.tools.contains(stop) {
                         return Err(ValidateError::StopToolNotDeclared { at: at.clone() });
+                    }
+                }
+                // The tool_set gene's alphabet is the declared table (RFC
+                // 0004 §5): any duplicate-free subset validates, anything
+                // else is refused at load — never lazily at run time.
+                if let crate::ir::params::ParamValue::ToolSet { tools } =
+                    &self.p.params[n.tool_set].default
+                {
+                    let mut seen: HashSet<crate::ir::graph::ToolId> = HashSet::new();
+                    for t in tools {
+                        let tool = self.p.syms.get(self.p.tools[*t].name).to_string();
+                        if !n.tools.contains(t) {
+                            return Err(ValidateError::ToolSetUndeclared {
+                                at: at.clone(),
+                                tool,
+                            });
+                        }
+                        if !seen.insert(*t) {
+                            return Err(ValidateError::ToolSetDuplicate {
+                                at: at.clone(),
+                                tool,
+                            });
+                        }
                     }
                 }
                 self.check_leaf_bindings(&at, n.sig, &n.binding, scope)?;

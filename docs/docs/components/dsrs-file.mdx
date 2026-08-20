@@ -167,6 +167,7 @@ An LM plus tool loop. The block is required.
 ```
 researcher = agent Research @fast (question = $.question) {
   tools [fetch shout]
+  tool_set [fetch]
   stop_tools [shout]
   max_turns 6
   until_parse false
@@ -176,6 +177,8 @@ researcher = agent Research @fast (question = $.question) {
   demos [{"input":{"ticket":"x"},"output":{"reply":"y"}}]
 }
 ```
+
+`tools` declares which tools the loop *may* carry — it is the loop's capability footprint. `tool_set` is the tuned selection: the subset the loop actually presents to the model, an optimizable parameter like `instruction` or `demos`. It only prints when an optimizer has restricted it; absent means the full `tools` list.
 
 ### `hole`
 
@@ -276,7 +279,7 @@ Violations of any of these are compile errors:
 
 1. `dsrs 1` first; `main: <Sig> = seq { ... }` last.
 2. Node names are program-unique; only earlier nodes are referenceable.
-3. Every hole and tool `caps [...]` must be a subset of the program `caps { ... }`.
+3. Every hole and tool `caps [...]` must be a subset of the program `caps { ... }`; an agent's `stop_tools` must come from its `tools`, and its `tool_set` must be a duplicate-free subset of them.
 4. `route` needs `else` unless its arms cover every enum variant; arms export identical fields.
 5. All loops carry explicit bounds (`max_iters`, `max_turns`, `attempts`, `max_rounds`).
 6. Signatures need at least one `in` and one `out` field; `check` needs a label.
