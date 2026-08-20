@@ -9,7 +9,6 @@ use syn::{
     visit::Visit,
 };
 
-mod dsrs_syntax;
 mod example_derive;
 mod include_program;
 mod module_macro;
@@ -103,14 +102,16 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The full `.dsrs` parser lives in `dspy-rs`, which depends on this macro
 /// crate — it cannot be called from here without a dependency cycle. The
-/// macro therefore validates **syntax only** at build time: the `dsrs 1`
-/// pragma, the top-level keyword vocabulary and declaration shapes, balanced
-/// delimiters, strings/numbers/code fences — a standalone check against the
-/// same surface grammar (see `docs/dsrs-format.md`). Types, dataflow,
-/// capability subsets, and everything else semantic are checked by the real
-/// parser at first use of `program()`/`try_program()` — and at CI time by the
-/// generated test, which is the sqlx-offline analogue: run `cargo test` and a
-/// semantically invalid artifact fails the suite even if never executed.
+/// macro therefore validates **syntax only** at build time, via the shared
+/// `dsrs-syntax` crate: the `dsrs 1` pragma, the top-level keyword
+/// vocabulary and declaration shapes, balanced delimiters,
+/// strings/numbers/code fences (see `docs/dsrs-format.md`). `dsrs-syntax`
+/// also supplies the lexer `Program::from_dsrs` parses with, so the two
+/// layers cannot drift. Types, dataflow, capability subsets, and everything
+/// else semantic are checked by the full parser at first use of
+/// `program()`/`try_program()` — and at CI time by the generated test, which
+/// is the sqlx-offline analogue: run `cargo test` and a semantically invalid
+/// artifact fails the suite even if never executed.
 #[proc_macro]
 pub fn include_program(input: TokenStream) -> TokenStream {
     let source_dir = proc_macro::Span::call_site()

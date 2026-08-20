@@ -1090,11 +1090,11 @@ name = "dsrs_macros"
 version = "0.7.2"
 dependencies = [
  "dspy-rs",
+ "dsrs-syntax",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.106",
  "trybuild",
 ]
