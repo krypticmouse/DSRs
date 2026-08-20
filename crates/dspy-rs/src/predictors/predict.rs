@@ -254,10 +254,7 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
-        if !self.tools.is_empty() {
-            return self.call_tooled(input).await;
-        }
-        let program = self.program()?;
+        let program = self.program().await?;
         let overlay = self.effective_overlay(&program)?;
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
@@ -270,38 +267,69 @@ impl<S: Signature> Predict<S> {
         predicted_from_run::<S>(run)
     }
 
-    /// The tooled call path: prompt + LM tool loop through the LM layer.
-    async fn call_tooled(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError>
-    where
-        S::Input: Schema,
-        S::Output: Schema,
-    {
-        // Serialize the input for trace recording only when a scope is active.
-        let capture_input = if crate::trace::is_capturing() {
-            json_map_from_input::<S>(&input).ok()
-        } else {
-            None
-        };
-        let chat = self.build_chat(&input)?;
-        // The chat is prefix + one live user message; everything before the
-        // final message is the interned span prefix.
-        let prefix_len = chat.len().saturating_sub(1);
-        let (predicted, _) = self
-            .call_and_parse_with_input(chat, capture_input, prefix_len)
-            .await?;
-        Ok(predicted)
-    }
-
-    /// Returns the cached 1-node program, building it on first use.
-    #[allow(clippy::result_large_err)]
-    fn program(&self) -> Result<Arc<Program>, PredictError> {
+    /// Returns the cached 1-node program, building it on first use: a
+    /// `predict` leaf, or an `agent` leaf when tools are attached (the IR
+    /// says `Predict` carries no tools — a tooled predictor *is* an agent
+    /// loop).
+    async fn program(&self) -> Result<Arc<Program>, PredictError> {
         if let Some(program) = self.program.get() {
             return Ok(Arc::clone(program));
         }
-        let built = Arc::new(self.build_program()?);
+        let built = if self.tools.is_empty() {
+            self.build_predict_program()?
+        } else {
+            let toolset = self
+                .cached_toolset()
+                .await
+                .expect("tools are non-empty, so the toolset exists");
+            self.build_agent_program(toolset.definitions())?
+        };
         // A concurrent call may have won the race — both builds are identical.
-        let _ = self.program.set(built);
+        let _ = self.program.set(Arc::new(built));
         Ok(Arc::clone(self.program.get().expect("program set above")))
+    }
+
+    /// Builds the 1-node `agent` program for a tooled predictor: same leaf
+    /// name and signature as the `predict` form, plus a host-tool declaration
+    /// per attached tool. Stop behavior is the IR's [`StopSpec`](crate::ir::StopSpec)
+    /// default — `until_parse` with `max_turns = 8` — the closest IR
+    /// expression of the old LM-layer auto tool loop.
+    #[allow(clippy::result_large_err)]
+    fn build_agent_program(
+        &self,
+        definitions: &[rig::completion::ToolDefinition],
+    ) -> Result<Program, PredictError> {
+        let leaf = self.component_name();
+        let def = SignatureDef::of::<S>();
+        let mut b = ir::ProgramBuilder::new(leaf);
+        let model = b.model("default", crate::ir::module_build::unbound_model_config("default"));
+        let sid = b.sig_of::<S>();
+        b.add_types(&<S::Input as crate::typesys::Schema>::output_schema().types);
+
+        let mut tool_ids = Vec::with_capacity(definitions.len());
+        let mut seen = std::collections::HashSet::new();
+        for definition in definitions {
+            // Duplicate names keep the first tool, mirroring `ToolSet::build`.
+            if !seen.insert(definition.name.as_str()) {
+                continue;
+            }
+            let (tool_sig, tool_types) =
+                tool_signature_from_definition(&definition.name, &definition.parameters);
+            b.add_types(&tool_types);
+            let tool_sid = b.sig(tool_sig);
+            tool_ids.push(b.host_tool(&definition.name, &definition.description, tool_sid, &[]));
+        }
+
+        let mut ns = ir::agent(leaf, sid).model(model).tools(tool_ids);
+        for field in def.inputs.iter() {
+            ns = ns.bind(&field.name, ir::input(&field.name));
+        }
+        let mut root = ir::seq([ns]);
+        for field in def.outputs.iter() {
+            root = root.out(&field.name, ir::out(leaf, &field.name));
+        }
+        b.main(sid, root)
+            .map_err(|err| internal_error(format!("failed to build agent program: {err}")))
     }
 
     /// Builds the 1-node `predict` program: leaf name = the trace-name
@@ -309,7 +337,7 @@ impl<S: Signature> Predict<S> {
     /// signature = `SignatureDef::of::<S>()`, model = the `default` ref bound
     /// through [`RuntimeEnv`] at load.
     #[allow(clippy::result_large_err)]
-    fn build_program(&self) -> Result<Program, PredictError> {
+    fn build_predict_program(&self) -> Result<Program, PredictError> {
         let leaf = self.component_name();
         let def = SignatureDef::of::<S>();
         let mut b = ir::ProgramBuilder::new(leaf);
@@ -436,9 +464,13 @@ impl<S: Signature> Predict<S> {
     }
 
     /// The runtime environment a load binds against: the resolved model under
-    /// the `default` ref.
+    /// the `default` ref, plus every attached tool bound as a host tool.
     fn runtime_env(&self, lm: &Arc<crate::core::LM>) -> RuntimeEnv {
-        RuntimeEnv::new().bind_model("default", Arc::clone(lm))
+        let mut env = RuntimeEnv::new().bind_model("default", Arc::clone(lm));
+        for tool in &self.tools {
+            env = env.bind_host_tool(&tool.name(), Arc::clone(tool));
+        }
+        env
     }
 
     /// Builds the first-turn chat from the signature, demos, and input.
@@ -450,13 +482,20 @@ impl<S: Signature> Predict<S> {
     /// The system message and demo turns are formatted once per (instruction,
     /// demos) configuration and cached on the instance — only the live user
     /// message is formatted per call.
+    ///
+    /// Part of the conversation seam
+    /// (see [`call_and_parse`](Predict::call_and_parse)).
+    // TODO(dsrs-phase4-conversation): fold the caller-owned-chat seam into the
+    // interpreter once it grows a conversation-in/conversation-out surface.
     #[allow(clippy::result_large_err)]
     pub fn build_chat(&self, input: &S::Input) -> Result<Chat, PredictError>
     where
         S::Input: Schema,
     {
         let prefix = self.prompt_prefix()?;
-        let user = ChatAdapter.format_user_message_typed::<S>(input);
+        let input_map = json_map_from_input::<S>(input)
+            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+        let user = ChatAdapter.format_input_def(SignatureDef::of::<S>(), &input_map);
 
         let mut messages = Vec::with_capacity(prefix.len() + 1);
         messages.extend(prefix.iter().cloned());
@@ -489,32 +528,22 @@ impl<S: Signature> Predict<S> {
     where
         S::Input: Schema,
     {
-        let chat_adapter = ChatAdapter;
-        let system = match chat_adapter
-            .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
-        {
-            Ok(system) => system,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "internal".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
+        let def = SignatureDef::of::<S>();
+        let types = SignatureDef::types_of::<S>();
+        let system =
+            ChatAdapter.build_system_def(def, types, self.instruction_override.as_deref());
         trace!(system_len = system.len(), "typed system prompt formatted");
 
         let mut messages = Vec::with_capacity(1 + self.demos.len() * 2);
         messages.push(Message::system(system));
         for demo in &self.demos {
-            messages.push(Message::user(
-                chat_adapter.format_user_message_typed::<S>(&demo.input),
-            ));
-            messages.push(Message::assistant(
-                chat_adapter.format_assistant_message_typed::<S>(&demo.output),
-            ));
+            let input = json_map_from_input::<S>(&demo.input)
+                .map_err(|err| internal_error(format!("failed to serialize demo input: {err}")))?;
+            let output = json_map_from_output::<S>(&demo.output).map_err(|err| {
+                internal_error(format!("failed to serialize demo output: {err}"))
+            })?;
+            messages.push(Message::user(ChatAdapter.format_input_def(def, &input)));
+            messages.push(Message::assistant(ChatAdapter.format_output_def(def, &output)));
         }
         Ok(messages)
     }
@@ -561,6 +590,12 @@ impl<S: Signature> Predict<S> {
     /// Every turn parses with the same `[[ ## field ## ]]` protocol; the caller
     /// is responsible for including format instructions in follow-up messages if
     /// the model needs reminding of the output format.
+    ///
+    /// This seam is a compat shim on the LM-layer call path: the interpreter
+    /// has no conversation-in/conversation-out surface yet, so caller-owned
+    /// chats (and the caller-managed tool pattern built on them) stay here.
+    // TODO(dsrs-phase4-conversation): fold this seam into the interpreter
+    // once it can accept and return a caller-owned conversation.
     pub async fn call_and_parse(
         &self,
         chat: Chat,
@@ -633,6 +668,10 @@ impl<S: Signature> Predict<S> {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
+        // TODO(dsrs-phase4-caller-managed): this LM-layer tool loop only
+        // serves the conversation seam; typed `call`s with tools run through
+        // the interpreter's AgentLoop. Fold this into the interpreter when it
+        // can express caller-managed conversations.
         let toolset = self.cached_toolset().await;
         let empty_toolset = ToolSet::default();
         let toolset_ref = toolset.as_deref().unwrap_or(&empty_toolset);
@@ -680,13 +719,15 @@ impl<S: Signature> Predict<S> {
             events,
         } = response;
 
-        let chat_adapter = ChatAdapter;
         let raw_response = output.content();
         let lm_usage = usage;
 
-        let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&output) {
+        let def = SignatureDef::of::<S>();
+        let types = SignatureDef::types_of::<S>();
+        let (output_map, def_metas) = match ChatAdapter.parse_output_def(def, types, &output) {
             Ok(parsed) => parsed,
             Err(err) => {
+                let err = translate_parse_error::<S>(err);
                 let failed_fields = err.fields();
                 debug!(
                     failed_fields = failed_fields.len(),
@@ -716,12 +757,37 @@ impl<S: Signature> Predict<S> {
             }
         };
 
+        let typed_output: S::Output = match typed_output_from_map::<S>(&output_map, &raw_response)
+        {
+            Ok(typed) => typed,
+            Err(err) => {
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events,
+                        raw_output: Some(raw_response.clone()),
+                        output: None,
+                        usage: lm_usage,
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Parse,
+                            message: err.to_string(),
+                        }),
+                    });
+                }
+                return Err(PredictError::Parse {
+                    source: err,
+                    raw_response,
+                    lm_usage,
+                });
+            }
+        };
+        let field_metas = translate_field_meta::<S>(&def_metas);
+
         let span_id = guard.as_ref().map(|guard| guard.id());
         if let Some(guard) = guard {
             guard.finish(crate::trace::SpanOutcome {
                 events,
                 raw_output: Some(raw_response.clone()),
-                output: json_map_from_output::<S>(&typed_output).ok(),
+                output: Some(output_map),
                 usage: lm_usage,
                 error: None,
             });
@@ -1032,6 +1098,167 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// Tool schema projection (JSON Schema → SignatureDef)
+// ---------------------------------------------------------------------------
+
+/// Best-effort projection of a rig tool's JSON-Schema `parameters` object
+/// into a tool [`SignatureDef`] (input side) plus the class/enum definitions
+/// it references. The interpreter regenerates the model-facing schema from
+/// this signature via [`ir::input_schema_of`](crate::ir::input_schema_of);
+/// JSON-Schema features outside [`FieldType`](crate::typesys::FieldType)
+/// (open `additionalProperties`, `oneOf`, per-property formats, …) degrade to
+/// their closest `FieldType` equivalent.
+fn tool_signature_from_definition(
+    tool_name: &str,
+    parameters: &Value,
+) -> (SignatureDef, crate::typesys::TypeTable) {
+    let mut types = crate::typesys::TypeTable::default();
+    let empty = Map::new();
+    let properties = parameters
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let required: Vec<&str> = parameters
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+
+    let mut inputs = Vec::with_capacity(properties.len());
+    for (name, schema) in properties {
+        let token = format!("{tool_name}_{name}");
+        let mut ty = field_type_from_json_schema(&token, schema, &mut types);
+        if !required.contains(&name.as_str()) {
+            ty = crate::typesys::FieldType::optional(ty);
+        }
+        let mut field = ir::FieldDef::new(name, ty);
+        if let Some(docs) = schema.get("description").and_then(Value::as_str) {
+            field = field.with_docs(docs);
+        }
+        inputs.push(field);
+    }
+
+    let def = SignatureDef {
+        name: format!("{tool_name}_tool").into(),
+        instruction: "".into(),
+        inputs: inputs.into_boxed_slice(),
+        // The output side is unused for host tools (results come back as raw
+        // strings); a single string field keeps the signature well-formed.
+        outputs: Box::new([ir::FieldDef::new(
+            "result",
+            crate::typesys::FieldType::String,
+        )]),
+    };
+    (def, types)
+}
+
+fn field_type_from_json_schema(
+    token: &str,
+    schema: &Value,
+    types: &mut crate::typesys::TypeTable,
+) -> crate::typesys::FieldType {
+    use crate::typesys::FieldType;
+
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        let items = any_of
+            .iter()
+            .enumerate()
+            .map(|(i, sub)| field_type_from_json_schema(&format!("{token}_{i}"), sub, types))
+            .collect();
+        return FieldType::Union(items);
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let names: Vec<String> = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !names.is_empty() {
+            types.enums.insert(
+                token.to_string(),
+                crate::typesys::EnumDef {
+                    internal_name: token.to_string(),
+                    rendered_name: token.to_string(),
+                    docs: None,
+                    values: names
+                        .into_iter()
+                        .map(|name| crate::typesys::EnumValueDef {
+                            rendered_name: name.clone(),
+                            name,
+                            docs: None,
+                        })
+                        .collect(),
+                },
+            );
+            return FieldType::Enum(token.to_string());
+        }
+    }
+    match schema.get("type").and_then(Value::as_str) {
+        Some("string") => FieldType::String,
+        Some("integer") => FieldType::Int,
+        Some("number") => FieldType::Float,
+        Some("boolean") => FieldType::Bool,
+        Some("array") => FieldType::List(Box::new(
+            schema
+                .get("items")
+                .map(|items| field_type_from_json_schema(&format!("{token}_items"), items, types))
+                .unwrap_or(FieldType::String),
+        )),
+        Some("object") => {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                let required: Vec<&str> = schema
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .map(|entries| entries.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                let fields = properties
+                    .iter()
+                    .map(|(name, sub)| {
+                        let mut ty =
+                            field_type_from_json_schema(&format!("{token}_{name}"), sub, types);
+                        if !required.contains(&name.as_str()) {
+                            ty = crate::typesys::FieldType::optional(ty);
+                        }
+                        crate::typesys::FieldDef {
+                            name: name.clone(),
+                            rendered_name: name.clone(),
+                            field_type: ty,
+                            docs: sub
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            constraints: Vec::new(),
+                        }
+                    })
+                    .collect();
+                types.classes.insert(
+                    token.to_string(),
+                    crate::typesys::ClassDef {
+                        internal_name: token.to_string(),
+                        rendered_name: token.to_string(),
+                        docs: None,
+                        fields,
+                        constraints: Vec::new(),
+                    },
+                );
+                FieldType::Class(token.to_string())
+            } else {
+                let inner = match schema.get("additionalProperties") {
+                    Some(additional) if additional.is_object() => field_type_from_json_schema(
+                        &format!("{token}_value"),
+                        additional,
+                        types,
+                    ),
+                    _ => FieldType::String,
+                };
+                FieldType::Map(Box::new(FieldType::String), Box::new(inner))
+            }
+        }
+        _ => FieldType::String,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Interpreter boundary: RunError → PredictError, RunOutput → Predicted
 // ---------------------------------------------------------------------------
 
@@ -1045,6 +1272,37 @@ fn internal_error(message: String) -> PredictError {
             source: None,
         },
     }
+}
+
+/// Deserializes the canonical output map into the typed output struct —
+/// failure is the historical `ParseError::ExtractionFailed` shape.
+fn typed_output_from_map<S: Signature>(
+    output_map: &Map<String, Value>,
+    raw_response: &str,
+) -> std::result::Result<S::Output, ParseError> {
+    serde_json::from_value(Value::Object(output_map.clone())).map_err(|err| {
+        ParseError::ExtractionFailed {
+            field: "<all>".to_string(),
+            raw_response: raw_response.to_string(),
+            reason: err.to_string(),
+        }
+    })
+}
+
+/// Re-keys def-lane [`FieldMeta`](crate::FieldMeta) entries (canonical
+/// `FieldDef::name`s) to the static lane's `rust_name` keying, preserving
+/// schema field order — the user-visible `CallMetadata` contract.
+fn translate_field_meta<S: Signature>(
+    leaf_meta: &IndexMap<String, crate::FieldMeta>,
+) -> IndexMap<String, crate::FieldMeta> {
+    let mut field_meta = IndexMap::new();
+    for field in S::schema().output_fields() {
+        let leaf_name = field.path().iter().last().unwrap_or(field.lm_name);
+        if let Some(meta) = leaf_meta.get(leaf_name) {
+            field_meta.insert(field.rust_name.clone(), meta.clone());
+        }
+    }
+    field_meta
 }
 
 /// The canonical (leaf) name of an output field → the static lane's
@@ -1147,29 +1405,34 @@ where
     S::Output: Schema,
 {
     let leaf = run.leaves.into_iter().next();
-    let (raw_response, lm_usage, span_id, leaf_meta) = match leaf {
-        Some(leaf) => (leaf.raw_response, leaf.usage, leaf.span_id, leaf.field_meta),
-        None => (String::new(), LmUsage::default(), None, IndexMap::new()),
+    let (raw_response, lm_usage, span_id, leaf_meta, tool_calls, tool_executions) = match leaf {
+        Some(leaf) => (
+            leaf.raw_response,
+            leaf.usage,
+            leaf.span_id,
+            leaf.field_meta,
+            leaf.tool_calls,
+            leaf.tool_executions,
+        ),
+        None => (
+            String::new(),
+            LmUsage::default(),
+            None,
+            IndexMap::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
     };
 
     let typed: S::Output =
-        serde_json::from_value(Value::Object(run.output)).map_err(|err| PredictError::Parse {
-            source: ParseError::ExtractionFailed {
-                field: "<all>".to_string(),
+        typed_output_from_map::<S>(&run.output, &raw_response).map_err(|err| {
+            PredictError::Parse {
+                source: err,
                 raw_response: raw_response.clone(),
-                reason: err.to_string(),
-            },
-            raw_response: raw_response.clone(),
-            lm_usage,
+                lm_usage,
+            }
         })?;
-
-    let mut field_meta = IndexMap::new();
-    for field in S::schema().output_fields() {
-        let leaf_name = field.path().iter().last().unwrap_or(field.lm_name);
-        if let Some(meta) = leaf_meta.get(leaf_name) {
-            field_meta.insert(field.rust_name.clone(), meta.clone());
-        }
-    }
+    let field_meta = translate_field_meta::<S>(&leaf_meta);
 
     let checks_total = field_meta
         .values()
@@ -1188,8 +1451,8 @@ where
     let metadata = CallMetadata::new(
         raw_response,
         lm_usage,
-        Vec::new(),
-        Vec::new(),
+        tool_calls,
+        tool_executions,
         span_id,
         field_meta,
     );
