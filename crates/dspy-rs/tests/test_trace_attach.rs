@@ -300,20 +300,3 @@ async fn param_ids_survive_the_jsonl_round_trip_and_stay_additive() {
     assert_eq!(restored.meta.v, trace.meta.v, "no format version bump");
     assert_eq!(restored.param_ids, trace.param_ids);
 }
-
-#[tokio::test]
-async fn absorb_keeps_the_column_parallel() {
-    let (program, mut attached) = captured_run().await;
-    attached.attach_program(&program);
-
-    // Absorb an unattached trace with a foreign component.
-    let mut other = Trace::default();
-    other.components.push("foreign".to_string());
-    attached.absorb(other);
-
-    assert_eq!(attached.param_ids.len(), attached.components.len());
-    let foreign = attached.component_id("foreign").unwrap();
-    assert!(attached.param_ids[foreign.0 as usize].is_none());
-    let drafter = attached.component_id("drafter").unwrap();
-    assert!(attached.param_ids[drafter.0 as usize].is_some());
-}

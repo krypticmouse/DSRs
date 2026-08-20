@@ -103,11 +103,6 @@ async fn capture_records_spans_with_component_names_and_seq() {
     assert_eq!(trace.for_component("refiner").count(), 1);
     assert_eq!(trace.for_component("missing").count(), 0);
 
-    // Sequential links: each span points at its predecessor.
-    assert!(trace.spans[0].links.is_empty());
-    assert_eq!(trace.spans[1].links, vec![trace.spans[0].id]);
-    assert_eq!(trace.spans[2].links, vec![trace.spans[1].id]);
-
     // Prefix interning: both drafter calls share one prefix entry (system +
     // demo turns); the refiner has its own.
     let d0 = drafter_spans[0];

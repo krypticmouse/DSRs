@@ -129,16 +129,15 @@ async fn main() -> Result<()> {
     }
 
     // Each Predict call records one span: component name, invocation seq,
-    // typed input/output as JSON, a link to the previous span, and timing.
+    // typed input/output as JSON, and timing.
     // Failed calls stay visible with the prompt recorded and output absent.
     println!("Trace {} spans: {}", trace.meta.trace_id, trace.spans.len());
     for span in &trace.spans {
         println!(
-            "Span {}: component={:?} seq={} links={:?} events={}",
+            "Span {}: component={:?} seq={} events={}",
             span.id.0,
             trace.component_name(span.component),
             span.seq,
-            span.links,
             span.events.len(),
         );
         if let Some(input) = &span.input {
