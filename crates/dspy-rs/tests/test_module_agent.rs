@@ -66,6 +66,20 @@ fn shout(text: String) -> String {
 #[agent(tools(shout), max_turns = 3, budget(tokens = 50_000, on_exhausted = finalize))]
 fn research(question: String) -> String;
 
+/// Record the final report.
+#[tool]
+fn submit(report: String) -> String {
+    report
+}
+
+/// Compile a report; call submit when done.
+#[agent(tools(shout, submit), stop_tools(submit), max_turns = 4)]
+fn report(question: String) -> String;
+
+/// Answer immediately — one turn, fail when exhausted.
+#[agent(tools(shout), max_turns = 1)]
+fn quick(question: String) -> String;
+
 #[dspy_rs::Schema]
 #[derive(Debug)]
 pub struct AOut {
@@ -161,11 +175,61 @@ async fn agent_runs_in_module_and_standalone() {
         "the host tool executed inside the loop: {events:?}"
     );
 
-    // Standalone: the same fn, static-lane tool loop, same tool binding.
+    // Standalone: the same fn, the same 1-node AgentLoop program, same tool
+    // binding — and the same attribute options (see the dedicated tests below).
     client.push_response(tool_call("shout", json!({"text": "again"})));
     client.push_response(text_fields(&[("research", "LOUDER")]));
     let predicted = research("standalone?".to_string())
         .await
         .expect("standalone agent call succeeds");
     assert_eq!(predicted.research, "LOUDER");
+}
+
+// ---------------------------------------------------------------------------
+// Standalone path honors the `#[agent(...)]` options (phase 4)
+// ---------------------------------------------------------------------------
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn standalone_honors_stop_tools() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let (lm, _client) = make_test_lm(vec![
+        // A `submit` call must end the loop with its args as the raw final
+        // output — no tool execution, no second LM turn (the queue has none).
+        tool_call("submit", json!({"report": "FINAL"})),
+    ])
+    .await;
+    configure(lm);
+
+    let predicted = report("summarize".to_string())
+        .await
+        .expect("stop tool ends the loop with its args as the output");
+    assert_eq!(predicted.report, "FINAL");
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn standalone_honors_max_turns() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let (lm, _client) = make_test_lm(vec![
+        // One tool turn spends the whole `max_turns = 1` allowance; the old
+        // ignored-options path would take a second LM turn and fail on the
+        // empty response queue instead.
+        tool_call("shout", json!({"text": "stall"})),
+    ])
+    .await;
+    configure(lm);
+
+    let err = quick("now".to_string())
+        .await
+        .expect_err("one tool turn exhausts max_turns = 1");
+    let message = format!("{err:?}");
+    assert!(
+        message.contains("budget exhausted"),
+        "max_turns bounded the loop: {message}"
+    );
+    assert!(
+        !message.contains("queue is empty"),
+        "the loop must not take a second LM turn: {message}"
+    );
 }

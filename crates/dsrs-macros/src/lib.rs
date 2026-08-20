@@ -52,8 +52,13 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `context(max_history_turns = N, tool_result_max_bytes = N, playbook = "…")`.
 ///
 /// Inside `#[module]` bodies this lowers to a first-class `AgentLoop` node.
-/// Called standalone it runs the static-lane tool loop (`Predict` +
-/// `ToolLoopMode::Auto`) — loop options apply to the lowered form only.
+/// Called standalone it executes the same 1-node `AgentLoop` program, with
+/// the loop options honored: `max_turns`/`stop_tools`/`until_parse` land in
+/// the node's `StopSpec`, `budget` in its `NodeBudget`, `context` in its
+/// `ContextPolicy`. The exception is `model`: model refs bind only inside a
+/// `#[module]` program, so setting `model = "…"` removes the standalone fn —
+/// calling it is a compile error rather than a silent fallback to the
+/// globally configured LM.
 #[proc_macro_attribute]
 pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     tool_agent::expand_agent(attr, item)

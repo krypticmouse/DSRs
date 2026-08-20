@@ -16,6 +16,31 @@ use crate::{
     ParseError, PredictError, Predicted, Schema, SignatureSchema,
 };
 
+/// Loop options for a tooled predictor's 1-node `agent` program.
+///
+/// The typed carrier for `#[agent(...)]` attribute options on the standalone
+/// call path: `stop_tools`/`max_turns`/`until_parse` land in the node's
+/// [`StopSpec`](crate::ir::StopSpec), `budget` in its
+/// [`NodeBudget`](crate::ir::NodeBudget), and `context` in its
+/// [`ContextPolicy`](crate::ir::ContextPolicy) slot. `None`s fall back to the
+/// IR defaults ([`StopSpec::default`](crate::ir::StopSpec): 8 turns,
+/// `until_parse = true`, no stop tools).
+///
+/// Only meaningful on a predictor with tools attached
+/// ([`PredictBuilder::with_tools`]); ignored otherwise.
+#[derive(Clone, Debug, Default)]
+pub struct AgentLoopSpec {
+    /// Names (⊆ the attached tools) whose call ends the loop; the call's args
+    /// become the raw final output (the "submit answer" pattern).
+    pub stop_tools: Vec<String>,
+    /// `None` = the IR default (8).
+    pub max_turns: Option<u32>,
+    /// `None` = the IR default (`true`).
+    pub until_parse: Option<bool>,
+    pub budget: crate::ir::NodeBudget,
+    pub context: crate::ir::ContextPolicy,
+}
+
 /// A typed input/output pair for few-shot prompting.
 ///
 /// Demos are formatted as user/assistant exchanges in the prompt, showing the LM
@@ -90,6 +115,11 @@ impl<S: Signature> Demo<S> {
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
+    /// Loop options applied to the 1-node `agent` program when tools are
+    /// attached (stop spec, node budget, context policy). Settable only at
+    /// build time, like the tools themselves.
+    #[facet(skip, opaque)]
+    agent_spec: Option<AgentLoopSpec>,
     #[facet(skip, opaque)]
     demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
@@ -137,6 +167,7 @@ impl<S: Signature> Predict<S> {
     pub fn new() -> Self {
         Self {
             tools: Vec::new(),
+            agent_spec: None,
             demos: Vec::new(),
             instruction_override: None,
             lm: None,
@@ -257,9 +288,12 @@ impl<S: Signature> Predict<S> {
 
     /// Builds the 1-node `agent` program for a tooled predictor: same leaf
     /// name and signature as the `predict` form, plus a host-tool declaration
-    /// per attached tool. Stop behavior is the IR's [`StopSpec`](crate::ir::StopSpec)
-    /// default — `until_parse` with `max_turns = 8` — the closest IR
-    /// expression of the old LM-layer auto tool loop.
+    /// per attached tool. Loop behavior comes from the attached
+    /// [`AgentLoopSpec`] when one was built in
+    /// ([`PredictBuilder::with_agent_spec`]); otherwise it is the IR's
+    /// [`StopSpec`](crate::ir::StopSpec) default — `until_parse` with
+    /// `max_turns = 8` — the closest IR expression of the old LM-layer auto
+    /// tool loop.
     #[allow(clippy::result_large_err)]
     fn build_agent_program(
         &self,
@@ -273,6 +307,7 @@ impl<S: Signature> Predict<S> {
         b.add_types(&<S::Input as crate::typesys::Schema>::output_schema().types);
 
         let mut tool_ids = Vec::with_capacity(definitions.len());
+        let mut tool_names = Vec::with_capacity(definitions.len());
         let mut seen = std::collections::HashSet::new();
         for definition in definitions {
             // Duplicate names keep the first tool, mirroring `ToolSet::build`.
@@ -284,9 +319,33 @@ impl<S: Signature> Predict<S> {
             b.add_types(&tool_types);
             let tool_sid = b.sig(tool_sig);
             tool_ids.push(b.host_tool(&definition.name, &definition.description, tool_sid, &[]));
+            tool_names.push(definition.name.clone());
         }
 
-        let mut ns = ir::agent(leaf, sid).model(model).tools(tool_ids);
+        let mut ns = ir::agent(leaf, sid).model(model);
+        if let Some(spec) = &self.agent_spec {
+            let mut stop_ids = Vec::with_capacity(spec.stop_tools.len());
+            for name in &spec.stop_tools {
+                let position = tool_names.iter().position(|n| n == name).ok_or_else(|| {
+                    internal_error(format!(
+                        "stop tool `{name}` is not among the attached tools"
+                    ))
+                })?;
+                stop_ids.push(tool_ids[position]);
+            }
+            ns = ns.stop_tools(stop_ids);
+            if let Some(turns) = spec.max_turns {
+                if turns == 0 {
+                    return Err(internal_error("agent `max_turns` must be > 0".to_string()));
+                }
+                ns = ns.max_turns(turns);
+            }
+            if let Some(until_parse) = spec.until_parse {
+                ns = ns.until_parse(until_parse);
+            }
+            ns = ns.budget(spec.budget.clone()).context(spec.context.clone());
+        }
+        let mut ns = ns.tools(tool_ids);
         for field in def.inputs.iter() {
             ns = ns.bind(&field.name, ir::input(&field.name));
         }
@@ -934,6 +993,7 @@ impl<S: Signature> Default for Predict<S> {
 /// ```
 pub struct PredictBuilder<S: Signature> {
     tools: Vec<Arc<dyn ToolDyn>>,
+    agent_spec: Option<AgentLoopSpec>,
     demos: Vec<Demo<S>>,
     instruction_override: Option<String>,
     lm: Option<Arc<crate::core::LM>>,
@@ -945,6 +1005,7 @@ impl<S: Signature> PredictBuilder<S> {
     fn new() -> Self {
         Self {
             tools: Vec::new(),
+            agent_spec: None,
             demos: Vec::new(),
             instruction_override: None,
             lm: None,
@@ -983,6 +1044,14 @@ impl<S: Signature> PredictBuilder<S> {
         self
     }
 
+    /// Sets loop options ([`AgentLoopSpec`]) for the 1-node `agent` program a
+    /// tooled predictor executes: stop tools, max turns, until-parse, node
+    /// budget, and context policy. No effect without tools.
+    pub fn with_agent_spec(mut self, spec: AgentLoopSpec) -> Self {
+        self.agent_spec = Some(spec);
+        self
+    }
+
     /// Overrides the signature's default instruction for this predictor.
     pub fn instruction(mut self, instruction: impl Into<String>) -> Self {
         self.instruction_override = Some(instruction.into());
@@ -1012,6 +1081,7 @@ impl<S: Signature> PredictBuilder<S> {
     pub fn build(self) -> Predict<S> {
         let mut predict = Predict {
             tools: self.tools,
+            agent_spec: self.agent_spec,
             demos: Vec::new(),
             instruction_override: None,
             lm: self.lm,
