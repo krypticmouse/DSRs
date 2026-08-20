@@ -1,0 +1,5 @@
+error: `max_turns` must be > 0 (the loop is mandatory and bounded)
+  --> tests/ui/agent_zero_max_turns.rs:12:35
+   |
+12 | #[agent(tools(shout), max_turns = 0)]
+   |                                   ^

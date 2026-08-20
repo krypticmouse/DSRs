@@ -1,7 +1,6 @@
 //! The graph-edit calculus (`ir::edit`): typed structural edits over the IR —
 //! application, apply/validate failure modes, garbage collection, the
 //! `legal_edits` menu, and overlay migration across structural change.
-#![cfg(feature = "ir")]
 
 use std::num::NonZeroU32;
 

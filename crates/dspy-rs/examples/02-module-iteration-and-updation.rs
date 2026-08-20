@@ -9,10 +9,7 @@ cargo run --example 02-module-iteration-and-updation
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    COPRO, LM, Eval, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
-};
+use dspy_rs::prelude::*;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {

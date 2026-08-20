@@ -98,7 +98,6 @@ impl ToolSet {
     ///
     /// Errors if two tool names mangle to the same JS identifier (see
     /// [`dsrs_tools::js_identifier`]).
-    #[cfg(feature = "code-mode")]
     pub async fn code_mode(
         tools: Vec<Arc<dyn ToolDyn>>,
         config: dsrs_tools::SandboxConfig,

@@ -52,7 +52,7 @@ The bodyless-fn rules match `#[predict]`: no `async`, no generics, no `self`, pl
 
 | Option | Form | Meaning |
 |---|---|---|
-| `model` | `model = "@name"` | Model reference for the loop. |
+| `model` | `model = "@name"` | Model reference for the loop. Binds only inside `#[module]` programs; setting it removes the standalone fn (calling one is a compile error). |
 | `tools` | `tools(a, b)` | The `#[tool]` functions the loop may call, in order. |
 | `stop_tools` | `stop_tools(a)` | Tools whose call ends the loop. Each must also appear in `tools(...)`. |
 | `max_turns` | `max_turns = N` | Turn bound for the lowered loop node (IR default is 8 when omitted). |
@@ -80,7 +80,7 @@ When the model calls a stop tool, the loop ends right there. The arguments of th
 
 ## Standalone or inside a module
 
-`#[agent]` generates a standalone `async fn` returning `Result<Predicted<research::SigOutput>, PredictError>`. Called directly, it runs the static-lane tool loop (`Predict` with `ToolLoopMode::Auto`). Inside a `#[module]` body, the same call lowers to a first-class `AgentLoop` node in the program graph, and the loop options (`max_turns`, `budget`, `context`) apply only to this lowered form.
+`#[agent]` generates a standalone `async fn` returning `Result<Predicted<research::SigOutput>, PredictError>`. Called directly, it executes the same 1-node `AgentLoop` program the `#[module]` lowering produces, with the loop options honored on both paths: `max_turns`/`stop_tools`/`until_parse` land in the node's `StopSpec`, `budget` in its `NodeBudget`, and `context` in its `ContextPolicy`. The one exception is `model`: model refs bind only inside a `#[module]` program, so setting `model = "…"` removes the standalone fn — calling it is a compile error rather than a silent fallback to the globally configured LM.
 
 ```rust
 use dspy_rs::module;

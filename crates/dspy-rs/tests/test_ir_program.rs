@@ -1,6 +1,5 @@
 //! IR-2 (RFC 0002 §2): program construction, load-time validation, parameter
 //! addressing, overlays, and the canonical serde round trip.
-#![cfg(feature = "ir")]
 
 use dspy_rs::LMConfig;
 use dspy_rs::ir::{

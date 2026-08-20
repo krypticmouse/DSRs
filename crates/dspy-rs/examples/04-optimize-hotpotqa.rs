@@ -9,11 +9,7 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    COPRO, DataLoader, Example, LM, Eval, Module, ModuleState, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
-    configure, evaluate_trainset, init_tracing,
-};
+use dspy_rs::prelude::*;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {

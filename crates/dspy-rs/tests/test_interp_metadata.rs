@@ -4,7 +4,6 @@
 //! parity data the historical static lane kept, so a typed
 //! `Predict<S>` routed through the interpreter loses none of `Predicted`'s
 //! metadata contract.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 

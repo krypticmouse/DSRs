@@ -269,7 +269,14 @@ fn parse_agent_attr(attr: TokenStream2) -> syn::Result<AgentAttrs> {
                 out.model = Some(model_ref_value(&nv.value)?);
             }
             Meta::NameValue(nv) if nv.path.is_ident("max_turns") => {
-                out.max_turns = Some(int_value(&nv.value)?);
+                let turns: u32 = int_value(&nv.value)?;
+                if turns == 0 {
+                    return Err(syn::Error::new_spanned(
+                        &nv.value,
+                        "`max_turns` must be > 0 (the loop is mandatory and bounded)",
+                    ));
+                }
+                out.max_turns = Some(turns);
             }
             Meta::NameValue(nv) if nv.path.is_ident("until_parse") => {
                 let Expr::Lit(ExprLit {
@@ -492,6 +499,68 @@ fn expand_agent_inner(
         None => quote! { ::core::option::Option::None },
     };
 
+    // The standalone fn executes the same 1-node `AgentLoop` program the
+    // `#[module]` lowering produces, so the loop options are honored on both
+    // paths. The one exception is `model`: model refs bind only inside a
+    // `#[module]` program's model table, and silently falling back to the
+    // globally configured LM would misreport which model ran — so with
+    // `model = "…"` set, no standalone fn is generated at all and calling it
+    // is a compile error ("expected function, found module").
+    let standalone = if attrs.model.is_some() {
+        quote! {}
+    } else {
+        quote! {
+            #(#doc_attrs)*
+            ///
+            /// Standalone calls execute the same 1-node `AgentLoop` program
+            /// the `#[module]` lowering produces, with the attribute options
+            /// honored: `max_turns`/`stop_tools`/`until_parse` land in the
+            /// node's `StopSpec`, `budget` in its `NodeBudget`, and `context`
+            /// in its `ContextPolicy`. The predictor (and thus the tool set)
+            /// is built once, on first call.
+            #vis async fn #fn_name(
+                #(#arg_names: #arg_types),*
+            ) -> ::core::result::Result<
+                #runtime::Predicted<#fn_name::SigOutput>,
+                #runtime::PredictError,
+            > {
+                static __PREDICT: ::std::sync::OnceLock<
+                    ::std::sync::Arc<#runtime::Predict<#fn_name::Sig>>,
+                > = ::std::sync::OnceLock::new();
+                let predictor = __PREDICT.get_or_init(|| {
+                    let step = #fn_name::__dsrs_step();
+                    let agent = step
+                        .agent
+                        .expect("#[agent] steps always carry agent opts");
+                    let spec = #runtime::predictors::AgentLoopSpec {
+                        stop_tools: agent
+                            .stop_tools
+                            .iter()
+                            .map(|name| ::std::string::String::from(*name))
+                            .collect(),
+                        max_turns: agent.max_turns,
+                        until_parse: agent.until_parse,
+                        budget: agent.budget.clone(),
+                        context: agent.context.clone(),
+                    };
+                    let tools: ::std::vec::Vec<
+                        ::std::sync::Arc<dyn #runtime::__macro_support::rig::tool::ToolDyn>,
+                    > = agent.tools.into_iter().map(|t| t.dyn_tool).collect();
+                    ::std::sync::Arc::new(
+                        #runtime::Predict::<#fn_name::Sig>::builder()
+                            .named(#fn_name_str)
+                            .with_tools(tools)
+                            .with_agent_spec(spec)
+                            .build(),
+                    )
+                });
+                predictor
+                    .call(#fn_name::SigInput { #(#arg_names),* })
+                    .await
+            }
+        }
+    };
+
     Ok(quote! {
         #vis mod #fn_name {
             #![allow(non_camel_case_types, unused_imports)]
@@ -537,40 +606,7 @@ fn expand_agent_inner(
             }
         }
 
-        #(#doc_attrs)*
-        ///
-        /// Standalone calls run the static-lane tool loop (`Predict` +
-        /// `ToolLoopMode::Auto`); loop options (`max_turns`, `budget`,
-        /// `context`) apply to the lowered `AgentLoop` node inside
-        /// `#[module]` programs.
-        #vis async fn #fn_name(
-            #(#arg_names: #arg_types),*
-        ) -> ::core::result::Result<
-            #runtime::Predicted<#fn_name::SigOutput>,
-            #runtime::PredictError,
-        > {
-            static __PREDICT: ::std::sync::OnceLock<
-                ::std::sync::Arc<#runtime::Predict<#fn_name::Sig>>,
-            > = ::std::sync::OnceLock::new();
-            let predictor = __PREDICT.get_or_init(|| {
-                let step = #fn_name::__dsrs_step();
-                let tools: ::std::vec::Vec<
-                    ::std::sync::Arc<dyn #runtime::__macro_support::rig::tool::ToolDyn>,
-                > = step
-                    .agent
-                    .map(|agent| agent.tools.into_iter().map(|t| t.dyn_tool).collect())
-                    .unwrap_or_default();
-                ::std::sync::Arc::new(
-                    #runtime::Predict::<#fn_name::Sig>::builder()
-                        .named(#fn_name_str)
-                        .with_tools(tools)
-                        .build(),
-                )
-            });
-            predictor
-                .call(#fn_name::SigInput { #(#arg_names),* })
-                .await
-        }
+        #standalone
     })
 }
 

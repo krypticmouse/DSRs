@@ -1,0 +1,5 @@
+error[E0423]: expected function, found module `research`
+  --> tests/ui/agent_model_standalone.rs:18:13
+   |
+18 |     let _ = research("hi".to_string()).await;
+   |             ^^^^^^^^ not a function

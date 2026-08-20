@@ -1,7 +1,6 @@
 //! IR-2 bridge leftovers (RFC 0002 §2.4 migration contract): `fx::Params` ↔
 //! `Overlay` bind/unbind, the `with_overlay` fx-lane scope, and the
 //! `ModuleState` ↔ `Overlay` serde projection.
-#![cfg(feature = "ir")]
 
 use dspy_rs::ir::{
     self, FieldType as T, Overlay, OverlayError, ParamValue, Program, ProgramBuilder, SignatureDef,

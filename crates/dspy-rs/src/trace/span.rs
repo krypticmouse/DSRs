@@ -219,7 +219,6 @@ pub struct Trace {
     /// [`attach_program`](Trace::attach_program) fills it; a `None` entry is
     /// a component the program has no leaf for (static-lane harnesses leave
     /// the whole column empty). Additive — no format version bump.
-    #[cfg(feature = "ir")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub param_ids: Vec<Option<Vec<crate::ir::ParamId>>>,
     pub models: Vec<ModelEntry>,
@@ -338,7 +337,6 @@ impl Trace {
     /// One addressing story: a span's `component` string == the leaf name ==
     /// the `ParamPath` prefix, so after attaching, spans join to optimizable
     /// slots without string surgery.
-    #[cfg(feature = "ir")]
     pub fn attach_program(&mut self, program: &crate::ir::Program) {
         let mut by_leaf: std::collections::HashMap<&str, Vec<crate::ir::ParamId>> =
             std::collections::HashMap::new();

@@ -1,3 +1,7 @@
+//! Exercises the CSV/Parquet/HF loaders, so the whole suite requires the
+//! (default-on) `data` feature.
+#![cfg(feature = "data")]
+
 use anyhow::{Result, anyhow};
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};

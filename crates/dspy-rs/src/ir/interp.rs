@@ -334,7 +334,6 @@ pub struct RuntimeEnv {
     /// the serialized program. `ToolKind` is also per-tool, while code mode
     /// collapses a whole loop's tool surface; and leaving the closed enum
     /// untouched keeps the `.dsrs` text format stable.
-    #[cfg(feature = "code-mode")]
     pub code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
@@ -377,7 +376,6 @@ impl RuntimeEnv {
     /// Enables Code Mode for every `AgentLoop` (see
     /// [`code_mode`](Self::code_mode)): tools are presented to the model as a
     /// JS API behind one `run_js` tool executing under `config`.
-    #[cfg(feature = "code-mode")]
     pub fn with_code_mode(mut self, config: dsrs_tools::SandboxConfig) -> Self {
         self.code_mode = Some(config);
         self
@@ -412,7 +410,6 @@ pub struct Interpreter {
     /// default code gene; overlay code variants register on first use.
     registered: tokio::sync::Mutex<HashMap<u64, String>>,
     /// Code Mode sandbox config (see [`RuntimeEnv::code_mode`]).
-    #[cfg(feature = "code-mode")]
     code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
@@ -496,7 +493,6 @@ impl Interpreter {
 
         // Code Mode: JS-identifier collisions among a loop's non-stop tool
         // names are a load-time refusal (nothing lazy, nothing at call time).
-        #[cfg(feature = "code-mode")]
         if env.code_mode.is_some() {
             for (_, node) in program.nodes.iter() {
                 let Node::AgentLoop(agent) = node else {
@@ -556,7 +552,6 @@ impl Interpreter {
             host_holes,
             sandbox,
             registered: tokio::sync::Mutex::new(registered),
-            #[cfg(feature = "code-mode")]
             code_mode: env.code_mode,
         })
     }
@@ -1237,7 +1232,6 @@ impl Interpreter {
         // Code Mode: collapse the non-stop tool surface into one `run_js`
         // definition (stop tools stay individual — the loop must see their
         // calls by name to end).
-        #[cfg(feature = "code-mode")]
         let code_mode = self
             .build_code_mode_surface(&at, n, &mut definitions, &sandbox_code, &stop_names)
             .await?;
@@ -1338,7 +1332,6 @@ impl Interpreter {
             meter: &meter,
             run_meter: &cx.meter,
             policy: &policy,
-            #[cfg(feature = "code-mode")]
             code_mode: code_mode.as_ref(),
         };
         let mut run = AgentRun::default();
@@ -1519,15 +1512,12 @@ impl Interpreter {
         lc: &AgentLoopCx<'_>,
         call: &rig::message::ToolCall,
     ) -> (String, Option<String>) {
-        #[cfg(feature = "code-mode")]
         let outcome: Result<String, String> = match lc.code_mode {
             Some(surface) if call.function.name == dsrs_tools::RUN_JS_TOOL_NAME => {
                 execute_code_mode_script(surface, &call.function.arguments).await
             }
             _ => self.dispatch_agent_tool(lc, call).await,
         };
-        #[cfg(not(feature = "code-mode"))]
-        let outcome = self.dispatch_agent_tool(lc, call).await;
         let (mut text, error) = match outcome {
             Ok(text) => (text, None),
             Err(message) => (message.clone(), Some(message)),
@@ -1610,7 +1600,6 @@ impl Interpreter {
     /// the *overlay-resolved* tool descriptions — `ToolDesc` genes keep
     /// flowing into the surface the model sees. Returns `None` when code
     /// mode is off or the loop has no non-stop tools.
-    #[cfg(feature = "code-mode")]
     async fn build_code_mode_surface(
         &self,
         at: &str,
@@ -1870,13 +1859,11 @@ struct AgentLoopCx<'a> {
     meter: &'a Arc<BudgetMeter>,
     run_meter: &'a Arc<BudgetMeter>,
     policy: &'a ContextPolicy,
-    #[cfg(feature = "code-mode")]
     code_mode: Option<&'a CodeModeSurface>,
 }
 
 /// One agent loop's Code Mode surface: the wrapped tool capabilities and the
 /// sandbox config `run_js` scripts execute under.
-#[cfg(feature = "code-mode")]
 struct CodeModeSurface {
     capabilities: Vec<dsrs_tools::Capability>,
     config: dsrs_tools::SandboxConfig,
@@ -1884,7 +1871,6 @@ struct CodeModeSurface {
 
 /// Executes one `run_js` call against the loop's Code Mode surface. Failures
 /// are conversational, like every agent tool failure.
-#[cfg(feature = "code-mode")]
 async fn execute_code_mode_script(
     surface: &CodeModeSurface,
     args: &Value,
