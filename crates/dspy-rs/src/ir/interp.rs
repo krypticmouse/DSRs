@@ -181,6 +181,9 @@ pub struct LeafOutcome {
     /// trace's [`ModelEntry::config_hash`](crate::trace::ModelEntry) for the
     /// same config.
     pub model_config_hash: u64,
+    /// The trace span this evaluation recorded, when a capture scope was
+    /// active — what `Predict` surfaces as `CallMetadata::span_id`.
+    pub span_id: Option<crate::trace::SpanId>,
 }
 
 /// Program output plus per-leaf metadata, returned by
@@ -229,7 +232,17 @@ pub enum RunError {
         source: LmError,
     },
     #[error("parse error at `{at}`")]
-    Parse { at: Box<str>, raw: String },
+    Parse {
+        at: Box<str>,
+        raw: String,
+        /// The structured def-lane parse failure, when the leaf's response
+        /// text was parsed (`Predict`/`AgentLoop` field parsing); `None` for
+        /// structural coercions with no section parse (stop-tool args, hole
+        /// outputs).
+        source: Option<Box<crate::ParseError>>,
+        /// Usage accumulated by the failing leaf evaluation.
+        usage: LmUsage,
+    },
     #[error("tool `{tool}` failed at `{at}`: {message}")]
     Tool {
         at: Box<str>,
@@ -856,6 +869,7 @@ impl Interpreter {
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
                     });
                 }
                 if let Some(guard) = guard {
@@ -937,6 +951,7 @@ impl Interpreter {
                         usage: response.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
                     });
                 }
                 if let Some(guard) = guard {
@@ -960,7 +975,12 @@ impl Interpreter {
                         response.usage,
                     ));
                 }
-                Err(RunError::Parse { at: at.into(), raw })
+                Err(RunError::Parse {
+                    at: at.into(),
+                    raw,
+                    source: Some(Box::new(err)),
+                    usage: response.usage,
+                })
             }
         }
     }
@@ -1381,10 +1401,12 @@ impl Interpreter {
                              `[[ ## field ## ]]` format."
                         )));
                     }
-                    Err(_) => {
+                    Err(err) => {
                         return Err(RunError::Parse {
                             at: lc.at.into(),
                             raw,
+                            source: Some(Box::new(err)),
+                            usage: *usage,
                         });
                     }
                 }
@@ -1432,9 +1454,11 @@ impl Interpreter {
         let raw = response.output.content();
         let output = ChatAdapter
             .parse_output_def(lc.def, &self.program.types, &response.output)
-            .map_err(|_| RunError::Parse {
+            .map_err(|err| RunError::Parse {
                 at: lc.at.into(),
                 raw: raw.clone(),
+                source: Some(Box::new(err)),
+                usage: *usage,
             })?
             .0;
         Ok((output, raw))
@@ -1897,6 +1921,8 @@ fn coerce_outputs(
         return Err(RunError::Parse {
             at: at.into(),
             raw: value.to_string(),
+            source: None,
+            usage: LmUsage::default(),
         });
     };
     let mut output = JsonMap::new();
@@ -1912,6 +1938,8 @@ fn coerce_outputs(
                 return Err(RunError::Parse {
                     at: at.into(),
                     raw: value.to_string(),
+                    source: None,
+                    usage: LmUsage::default(),
                 });
             }
         }
