@@ -3,13 +3,11 @@ use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Map, Value};
 use std::marker::PhantomData;
-use std::ops::ControlFlow;
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, trace};
 
-use crate as dsrs;
 use crate::core::lm::ToolSet;
-use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature, StateUpdate};
+use crate::core::{Module, PredictState, Signature};
 use crate::ir::{
     self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
 };
@@ -46,34 +44,6 @@ impl<S: Signature> Demo<S> {
     }
 }
 
-fn predict_dyn_visit<S>(
-    value: *mut (),
-    visitor: &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>,
-) -> ControlFlow<()>
-where
-    S: Signature,
-{
-    // SAFETY: this function is only called through the shape-local
-    // `dsrs::predict_accessor` payload attached to a shape with strict
-    // `Predict` identity (`type_identifier` + `module_path`).
-    let typed = unsafe { &mut *(value.cast::<Predict<S>>()) };
-    visitor(typed)
-}
-
-type VisitPredictorMutFn =
-    fn(*mut (), &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>) -> ControlFlow<()>;
-
-trait PredictAccessorProvider {
-    const VISIT_MUT: VisitPredictorMutFn;
-}
-
-impl<S> PredictAccessorProvider for S
-where
-    S: Signature,
-{
-    const VISIT_MUT: VisitPredictorMutFn = predict_dyn_visit::<S>;
-}
-
 /// The leaf module. The only thing in the system that actually calls the LM.
 ///
 /// One `Predict` = one prompt template = one LM call. It takes a [`Signature`]'s fields
@@ -84,16 +54,14 @@ where
 ///
 /// This is also the unit of optimization. When an optimizer tunes your program, it's
 /// adjusting `Predict` leaves: their demos (few-shot examples) and instructions.
-/// The optimizer's Facet walker discovers leaves automatically from struct fields —
-/// no `#[parameter]` annotations or manual traversal needed.
 ///
 /// # Optimizer discovery
 ///
-/// `Predict<S>` encodes shape-local discovery payloads:
-/// - strict shape identity (`type_identifier` + `module_path`) identifies the leaf
-/// - `dsrs::predict_accessor` stores the typed mutable accessor visitor
-///
-/// The optimizer walker consumes these through `visit_named_predictors_mut`.
+/// Modules declare their `Predict` leaves by name through the
+/// [`Predictors`](crate::Predictors) trait (see the `predictors!` macro);
+/// optimizers read each leaf through its [`PredictorInfo`](crate::PredictorInfo)
+/// view and inject candidates ambiently per call
+/// ([`fx::with_params`](crate::fx::with_params)) — never by mutating the leaf.
 /// There is no runtime registration side effect in `new()` or `build()`.
 ///
 /// ```no_run
@@ -119,9 +87,6 @@ where
 /// ```
 #[derive(facet::Facet)]
 #[facet(crate = facet, opaque)]
-#[facet(dsrs::predict_accessor = &PredictAccessorFns {
-    visit_mut: <S as PredictAccessorProvider>::VISIT_MUT,
-})]
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
@@ -193,9 +158,10 @@ impl<S: Signature> Predict<S> {
     /// The typed write path for optimizable state (instruction override + demos).
     ///
     /// This is the only place that assigns those fields and invalidates the
-    /// cached prompt prefix; the builder and the type-erased
-    /// `DynPredictor::apply_update` seam both funnel here. `None` leaves a
-    /// field untouched.
+    /// cached prompt prefix; the builder and the [`PredictorInfo::load_state`]
+    /// install seam both funnel here. `None` leaves a field untouched.
+    ///
+    /// [`PredictorInfo::load_state`]: crate::core::PredictorInfo::load_state
     fn apply_state(
         &mut self,
         instruction: Option<Option<String>>,
@@ -373,7 +339,7 @@ impl<S: Signature> Predict<S> {
             None
         } else {
             let state = PredictState {
-                demos: DynPredictor::demos_as_json(self),
+                demos: crate::core::PredictorInfo::demos_as_json(self),
                 instruction_override: self.instruction_override.clone(),
             };
             let minted =
@@ -1511,60 +1477,6 @@ where
     }
 }
 
-impl<S> DynPredictor for Predict<S>
-where
-    S: Signature,
-    S::Input: Schema,
-    S::Output: Schema,
-{
-    fn schema(&self) -> &SignatureSchema {
-        S::schema()
-    }
-
-    fn instruction(&self) -> String {
-        self.instruction_override
-            .clone()
-            .unwrap_or_else(|| S::instruction().to_string())
-    }
-
-    fn demos_as_json(&self) -> Vec<Map<String, Value>> {
-        self.demos
-            .iter()
-            .map(|example| {
-                json_from_demo::<S>(example)
-                    .expect("typed Predict demo conversion should succeed")
-            })
-            .collect()
-    }
-
-    fn dump_state(&self) -> PredictState {
-        PredictState {
-            demos: self.demos_as_json(),
-            instruction_override: self.instruction_override.clone(),
-        }
-    }
-
-    fn apply_update(&mut self, update: StateUpdate) -> Result<()> {
-        // Convert demos before touching any state so a schema mismatch leaves
-        // the predictor unchanged.
-        let demos = update
-            .demos
-            .map(|demos| {
-                demos
-                    .iter()
-                    .map(demo_from_json::<S>)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
-        self.apply_state(update.instruction, demos);
-        Ok(())
-    }
-
-    fn set_trace_name(&mut self, name: &str) {
-        Predict::assign_trace_name(self, name);
-    }
-}
-
 impl<S: Signature> Predict<S> {
     /// Assigns the component name recorded on this predictor's trace spans.
     ///
@@ -1710,20 +1622,24 @@ mod tests {
     }
 
     #[test]
-    fn dyn_predictor_apply_update_round_trips_json_demo_rows() {
+    fn predictor_info_load_state_round_trips_json_demo_rows() {
+        use crate::core::PredictorInfo;
+
         let typed = typed_row("demo-input", "demo-output");
         let row = json_from_demo::<PredictConversionSig>(&typed)
             .expect("typed demo should convert to a flat row");
         let mut predictor = Predict::<PredictConversionSig>::new();
 
-        let update = StateUpdate {
-            instruction: None,
-            demos: Some(vec![row]),
-        };
-        DynPredictor::apply_update(&mut predictor, update)
-            .expect("predictor should accept JSON demo rows");
+        PredictorInfo::load_state(
+            &mut predictor,
+            PredictState {
+                demos: vec![row],
+                instruction_override: None,
+            },
+        )
+        .expect("predictor should accept JSON demo rows");
 
-        let demos = DynPredictor::demos_as_json(&predictor);
+        let demos = PredictorInfo::demos_as_json(&predictor);
         assert_eq!(demos.len(), 1);
         assert_eq!(demos[0].get("prompt"), Some(&json!("demo-input")));
         assert_eq!(demos[0].get("answer"), Some(&json!("demo-output")));

@@ -92,10 +92,6 @@
 //! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
 
-// TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
-// extension-attr dispatch no longer triggers rust-lang/rust#52234 on in-crate usage.
-#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
-
 extern crate self as dspy_rs;
 
 pub mod adapter;

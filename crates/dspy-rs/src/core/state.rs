@@ -23,7 +23,27 @@ use std::path::Path;
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{PredictState, Predictors};
+use crate::core::Predictors;
+use crate::trace::JsonMap;
+
+/// Serializable snapshot of a [`crate::Predict`]'s optimizable state.
+///
+/// Contains demos (as flat JSON rows) and the instruction override.
+/// Produced by optimizers when they tune a predictor; persist a whole module's
+/// worth of these with [`ModuleState`], or inject them per call tree with
+/// [`fx::Params`](crate::fx::Params).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PredictState {
+    /// Demo rows as flat JSON objects: field name → value, with input and
+    /// output fields merged into one object. This is the serde boundary for
+    /// demos-as-data — rows are split back into the predictor's typed
+    /// `Demo<S>` via the signature schema on load.
+    #[serde(default)]
+    pub demos: Vec<JsonMap>,
+    /// The instruction override, if any.
+    #[serde(default)]
+    pub instruction_override: Option<String>,
+}
 
 /// Serializable snapshot of every [`Predict`](crate::Predict) leaf in a module,
 /// keyed by the leaf name the module declares via [`Predictors`].

@@ -42,7 +42,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 
 use tokio::task_local;
 
-use crate::core::{DynPredictor, ModuleState, PredictState};
+use crate::core::{ModuleState, PredictState, PredictorInfo};
 use crate::{Facet, LmError, Module, Predict, PredictError, Predicted, Schema, Signature};
 
 /// Runs a future with an [`ir::Overlay`](crate::ir::Overlay) as the ambient
@@ -284,7 +284,7 @@ where
 
     let mut predictor = Predict::<S>::builder().named(name).build();
     if let Some(state) = state {
-        predictor.load_state(state).map_err(|err| PredictError::Lm {
+        PredictorInfo::load_state(&mut predictor, state).map_err(|err| PredictError::Lm {
             source: LmError::Provider {
                 provider: "fx".to_string(),
                 message: format!("params for `{name}` don't fit signature: {err}"),

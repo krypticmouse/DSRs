@@ -11,16 +11,14 @@
 //! [`LmError`] — distinguishes LM failures from parse failures so callers can handle
 //! retries differently. [`LM`] is the language model client itself.
 //!
-//! Optimizer leaf discovery is internal (`visit_named_predictors_mut`) and currently
-//! traverses struct fields plus `Option`, `Vec`, `HashMap<String, _>`, and `Box`.
-//! `Rc`/`Arc` wrappers that contain `Predict` leaves are rejected with explicit
-//! container errors.
+//! Optimizer leaf discovery is explicit: modules declare their [`Predict`](crate::Predict)
+//! leaves by name through the [`Predictors`] trait (usually one `predictors!` line),
+//! and optimizers read them through the object-safe [`PredictorInfo`] view.
 //!
 //! Most users import these through the crate root (`use dspy_rs::*`). Module authors
 //! who need fine-grained prompt control also use [`SignatureSchema`] and the adapter
 //! building blocks directly.
 
-pub(crate) mod dyn_predictor;
 mod errors;
 pub mod example;
 pub mod lm;
@@ -31,11 +29,9 @@ pub mod settings;
 pub mod signature;
 mod state;
 
-pub(crate) use dyn_predictor::*;
-pub use dyn_predictor::PredictState;
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
 pub use example::{ToInput, ToOutput};
-pub use state::ModuleState;
+pub use state::{ModuleState, PredictState};
 pub use lm::*;
 pub use module::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
