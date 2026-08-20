@@ -127,7 +127,6 @@ pub use utils::*;
 
 // Code Mode (vision report §5.5): tools as a sandboxed JS API. See
 // `ToolSet::code_mode` for the module lane and `RuntimeEnv` for the IR lane.
-#[cfg(feature = "code-mode")]
 pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
 
 pub mod typesys;

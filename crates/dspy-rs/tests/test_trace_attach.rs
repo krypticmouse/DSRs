@@ -1,7 +1,6 @@
 //! RFC 0001 §1's reserved `param_ids` column + RFC 0002 §3.3's
 //! `Trace::attach_program`: joining span components to a program's global
 //! `ParamId`s — one addressing story across traces, overlays, and slots.
-#![cfg(feature = "ir")]
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

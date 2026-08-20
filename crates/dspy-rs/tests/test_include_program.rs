@@ -3,7 +3,6 @@
 //! resolves the runtime crate via proc-macro-crate, so this exercises the
 //! `FoundCrate::Itself` → `::dspy_rs` alias branch that examples/tests of the
 //! dspy-rs package itself hit.
-#![cfg(feature = "ir")]
 
 dspy_rs::include_program!("tests/fixtures/qa.dsrs");
 

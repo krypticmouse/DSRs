@@ -2,7 +2,6 @@
 //! `#[agent]` (StepDef + standalone static-lane execution), and a `#[module]`
 //! whose body lowers an agent step to a first-class `AgentLoop` node with the
 //! tool bound and the capability ceiling self-granted.
-#![cfg(feature = "ir")]
 
 use std::sync::LazyLock;
 

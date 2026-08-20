@@ -49,7 +49,6 @@ use crate::{Facet, LmError, Module, Predict, PredictError, Predicted, Schema, Si
 /// candidate — the overlay is unbound against the program into [`Params`] and
 /// scoped exactly like [`with_params`]. See
 /// [`ir::bridge`](crate::ir::bridge).
-#[cfg(feature = "ir")]
 pub use crate::ir::bridge::with_overlay;
 
 task_local! {
@@ -190,7 +189,6 @@ impl Params {
     }
 
     /// All named states, for the IR bridge (`Params::bind`).
-    #[cfg(feature = "ir")]
     pub(crate) fn iter_states(&self) -> impl Iterator<Item = (&str, &PredictState)> {
         self.entries
             .iter()

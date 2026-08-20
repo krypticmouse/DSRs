@@ -29,10 +29,11 @@ thiserror = { workspace = true }
 dsrs_macros = { version = "0.7.2", path = "../dsrs-macros" }
 # Shared .dsrs lexer/structural grammar (also what include_program! validates with).
 dsrs-syntax = { workspace = true }
-csv = { version = "1.3.1" }
-hf-hub = { version = "0.4.3", features = ["tokio"] }
-parquet = { version = "56.1.0" }
-arrow = { version = "56.1.0" }
+# Heavy dataset-ingestion stack, gated behind the `data` feature (default-on).
+csv = { version = "1.3.1", optional = true }
+hf-hub = { version = "0.4.3", features = ["tokio"], optional = true }
+parquet = { version = "56.1.0", optional = true }
+arrow = { version = "56.1.0", optional = true }
 regex = "1.11.2"
 reqwest = { workspace = true, features = ["blocking"] }
 rand = "0.8.5"
@@ -45,21 +46,20 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 minijinja = { workspace = true, features = ["builtins", "serde", "debug"] }
 # IR graph core (RFC 0002 §2): entity arenas + the sandboxed hole executor.
-cranelift-entity = { version = "0.134", features = ["enable-serde"], optional = true }
-dsrs-tools = { version = "0.1.0", path = "../dsrs-tools", optional = true }
+# Unconditional since phase 2β: Predict runs through the IR Interpreter, so
+# the graph core (and Code Mode via dsrs-tools) is load-bearing, not optional.
+cranelift-entity = { version = "0.134", features = ["enable-serde"] }
+dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
 
 [features]
-# RFC 0002 IR-3: the graph core + interpreter ship behind the `ir` feature
-# (default-on) until the text format stage stabilizes the surface.
-default = ["ir", "code-mode"]
-ir = ["dep:cranelift-entity", "dep:dsrs-tools"]
-# Code Mode (vision report §5.5): collapse a tool set into one sandboxed
-# `run_js` tool. Default-on costs nothing extra (`ir` already pulls
-# dsrs-tools); build with --no-default-features for the dep-light library.
-code-mode = ["dep:dsrs-tools"]
+default = ["data"]
+# CSV/Parquet/HuggingFace dataset ingestion (the arrow stack). JSON/JSONL
+# loading is always available. Build with --no-default-features for a
+# meaningfully lighter dependency tree.
+data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
 
 [dev-dependencies]
 rstest = "0.25.0"

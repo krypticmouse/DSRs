@@ -1,7 +1,6 @@
 //! IR-3 (RFC 0002 §3): interpreter end-to-end over canned LM responses —
 //! every node kind, overlay read-through at render time, trace capture with
 //! program leaf names, budget metering, and load-time refusals.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 

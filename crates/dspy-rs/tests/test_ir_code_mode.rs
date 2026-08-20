@@ -2,7 +2,6 @@
 //! present its non-stop tools as one sandboxed `run_js` tool. Same canned
 //! flow as the module lane, run through the interpreter — spans record the
 //! `ToolRun`, stop tools stay individual, collisions refuse the load.
-#![cfg(all(feature = "ir", feature = "code-mode"))]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

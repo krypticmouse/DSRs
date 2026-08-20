@@ -2,7 +2,6 @@
 //! evaluated over ONE shared program through the interpreter with true
 //! candidate-level parallelism, per-candidate rollout caching keyed on the
 //! overlay hash, budget gating, and the minibatch gate.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 use std::time::Duration;

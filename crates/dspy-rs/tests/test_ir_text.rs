@@ -1,6 +1,5 @@
 //! IR-5 (RFC 0002 §4/§5): the `.dsrs` text format — parse, canonical print,
 //! text-preimage program hash, and parse-error quality.
-#![cfg(feature = "ir")]
 
 use dspy_rs::LMConfig;
 use dspy_rs::ir::{

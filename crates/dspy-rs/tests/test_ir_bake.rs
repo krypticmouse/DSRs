@@ -1,7 +1,6 @@
 //! IR-6 (RFC 0002 §5): `Program::bake` — folding an overlay into a new
 //! program value, lineage stamping, hash recompute, and behavioral equality
 //! of base+overlay vs. baked on canned LMs.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 

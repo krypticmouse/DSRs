@@ -3,7 +3,6 @@
 //! parse, two projections. Covers: metadata, the lowered artifact (extern
 //! hole, leaf names, Main sig), OPACITY, end-to-end execution through the
 //! interpreter, and ambient-overlay mutation of a step instruction.
-#![cfg(feature = "ir")]
 
 use std::sync::{Arc, LazyLock};
 
