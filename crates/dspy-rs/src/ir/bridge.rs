@@ -201,6 +201,56 @@ where
     Ok(overlay)
 }
 
+/// Resolves one named [`fx::ParamsEntry`](crate::fx) against `program` into
+/// `(ParamId, ParamValue)` pairs — the flag-aware sibling of
+/// [`states_to_overlay`] used by `Predict`'s ambient-params composition:
+///
+/// - `clear_instruction` resolves to the slot's *default* value (an explicit
+///   entry, so it wins over instance state when composed);
+/// - `explicit_demos` emits a `Demos` entry even when the row set is empty
+///   (clearing instance demos);
+/// - otherwise plain `PredictState` semantics apply (no override/no demos =
+///   no entry, the incumbent reads through).
+pub(crate) fn entry_slot_values(
+    program: &Program,
+    name: &str,
+    entry: &crate::fx::ParamsEntry,
+) -> Result<Vec<(crate::ir::params::ParamId, ParamValue)>, OverlayError> {
+    let mut values = Vec::new();
+
+    let instruction_path = format!("{name}.instruction");
+    let instruction_id =
+        program
+            .param_id(&instruction_path)
+            .ok_or_else(|| OverlayError::UnknownPath {
+                path: instruction_path,
+            })?;
+    if entry.clear_instruction {
+        values.push((instruction_id, program.params[instruction_id].default.clone()));
+    } else if let Some(text) = &entry.state.instruction_override {
+        values.push((instruction_id, ParamValue::Instruction { text: text.clone() }));
+    }
+
+    if entry.explicit_demos || !entry.state.demos.is_empty() {
+        let demos_path = format!("{name}.demos");
+        let demos_id = program
+            .param_id(&demos_path)
+            .ok_or_else(|| OverlayError::UnknownPath {
+                path: demos_path.clone(),
+            })?;
+        let def = leaf_sig_of(program, demos_id);
+        let rows = entry
+            .state
+            .demos
+            .iter()
+            .map(|flat| split_demo_row(def, &demos_path, flat))
+            .collect::<Result<Vec<_>, _>>()?;
+        values.push((demos_id, ParamValue::Demos { rows }));
+    }
+
+    Ok(values)
+}
+
 /// Projects an overlay down to `(leaf name → PredictState)`, restricted to
 /// `Instruction`/`Demos` kinds — the shared core of
 /// [`fx::Params::from_overlay`](crate::fx::Params::from_overlay) and

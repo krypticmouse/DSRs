@@ -1,75 +1,54 @@
 //! The shared evaluation engine (vision §5.4): every optimizer is a thin
 //! strategy over this core.
 //!
-//! # Why this lives in `optimizer/`, not `evaluate/`
+//! # One engine, two lanes
 //!
-//! The `evaluate/` module owns the *strategy-free* primitives: the
-//! [`TypedMetric`] trait and the traced rollout loop
-//! (`evaluate_examples_traced`). This engine composes those primitives with
-//! optimizer-side vocabulary — candidates, budgets, rollout caching, Pareto
-//! bookkeeping, minibatch gating — and applies candidates through the
-//! crate-internal mutation seam (`with_named_predictor` /
-//! `DynPredictor::apply_update`) that already lives in `optimizer/`. Putting it
-//! here keeps the dependency arrow one-way: `optimizer` → `evaluate`, never the
-//! reverse.
+//! [`Engine`] owns the strategy-independent bookkeeping — candidate registry,
+//! rollout cache, budget metering, score matrix / Pareto views, minibatch
+//! gating — and evaluates candidates against an
+//! [`OptimizeTarget`](crate::optimizer::OptimizeTarget), which is one of two
+//! lanes:
 //!
-//! # The pieces
+//! - **module lane** — a typed module + trainset + [`TypedMetric`]. Candidates
+//!   are name-keyed [`Candidate`]s injected *ambiently* per rollout via
+//!   [`fx::with_params`](crate::fx::with_params); each
+//!   [`Predict`](crate::Predict) leaf binds its own entry at call time.
+//!   Nothing is ever mutated during evaluation, so candidates fan out
+//!   concurrently exactly like the program lane.
+//! - **program lane** — an interpreter-loaded [`Program`](crate::ir::Program)
+//!   + labeled [`DemoRow`](crate::ir::DemoRow)s + a
+//!   [`ProgramMetric`](crate::optimizer::ProgramMetric). Candidates are
+//!   [`ir::Overlay`](crate::ir::Overlay)s (or [`Candidate`]s bound through
+//!   [`fx::Params::bind`](crate::fx::Params::bind)) read through at render
+//!   time.
 //!
-//! - **[`Candidate`]** — a named set of parameter overlays (predictor name →
-//!   instruction/demos) plus a stable content hash. This is the §5.4 overlay
-//!   contract in its pre-IR form: cheap to clone, trivially serializable, and
-//!   applied/restored in exactly one place ([`apply_candidate`] /
-//!   [`restore_candidate`]) through the single mutation seam.
-//! - **[`EvalEngine`]** — bounded-concurrency async fan-out over
-//!   (candidate × examples) with per-rollout trace capture, a rollout cache,
-//!   budget metering, minibatch gating, and a per-instance score matrix.
-//! - **[`ScoreMatrix`] / [`ParetoView`]** — (candidates × examples) score
-//!   bookkeeping generalizing what GEPA's `ParetoFrontier` does, usable by any
-//!   strategy.
-//!
-//! # Concurrency model (and the candidate-parallelism seam)
-//!
-//! Candidates mutate shared module state through `apply_update`, so the engine
-//! **serializes candidate application** and parallelizes across *examples*
-//! within one candidate (`buffer_unordered`, bounded by
-//! [`EngineConfig::concurrency`]). This is correct today because a module is
-//! immutable (`&M`) for the duration of one candidate's fan-out.
-//! Candidate-level parallelism — evaluating many candidates over one skeleton
-//! simultaneously — requires overlays applied at render time, and that is the
-//! IR lane's path:
-//! [`ProgramEvalEngine`](crate::optimizer::program_engine::ProgramEvalEngine)
-//! evaluates N `ir::Overlay` candidates over one shared `Arc<Program>` through
-//! the interpreter in a single fan-out (no apply/restore at all). The module
-//! lane here keeps its serialized apply/restore model unchanged.
+//! The traced-rollout loop itself is owned by `evaluate/` —
+//! the engine composes `rollout_traced`, it does not reimplement it.
 //!
 //! # Cache keying
 //!
-//! Rollouts are cached on `(baseline hash, candidate hash, example uid,
+//! Rollouts are cached on `(baseline identity, candidate hash, example uid,
 //! cache salt)`:
 //!
-//! - the *baseline hash* is the module's [`ModuleState`] before the overlay is
-//!   applied, so permanently installing a winner mid-run (COPRO between
-//!   rounds, MIPRO after demo bootstrap) correctly invalidates stale entries;
+//! - the *baseline identity* is computed once per run when the target is
+//!   constructed (module lane: hash of the predictors() state snapshot;
+//!   program lane: the program hash). Installing a winner and building a new
+//!   target yields a new baseline, invalidating stale entries;
 //! - the *cache salt* ([`EngineConfig::cache_salt`]) is the sampling-params
-//!   seam: today sampling params live on LM configs outside the candidate, so
-//!   callers that change them must bump the salt. When model refs become
-//!   overlay parameters, they fold into the candidate hash and the salt can
-//!   retire.
+//!   seam: sampling params live on LM configs outside the candidate, so
+//!   callers that change them must bump the salt.
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
 
 use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 
-use crate::core::{ModuleState, PredictState, StateUpdate};
-use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval, TypedMetric};
-use crate::optimizer::with_named_predictor;
-use crate::trace::{JsonMap, Trace, TraceMeta, TraceOutcome, capture_with_meta};
+use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval};
+use crate::optimizer::target::OptimizeTarget;
+use crate::trace::{JsonMap, Trace};
 use crate::utils::hash::StableHasher;
-use crate::core::ToInput;
-use crate::{Facet, LmUsage, Module};
+use crate::LmUsage;
 
 /// Score tolerance for Pareto win/tie comparisons (matches the historical
 /// `ParetoFrontier` tolerance).
@@ -138,54 +117,47 @@ pub(crate) fn canonical_hash<T: Serialize>(value: &T) -> u64 {
     hasher.finish()
 }
 
-fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<JsonMap> {
-    match value {
-        Ok(serde_json::Value::Object(map)) => Some(map),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Candidate as data
 // ---------------------------------------------------------------------------
 
-/// A per-predictor parameter overlay: which optimizable values to install.
+/// One leaf's slice of a [`Candidate`]: which optimizable values to inject.
 ///
-/// `None` fields leave the predictor's current value untouched — an overlay is
-/// a *partial* update, resolved against whatever module state is live when the
-/// candidate is applied.
+/// Unset fields leave the leaf's incumbent value untouched — a candidate is a
+/// *partial* configuration, resolved per slot at render time (ambient entries
+/// win over instance state, exactly the precedence the old mutation seam had).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct Overlay {
-    /// `Some` installs this instruction override.
+pub struct CandidateSlot {
+    /// `Some` injects this instruction override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub instruction: Option<String>,
-    /// `Some` replaces the demo set. Rows are flat JSON objects (field name →
-    /// value, input and output fields merged), the same shape as
-    /// [`PredictState::demos`].
+    /// Explicitly reset the instruction to the signature default, winning
+    /// over any instance override. Mutually exclusive with `instruction`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_instruction: bool,
+    /// `Some` replaces the demo set (an empty vec clears it). Rows are flat
+    /// JSON objects (field name → value, input and output fields merged), the
+    /// same shape as [`PredictState::demos`](crate::core::PredictState).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub demos: Option<Vec<JsonMap>>,
 }
 
-impl Overlay {
-    fn to_update(&self) -> StateUpdate {
-        StateUpdate {
-            instruction: self.instruction.clone().map(Some),
-            demos: self.demos.clone(),
-        }
-    }
-}
-
-/// A candidate is *data*: a named set of [`Overlay`]s (predictor name →
-/// instruction/demos) plus a stable hash ([`Candidate::stable_hash`]).
+/// A candidate is *data*: name-keyed per-leaf overlays plus a stable content
+/// hash ([`Candidate::stable_hash`]). The candidate currency of the module
+/// lane, and — via [`to_params`](Candidate::to_params) +
+/// [`fx::Params::bind`](crate::fx::Params::bind) — of the program lane too.
 ///
-/// This is the §5.4 overlay contract in its pre-IR form — cheap to clone,
-/// serializable, applied and restored in exactly one place
-/// ([`apply_candidate`] / [`restore_candidate`]). The empty candidate
-/// (`Candidate::default()`) is the baseline: the module exactly as it is.
+/// Cheap to clone, serializable, and **never applied by mutation**: the
+/// engine scopes it ambiently around each rollout
+/// ([`fx::with_params`](crate::fx::with_params)); the single mutating step is
+/// the caller-driven final install
+/// ([`OptimizeTarget::install`](crate::optimizer::OptimizeTarget::install)).
+/// The empty candidate (`Candidate::default()`) is the baseline: the module
+/// exactly as it is.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Candidate {
-    /// Predictor name (fx slot name / facet dotted path) → overlay.
-    pub overlays: BTreeMap<String, Overlay>,
+    /// Leaf name (the [`Predictors`](crate::Predictors) contract name) → slot.
+    pub slots: BTreeMap<String, CandidateSlot>,
 }
 
 impl Candidate {
@@ -207,99 +179,65 @@ impl Candidate {
         name: impl Into<String>,
         instruction: impl Into<String>,
     ) -> &mut Self {
-        self.overlays.entry(name.into()).or_default().instruction = Some(instruction.into());
+        let slot = self.slots.entry(name.into()).or_default();
+        slot.instruction = Some(instruction.into());
+        slot.clear_instruction = false;
+        self
+    }
+
+    /// Explicitly resets a named predictor's instruction to its signature
+    /// default (winning over any instance override).
+    pub fn clear_instruction(&mut self, name: impl Into<String>) -> &mut Self {
+        let slot = self.slots.entry(name.into()).or_default();
+        slot.instruction = None;
+        slot.clear_instruction = true;
         self
     }
 
     /// Sets the demo overlay for a named predictor. Each row is a flat JSON
-    /// object with the signature's input and output fields merged.
+    /// object with the signature's input and output fields merged; an empty
+    /// vec clears the demo set.
     pub fn set_demos(&mut self, name: impl Into<String>, demos: Vec<JsonMap>) -> &mut Self {
-        self.overlays.entry(name.into()).or_default().demos = Some(demos);
+        self.slots.entry(name.into()).or_default().demos = Some(demos);
         self
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.overlays.is_empty()
+    /// The instruction this candidate injects for `name`, if any.
+    pub fn instruction_of(&self, name: &str) -> Option<&str> {
+        self.slots.get(name)?.instruction.as_deref()
     }
 
-    /// Stable content hash: identical overlay content hashes identically across
+    /// The demo set this candidate injects for `name`, if any.
+    pub fn demos_of(&self, name: &str) -> Option<&[JsonMap]> {
+        self.slots.get(name)?.demos.as_deref()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// Stable content hash: identical content hashes identically across
     /// processes and map orderings — the cache identity.
     pub fn stable_hash(&self) -> u64 {
         canonical_hash(self)
     }
-}
 
-/// Saved pre-overlay state for the predictors a candidate touched. Produced by
-/// [`apply_candidate`], consumed by [`restore_candidate`].
-#[derive(Clone, Debug)]
-pub struct CandidateUndo {
-    saved: BTreeMap<String, PredictState>,
-}
-
-/// Applies a candidate's overlays to a module through the single mutation seam
-/// (`DynPredictor::apply_update`), returning the undo snapshot.
-///
-/// This is the **one** place candidate state is written. If any overlay fails
-/// to apply (unknown predictor name, demo schema mismatch), the overlays
-/// applied so far are rolled back before the error returns.
-pub fn apply_candidate<M>(module: &mut M, candidate: &Candidate) -> Result<CandidateUndo>
-where
-    M: for<'a> Facet<'a>,
-{
-    let mut undo = CandidateUndo {
-        saved: BTreeMap::new(),
-    };
-    for (name, overlay) in &candidate.overlays {
-        let applied = with_named_predictor(module, name, |predictor| {
-            let prior = predictor.dump_state();
-            predictor.apply_update(overlay.to_update())?;
-            Ok(prior)
-        });
-        match applied {
-            Ok(prior) => {
-                undo.saved.insert(name.clone(), prior);
+    /// Converts to the ambient-injection currency: name-keyed
+    /// [`fx::Params`](crate::fx::Params) with explicit clears preserved.
+    pub fn to_params(&self) -> crate::fx::Params {
+        let mut params = crate::fx::Params::new();
+        for (name, slot) in &self.slots {
+            if slot.clear_instruction {
+                params.clear_instruction(name.clone());
+            } else if let Some(text) = &slot.instruction {
+                params.set_instruction(name.clone(), text.clone());
             }
-            Err(err) => {
-                return match restore_candidate(module, undo) {
-                    Ok(()) => Err(err),
-                    Err(restore_err) => Err(anyhow!(
-                        "failed to apply candidate: {err}; and failed to roll back partial application: {restore_err}"
-                    )),
-                };
+            if let Some(demos) = &slot.demos {
+                params.set_demos(name.clone(), demos.clone());
             }
         }
+        params
     }
-    Ok(undo)
-}
-
-/// Restores the pre-candidate state captured by [`apply_candidate`].
-///
-/// Attempts every predictor even if one fails, then reports the first error.
-pub fn restore_candidate<M>(module: &mut M, undo: CandidateUndo) -> Result<()>
-where
-    M: for<'a> Facet<'a>,
-{
-    let mut first_error = None;
-    for (name, state) in undo.saved {
-        if let Err(err) = with_named_predictor(module, &name, |predictor| predictor.load_state(state.clone()))
-            && first_error.is_none()
-        {
-            first_error = Some(anyhow!("failed to restore `{name}`: {err}"));
-        }
-    }
-    match first_error {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
-}
-
-/// Content hash of a module's full optimizable state ([`ModuleState`]) —
-/// the "skeleton" a candidate overlays. Part of the rollout-cache key.
-fn baseline_hash<M>(module: &mut M) -> Result<u64>
-where
-    M: for<'a> Facet<'a>,
-{
-    Ok(canonical_hash(&ModuleState::from_module(module)?))
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +248,7 @@ where
 ///
 /// `max_metric_calls` and `max_lm_calls` are metered at rollout granularity
 /// (one module execution = one metric call = one LM call unit; auxiliary LM
-/// spend like reflection calls is charged via [`EvalEngine::charge`]).
+/// spend like reflection calls is charged via [`Engine::charge`]).
 /// Exact per-span counts and token totals are tracked in [`Spend`]
 /// (`lm_spans`, `tokens`) from the captured traces; `max_tokens` stops the
 /// engine once recorded token usage reaches the cap.
@@ -359,7 +297,7 @@ pub struct Spend {
     /// Metric evaluations executed (cache hits don't re-run the metric).
     pub metric_calls: usize,
     /// LM call units: one per executed rollout plus auxiliary charges
-    /// ([`EvalEngine::charge`]).
+    /// ([`Engine::charge`]).
     pub lm_calls: usize,
     /// Exact `Predict` spans observed across captured rollout traces.
     pub lm_spans: usize,
@@ -599,7 +537,7 @@ pub struct ParetoStatistics {
 /// Engine tuning knobs.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct EngineConfig {
-    /// Rollouts in flight at once within one candidate's fan-out.
+    /// Rollouts in flight at once within one evaluation batch.
     pub concurrency: usize,
     /// Hard spend caps; the engine stops cleanly when a batch wouldn't fit.
     pub budget: Budget,
@@ -621,7 +559,7 @@ impl Default for EngineConfig {
 /// One evaluated (or cache-served) rollout.
 #[derive(Clone, Debug)]
 pub struct RolloutOutcome {
-    /// Index into the engine's example set.
+    /// Index into the target's example set.
     pub example: usize,
     pub eval: Eval,
     /// The captured execution trace; `None` when served from the cache.
@@ -650,7 +588,7 @@ impl CandidateEval {
     }
 }
 
-/// Result of [`EvalEngine::evaluate`].
+/// Result of [`Engine::evaluate`].
 #[derive(Clone, Debug)]
 pub enum EvalOutcome {
     Complete(CandidateEval),
@@ -670,7 +608,27 @@ impl EvalOutcome {
     }
 }
 
-/// Result of [`EvalEngine::evaluate_gated`].
+/// Result of [`Engine::evaluate_many`].
+#[derive(Clone, Debug)]
+pub enum BatchEvalOutcome {
+    /// One [`CandidateEval`] per requested candidate, in request order.
+    Complete(Vec<CandidateEval>),
+    /// The uncached portion of the batch didn't fit the remaining budget;
+    /// nothing ran and spend is unchanged.
+    BudgetExhausted { needed: usize },
+}
+
+impl BatchEvalOutcome {
+    /// The completed evaluations, if the budget allowed the batch.
+    pub fn completed(self) -> Option<Vec<CandidateEval>> {
+        match self {
+            Self::Complete(evals) => Some(evals),
+            Self::BudgetExhausted { .. } => None,
+        }
+    }
+}
+
+/// Result of [`Engine::evaluate_gated`].
 #[derive(Clone, Debug)]
 pub enum GateOutcome {
     /// Minibatch (or promotion) evaluation didn't fit the remaining budget.
@@ -684,51 +642,59 @@ pub enum GateOutcome {
     },
 }
 
+/// A registered candidate: its cache-identity hash plus its payload.
+pub(crate) enum CandidatePayload {
+    /// Module-lane (name-keyed) candidate, pre-converted to the ambient
+    /// injection currency. Also evaluable on a program target via
+    /// [`fx::Params::bind`](crate::fx::Params::bind).
+    Params {
+        candidate: Candidate,
+        params: std::sync::Arc<crate::fx::Params>,
+    },
+    /// Program-lane native candidate (can carry non-Params kinds: model refs,
+    /// context policies, code). Only evaluable on a program target.
+    Overlay(std::sync::Arc<crate::ir::Overlay>),
+}
+
+/// A candidate bound against a concrete target, ready to inject per rollout.
+#[derive(Clone)]
+pub(crate) enum BoundCandidate {
+    Params(std::sync::Arc<crate::fx::Params>),
+    Overlay(std::sync::Arc<crate::ir::Overlay>),
+}
+
 /// The shared evaluation core (vision §5.4).
 ///
-/// Owns the example set, the candidate registry, the score matrix, the rollout
-/// cache, and the budget meter. Strategies (GEPA, COPRO, MIPRO, bootstrap)
-/// register [`Candidate`]s and call [`evaluate`](Self::evaluate) /
-/// [`evaluate_gated`](Self::evaluate_gated); the engine handles application,
-/// fan-out, caching, accounting, and bookkeeping.
-pub struct EvalEngine<'m, E, MT> {
-    examples: Vec<E>,
-    example_uids: Vec<u64>,
-    metric: &'m MT,
+/// Owns the candidate registry, the score matrix, the rollout cache, and the
+/// budget meter. Strategies (GEPA, COPRO, MIPRO, SIMBA, bootstrap) register
+/// [`Candidate`]s and call [`evaluate`](Self::evaluate) /
+/// [`evaluate_many`](Self::evaluate_many) /
+/// [`evaluate_gated`](Self::evaluate_gated) against an
+/// [`OptimizeTarget`](crate::optimizer::OptimizeTarget); the engine handles
+/// binding, fan-out, caching, accounting, and bookkeeping. Because candidate
+/// injection is ambient (never mutation), rollouts for *different candidates*
+/// share one bounded-concurrency fan-out in both lanes.
+pub struct Engine {
     config: EngineConfig,
-    candidates: Vec<Candidate>,
-    candidate_hashes: Vec<u64>,
+    candidates: Vec<(u64, CandidatePayload)>,
     matrix: ScoreMatrix,
     cache: RolloutCache,
     spend: Spend,
+    /// High-water mark of *distinct candidates* with rollouts in flight at
+    /// the same instant (see [`peak_candidate_concurrency`](Self::peak_candidate_concurrency)).
+    peak_candidates_in_flight: usize,
 }
 
-impl<'m, E, MT> EvalEngine<'m, E, MT>
-where
-    E: Serialize,
-{
-    pub fn new(examples: Vec<E>, metric: &'m MT, config: EngineConfig) -> Self {
-        let example_uids = examples.iter().map(canonical_hash).collect();
-        let matrix = ScoreMatrix::new(examples.len());
+impl Engine {
+    pub fn new(config: EngineConfig) -> Self {
         Self {
-            examples,
-            example_uids,
-            metric,
             config,
             candidates: Vec::new(),
-            candidate_hashes: Vec::new(),
-            matrix,
+            matrix: ScoreMatrix::new(0),
             cache: RolloutCache::default(),
             spend: Spend::default(),
+            peak_candidates_in_flight: 0,
         }
-    }
-
-    pub fn examples(&self) -> &[E] {
-        &self.examples
-    }
-
-    pub fn num_examples(&self) -> usize {
-        self.examples.len()
     }
 
     pub fn config(&self) -> &EngineConfig {
@@ -743,6 +709,13 @@ where
         &self.matrix
     }
 
+    /// The rollout cache. Keys are `(baseline identity, candidate hash,
+    /// example uid, salt)` — candidate identity is in the key, so two
+    /// candidates on the same example occupy distinct entries.
+    pub fn cache(&self) -> &RolloutCache {
+        &self.cache
+    }
+
     /// Pareto view over all example columns (see [`ScoreMatrix::pareto`]).
     pub fn pareto(&self) -> ParetoView {
         self.matrix.pareto()
@@ -753,24 +726,55 @@ where
         self.matrix.pareto_over(columns)
     }
 
-    /// Registers a candidate, deduplicating by content hash. Returns its index.
+    /// The parallelism gauge: the maximum number of **distinct candidates**
+    /// that have had rollouts in flight simultaneously across all batches so
+    /// far.
+    pub fn peak_candidate_concurrency(&self) -> usize {
+        self.peak_candidates_in_flight
+    }
+
+    /// Registers a module-lane candidate, deduplicating by content hash.
+    /// Returns its index.
     pub fn register(&mut self, candidate: Candidate) -> usize {
         let hash = candidate.stable_hash();
-        if let Some(existing) = self.candidate_hashes.iter().position(|&h| h == hash) {
+        if let Some(existing) = self.candidates.iter().position(
+            |(h, payload)| *h == hash && matches!(payload, CandidatePayload::Params { .. }),
+        ) {
             return existing;
         }
-        self.candidates.push(candidate);
-        self.candidate_hashes.push(hash);
+        let params = std::sync::Arc::new(candidate.to_params());
+        self.candidates
+            .push((hash, CandidatePayload::Params { candidate, params }));
         self.matrix.ensure_rows(self.candidates.len());
         self.candidates.len() - 1
     }
 
-    pub fn candidate(&self, index: usize) -> &Candidate {
-        &self.candidates[index]
+    /// Registers a program-lane [`ir::Overlay`](crate::ir::Overlay) candidate,
+    /// deduplicating by [`Overlay::hash`](crate::ir::Overlay::hash). Returns
+    /// its index.
+    pub fn register_overlay(&mut self, overlay: crate::ir::Overlay) -> usize {
+        let hash = overlay.hash();
+        if let Some(existing) = self.candidates.iter().position(
+            |(h, payload)| *h == hash && matches!(payload, CandidatePayload::Overlay(_)),
+        ) {
+            return existing;
+        }
+        self.candidates
+            .push((hash, CandidatePayload::Overlay(std::sync::Arc::new(overlay))));
+        self.matrix.ensure_rows(self.candidates.len());
+        self.candidates.len() - 1
+    }
+
+    /// The registered module-lane candidate at `index`, if it is one.
+    pub fn candidate(&self, index: usize) -> Option<&Candidate> {
+        match &self.candidates.get(index)?.1 {
+            CandidatePayload::Params { candidate, .. } => Some(candidate),
+            CandidatePayload::Overlay(_) => None,
+        }
     }
 
     pub fn candidate_hash(&self, index: usize) -> u64 {
-        self.candidate_hashes[index]
+        self.candidates[index].0
     }
 
     pub fn num_candidates(&self) -> usize {
@@ -789,88 +793,81 @@ where
         self.spend.lm_calls = self.spend.lm_calls.saturating_add(lm_calls);
     }
 
-    /// Evaluates a registered candidate over `subset` example indices (`None`
-    /// = the full set): applies the overlay through the mutation seam, fans
-    /// out uncached rollouts with bounded concurrency under per-rollout trace
-    /// capture, restores the module, and records scores into the matrix and
-    /// cache.
+    /// Evaluates N registered candidates over `subset` example indices
+    /// (`None` = the target's full set) in **one** bounded-concurrency
+    /// fan-out — candidate-level parallelism in both lanes, since candidates
+    /// are injected per rollout, never applied to shared state.
     ///
     /// Cached rollouts return their `Eval` with `trace: None` and consume no
     /// budget. If the uncached portion doesn't fit the remaining budget the
-    /// engine runs nothing and returns [`EvalOutcome::BudgetExhausted`].
-    pub async fn evaluate<M>(
+    /// engine runs nothing and returns [`BatchEvalOutcome::BudgetExhausted`].
+    pub async fn evaluate_many(
         &mut self,
-        module: &mut M,
-        candidate: usize,
+        target: &OptimizeTarget<'_>,
+        candidates: &[usize],
         subset: Option<&[usize]>,
-    ) -> Result<EvalOutcome>
-    where
-        E: ToInput<M::Input> + Sync,
-        M: Module + for<'a> Facet<'a>,
-        MT: TypedMetric<E, M>,
-    {
-        let candidate_hash = *self
-            .candidate_hashes
-            .get(candidate)
-            .ok_or_else(|| anyhow!("candidate index {candidate} is not registered"))?;
+    ) -> Result<BatchEvalOutcome> {
+        for &candidate in candidates {
+            if candidate >= self.candidates.len() {
+                return Err(anyhow!("candidate index {candidate} is not registered"));
+            }
+        }
+        let num_examples = target.num_examples();
         let indices: Vec<usize> = match subset {
             Some(subset) => subset.to_vec(),
-            None => (0..self.examples.len()).collect(),
+            None => (0..num_examples).collect(),
         };
-        if let Some(&bad) = indices.iter().find(|&&idx| idx >= self.examples.len()) {
+        if let Some(&bad) = indices.iter().find(|&&idx| idx >= num_examples) {
             return Err(anyhow!(
-                "example index {bad} out of range ({} examples)",
-                self.examples.len()
+                "example index {bad} out of range ({num_examples} examples)"
             ));
         }
 
-        let baseline = baseline_hash(module)?;
+        let baseline = target.baseline();
         let salt = self.config.cache_salt;
 
-        let mut cached: HashMap<usize, Eval> = HashMap::new();
-        let mut pending: Vec<usize> = Vec::new();
-        for &idx in &indices {
-            match self.cache.get(baseline, candidate_hash, self.example_uids[idx], salt) {
-                Some(eval) => {
-                    cached.insert(idx, eval.clone());
+        // Partition the (candidate × example) grid into cached and pending.
+        let mut cached: HashMap<(usize, usize), Eval> = HashMap::new();
+        let mut pending: Vec<(usize, usize)> = Vec::new();
+        for &candidate in candidates {
+            let candidate_hash = self.candidates[candidate].0;
+            for &idx in &indices {
+                let key = (candidate, idx);
+                if cached.contains_key(&key) || pending.contains(&key) {
+                    continue;
                 }
-                None => {
-                    if !cached.contains_key(&idx) && !pending.contains(&idx) {
-                        pending.push(idx);
+                match self
+                    .cache
+                    .get(baseline, candidate_hash, target.example_uid(idx), salt)
+                {
+                    Some(eval) => {
+                        cached.insert(key, eval.clone());
                     }
+                    None => pending.push(key),
                 }
             }
         }
 
         if !self.budget_allows(pending.len()) {
-            return Ok(EvalOutcome::BudgetExhausted {
+            return Ok(BatchEvalOutcome::BudgetExhausted {
                 needed: pending.len(),
             });
         }
 
-        let fresh: Vec<(usize, Eval, Trace)> = if pending.is_empty() {
-            Vec::new()
-        } else {
-            let undo = apply_candidate(module, &self.candidates[candidate])?;
-            let ran = self.run_rollouts(&*module, &pending, candidate_hash).await;
-            let restored = restore_candidate(module, undo);
-            match (ran, restored) {
-                (Ok(fresh), Ok(())) => fresh,
-                (Ok(_), Err(restore_err)) => return Err(restore_err),
-                (Err(eval_err), Ok(())) => return Err(eval_err),
-                (Err(eval_err), Err(restore_err)) => {
-                    return Err(anyhow!(
-                        "candidate evaluation failed: {eval_err}; failed to restore module state: {restore_err}"
-                    ));
-                }
-            }
-        };
+        // Bind each requested candidate against the target once.
+        let mut bound: HashMap<usize, BoundCandidate> = HashMap::new();
+        for &candidate in candidates {
+            bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
+        }
+
+        let (fresh, batch_peak) = self.run_rollouts(target, &pending, &bound).await?;
+        self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(batch_peak);
 
         // Accounting: fresh rollouts consume budget, cached hits are free.
         self.spend.metric_calls += fresh.len();
         self.spend.lm_calls += fresh.len();
         self.spend.cache_hits += cached.len();
-        for (_, _, trace) in &fresh {
+        for (_, _, _, trace) in &fresh {
             self.spend.lm_spans += trace.spans.len();
             for span in &trace.spans {
                 self.spend.tokens = self.spend.tokens + span.usage;
@@ -878,62 +875,81 @@ where
         }
 
         // Bookkeeping: cache inserts + matrix records.
-        let mut fresh_by_idx: HashMap<usize, (Eval, Trace)> = HashMap::with_capacity(fresh.len());
-        for (idx, eval, trace) in fresh {
-            self.cache
-                .insert(baseline, candidate_hash, self.example_uids[idx], salt, eval.clone());
+        let mut fresh_by_key: HashMap<(usize, usize), (Eval, Trace)> =
+            HashMap::with_capacity(fresh.len());
+        for (candidate, idx, eval, trace) in fresh {
+            self.cache.insert(
+                baseline,
+                self.candidates[candidate].0,
+                target.example_uid(idx),
+                salt,
+                eval.clone(),
+            );
             self.matrix.record(candidate, idx, eval.score);
-            fresh_by_idx.insert(idx, (eval, trace));
+            fresh_by_key.insert((candidate, idx), (eval, trace));
         }
-        for (&idx, eval) in &cached {
+        for (&(candidate, idx), eval) in &cached {
             self.matrix.record(candidate, idx, eval.score);
         }
 
-        let rollouts = indices
+        let evals = candidates
             .iter()
-            .map(|&idx| {
-                if let Some((eval, trace)) = fresh_by_idx.remove(&idx) {
-                    RolloutOutcome {
-                        example: idx,
-                        eval,
-                        trace: Some(trace),
-                    }
-                } else {
-                    let eval = cached
-                        .get(&idx)
-                        .cloned()
-                        .expect("every requested index is either fresh or cached");
-                    RolloutOutcome {
-                        example: idx,
-                        eval,
-                        trace: None,
-                    }
-                }
+            .map(|&candidate| CandidateEval {
+                candidate,
+                rollouts: indices
+                    .iter()
+                    .map(|&idx| {
+                        if let Some((eval, trace)) = fresh_by_key.remove(&(candidate, idx)) {
+                            RolloutOutcome {
+                                example: idx,
+                                eval,
+                                trace: Some(trace),
+                            }
+                        } else {
+                            let eval = cached
+                                .get(&(candidate, idx))
+                                .cloned()
+                                .expect("every requested pair is either fresh or cached");
+                            RolloutOutcome {
+                                example: idx,
+                                eval,
+                                trace: None,
+                            }
+                        }
+                    })
+                    .collect(),
             })
             .collect();
 
-        Ok(EvalOutcome::Complete(CandidateEval {
-            candidate,
-            rollouts,
-        }))
+        Ok(BatchEvalOutcome::Complete(evals))
+    }
+
+    /// Single-candidate convenience over [`evaluate_many`](Self::evaluate_many).
+    pub async fn evaluate(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        subset: Option<&[usize]>,
+    ) -> Result<EvalOutcome> {
+        match self.evaluate_many(target, &[candidate], subset).await? {
+            BatchEvalOutcome::Complete(mut evals) => Ok(EvalOutcome::Complete(evals.remove(0))),
+            BatchEvalOutcome::BudgetExhausted { needed } => {
+                Ok(EvalOutcome::BudgetExhausted { needed })
+            }
+        }
     }
 
     /// Minibatch gating (the GEPA acceptance pattern): evaluates the candidate
     /// on `minibatch`; only if the minibatch mean strictly beats `threshold`
     /// does it promote to a full-set evaluation.
-    pub async fn evaluate_gated<M>(
+    pub async fn evaluate_gated(
         &mut self,
-        module: &mut M,
+        target: &OptimizeTarget<'_>,
         candidate: usize,
         minibatch: &[usize],
         threshold: f64,
-    ) -> Result<GateOutcome>
-    where
-        E: ToInput<M::Input> + Sync,
-        M: Module + for<'a> Facet<'a>,
-        MT: TypedMetric<E, M>,
-    {
-        let minibatch_eval = match self.evaluate(module, candidate, Some(minibatch)).await? {
+    ) -> Result<GateOutcome> {
+        let minibatch_eval = match self.evaluate(target, candidate, Some(minibatch)).await? {
             EvalOutcome::Complete(eval) => eval,
             EvalOutcome::BudgetExhausted { needed } => {
                 return Ok(GateOutcome::BudgetExhausted { needed });
@@ -946,7 +962,7 @@ where
             });
         }
 
-        match self.evaluate(module, candidate, None).await? {
+        match self.evaluate(target, candidate, None).await? {
             EvalOutcome::Complete(full) => Ok(GateOutcome::Promoted {
                 minibatch: minibatch_eval,
                 full,
@@ -955,48 +971,75 @@ where
         }
     }
 
-    /// Bounded-concurrency fan-out over uncached examples for one applied
-    /// candidate. `module` is immutable here — the overlay was installed by
-    /// the caller — so example-level parallelism is safe.
-    async fn run_rollouts<M>(
+    /// The one shared fan-out: every pending `(candidate, example)` pair —
+    /// across all candidates, in both lanes — in a single `buffer_unordered`
+    /// stream. Returns the fresh rollouts and the batch's distinct-candidate
+    /// concurrency high-water mark.
+    async fn run_rollouts(
         &self,
-        module: &M,
-        pending: &[usize],
-        candidate_hash: u64,
-    ) -> Result<Vec<(usize, Eval, Trace)>>
-    where
-        E: ToInput<M::Input> + Sync,
-        M: Module,
-        MT: TypedMetric<E, M>,
-    {
-        let metric = self.metric;
-        stream::iter(pending.iter().map(|&idx| {
-            let example = &self.examples[idx];
-            async move {
-                let input = example.to_input()?;
-                let meta = TraceMeta {
-                    candidate_hash: Some(candidate_hash),
-                    input: json_object(serde_json::to_value(&input)),
-                    ..TraceMeta::default()
-                };
-                let started = Instant::now();
-                let (result, mut trace) = capture_with_meta(meta, || module.call(input)).await;
-                let predicted = result.map_err(|err| anyhow!("{err}"))?;
-                // Metric runs outside the capture scope so LM-as-judge metrics
-                // don't pollute the execution trace.
-                let eval = metric.evaluate(example, &predicted, Some(&trace)).await?;
-                trace.outcome = Some(TraceOutcome {
-                    output: json_object(serde_json::to_value(&*predicted)),
-                    error: None,
-                    eval: Some(eval.clone()),
-                    duration_us: started.elapsed().as_micros() as u64,
-                });
-                Ok::<_, anyhow::Error>((idx, eval, trace))
+        target: &OptimizeTarget<'_>,
+        pending: &[(usize, usize)],
+        bound: &HashMap<usize, BoundCandidate>,
+    ) -> Result<(Vec<(usize, usize, Eval, Trace)>, usize)> {
+        let gauge = Gauge::default();
+
+        let fresh: Vec<(usize, usize, Eval, Trace)> =
+            stream::iter(pending.iter().map(|&(candidate, idx)| {
+                let bound = bound[&candidate].clone();
+                let candidate_hash = self.candidates[candidate].0;
+                let gauge = &gauge;
+                async move {
+                    let _in_flight = gauge.enter(candidate);
+                    let (eval, trace) = target.run(idx, bound, candidate_hash).await?;
+                    Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
+                }
+            }))
+            .buffer_unordered(self.config.concurrency.max(1))
+            .try_collect()
+            .await?;
+
+        Ok((fresh, gauge.peak()))
+    }
+}
+
+/// Counts distinct candidates with rollouts in flight; records the peak.
+#[derive(Default)]
+struct Gauge {
+    in_flight: std::sync::Mutex<HashMap<usize, usize>>,
+    peak: std::sync::atomic::AtomicUsize,
+}
+
+impl Gauge {
+    fn enter(&self, candidate: usize) -> GaugeGuard<'_> {
+        let mut in_flight = self.in_flight.lock().unwrap();
+        *in_flight.entry(candidate).or_insert(0) += 1;
+        self.peak
+            .fetch_max(in_flight.len(), std::sync::atomic::Ordering::Relaxed);
+        GaugeGuard {
+            gauge: self,
+            candidate,
+        }
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+struct GaugeGuard<'a> {
+    gauge: &'a Gauge,
+    candidate: usize,
+}
+
+impl Drop for GaugeGuard<'_> {
+    fn drop(&mut self) {
+        let mut in_flight = self.gauge.in_flight.lock().unwrap();
+        if let Some(count) = in_flight.get_mut(&self.candidate) {
+            *count -= 1;
+            if *count == 0 {
+                in_flight.remove(&self.candidate);
             }
-        }))
-        .buffer_unordered(self.config.concurrency.max(1))
-        .try_collect()
-        .await
+        }
     }
 }
 
@@ -1030,6 +1073,24 @@ mod tests {
         let empty = Candidate::new();
         assert_ne!(a.stable_hash(), empty.stable_hash());
         assert_eq!(empty.stable_hash(), Candidate::default().stable_hash());
+    }
+
+    #[test]
+    fn explicit_clears_are_distinct_candidate_content() {
+        let unset = Candidate::with_instruction("drafter", "x");
+        let mut cleared = Candidate::with_instruction("drafter", "x");
+        cleared.clear_instruction("drafter");
+        assert_ne!(unset.stable_hash(), cleared.stable_hash());
+
+        // Clearing demos (empty set) differs from leaving them unset.
+        let mut no_demos = Candidate::new();
+        no_demos.set_demos("drafter", Vec::new());
+        assert_ne!(no_demos.stable_hash(), Candidate::new().stable_hash());
+
+        // to_params preserves the explicit clear.
+        let params = cleared.to_params();
+        assert!(params.get("drafter").is_some());
+        assert_eq!(params.get("drafter").unwrap().instruction_override, None);
     }
 
     #[test]

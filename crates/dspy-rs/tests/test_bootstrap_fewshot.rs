@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    BootstrapFewShot, Eval, LM, LMClient, Module, ModuleState, Optimizer, Predict, PredictError,
+    BootstrapFewShot, Eval, LM, LMClient, Module, ModuleState, Predict, PredictError,
     Predicted, Signature, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
@@ -20,11 +20,11 @@ struct BootSig {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct BootModule {
     predictor: Predict<BootSig>,
 }
+
+dspy_rs::predictors!(BootModule { predictor });
 
 impl Module for BootModule {
     type Input = BootSigInput;
@@ -106,7 +106,7 @@ async fn bootstrap_harvests_demos_and_adopts_when_better() {
         .build();
 
     let report = bootstrap
-        .compile(&mut module, trainset(), &ExactMatch)
+        .compile_module(&mut module, &trainset(), &ExactMatch)
         .await
         .expect("bootstrap should succeed on canned responses");
 
@@ -152,7 +152,7 @@ async fn bootstrap_keeps_baseline_when_candidate_is_worse() {
         .build();
 
     let report = bootstrap
-        .compile(&mut module, trainset(), &ExactMatch)
+        .compile_module(&mut module, &trainset(), &ExactMatch)
         .await
         .unwrap();
 
@@ -184,7 +184,7 @@ async fn bootstrap_without_qualifying_rollouts_skips_candidate_eval() {
         .build();
 
     let report = bootstrap
-        .compile(&mut module, trainset(), &ExactMatch)
+        .compile_module(&mut module, &trainset(), &ExactMatch)
         .await
         .unwrap();
 
@@ -214,7 +214,7 @@ async fn bootstrap_respects_max_demos() {
         .build();
 
     let report = bootstrap
-        .compile(&mut module, trainset(), &ExactMatch)
+        .compile_module(&mut module, &trainset(), &ExactMatch)
         .await
         .unwrap();
 

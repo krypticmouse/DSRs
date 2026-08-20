@@ -4,7 +4,7 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Eval, LM, LMClient, Module, ModuleState, Optimizer, Predict, PredictError, Predicted, SIMBA,
+    Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA,
     Signature, SimbaMove, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
@@ -20,11 +20,11 @@ struct SimbaSig {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct SimbaModule {
     predictor: Predict<SimbaSig>,
 }
+
+dspy_rs::predictors!(SimbaModule { predictor });
 
 impl Module for SimbaModule {
     type Input = SimbaSigInput;
@@ -123,7 +123,7 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
         .build();
 
     let report = simba
-        .compile(&mut module, trainset(3), &ExactMatch)
+        .compile_module(&mut module, &trainset(3), &ExactMatch)
         .await
         .expect("SIMBA should succeed on canned responses");
 
@@ -179,7 +179,7 @@ async fn append_rule_move_uses_the_reflection_lm() {
         .build();
 
     let report = simba
-        .compile(&mut module, trainset(2), &ExactMatch)
+        .compile_module(&mut module, &trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -222,7 +222,7 @@ async fn append_rule_falls_back_to_metric_feedback_without_prompt_model() {
         .build();
 
     let report = simba
-        .compile(&mut module, trainset(2), &ExactMatch)
+        .compile_module(&mut module, &trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -262,7 +262,7 @@ async fn gate_rejection_leaves_the_module_untouched() {
         .build();
 
     let report = simba
-        .compile(&mut module, trainset(2), &ExactMatch)
+        .compile_module(&mut module, &trainset(2), &ExactMatch)
         .await
         .unwrap();
 
@@ -300,7 +300,7 @@ async fn budget_stops_the_ascent_cleanly() {
         .build();
 
     let report = simba
-        .compile(&mut module, trainset(2), &ExactMatch)
+        .compile_module(&mut module, &trainset(2), &ExactMatch)
         .await
         .unwrap();
 

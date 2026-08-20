@@ -1,6 +1,6 @@
 //! Shared evaluation engine (vision §5.4) coverage: bounded-concurrency
 //! fan-out, rollout caching, budget metering, minibatch gating, matrix/Pareto
-//! bookkeeping, and the candidate apply/restore seam.
+//! bookkeeping, and the ambient candidate-injection + one-shot install model.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use dspy_rs::{
-    Budget, CallMetadata, Candidate, EngineConfig, Eval, EvalEngine, EvalOutcome, GateOutcome, LM,
-    LMClient, Module, ModuleState, Predict, PredictError, Predicted, Signature,
-    TestCompletionModel, TypedMetric, apply_candidate, restore_candidate,
+    Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM,
+    LMClient, Module, ModuleState, OptimizeTarget, Predict, PredictError, Predicted, Signature,
+    TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -46,11 +46,11 @@ fn trainset(n: usize) -> Vec<(EngSigInput, EngSigOutput)> {
 // ---------------------------------------------------------------------------
 
 /// No-LM module: echoes the prompt back as the answer.
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct EchoModule {
     predictor: Predict<EngSig>,
 }
+
+dspy_rs::predictors!(EchoModule { predictor });
 
 impl EchoModule {
     fn new() -> Self {
@@ -77,13 +77,12 @@ impl Module for EchoModule {
 
 /// Echo module that blocks each rollout on a barrier: the test only completes
 /// if all N rollouts are genuinely in flight at once.
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct BarrierModule {
     predictor: Predict<EngSig>,
-    #[facet(opaque, skip)]
     barrier: Arc<tokio::sync::Barrier>,
 }
+
+dspy_rs::predictors!(BarrierModule { predictor });
 
 impl Module for BarrierModule {
     type Input = EngSigInput;
@@ -103,17 +102,14 @@ impl Module for BarrierModule {
 /// Echo module that gauges how many rollouts are inside `forward` at once.
 /// The pair barrier forces at least two to overlap, so a sequential engine
 /// deadlocks; the gauge proves the bound is never exceeded.
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct GaugeModule {
     predictor: Predict<EngSig>,
-    #[facet(opaque, skip)]
     in_flight: Arc<AtomicUsize>,
-    #[facet(opaque, skip)]
     max_in_flight: Arc<AtomicUsize>,
-    #[facet(opaque, skip)]
     pair_barrier: Arc<tokio::sync::Barrier>,
 }
+
+dspy_rs::predictors!(GaugeModule { predictor });
 
 impl Module for GaugeModule {
     type Input = EngSigInput;
@@ -135,11 +131,11 @@ impl Module for GaugeModule {
 
 /// Real `Predict` leaf backed by [`TestCompletionModel`] — every rollout is an
 /// actual LM call against the canned response queue.
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct LmModule {
     predictor: Predict<EngSig>,
 }
+
+dspy_rs::predictors!(LmModule { predictor });
 
 impl Module for LmModule {
     type Input = EngSigInput;
@@ -253,21 +249,19 @@ async fn fan_out_runs_examples_concurrently_with_correct_results() {
         barrier: Arc::new(tokio::sync::Barrier::new(N)),
     };
     let metric = IndexMetric;
-    let mut engine = EvalEngine::new(
-        trainset(N),
-        &metric,
-        EngineConfig {
-            concurrency: N,
-            ..EngineConfig::default()
-        },
-    );
+    let examples = trainset(N);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: N,
+        ..EngineConfig::default()
+    });
 
     let candidate = engine.register(Candidate::new());
     // The barrier only opens once all N rollouts are in flight simultaneously;
     // a sequential engine would deadlock and trip the timeout.
     let outcome = tokio::time::timeout(
         Duration::from_secs(10),
-        engine.evaluate(&mut module, candidate, None),
+        engine.evaluate(&target, candidate, None),
     )
     .await
     .expect("fan-out must run all rollouts concurrently")
@@ -294,11 +288,13 @@ async fn fan_out_runs_examples_concurrently_with_correct_results() {
 async fn subset_evaluation_respects_order_and_matrix_cells() {
     let mut module = EchoModule::new();
     let metric = IndexMetric;
-    let mut engine = EvalEngine::new(trainset(4), &metric, EngineConfig::default());
+    let examples = trainset(4);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
 
     let candidate = engine.register(Candidate::new());
     let eval = engine
-        .evaluate(&mut module, candidate, Some(&[3, 1, 2]))
+        .evaluate(&target, candidate, Some(&[3, 1, 2]))
         .await
         .unwrap()
         .completed()
@@ -321,11 +317,13 @@ async fn rollout_cache_serves_repeats_without_lm_calls() {
     ]);
     let mut module = lm_module(client.clone()).await;
     let metric = ExactMatch;
-    let mut engine = EvalEngine::new(trainset(3), &metric, EngineConfig::default());
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
 
     let candidate = engine.register(Candidate::new());
     let first = engine
-        .evaluate(&mut module, candidate, None)
+        .evaluate(&target, candidate, None)
         .await
         .unwrap()
         .completed()
@@ -337,7 +335,7 @@ async fn rollout_cache_serves_repeats_without_lm_calls() {
     // Re-evaluation: the response queue is now EMPTY, so any LM call would
     // error. The cache must serve all three rollouts.
     let second = engine
-        .evaluate(&mut module, candidate, None)
+        .evaluate(&target, candidate, None)
         .await
         .expect("cached re-evaluation must not touch the LM")
         .completed()
@@ -348,13 +346,14 @@ async fn rollout_cache_serves_repeats_without_lm_calls() {
     assert_eq!(engine.spend().metric_calls, 3, "metric must not re-run");
     assert_eq!(engine.spend().cache_hits, 3);
 
-    // A *different* candidate is a cache miss: it runs fresh LM calls.
+    // A *different* candidate is a cache miss: it runs fresh LM calls, with
+    // the candidate's instruction injected ambiently.
     client.push_response(answer_response("0"));
     client.push_response(answer_response("wrong"));
     client.push_response(answer_response("2"));
     let other = engine.register(Candidate::with_instruction("predictor", "be brief"));
     let third = engine
-        .evaluate(&mut module, other, None)
+        .evaluate(&target, other, None)
         .await
         .unwrap()
         .completed()
@@ -362,8 +361,9 @@ async fn rollout_cache_serves_repeats_without_lm_calls() {
     assert!((third.mean() - 2.0 / 3.0).abs() < 1e-9);
     assert_eq!(engine.spend().lm_calls, 6);
 
-    // Candidate evaluation restored the module: no instruction override left.
-    let state = ModuleState::from_module(&mut module).unwrap();
+    // Injection was ambient: the module itself never changed.
+    drop(target);
+    let state = ModuleState::from_module(&module).unwrap();
     assert_eq!(state.predictors["predictor"].instruction_override, None);
 }
 
@@ -371,24 +371,22 @@ async fn rollout_cache_serves_repeats_without_lm_calls() {
 async fn budget_stops_cleanly_and_reports_spend() {
     let mut module = EchoModule::new();
     let metric = IndexMetric;
-    let mut engine = EvalEngine::new(
-        trainset(3),
-        &metric,
-        EngineConfig {
-            budget: Budget {
-                max_metric_calls: Some(4),
-                ..Budget::unlimited()
-            },
-            ..EngineConfig::default()
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(4),
+            ..Budget::unlimited()
         },
-    );
+        ..EngineConfig::default()
+    });
 
     let base = engine.register(Candidate::new());
     let better = engine.register(Candidate::with_instruction("predictor", "improved"));
 
     assert!(engine.budget_allows(3));
     engine
-        .evaluate(&mut module, base, None)
+        .evaluate(&target, base, None)
         .await
         .unwrap()
         .completed()
@@ -396,7 +394,7 @@ async fn budget_stops_cleanly_and_reports_spend() {
     assert_eq!(engine.spend().metric_calls, 3);
 
     // A second full eval needs 3 more rollouts; only 1 remains.
-    match engine.evaluate(&mut module, better, None).await.unwrap() {
+    match engine.evaluate(&target, better, None).await.unwrap() {
         EvalOutcome::BudgetExhausted { needed } => assert_eq!(needed, 3),
         EvalOutcome::Complete(_) => panic!("engine must stop at the budget"),
     }
@@ -404,7 +402,7 @@ async fn budget_stops_cleanly_and_reports_spend() {
 
     // Cache-served batches are free even at the budget edge.
     let replay = engine
-        .evaluate(&mut module, base, None)
+        .evaluate(&target, base, None)
         .await
         .unwrap()
         .completed()
@@ -413,7 +411,7 @@ async fn budget_stops_cleanly_and_reports_spend() {
 
     // The final budget unit still fits a single-example batch.
     engine
-        .evaluate(&mut module, better, Some(&[0]))
+        .evaluate(&target, better, Some(&[0]))
         .await
         .unwrap()
         .completed()
@@ -430,13 +428,15 @@ async fn minibatch_gate_promotes_only_above_threshold() {
     let metric = HashKeyedMetric {
         scores: HashMap::from([(strong.stable_hash(), 0.9), (weak.stable_hash(), 0.1)]),
     };
-    let mut engine = EvalEngine::new(trainset(6), &metric, EngineConfig::default());
+    let examples = trainset(6);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
 
     let strong = engine.register(strong);
     let weak = engine.register(weak);
 
     match engine
-        .evaluate_gated(&mut module, weak, &[0, 1], 0.5)
+        .evaluate_gated(&target, weak, &[0, 1], 0.5)
         .await
         .unwrap()
     {
@@ -451,7 +451,7 @@ async fn minibatch_gate_promotes_only_above_threshold() {
     assert!(engine.matrix().score(weak, 2).is_none());
 
     match engine
-        .evaluate_gated(&mut module, strong, &[0, 1], 0.5)
+        .evaluate_gated(&target, strong, &[0, 1], 0.5)
         .await
         .unwrap()
     {
@@ -490,19 +490,17 @@ async fn fan_out_never_exceeds_the_concurrency_bound() {
         pair_barrier: Arc::new(tokio::sync::Barrier::new(BOUND)),
     };
     let metric = IndexMetric;
-    let mut engine = EvalEngine::new(
-        trainset(N),
-        &metric,
-        EngineConfig {
-            concurrency: BOUND,
-            ..EngineConfig::default()
-        },
-    );
+    let examples = trainset(N);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: BOUND,
+        ..EngineConfig::default()
+    });
 
     let candidate = engine.register(Candidate::new());
     let eval = tokio::time::timeout(
         Duration::from_secs(10),
-        engine.evaluate(&mut module, candidate, None),
+        engine.evaluate(&target, candidate, None),
     )
     .await
     .expect("bounded fan-out must still overlap rollouts")
@@ -524,20 +522,18 @@ async fn gate_reports_budget_exhaustion_for_minibatch_and_promotion() {
 
     // Minibatch itself doesn't fit: nothing runs, spend unchanged.
     let mut module = EchoModule::new();
-    let mut engine = EvalEngine::new(
-        trainset(4),
-        &metric,
-        EngineConfig {
-            budget: Budget {
-                max_metric_calls: Some(1),
-                ..Budget::unlimited()
-            },
-            ..EngineConfig::default()
+    let examples = trainset(4);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(1),
+            ..Budget::unlimited()
         },
-    );
+        ..EngineConfig::default()
+    });
     let candidate = engine.register(Candidate::new());
     match engine
-        .evaluate_gated(&mut module, candidate, &[0, 1], 0.0)
+        .evaluate_gated(&target, candidate, &[0, 1], 0.0)
         .await
         .unwrap()
     {
@@ -547,20 +543,16 @@ async fn gate_reports_budget_exhaustion_for_minibatch_and_promotion() {
     assert_eq!(engine.spend().metric_calls, 0);
 
     // Minibatch fits and passes the gate, but the full-set promotion doesn't.
-    let mut engine = EvalEngine::new(
-        trainset(4),
-        &metric,
-        EngineConfig {
-            budget: Budget {
-                max_metric_calls: Some(3),
-                ..Budget::unlimited()
-            },
-            ..EngineConfig::default()
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(3),
+            ..Budget::unlimited()
         },
-    );
+        ..EngineConfig::default()
+    });
     let candidate = engine.register(Candidate::new());
     match engine
-        .evaluate_gated(&mut module, candidate, &[2, 3], 0.0)
+        .evaluate_gated(&target, candidate, &[2, 3], 0.0)
         .await
         .unwrap()
     {
@@ -577,21 +569,19 @@ async fn gate_reports_budget_exhaustion_for_minibatch_and_promotion() {
 async fn auxiliary_charges_count_against_the_budget() {
     let mut module = EchoModule::new();
     let metric = IndexMetric;
-    let mut engine = EvalEngine::new(
-        trainset(3),
-        &metric,
-        EngineConfig {
-            budget: Budget {
-                max_lm_calls: Some(5),
-                ..Budget::unlimited()
-            },
-            ..EngineConfig::default()
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_lm_calls: Some(5),
+            ..Budget::unlimited()
         },
-    );
+        ..EngineConfig::default()
+    });
 
     let candidate = engine.register(Candidate::new());
     engine
-        .evaluate(&mut module, candidate, None)
+        .evaluate(&target, candidate, None)
         .await
         .unwrap()
         .completed()
@@ -606,34 +596,36 @@ async fn auxiliary_charges_count_against_the_budget() {
 }
 
 #[tokio::test]
-async fn permanent_install_invalidates_the_cache_via_baseline_hash() {
+async fn install_changes_baseline_identity_and_invalidates_the_cache() {
     let client = TestCompletionModel::new([answer_response("0"), answer_response("1")]);
     let mut module = lm_module(client.clone()).await;
     let metric = ExactMatch;
-    let mut engine = EvalEngine::new(trainset(2), &metric, EngineConfig::default());
+    let examples = trainset(2);
+    let mut engine = Engine::new(EngineConfig::default());
 
+    let mut target = OptimizeTarget::module(&mut module, &examples, &metric);
     let candidate = engine.register(Candidate::new());
     engine
-        .evaluate(&mut module, candidate, None)
+        .evaluate(&target, candidate, None)
         .await
         .unwrap()
         .completed()
         .unwrap();
     assert_eq!(engine.spend().lm_calls, 2);
 
-    // Permanently install a winner mid-run (the COPRO-between-rounds shape):
-    // the module skeleton changed, so cached entries for the old baseline
-    // must NOT be served for the same candidate on the new baseline.
-    apply_candidate(
-        &mut module,
-        &Candidate::with_instruction("predictor", "installed"),
-    )
-    .unwrap();
+    // Install a winner (the run's one mutation) and start a new run: the
+    // module skeleton changed, so a fresh target computes a new baseline
+    // identity and cached entries for the old baseline must NOT be served.
+    target
+        .install(&Candidate::with_instruction("predictor", "installed"))
+        .unwrap();
+    drop(target);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
 
     client.push_response(answer_response("0"));
     client.push_response(answer_response("1"));
     let eval = engine
-        .evaluate(&mut module, candidate, None)
+        .evaluate(&target, candidate, None)
         .await
         .unwrap()
         .completed()
@@ -644,9 +636,9 @@ async fn permanent_install_invalidates_the_cache_via_baseline_hash() {
 }
 
 #[tokio::test]
-async fn apply_and_restore_are_the_single_candidate_seam() {
+async fn install_is_the_single_mutation_seam() {
     let mut module = EchoModule::new();
-    let before = ModuleState::from_module(&mut module).unwrap();
+    let before = ModuleState::from_module(&module).unwrap();
     assert_eq!(
         before.predictors["predictor"].instruction_override.as_deref(),
         Some("seed")
@@ -654,7 +646,7 @@ async fn apply_and_restore_are_the_single_candidate_seam() {
     assert!(before.predictors["predictor"].demos.is_empty());
 
     let mut candidate = Candidate::new();
-    candidate.set_instruction("predictor", "overlaid");
+    candidate.set_instruction("predictor", "installed");
     candidate.set_demos(
         "predictor",
         vec![
@@ -665,29 +657,70 @@ async fn apply_and_restore_are_the_single_candidate_seam() {
         ],
     );
 
-    let undo = apply_candidate(&mut module, &candidate).unwrap();
-    let applied = ModuleState::from_module(&mut module).unwrap();
+    // Evaluation never mutates; install does, once, at the boundary.
+    let metric = IndexMetric;
+    let examples = trainset(1);
+    let mut target = OptimizeTarget::module(&mut module, &examples, &metric);
+    target.install(&candidate).unwrap();
+
+    // Unknown predictor names are rejected.
+    let bad = Candidate::with_instruction("missing", "nope");
+    let err = target.install(&bad).expect_err("unknown predictor must fail");
+    assert!(err.to_string().contains("missing"));
+    drop(target);
+
+    let applied = ModuleState::from_module(&module).unwrap();
     assert_eq!(
         applied.predictors["predictor"].instruction_override.as_deref(),
-        Some("overlaid")
+        Some("installed")
     );
     assert_eq!(applied.predictors["predictor"].demos.len(), 1);
 
-    restore_candidate(&mut module, undo).unwrap();
-    let after = ModuleState::from_module(&mut module).unwrap();
-    assert_eq!(
-        after.predictors["predictor"].instruction_override.as_deref(),
-        Some("seed")
-    );
-    assert!(after.predictors["predictor"].demos.is_empty());
+    // Explicit clear-to-default is expressible and installs as a clear.
+    let mut clear = Candidate::new();
+    clear.clear_instruction("predictor");
+    clear.set_demos("predictor", Vec::new());
+    let mut target = OptimizeTarget::module(&mut module, &examples, &metric);
+    target.install(&clear).unwrap();
+    drop(target);
 
-    // Unknown predictor: error, and no partial application sticks.
-    let bad = Candidate::with_instruction("missing", "nope");
-    let err = apply_candidate(&mut module, &bad).expect_err("unknown predictor must fail");
-    assert!(err.to_string().contains("missing"));
-    let unchanged = ModuleState::from_module(&mut module).unwrap();
-    assert_eq!(
-        unchanged.predictors["predictor"].instruction_override.as_deref(),
-        Some("seed")
+    let cleared = ModuleState::from_module(&module).unwrap();
+    assert_eq!(cleared.predictors["predictor"].instruction_override, None);
+    assert!(cleared.predictors["predictor"].demos.is_empty());
+}
+
+#[tokio::test]
+async fn candidates_fan_out_concurrently_in_the_module_lane() {
+    // Two DISTINCT candidates rendezvous on one barrier: the test only
+    // passes if their rollouts are in flight simultaneously — the module
+    // lane's ambient injection has no serialized apply/restore step.
+    const CANDIDATES: usize = 2;
+    let mut module = BarrierModule {
+        predictor: Predict::<EngSig>::builder().instruction("seed").build(),
+        barrier: Arc::new(tokio::sync::Barrier::new(CANDIDATES)),
+    };
+    let metric = IndexMetric;
+    let examples = trainset(1);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
+
+    let a = engine.register(Candidate::with_instruction("predictor", "A"));
+    let b = engine.register(Candidate::with_instruction("predictor", "B"));
+
+    let evals = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.evaluate_many(&target, &[a, b], None),
+    )
+    .await
+    .expect("candidate-level parallelism must release the barrier")
+    .unwrap()
+    .completed()
+    .unwrap();
+
+    assert_eq!(evals.len(), 2);
+    assert!(
+        engine.peak_candidate_concurrency() >= 2,
+        "expected candidate-level concurrency, gauge read {}",
+        engine.peak_candidate_concurrency()
     );
 }

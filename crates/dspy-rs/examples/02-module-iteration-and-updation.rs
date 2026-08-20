@@ -30,6 +30,8 @@ struct QAModule {
     answerer: Predict<QA>,
 }
 
+dspy_rs::predictors!(QAModule { answerer });
+
 impl Module for QAModule {
     type Input = QAInput;
     type Output = QAOutput;
@@ -96,7 +98,7 @@ async fn main() -> Result<()> {
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile(&mut module, trainset.clone(), &metric)
+        .compile_module(&mut module, &trainset, &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);

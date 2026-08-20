@@ -43,6 +43,8 @@ struct SimpleQA {
     answerer: Predict<QuestionAnswering>,
 }
 
+dspy_rs::predictors!(SimpleQA { answerer });
+
 impl Module for SimpleQA {
     type Input = QuestionAnsweringInput;
     type Output = QuestionAnsweringOutput;
@@ -122,11 +124,11 @@ async fn main() -> Result<()> {
 
     println!("Starting MIPROv2 optimization...");
     optimizer
-        .compile(&mut qa_module, train_subset.clone(), &metric)
+        .compile_module(&mut qa_module, &train_subset, &metric)
         .await?;
 
     // Inspect what the optimizer installed: instructions + bootstrapped demos.
-    let state = ModuleState::from_module(&mut qa_module)?;
+    let state = ModuleState::from_module(&qa_module)?;
     for (predictor, predictor_state) in &state.predictors {
         println!(
             "Predictor `{predictor}`: {} bootstrapped demos, instruction override: {}",

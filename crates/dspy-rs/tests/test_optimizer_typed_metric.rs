@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
-    COPRO, CallMetadata, MIPROv2, Eval, Module, Optimizer, Predict, PredictError, Predicted,
+    COPRO, CallMetadata, MIPROv2, Eval, Module, Predict, PredictError, Predicted,
     Signature, TypedMetric,
 };
 use std::collections::HashSet;
@@ -15,11 +15,11 @@ struct OptimizerSig {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct InstructionEchoModule {
     predictor: Predict<OptimizerSig>,
 }
+
+dspy_rs::predictors!(InstructionEchoModule { predictor });
 
 impl Module for InstructionEchoModule {
     type Input = OptimizerSigInput;
@@ -113,7 +113,7 @@ async fn copro_compile_uses_typed_metric_predictions() {
 
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
     optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("COPRO compile should succeed on typed metric");
 
@@ -147,7 +147,7 @@ async fn mipro_compile_uses_typed_metric_predictions() {
         .build();
 
     optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("MIPRO compile should succeed on typed metric");
 
@@ -171,7 +171,7 @@ async fn copro_compile_propagates_metric_errors() {
     let optimizer = COPRO::builder().breadth(3).depth(1).build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &FailingMetric)
+        .compile_module(&mut module, &trainset(), &FailingMetric)
         .await
         .expect_err("COPRO should propagate typed metric errors");
 
@@ -192,7 +192,7 @@ async fn mipro_compile_propagates_metric_errors() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &FailingMetric)
+        .compile_module(&mut module, &trainset(), &FailingMetric)
         .await
         .expect_err("MIPRO should propagate typed metric errors");
 

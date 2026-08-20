@@ -19,8 +19,9 @@
 //!
 //! A [`Predict`] is the leaf — the only thing that actually calls the LM. Every other
 //! module ([`ChainOfThought`], custom pipelines) delegates to one or more `Predict` leaves.
-//! Optimizers discover these leaves automatically via Facet reflection and mutate their
-//! instructions and few-shot demos.
+//! Modules name their leaves explicitly via [`Predictors`] (see the `predictors!` macro);
+//! optimizers tune those leaves' instructions and few-shot demos by injecting candidates
+//! ambiently per call, installing only the winner.
 //!
 //! # Quick start
 //!
@@ -73,10 +74,9 @@
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
-//! - **Container traversal is partial.** The optimizer walker handles `Option`, `Vec`,
-//!   `HashMap<String, _>`, and `Box`. `Rc`/`Arc` containing `Predict` leaves return
-//!   explicit container errors (not silent skips), and `Predict` discovery requires
-//!   a valid shape-local accessor payload (`TODO(dsrs-shared-ptr-policy)`).
+//! - **Leaf discovery is explicit.** Optimizable [`Predict`] leaves are whatever a
+//!   module declares in its [`Predictors`] impl — there is no reflection walker.
+//!   A leaf you forget to declare simply isn't optimized or persisted.
 //!
 //! # Crate organization
 //!
@@ -91,10 +91,6 @@
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
 //! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
-
-// TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
-// extension-attr dispatch no longer triggers rust-lang/rust#52234 on in-crate usage.
-#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 
 extern crate self as dspy_rs;
 

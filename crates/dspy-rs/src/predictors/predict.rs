@@ -3,13 +3,11 @@ use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Map, Value};
 use std::marker::PhantomData;
-use std::ops::ControlFlow;
 use std::sync::{Arc, OnceLock};
 use tracing::{debug, trace};
 
-use crate as dsrs;
 use crate::core::lm::ToolSet;
-use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature, StateUpdate};
+use crate::core::{Module, PredictState, Signature};
 use crate::ir::{
     self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
 };
@@ -46,34 +44,6 @@ impl<S: Signature> Demo<S> {
     }
 }
 
-fn predict_dyn_visit<S>(
-    value: *mut (),
-    visitor: &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>,
-) -> ControlFlow<()>
-where
-    S: Signature,
-{
-    // SAFETY: this function is only called through the shape-local
-    // `dsrs::predict_accessor` payload attached to a shape with strict
-    // `Predict` identity (`type_identifier` + `module_path`).
-    let typed = unsafe { &mut *(value.cast::<Predict<S>>()) };
-    visitor(typed)
-}
-
-type VisitPredictorMutFn =
-    fn(*mut (), &mut dyn FnMut(&mut dyn DynPredictor) -> ControlFlow<()>) -> ControlFlow<()>;
-
-trait PredictAccessorProvider {
-    const VISIT_MUT: VisitPredictorMutFn;
-}
-
-impl<S> PredictAccessorProvider for S
-where
-    S: Signature,
-{
-    const VISIT_MUT: VisitPredictorMutFn = predict_dyn_visit::<S>;
-}
-
 /// The leaf module. The only thing in the system that actually calls the LM.
 ///
 /// One `Predict` = one prompt template = one LM call. It takes a [`Signature`]'s fields
@@ -84,16 +54,14 @@ where
 ///
 /// This is also the unit of optimization. When an optimizer tunes your program, it's
 /// adjusting `Predict` leaves: their demos (few-shot examples) and instructions.
-/// The optimizer's Facet walker discovers leaves automatically from struct fields —
-/// no `#[parameter]` annotations or manual traversal needed.
 ///
 /// # Optimizer discovery
 ///
-/// `Predict<S>` encodes shape-local discovery payloads:
-/// - strict shape identity (`type_identifier` + `module_path`) identifies the leaf
-/// - `dsrs::predict_accessor` stores the typed mutable accessor visitor
-///
-/// The optimizer walker consumes these through `visit_named_predictors_mut`.
+/// Modules declare their `Predict` leaves by name through the
+/// [`Predictors`](crate::Predictors) trait (see the `predictors!` macro);
+/// optimizers read each leaf through its [`PredictorInfo`](crate::PredictorInfo)
+/// view and inject candidates ambiently per call
+/// ([`fx::with_params`](crate::fx::with_params)) — never by mutating the leaf.
 /// There is no runtime registration side effect in `new()` or `build()`.
 ///
 /// ```no_run
@@ -119,9 +87,6 @@ where
 /// ```
 #[derive(facet::Facet)]
 #[facet(crate = facet, opaque)]
-#[facet(dsrs::predict_accessor = &PredictAccessorFns {
-    visit_mut: <S as PredictAccessorProvider>::VISIT_MUT,
-})]
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
@@ -193,9 +158,10 @@ impl<S: Signature> Predict<S> {
     /// The typed write path for optimizable state (instruction override + demos).
     ///
     /// This is the only place that assigns those fields and invalidates the
-    /// cached prompt prefix; the builder and the type-erased
-    /// `DynPredictor::apply_update` seam both funnel here. `None` leaves a
-    /// field untouched.
+    /// cached prompt prefix; the builder and the [`PredictorInfo::load_state`]
+    /// install seam both funnel here. `None` leaves a field untouched.
+    ///
+    /// [`PredictorInfo::load_state`]: crate::core::PredictorInfo::load_state
     fn apply_state(
         &mut self,
         instruction: Option<Option<String>>,
@@ -373,7 +339,7 @@ impl<S: Signature> Predict<S> {
             None
         } else {
             let state = PredictState {
-                demos: DynPredictor::demos_as_json(self),
+                demos: crate::core::PredictorInfo::demos_as_json(self),
                 instruction_override: self.instruction_override.clone(),
             };
             let minted =
@@ -391,13 +357,22 @@ impl<S: Signature> Predict<S> {
             .clone())
     }
 
-    /// The overlay a run reads through: instance state composed with any
-    /// ambient optimizer overlay
-    /// ([`ir::current_overlay`](crate::ir::current_overlay)). Ambient entries
-    /// win over instance entries for the same slot — optimizer param
-    /// injection overrides instance state, exactly as the mutation seam did.
-    /// An ambient overlay minted against a *different* program is ignored
-    /// (one scope can span several modules; only the matching one accepts it).
+    /// The overlay a run reads through: instance state composed with the
+    /// ambient candidate scopes, later layers winning per slot:
+    ///
+    /// 1. instance state (instruction override + demos);
+    /// 2. an ambient optimizer overlay
+    ///    ([`ir::current_overlay`](crate::ir::current_overlay)) — ignored when
+    ///    minted against a *different* program (one scope can span several
+    ///    modules; only the matching one accepts it);
+    /// 3. the ambient [`fx::Params`](crate::fx::Params) entry matching this
+    ///    predictor's component name ([`fx::with_params`](crate::fx::with_params)
+    ///    — the optimizer's candidate-injection scope). Explicit clears
+    ///    resolve to the program slot defaults, so a candidate can reset a
+    ///    slot past instance state.
+    ///
+    /// Ambient entries winning over instance entries preserves exactly the
+    /// precedence the old apply/restore mutation seam had.
     #[allow(clippy::result_large_err)]
     fn effective_overlay(
         &self,
@@ -410,10 +385,18 @@ impl<S: Signature> Predict<S> {
         let instance = self.instance_overlay(program)?;
         let ambient = crate::ir::bridge::current_overlay()
             .filter(|overlay| overlay.base == program.meta.program_hash);
-        Ok(match (instance, ambient) {
+        let params_values = match crate::fx::ambient_entry(self.component_name()) {
+            Some(entry) => crate::ir::bridge::entry_slot_values(program, self.component_name(), &entry)
+                .map_err(|err| {
+                    internal_error(format!("failed to bind ambient params: {err}"))
+                })?,
+            None => Vec::new(),
+        };
+
+        let mut merged: Option<Overlay> = match (instance, ambient) {
             (None, None) => None,
-            (Some(instance), None) => Some(instance),
-            (None, Some(ambient)) => Some(ambient),
+            (Some(instance), None) => Some((*instance).clone()),
+            (None, Some(ambient)) => Some((*ambient).clone()),
             (Some(instance), Some(ambient)) => {
                 let mut merged = (*instance).clone();
                 for (id, value) in ambient.entries() {
@@ -421,9 +404,21 @@ impl<S: Signature> Predict<S> {
                         internal_error(format!("failed to compose ambient overlay: {err}"))
                     })?;
                 }
-                Some(Arc::new(merged))
+                Some(merged)
             }
-        })
+        };
+
+        if !params_values.is_empty() {
+            let mut overlay = merged.take().unwrap_or_else(|| Overlay::new(program));
+            for (id, value) in params_values {
+                overlay.set(program, id, value).map_err(|err| {
+                    internal_error(format!("failed to compose ambient params: {err}"))
+                })?;
+            }
+            merged = Some(overlay);
+        }
+
+        Ok(merged.map(Arc::new))
     }
 
     /// Resolves the LM this call uses: instance LM > global
@@ -1012,7 +1007,8 @@ impl<S: Signature> PredictBuilder<S> {
     }
 
     /// Builds the [`Predict`], routing state through the same applicator the
-    /// mutation seam uses.
+    /// install seam ([`PredictorInfo::load_state`](crate::core::PredictorInfo::load_state))
+    /// uses.
     pub fn build(self) -> Predict<S> {
         let mut predict = Predict {
             tools: self.tools,
@@ -1482,13 +1478,30 @@ where
     }
 }
 
-impl<S> DynPredictor for Predict<S>
+impl<S: Signature> Predict<S> {
+    /// Assigns the component name recorded on this predictor's trace spans.
+    ///
+    /// The leaf name is part of the 1-node program (and its hash), so the
+    /// cached program, the overlay minted against it, and the loaded
+    /// interpreter are all invalidated when the name changes.
+    pub(crate) fn assign_trace_name(&mut self, name: &str) {
+        if self.trace_name.as_deref() == Some(name) {
+            return;
+        }
+        self.trace_name = Some(name.to_string());
+        self.program = OnceLock::new();
+        self.instance_overlay = OnceLock::new();
+        *self.engine.get_mut() = None;
+    }
+}
+
+impl<S> crate::core::PredictorInfo for Predict<S>
 where
     S: Signature,
     S::Input: Schema,
     S::Output: Schema,
 {
-    fn schema(&self) -> &SignatureSchema {
+    fn schema(&self) -> &'static SignatureSchema {
         S::schema()
     }
 
@@ -1496,6 +1509,10 @@ where
         self.instruction_override
             .clone()
             .unwrap_or_else(|| S::instruction().to_string())
+    }
+
+    fn default_instruction(&self) -> String {
+        S::instruction().to_string()
     }
 
     fn demos_as_json(&self) -> Vec<Map<String, Value>> {
@@ -1510,38 +1527,44 @@ where
 
     fn dump_state(&self) -> PredictState {
         PredictState {
-            demos: self.demos_as_json(),
+            demos: crate::core::PredictorInfo::demos_as_json(self),
             instruction_override: self.instruction_override.clone(),
         }
     }
 
-    fn apply_update(&mut self, update: StateUpdate) -> Result<()> {
+    fn load_state(&mut self, state: PredictState) -> Result<()> {
         // Convert demos before touching any state so a schema mismatch leaves
         // the predictor unchanged.
-        let demos = update
+        let demos = state
             .demos
-            .map(|demos| {
-                demos
-                    .iter()
-                    .map(demo_from_json::<S>)
-                    .collect::<Result<Vec<_>>>()
-            })
-            .transpose()?;
-        self.apply_state(update.instruction, demos);
+            .iter()
+            .map(demo_from_json::<S>)
+            .collect::<Result<Vec<_>>>()?;
+        self.apply_state(Some(state.instruction_override), Some(demos));
         Ok(())
     }
 
     fn set_trace_name(&mut self, name: &str) {
-        if self.trace_name.as_deref() == Some(name) {
-            return;
-        }
-        self.trace_name = Some(name.to_string());
-        // The leaf name is part of the program (and its hash), so the cached
-        // program, the overlay minted against it, and the loaded interpreter
-        // are all stale.
-        self.program = OnceLock::new();
-        self.instance_overlay = OnceLock::new();
-        *self.engine.get_mut() = None;
+        Predict::assign_trace_name(self, name);
+    }
+}
+
+impl<S> crate::core::Predictors for Predict<S>
+where
+    S: Signature,
+    S::Input: Schema,
+    S::Output: Schema,
+{
+    /// A bare `Predict` used as a module is itself the one leaf. Its name is
+    /// the assigned trace name when present, else `"self"`.
+    fn predictors(&self) -> Vec<(String, &dyn crate::core::PredictorInfo)> {
+        let name = self.trace_name.clone().unwrap_or_else(|| "self".to_string());
+        vec![(name, self as &dyn crate::core::PredictorInfo)]
+    }
+
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn crate::core::PredictorInfo)> {
+        let name = self.trace_name.clone().unwrap_or_else(|| "self".to_string());
+        vec![(name, self as &mut dyn crate::core::PredictorInfo)]
     }
 }
 
@@ -1600,20 +1623,24 @@ mod tests {
     }
 
     #[test]
-    fn dyn_predictor_apply_update_round_trips_json_demo_rows() {
+    fn predictor_info_load_state_round_trips_json_demo_rows() {
+        use crate::core::PredictorInfo;
+
         let typed = typed_row("demo-input", "demo-output");
         let row = json_from_demo::<PredictConversionSig>(&typed)
             .expect("typed demo should convert to a flat row");
         let mut predictor = Predict::<PredictConversionSig>::new();
 
-        let update = StateUpdate {
-            instruction: None,
-            demos: Some(vec![row]),
-        };
-        DynPredictor::apply_update(&mut predictor, update)
-            .expect("predictor should accept JSON demo rows");
+        PredictorInfo::load_state(
+            &mut predictor,
+            PredictState {
+                demos: vec![row],
+                instruction_override: None,
+            },
+        )
+        .expect("predictor should accept JSON demo rows");
 
-        let demos = DynPredictor::demos_as_json(&predictor);
+        let demos = PredictorInfo::demos_as_json(&predictor);
         assert_eq!(demos.len(), 1);
         assert_eq!(demos[0].get("prompt"), Some(&json!("demo-input")));
         assert_eq!(demos[0].get("answer"), Some(&json!("demo-output")));

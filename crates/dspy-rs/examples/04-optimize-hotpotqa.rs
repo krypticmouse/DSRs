@@ -42,6 +42,8 @@ struct QAModule {
     answerer: Predict<QA>,
 }
 
+dspy_rs::predictors!(QAModule { answerer });
+
 impl Module for QAModule {
     type Input = QAInput;
     type Output = QAOutput;
@@ -96,14 +98,14 @@ async fn main() -> Result<()> {
         .eval_concurrency(16) // candidate evaluations fan out 16 LM calls at a time
         .build();
     optimizer
-        .compile(&mut module, examples.clone(), &metric)
+        .compile_module(&mut module, &examples, &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
 
     // Persist the tuned instructions for later `ModuleState::load(...).apply(...)`.
-    ModuleState::from_module(&mut module)?.save("optimized-hotpotqa.json")?;
+    ModuleState::from_module(&module)?.save("optimized-hotpotqa.json")?;
     println!("saved optimized module state to optimized-hotpotqa.json");
 
     Ok(())
