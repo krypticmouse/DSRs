@@ -44,8 +44,8 @@ and what the next owner must do before trusting or merging it.
 ## 3. Validation checklist for the next owner (priority order)
 
 0. **Confirm HEAD is green.** `cargo test --workspace` at `16f2b27`.
-   (Session A started this run while writing this doc — if you're reading this
-   in the repo, re-run it yourself rather than trusting a stale note.)
+   Session A's result (2026-08-20): exit 0, 80/80 suites ok, zero failures —
+   the seam merges pass on top of the phases. Cheap to re-run; do so anyway.
 1. **LIVE LM smoke test — the single biggest gap.** Every test in every phase
    ran against mocked completions (`TestCompletionModel`). The demoted
    `Predict` path, the AgentLoop-backed `with_tools` path, and the
