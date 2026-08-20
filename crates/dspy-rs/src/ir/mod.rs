@@ -6,15 +6,15 @@
 //!   [`SignatureDef::of`], serde-derivable for the program artifact. The type
 //!   model is [`typesys::FieldType`](crate::typesys::FieldType) unchanged;
 //!   class/enum definitions live in a program-owned [`TypeTable`].
-//! - **IR-2, the graph** (`ir` feature, default-on) — [`Program`]: entity
+//! - **IR-2, the graph** — [`Program`]: entity
 //!   arenas over the closed [`Node`] enum, field-level [`Binding`] dataflow,
 //!   [`ParamSlot`] parameters addressed by `ParamPath`, [`Overlay`]
 //!   candidates, capability ceilings, and load-time validation.
-//! - **IR-3, the interpreter** (`ir` feature) — [`Interpreter`]: async
+//! - **IR-3, the interpreter** — [`Interpreter`]: async
 //!   evaluation of a loaded program with overlay read-through at render time,
 //!   RFC 0001 trace spans (component = leaf name), budget metering, and
 //!   sandboxed [`Hole`](Node::Hole) execution via `dsrs-tools`.
-//! - **IR-5, the `.dsrs` text format** (`ir` feature) — the wire form of a
+//! - **IR-5, the `.dsrs` text format** — the wire form of a
 //!   program: [`Program::from_dsrs`]/[`Program::to_dsrs`] parse and
 //!   canonically print RFC 0002 §4 text, and the canonical text (minus
 //!   lineage) is the [`Program::compute_hash`] preimage. A canonical JSON

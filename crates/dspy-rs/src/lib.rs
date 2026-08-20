@@ -25,8 +25,11 @@
 //!
 //! # Quick start
 //!
+//! The recommended import is [`prelude`] — the curated core surface. (The
+//! crate root also glob re-exports everything for backwards compatibility.)
+//!
 //! ```no_run
-//! use dspy_rs::*;
+//! use dspy_rs::prelude::*;
 //!
 //! #[derive(Signature, Clone, Debug)]
 //! /// Answer questions accurately and concisely.
@@ -63,10 +66,10 @@
 //! # What doesn't work (yet)
 //!
 //! - **No structural optimization.** The [`ir`] layer ships a dynamic program
-//!   graph ([`ir::Program`], default-on behind the `ir` feature) with an
-//!   interpreter, an edit calculus ([`ir::Edit`]), and the `.dsrs` text format,
-//!   but the shipped optimizers only tune instructions and demos — none of them
-//!   rewrite graph structure yet.
+//!   graph ([`ir::Program`]) with an interpreter, an edit calculus
+//!   ([`ir::Edit`]), and the `.dsrs` text format, but the shipped optimizers
+//!   only tune instructions and demos — none of them rewrite graph structure
+//!   yet.
 //! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
 //!   [`ChainOfThought`]. Agentic tool loops live in the IR instead
 //!   (`AgentLoopNode` via the `#[agent]` macro); the module trait and
@@ -133,6 +136,63 @@ pub mod typesys;
 pub use dsrs_macros::*;
 pub use facet::{Facet, Shape};
 pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Schema};
+
+/// The curated core surface — the recommended import for DSRs programs.
+///
+/// ```no_run
+/// use dspy_rs::prelude::*;
+/// ```
+///
+/// Covers the basic path end to end: declare a [`Signature`], pick a module
+/// ([`Predict`], [`ChainOfThought`]), [`configure`] an [`LM`], load data,
+/// evaluate with a [`TypedMetric`], optimize with any [`Optimizer`], and
+/// capture/replay traces. The crate root's glob re-exports remain for the
+/// long tail (adapters, schema internals, fx, the full [`ir`] surface).
+pub mod prelude {
+    // Signatures: the trait and the derive share a name across namespaces.
+    pub use crate::core::signature::Signature;
+    pub use dsrs_macros::{Example, Signature};
+
+    // Modules and predictors.
+    pub use crate::core::{
+        CallMetadata, Module, ModuleState, PredictError, PredictState, Predicted, Predictors,
+    };
+    pub use crate::modules::{ChainOfThought, WithReasoning};
+    pub use crate::predictors::{Demo, Predict};
+    // The `predictors!` leaf-declaration macro (and, same name, the module).
+    pub use crate::predictors;
+
+    // LM configuration.
+    pub use crate::core::lm::{LM, LMConfig};
+    pub use crate::core::settings::configure;
+
+    // Data loading.
+    pub use crate::data::dataloader::{DataLoader, TypedLoadOptions};
+
+    // Evaluation.
+    pub use crate::evaluate::{
+        TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
+    };
+    pub use crate::trace::Eval;
+
+    // Optimization: the trait, the five strategies, and the engine surface.
+    pub use crate::optimizer::{
+        BootstrapFewShot, COPRO, Candidate, Engine, GEPA, MIPROv2, OptimizeTarget, Optimizer,
+        SIMBA,
+    };
+
+    // Trace capture and replay entry points.
+    pub use crate::trace::{
+        ReplayMode, ReplayReport, Trace, capture, capture_with_meta, is_capturing, is_replaying,
+        replay,
+    };
+
+    // The IR: programs as data.
+    pub use crate::ir::{Edit, Interpreter, Overlay, Program};
+
+    // Telemetry sugar every quickstart uses.
+    pub use crate::utils::init_tracing;
+}
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
