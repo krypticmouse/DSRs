@@ -149,11 +149,11 @@ impl BudgetMeter {
 /// Parse/coercion metadata from one successful `Predict`-leaf evaluation,
 /// collected by [`Interpreter::run_collecting`] in execution order.
 ///
-/// This is the interpreter-side twin of the static lane's
-/// [`CallMetadata`](crate::CallMetadata): the same [`FieldMeta`] type (jsonish
-/// coercion [`Flag`](crate::Flag)s + `#[check]` [`ConstraintResult`](crate::ConstraintResult)s)
-/// that `ChatAdapter::parse_output_with_meta` produces, so a typed `Predict<S>`
-/// routed through the interpreter loses none of `Predicted`'s metadata contract.
+/// This is what `Predict<S>` reassembles into [`CallMetadata`](crate::CallMetadata):
+/// the same [`FieldMeta`] type (jsonish coercion [`Flag`](crate::Flag)s +
+/// `#[check]` [`ConstraintResult`](crate::ConstraintResult)s) that
+/// `ChatAdapter::parse_output_def` produces, so a typed `Predict<S>` routed
+/// through the interpreter loses none of `Predicted`'s metadata contract.
 ///
 /// Scope and semantics:
 /// - `Predict` and `AgentLoop` leaves report; `Hole` leaves make no LM call

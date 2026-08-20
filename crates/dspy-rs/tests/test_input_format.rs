@@ -1,4 +1,17 @@
+use dspy_rs::ir::SignatureDef;
 use dspy_rs::{Schema, ChatAdapter, Signature};
+use serde_json::Value;
+
+fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(value).expect("serializable") {
+        Value::Object(map) => map,
+        other => panic!("expected object, got {other:?}"),
+    }
+}
+
+fn user_message<S: Signature>(input: &S::Input) -> String {
+    ChatAdapter.format_input_def(SignatureDef::of::<S>(), &json_map(input))
+}
 
 #[derive(Clone, Debug)]
 #[Schema]
@@ -158,7 +171,6 @@ fn extract_field(message: &str, field_name: &str) -> String {
 
 #[test]
 fn typed_input_format_yaml_falls_back_to_json() {
-    let adapter = ChatAdapter;
     let input = FormatSigInput {
         question: "What is YAML?".to_string(),
         context: vec![Document {
@@ -166,7 +178,7 @@ fn typed_input_format_yaml_falls_back_to_json() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<FormatSig>(&input);
+    let message = user_message::<FormatSig>(&input);
     let context_value = extract_field(&message, "context");
     let question_value = extract_field(&message, "question");
 
@@ -182,7 +194,6 @@ fn typed_input_format_yaml_falls_back_to_json() {
 
 #[test]
 fn typed_input_format_json_is_parsable() {
-    let adapter = ChatAdapter;
     let input = FormatJsonSigInput {
         question: "What is JSON?".to_string(),
         context: vec![Document {
@@ -190,7 +201,7 @@ fn typed_input_format_json_is_parsable() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<FormatJsonSig>(&input);
+    let message = user_message::<FormatJsonSig>(&input);
     let context_value = extract_field(&message, "context");
 
     let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
@@ -204,7 +215,6 @@ fn typed_input_format_json_is_parsable() {
 
 #[test]
 fn typed_input_format_toon_falls_back_to_json() {
-    let adapter = ChatAdapter;
     let input = FormatToonSigInput {
         question: "What is TOON?".to_string(),
         context: vec![Document {
@@ -212,7 +222,7 @@ fn typed_input_format_toon_falls_back_to_json() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<FormatToonSig>(&input);
+    let message = user_message::<FormatToonSig>(&input);
     let context_value = extract_field(&message, "context");
 
     let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
@@ -226,7 +236,6 @@ fn typed_input_format_toon_falls_back_to_json() {
 
 #[test]
 fn typed_input_default_string_is_raw() {
-    let adapter = ChatAdapter;
     let input = DefaultFormatSigInput {
         question: "Raw string".to_string(),
         context: vec![Document {
@@ -234,7 +243,7 @@ fn typed_input_default_string_is_raw() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    let message = user_message::<DefaultFormatSig>(&input);
     let question_value = extract_field(&message, "question");
 
     assert_eq!(question_value, "Raw string");
@@ -242,7 +251,6 @@ fn typed_input_default_string_is_raw() {
 
 #[test]
 fn typed_input_default_non_string_is_json() {
-    let adapter = ChatAdapter;
     let input = DefaultFormatSigInput {
         question: "Default JSON".to_string(),
         context: vec![Document {
@@ -250,7 +258,7 @@ fn typed_input_default_non_string_is_json() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    let message = user_message::<DefaultFormatSig>(&input);
     let context_value = extract_field(&message, "context");
     let parsed: serde_json::Value = serde_json::from_str(&context_value).expect("valid JSON");
     let first = parsed
@@ -263,7 +271,6 @@ fn typed_input_default_non_string_is_json() {
 
 #[test]
 fn typed_input_appends_response_instruction_reminder() {
-    let adapter = ChatAdapter;
     let input = DefaultFormatSigInput {
         question: "Reminder check".to_string(),
         context: vec![Document {
@@ -271,7 +278,7 @@ fn typed_input_appends_response_instruction_reminder() {
         }],
     };
 
-    let message = adapter.format_user_message_typed::<DefaultFormatSig>(&input);
+    let message = user_message::<DefaultFormatSig>(&input);
     assert!(message.contains("Respond with the corresponding output fields"));
     assert!(message.contains("[[ ## answer ## ]]"));
     assert!(message.contains("[[ ## completed ## ]]"));
@@ -279,7 +286,6 @@ fn typed_input_appends_response_instruction_reminder() {
 
 #[test]
 fn typed_input_render_jinja_uses_context_values() {
-    let adapter = ChatAdapter;
     let input = RenderJinjaSigInput {
         question: "Question".to_string(),
         context: Document {
@@ -287,7 +293,7 @@ fn typed_input_render_jinja_uses_context_values() {
         },
     };
 
-    let message = adapter.format_user_message_typed::<RenderJinjaSig>(&input);
+    let message = user_message::<RenderJinjaSig>(&input);
     let context_value = extract_field(&message, "ctx");
 
     assert_eq!(
@@ -298,27 +304,25 @@ fn typed_input_render_jinja_uses_context_values() {
 
 #[test]
 fn typed_input_render_jinja_missing_var_panics() {
-    let adapter = ChatAdapter;
     let input = RenderJinjaStrictSigInput {
         question: "Question".to_string(),
     };
 
     let result = std::panic::catch_unwind(|| {
-        adapter.format_user_message_typed::<RenderJinjaStrictSig>(&input)
+        user_message::<RenderJinjaStrictSig>(&input)
     });
     assert!(result.is_err(), "missing Jinja variables should panic");
 }
 
 #[test]
 fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
-    let adapter = ChatAdapter;
     let input = RenderJinjaFieldMetaSigInput {
         context: Document {
             text: "Hello".to_string(),
         },
     };
 
-    let message = adapter.format_user_message_typed::<RenderJinjaFieldMetaSig>(&input);
+    let message = user_message::<RenderJinjaFieldMetaSig>(&input);
     let context_value = extract_field(&message, "ctx");
     let parts: Vec<&str> = context_value.split('|').collect();
 
@@ -331,13 +335,12 @@ fn typed_input_render_jinja_exposes_field_metadata_and_vars() {
 
 #[test]
 fn typed_input_render_jinja_non_string_primitives() {
-    let adapter = ChatAdapter;
     let input = RenderPrimitiveSigInput {
         count: 42,
         is_ready: true,
     };
 
-    let message = adapter.format_user_message_typed::<RenderPrimitiveSig>(&input);
+    let message = user_message::<RenderPrimitiveSig>(&input);
     let count_value = extract_field(&message, "count");
     let ready_value = extract_field(&message, "is_ready");
 
@@ -347,14 +350,13 @@ fn typed_input_render_jinja_non_string_primitives() {
 
 #[test]
 fn typed_input_render_jinja_supports_contrib_filters() {
-    let adapter = ChatAdapter;
     let input = RenderContribFilterSigInput {
         context: Document {
             text: "abcdefg".to_string(),
         },
     };
 
-    let message = adapter.format_user_message_typed::<RenderContribFilterSig>(&input);
+    let message = user_message::<RenderContribFilterSig>(&input);
     let context_value = extract_field(&message, "context");
 
     assert_eq!(context_value, "abcde");

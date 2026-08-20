@@ -197,12 +197,17 @@ fn main() {
     init_tracing().expect("failed to initialize tracing");
 
     let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<InsuranceClaimInfo>()
-        .expect("system prompt");
-    let user = adapter.format_user_message_typed::<InsuranceClaimInfo>(&InsuranceClaimInfoInput {
+    let def = dspy_rs::ir::SignatureDef::of::<InsuranceClaimInfo>();
+    let types = dspy_rs::ir::SignatureDef::types_of::<InsuranceClaimInfo>();
+    let system = adapter.build_system_def(def, types, None);
+    let input = InsuranceClaimInfoInput {
         claim_text: "A raccoon bumped a parked scooter in a driveway. Reported by Taylor P. via phone. No policy details provided.".to_string(),
-    });
+    };
+    let input_map = match serde_json::to_value(&input).expect("serializable input") {
+        serde_json::Value::Object(map) => map,
+        _ => unreachable!("signature inputs serialize as objects"),
+    };
+    let user = adapter.format_input_def(def, &input_map);
 
     println!("=== System ===\n{system}\n");
     println!("=== User ===\n{user}");

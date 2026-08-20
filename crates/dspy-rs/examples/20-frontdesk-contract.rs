@@ -125,7 +125,14 @@ async fn main() -> Result<()> {
     // into the prompt — print it instead of trusting anyone's word.
     let adapter = ChatAdapter;
     println!("=== the prompt Triage becomes ===\n");
-    println!("{}", adapter.format_system_message_typed::<Triage>()?);
+    println!(
+        "{}",
+        adapter.build_system_def(
+            dspy_rs::ir::SignatureDef::of::<Triage>(),
+            dspy_rs::ir::SignatureDef::types_of::<Triage>(),
+            None,
+        )
+    );
 
     configure(
         LM::builder()
