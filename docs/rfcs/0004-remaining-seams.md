@@ -59,6 +59,8 @@ moot.
 
 ## 4. Whole-rollout credit assignment (`optimizer/harvest.rs`)
 
+> Status update (2026-08-20): an implementation landed in merge `109c571` on `v1-program-unification` (authored by a separate session). Not yet reviewed against the suggested shape below — see docs/handoff-v1-unification.md §3.2 before marking closed.
+
 **What:** demo harvesting scores every span in a rollout with the rollout's
 single metric score — a good final answer marks *all* intermediate predictor
 calls as good demos, including any that a later step had to recover from.
@@ -75,6 +77,8 @@ own eval over the rollout score when present. Deeper counterfactual schemes
 (ablate-one-span replays) can layer on the replay machinery later.
 
 ## 5. Tool membership as a `ParamSlot` (the ToolSet gene)
+
+> Status update (2026-08-20): an implementation landed in merge `16f2b27` (`ParamKind::ToolSet`; touches the `.dsrs` grammar and therefore program hashes). Not yet reviewed — see docs/handoff-v1-unification.md §3.2.
 
 **What:** which tools an `AgentLoop` carries is structural today
 (`AgentLoopNode::tools: Box<[ToolId]>`); only each tool's *description* is an
@@ -93,6 +97,8 @@ declared tools, so any subset is capability-safe by construction. Mutation
 proposals then compose with overlays like any other slot value.
 
 ## 6. Structural optimizers over `ir::Edit`
+
+> Status update (2026-08-20): an implementation landed in merge `ca14e08` (`optimizer/structural.rs`, the sixth strategy). Not yet reviewed — see docs/handoff-v1-unification.md §3.2.
 
 **What:** the edit calculus is fully shipped — `Edit`, `Program::edited`,
 `Program::legal_edits` (the menu of applicable edits per node), and
