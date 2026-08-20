@@ -41,6 +41,7 @@
               "docs/components/holes",
               "docs/components/capabilities",
               "docs/components/program-and-nodes",
+              "docs/components/edit-calculus",
               "docs/components/dsrs-file",
               "docs/components/runtime",
               "docs/components/cli",
@@ -106,7 +107,8 @@
             "group": "Companion crates",
             "pages": [
               "docs/api/dsrs-tools",
-              "docs/api/dsrs-macros"
+              "docs/api/dsrs-macros",
+              "docs/api/dsrs-syntax"
             ]
           }
         ]

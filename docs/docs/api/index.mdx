@@ -8,7 +8,7 @@ This tab is an auto-generated index of the public API: every public struct, enum
 
 Every item links to its page on docs.rs, which carries the full signatures, methods, trait implementations, and long-form documentation:
 
-<CardGroup cols={3}>
+<CardGroup cols={2}>
 <Card title="dspy-rs" icon="box-open" href="https://docs.rs/dspy-rs">
 The main crate: signatures, predictors, modules, IR, traces, optimizers
 </Card>
@@ -17,6 +17,9 @@ Sandboxed tool execution and Code Mode
 </Card>
 <Card title="dsrs-macros" icon="wand-magic-sparkles" href="https://docs.rs/dsrs-macros">
 The proc-macro crate behind the derive and attribute surface
+</Card>
+<Card title="dsrs-syntax" icon="scroll" href="https://docs.rs/dsrs-syntax">
+The shared .dsrs lexer and structural grammar both frontends read from
 </Card>
 </CardGroup>
 
@@ -30,7 +33,8 @@ The pages are rebuilt from the working tree, not fetched from a registry, so the
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dspy-rs --lib --all-features -- -Z unstable-options --output-format json
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-tools --lib -- -Z unstable-options --output-format json
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs_macros --lib -- -Z unstable-options --output-format json
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-syntax --lib -- -Z unstable-options --output-format json
 python3 docs/scripts/gen_api.py
 ```
 
-Each generated page carries the crate version and commit it was built from. Run the four commands after any public-API change; CI can run them and fail on a dirty diff to keep this tab honest.
+Each generated page carries the crate version and commit it was built from. Run the five commands after any public-API change; CI can run them and fail on a dirty diff to keep this tab honest.

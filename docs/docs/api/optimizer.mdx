@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `1e37260`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 Automatic prompt optimization.
@@ -18,9 +18,10 @@ Automatic prompt optimization.
 | `copro::*` | Glob re-export. |
 | `engine::*` | Glob re-export. |
 | `gepa::*` | Glob re-export. |
+| [`LeafInfo`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/struct.LeafInfo.html) | Re-export of `target::LeafInfo`. |
 | `mipro::*` | Glob re-export. |
-| `pareto::*` | Glob re-export. |
-| `program_engine::*` | Glob re-export. |
+| [`OptimizeTarget`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/struct.OptimizeTarget.html) | Re-export of `target::OptimizeTarget`. |
+| [`ProgramMetric`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/trait.ProgramMetric.html) | Re-export of `target::ProgramMetric`. |
 | `simba::*` | Glob re-export. |
 
 ## Modules
@@ -32,15 +33,26 @@ Automatic prompt optimization.
 | [`engine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/index.html) | The shared evaluation engine (vision §5.4): every optimizer is a thin strategy over this core. |
 | [`gepa`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/gepa/index.html) |  |
 | [`mipro`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/index.html) |  |
-| [`pareto`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/index.html) |  |
-| [`program_engine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/index.html) | The IR-native evaluation path (RFC 0002 IR-6): candidate `Overlay`s evaluated over one shared `Arc<Program>` through the `Interpreter` with **candidate-level parallelism**. |
 | [`simba`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/index.html) | SIMBA: Stochastic Introspective Mini-Batch Ascent (vision §4.3) — the cheap agentic default. |
+| [`target`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/index.html) | What an optimizer optimizes: `OptimizeTarget`, the lane-erased pair of (thing under optimization, evaluation harness). |
+
+## Structs
+
+| Item | Description |
+|---|---|
+| [`OptimizerCommon`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/struct.OptimizerCommon.html) | The engine/RNG knobs shared by every optimizer builder: evaluation concurrency, budget caps, cache salt, and the sampling seed. |
+
+## Enums
+
+| Item | Description |
+|---|---|
+| [`Report`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/enum.Report.html) | What an optimization run produced. Strategy-specific payloads for the optimizers that report more than "done". |
 
 ## Traits
 
 | Item | Description |
 |---|---|
-| [`Optimizer`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/trait.Optimizer.html) | Tunes a module's `Predict` leaves for better performance. |
+| [`Optimizer`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/trait.Optimizer.html) | A tuning strategy over the shared `Engine`. |
 
 ## `optimizer::bootstrap`
 
@@ -72,39 +84,27 @@ The shared evaluation engine (vision §5.4): every optimizer is a thin strategy 
 | Item | Description |
 |---|---|
 | [`Budget`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Budget.html) | Hard caps on evaluation spend. `None` = unlimited. |
-| [`Candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Candidate.html) | A candidate is *data*: a named set of `Overlay`s (predictor name → instruction/demos) plus a stable hash (`Candidate::stable_hash`). |
+| [`Candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Candidate.html) | A candidate is *data*: name-keyed per-leaf overlays plus a stable content hash (`Candidate::stable_hash`). |
 | [`CandidateEval`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.CandidateEval.html) | A candidate's results over one evaluation batch, in request order. |
-| [`CandidateUndo`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.CandidateUndo.html) | Saved pre-overlay state for the predictors a candidate touched. Produced by `apply_candidate`, consumed by `restore_candidate`. |
+| [`CandidateSlot`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.CandidateSlot.html) | One leaf's slice of a `Candidate`: which optimizable values to inject. |
+| [`Engine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Engine.html) | The shared evaluation core (vision §5.4). |
 | [`EngineConfig`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.EngineConfig.html) | Engine tuning knobs. |
-| [`EvalEngine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.EvalEngine.html) | The shared evaluation core (vision §5.4). |
-| [`Overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Overlay.html) | A per-predictor parameter overlay: which optimizable values to install. |
+| [`ParetoStatistics`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.ParetoStatistics.html) | Snapshot of the Pareto frontier at a point in the search. |
 | [`ParetoView`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.ParetoView.html) | Dominance snapshot computed from a `ScoreMatrix`: which candidates win (or tie, within tolerance) on at least one example. |
 | [`RolloutCache`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.RolloutCache.html) | In-memory rollout cache: `(baseline, candidate, example, salt)` → `Eval`. |
 | [`RolloutOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.RolloutOutcome.html) | One evaluated (or cache-served) rollout. |
 | [`ScoreMatrix`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.ScoreMatrix.html) | Per-instance score matrix: candidates × examples. |
-| [`Spend`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Spend.html) | What the engine has consumed so far. Serialized into checkpoints and reported to strategies. |
+| [`Spend`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/struct.Spend.html) | What the engine has consumed so far. Reported to strategies. |
 
 ### Enums
 
 | Item | Description |
 |---|---|
-| [`EvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.EvalOutcome.html) | Result of `EvalEngine::evaluate`. |
-| [`GateOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.GateOutcome.html) | Result of `EvalEngine::evaluate_gated`. |
-
-### Functions
-
-| Item | Description |
-|---|---|
-| [`apply_candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/fn.apply_candidate.html) | Applies a candidate's overlays to a module through the single mutation seam (`DynPredictor::apply_update`), returning the undo snapshot. |
-| [`restore_candidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/fn.restore_candidate.html) | Restores the pre-candidate state captured by `apply_candidate`. |
+| [`BatchEvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.BatchEvalOutcome.html) | Result of `Engine::evaluate_many`. |
+| [`EvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.EvalOutcome.html) | Result of `Engine::evaluate`. |
+| [`GateOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/engine/enum.GateOutcome.html) | Result of `Engine::evaluate_gated`. |
 
 ## `optimizer::gepa`
-
-### Re-exports
-
-| Item | Description |
-|---|---|
-| [`ParetoStatistics`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoStatistics.html) | Re-export of `super::pareto::ParetoStatistics`. |
 
 ### Structs
 
@@ -124,39 +124,7 @@ The shared evaluation engine (vision §5.4): every optimizer is a thin strategy 
 |---|---|
 | [`MIPROv2`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.MIPROv2.html) | Trace-guided instruction and demo optimizer. |
 | [`MIPROv2Builder`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.MIPROv2Builder.html) | Use builder syntax to set the inputs and finish with `build()`). |
-| [`PromptCandidate`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.PromptCandidate.html) | An instruction candidate with its evaluated score. |
 | [`PromptingTips`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/mipro/struct.PromptingTips.html) | Library of general prompting best practices used to seed candidate generation. |
-
-## `optimizer::pareto`
-
-### Structs
-
-| Item | Description |
-|---|---|
-| [`ParetoFrontier`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoFrontier.html) | Per-example dominance frontier for candidate selection. |
-| [`ParetoStatistics`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/pareto/struct.ParetoStatistics.html) | Snapshot of the Pareto frontier at a point in the search. |
-
-## `optimizer::program_engine`
-
-The IR-native evaluation path (RFC 0002 IR-6): candidate `Overlay`s evaluated over one shared `Arc<Program>` through the `Interpreter` with **candidate-level parallelism**.
-
-### Structs
-
-| Item | Description |
-|---|---|
-| [`ProgramEvalEngine`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/struct.ProgramEvalEngine.html) | The shared evaluation core for the dynamic lane: candidate overlays over one interpreter-loaded program. |
-
-### Enums
-
-| Item | Description |
-|---|---|
-| [`ProgramEvalOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/enum.ProgramEvalOutcome.html) | Result of `ProgramEvalEngine::evaluate_program_candidates`. |
-
-### Traits
-
-| Item | Description |
-|---|---|
-| [`ProgramMetric`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/program_engine/trait.ProgramMetric.html) | How a program-lane strategy tells the engine what "good" means: score one interpreter output (`JsonMap` of the program's output signature fields) against a labeled example. |
 
 ## `optimizer::simba`
 
@@ -177,3 +145,20 @@ SIMBA: Stochastic Introspective Mini-Batch Ascent (vision §4.3) — the cheap a
 | Item | Description |
 |---|---|
 | [`SimbaMove`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/simba/enum.SimbaMove.html) | Which of SIMBA's two moves a step proposed. |
+
+## `optimizer::target`
+
+What an optimizer optimizes: `OptimizeTarget`, the lane-erased pair of (thing under optimization, evaluation harness).
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`LeafInfo`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/struct.LeafInfo.html) | The read surface strategies build candidates from: one optimizable leaf's name, current values, and field contract. |
+| [`OptimizeTarget`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/struct.OptimizeTarget.html) | The thing an `Optimizer` optimizes: a module or a program, packaged with its example set and metric. See the module docs for the two lanes. |
+
+### Traits
+
+| Item | Description |
+|---|---|
+| [`ProgramMetric`](https://docs.rs/dspy-rs/latest/dspy_rs/optimizer/target/trait.ProgramMetric.html) | How a program-lane strategy tells the engine what "good" means: score one interpreter output (`JsonMap` of the program's output signature fields) against a labeled example. |

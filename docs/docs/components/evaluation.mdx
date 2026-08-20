@@ -1,6 +1,6 @@
 ---
 title: "Evaluation"
-description: "TypedMetric, Eval, the trainset evaluation loop, and feedback helper functions"
+description: "TypedMetric, Eval, and the trainset evaluation loop"
 icon: "gauge-high"
 ---
 
@@ -92,25 +92,6 @@ The public evaluation entry points return `Vec<Eval>`; the traced `Rollout` path
 | `average_score` | `fn(evals: &[Eval]) -> f64` | Arithmetic mean of scores; returns `0.0` for an empty slice |
 
 Each example runs inside a trace capture scope and the metric receives that rollout's `Trace`. Metric evaluation itself happens outside the scope, so LM-as-judge metrics do not pollute the execution trace.
-
-## Feedback helpers
-
-Helper functions in `evaluate::feedback_helpers` construct `Eval`s with structured textual feedback for common domains. All return `Eval`.
-
-| Function | Signature | Purpose |
-|---|---|---|
-| `retrieval_feedback` | `(retrieved: &[impl AsRef<str>], expected: &[impl AsRef<str>], context_docs: Option<&[impl AsRef<str>]>)` | Document retrieval. Score is F1; feedback lists correctly retrieved, missed, and incorrectly retrieved documents with precision, recall, and F1. Precision is `0.0` when `retrieved` is empty; recall is `1.0` when `expected` is empty |
-| `code_pipeline_feedback` | `(stages: &[(CodeStage, StageResult)], final_score: f64)` | Code generation pipelines. Feedback reports each stage in order and stops at the first failure; the score is the caller-supplied `final_score` |
-| `multi_objective_feedback` | `(objectives: &HashMap<String, (f64, String)>, weights: Option<&HashMap<String, f64>>)` | Multi-objective evaluation. Score is the weighted average (default weight `1.0` per objective); feedback lists each objective, sorted by name, plus the aggregate |
-| `string_similarity_feedback` | `(predicted: &str, expected: &str)` | String comparison. `1.0` for an exact trimmed match, `0.95` for a case-insensitive match, otherwise word-level F1 with missing and extra words listed |
-| `classification_feedback` | `(predicted_class: &str, expected_class: &str, confidence: Option<f64>)` | Classification. `1.0` on exact class match, `0.0` otherwise; feedback names the expected and predicted classes and the confidence when given |
-
-Supporting enums for `code_pipeline_feedback`:
-
-| Enum | Variants |
-|---|---|
-| `CodeStage` | `Parse`, `Compile`, `Execute`, `Test` |
-| `StageResult` | `Success`, `Failure { error: String }` |
 
 ## Metrics and optimizers
 

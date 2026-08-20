@@ -33,10 +33,10 @@ Uses the traces and a rotation of prompting tips to generate `num_candidates` in
 
 ### Phase 4: Trial evaluation
 
-- Evaluates up to `num_trials` candidates per predictor on one sampled minibatch
+- Evaluates up to `num_trials` candidates per predictor on one sampled minibatch (candidates injected ambiently — the module is never touched during evaluation)
 - Computes performance scores
 - Selects the best performing candidate
-- Applies it to the module
+- Installs the accumulated winner (demos + best instructions) once at the end through `OptimizeTarget::install`
 
 ## Configuration
 
@@ -56,7 +56,7 @@ You can also set `eval_concurrency` (concurrent LM calls during evaluation, defa
 ## Usage example
 
 ```rust
-use dspy_rs::{MIPROv2, Optimizer};
+use dspy_rs::MIPROv2;
 
 // Create optimizer
 let optimizer = MIPROv2::builder()
@@ -68,13 +68,13 @@ let optimizer = MIPROv2::builder()
 // Typed metric implementing TypedMetric<Row, MyModule> for your trainset row type
 let metric = ExactMatchMetric;
 
-// Optimize your module
-optimizer.compile(&mut module, train_examples, &metric).await?;
+// Optimize your module (MyModule declares its leaves via predictors!)
+optimizer.compile_module(&mut module, &train_examples, &metric).await?;
 ```
 
 The metric is the same `TypedMetric` used by every optimizer: `evaluate(&self, example, prediction, trace) -> Result<Eval>`, where `example` is your full trainset row. MIPROv2 only reads the numerical score; feedback is ignored. See the [evaluation reference](/docs/components/evaluation) for the trait.
 
-`train_examples` is `Vec<Row>` for any row type implementing `ToInput` toward the module's input — a `#[derive(Example)]` struct or `(Input, Output)` tuples; see [Data](/docs/components/data).
+`train_examples` is a slice of any row type implementing `ToInput` toward the module's input — a `#[derive(Example)]` struct or `(Input, Output)` tuples; see [Data](/docs/components/data). The module must declare its leaves with `predictors!`; see [Modules](/docs/components/modules#predictor-discovery-predictors).
 
 ### Typed data loading
 
@@ -109,16 +109,15 @@ Use the shared data ingress reference: [`DataLoader`](/docs/components/data).
 The code follows standard Rust practices:
 - No unsafe blocks
 - Results for error handling with context via anyhow
-- Strong types (`PromptCandidate`, `PromptingTips`)
+- Strong types (`Candidate`, `PromptingTips`)
 - Builder pattern for configuration
 - Async throughout, no blocking calls
 
-Key public types and methods:
-- `PromptCandidate` - an instruction with its evaluated `score: f64`
+Key public types:
 - `PromptingTips` - the library of best practices (`default_tips()`, `format_for_prompt()`)
-- `MIPROv2::select_best_traces`, `create_prompt_candidates`, `format_schema_fields`
+- `Candidate` - the shared engine currency MIPROv2 registers its instruction variants as (see [Optimizer engine](/docs/components/optimizer-engine))
 
-The report type is `()`: MIPROv2 mutates the module in place and returns nothing.
+`compile_module` returns `()`: MIPROv2 installs the winner on the module and reports nothing further (`Report::None` through the trait).
 
 Cost is roughly `num_predictors × (trainset_size + num_trials × minibatch_size)` LM calls, minus rollout-cache hits.
 

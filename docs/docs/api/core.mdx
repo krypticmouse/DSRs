@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `1e37260`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 The foundational abstractions everything else is built on.
@@ -27,12 +27,11 @@ The foundational abstractions everything else is built on.
 | `lm::*` | Glob re-export. |
 | [`LmError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.LmError.html) | Re-export of `errors::LmError`. |
 | `module::*` | Glob re-export. |
-| `module_ext::*` | Glob re-export. |
 | [`ModuleState`](https://docs.rs/dspy-rs/latest/dspy_rs/core/state/struct.ModuleState.html) | Re-export of `state::ModuleState`. |
 | [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.ParseError.html) | Re-export of `errors::ParseError`. |
 | [`Predicted`](https://docs.rs/dspy-rs/latest/dspy_rs/core/predicted/struct.Predicted.html) | Re-export of `predicted::Predicted`. |
 | [`PredictError`](https://docs.rs/dspy-rs/latest/dspy_rs/core/errors/enum.PredictError.html) | Re-export of `errors::PredictError`. |
-| [`PredictState`](https://docs.rs/dspy-rs/latest/dspy_rs/core/dyn_predictor/struct.PredictState.html) | Re-export of `dyn_predictor::PredictState`. |
+| [`PredictState`](https://docs.rs/dspy-rs/latest/dspy_rs/core/state/struct.PredictState.html) | Re-export of `state::PredictState`. |
 | `settings::*` | Glob re-export. |
 | `signature::*` | Glob re-export. |
 | [`SignatureSchema`](https://docs.rs/dspy-rs/latest/dspy_rs/core/schema/struct.SignatureSchema.html) | Re-export of `schema::SignatureSchema`. |
@@ -143,6 +142,8 @@ How trainset rows connect to modules.
 | Item | Description |
 |---|---|
 | [`Module`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/trait.Module.html) | Strategy-swapping interface for prompting modules. |
+| [`PredictorInfo`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/trait.PredictorInfo.html) | What optimizers read from — and, at explicit boundaries, write to — a `Predict` leaf. |
+| [`Predictors`](https://docs.rs/dspy-rs/latest/dspy_rs/core/module/trait.Predictors.html) | Explicit predictor-leaf discovery: a module *names* its optimizable `Predict` leaves. |
 
 ### Functions
 
