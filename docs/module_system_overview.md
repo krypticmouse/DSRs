@@ -1,6 +1,6 @@
 # DSRs Module System — What Changed, What It Enables
 
-This is a quick overview of the module system redesign. It builds on everything from the paper but adds a typed core and makes Section 1.3 (graph optimization) concrete.
+A quick overview of the module system as it stands after the v1 program unification. The typed core from the earlier redesign is unchanged; the graph-optimization story ("Section 1.3") is now concrete in the IR rather than a planned `ProgramGraph` layer.
 
 ---
 
@@ -8,15 +8,14 @@ This is a quick overview of the module system redesign. It builds on everything 
 
 | Before | Now |
 |--------|-----|
-| `Example` / `Prediction` as primary I/O | Typed `S::Input` / `Predicted<S::Output>` for the typed path; `Example` still used at optimizer/dynamic boundary |
+| `Example` / `Prediction` as primary I/O | Typed `S::Input` / `Predicted<S::Output>`; trainset rows are plain structs projected via `ToInput`/`ToOutput` |
 | `#[Signature(cot)]` applies CoT at signature level | `ChainOfThought::<S>::new()` — strategy is the module, not the signature |
-| `predict.forward(example).await` | `module.call(input).await?` on the typed path |
-| Manual `#[derive(Optimizable)]` + `#[parameter]` | Automatic discovery from struct shape |
-| Static `FieldSpec` arrays from macros | `SignatureSchema` derived from types at runtime |
-| `CallOutcome` with `.into_result()?` | `Result<Predicted<O>, PredictError>` — `?` works on stable |
-| Section 1.3 graph optimization (future work) | `ProgramGraph` being built now (V6) — walker foundation landed in V5 |
-
-> **TODO:** Nail down the long-term role of `Example`. It's still load-bearing at the DynPredictor boundary (demo conversion, optimizer manipulation, DataLoader). The typed path doesn't kill it — but its scope and future API need a decision.
+| Reflection-based leaf discovery (facet walker, `DynPredictor` handles) | Explicit declaration: the `Predictors` trait, one `predictors!(MyModule { field_a, field_b })` line per module |
+| Optimizers mutate the module during search | Candidates are data injected ambiently per rollout (`fx::with_params`); the single mutation is the final install of the winner |
+| Per-optimizer engines (`EvalEngine` / `ProgramEvalEngine`) | One shared `Engine` over an `OptimizeTarget` (typed module lane or loaded-program lane) |
+| `ReAct<S>` module, `ModuleExt::map`/`and_then` combinators | Deleted. Tool loops are IR `AgentLoop` nodes (`#[agent]`, or tools on a `Predict`); output transforms are plain Rust in `forward` |
+| `Predict` renders/parses on its own LM path | `Predict<S>` executes as a 1-node IR program through the `Interpreter`; instance state is an `ir::Overlay` |
+| Graph optimization as future work | The IR edit calculus: `Program::edited(&[Edit])`, `legal_edits`, `migrate_overlay` |
 
 ---
 
@@ -36,16 +35,8 @@ let result = module.call(QAInput { question: "2+2?".into() }).await?;
 result.reasoning  // augmented field — direct access
 result.answer     // original field — via Deref
 
-// Swap to ReAct — same call site
-let module = ReAct::<QA>::builder()
-    .tool("search", "Search the web", search_fn)
-    .build();
-
 // Batch without changing the module
-let results = dsrs::forward_all(&module, inputs, 5).await;
-
-// Simple transform without impl Module
-let confident = module.map(|r| Confident { answer: r.answer, confidence: 0.9 });
+let results = dspy_rs::forward_all(&module, inputs, 5).await;
 ```
 
 ---
@@ -58,97 +49,88 @@ A new augmentation (like adding confidence scoring to any output):
 #[augment(output, append)]
 struct Confidence {
     /// Model's self-assessed confidence
-    confidence: f64,
+    #[output] confidence: f64,
 }
 // Done — WithConfidence<O> now exists and composes with any signature
 // Users write: Predict<Augmented<QA, Confidence>>
 // They get: result.answer + result.confidence
 ```
 
-A new module (like BestOfN — runs N times, picks best):
+A new composite module is a struct with predictor fields, a `predictors!` line, and a `forward` body of ordinary Rust:
+
 ```rust
-#[derive(Module)]
-struct BestOfN<M: Module> {
-    module: M,              // walker sees through — finds all Predict leaves inside
-    #[skip] n: usize,
-    #[skip] reward_fn: Box<dyn Fn(&M::Input, &M::Output) -> f64 + Send + Sync>,
+struct TwoStepQA {
+    retrieve: Predict<RetrieveSig>,
+    answer: ChainOfThought<AnswerSig>,
 }
 
-impl<M: Module> Module for BestOfN<M> where M::Input: Clone {
-    type Input = M::Input;
-    type Output = M::Output;
+dspy_rs::predictors!(TwoStepQA { retrieve, answer });
 
-    async fn forward(&self, input: M::Input) -> Result<Predicted<Self::Output>, PredictError> {
-        let mut best = None;
-        let mut best_score = f64::NEG_INFINITY;
-        for _ in 0..self.n {
-            let result = self.module.call(input.clone()).await?;
-            let score = (self.reward_fn)(&input, &result);
-            if score > best_score { best_score = score; best = Some(result); }
-        }
-        best.ok_or(PredictError::AllAttemptsFailed)
+impl Module for TwoStepQA {
+    type Input = RetrieveInput;
+    type Output = WithReasoning<AnswerOutput>;
+
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        let ctx = self.retrieve.call(input).await?;
+        self.answer.call(AnswerInput { context: ctx.passages.clone() }).await
     }
 }
 ```
 
-`#[derive(Module)]` makes `module: M` discoverable — optimizers automatically find and tune the Predict leaves inside whatever `M` is. `#[skip]` fields (closures, config) are invisible to the walker. No traversal code, no schema construction.
+The `predictors!` line is the whole discovery story: each field identifier becomes the leaf's canonical name — its trace-span component, its optimizer-candidate key, and its `ModuleState` persistence key. No derive magic, no traversal code, no pointer casts.
 
 ---
 
 ## What optimizers see
 
 ```rust
-optimizer.compile(&mut module, trainset, metric).await;
+optimizer.compile_module(&mut module, &trainset, &metric).await?;
 // internally:
-visit_named_predictors_mut(&mut module, |path, predictor| {
-    // mutate demos, instructions, dump/load state — all through DynPredictor handles
-    ControlFlow::Continue(())
-})?;
+let mut target = OptimizeTarget::module(&mut module, &trainset, &metric);
+//   — snapshots each declared leaf as a LeafInfo (schema, instruction, demos)
+//   — stamps each leaf's trace name once (the naming pass)
+let mut engine = Engine::new(optimizer.engine_config());
+optimizer.compile(&mut target, &mut engine).await?;
+//   — candidates are name-keyed `Candidate`s, injected ambiently per rollout;
+//     evaluation never mutates the module, so candidates fan out concurrently
+//   — the winner is installed exactly once via PredictorInfo::load_state
 // after compile returns, module.call() uses optimized params — no code change
 ```
 
+The `Optimizer` trait is object-safe: `Box<dyn Optimizer>` pipelines can share one `Engine` — one budget, one rollout cache, one score matrix — across stages. The same trait drives the program lane (`OptimizeTarget::program`): an interpreter-loaded `.dsrs` program, JSON examples, and an overlay winner for `Program::bake`.
+
 ---
 
-## What ProgramGraph enables (Section 1.3 made concrete)
+## Structural optimization (Section 1.3 made concrete)
 
-This is the paper's "Dynamic Workflow Optimization" — pipelines as executable graphs that can restructure themselves.
-
-**Current state:** the V5 walker (`visit_named_predictors_mut`) enumerates all Predict leaves in a typed module through callback traversal. Everything else — `ProgramGraph`, `DynModule`, `StrategyFactory`, registry, type-validated edges, topological execution — is being built now in V6.
+The paper's "Dynamic Workflow Optimization" landed as the IR **edit calculus**, not a separate graph layer. A `#[module]` function lowers to a `Program` — a validated node tree with named leaves and addressable parameter slots — and structural moves are plain serde values applied purely:
 
 ```rust
-// Project a typed module into a mutable graph (snapshot — original untouched)
-let graph = ProgramGraph::from_module(&module);
+use dspy_rs::ir::{Edit, migrate_overlay};
 
-// Or build from scratch via registry
-let mut graph = ProgramGraph::new();
-let cot = registry::create("chain_of_thought", &schema, Default::default())?;
-graph.add_node("cot", cot)?;
-graph.connect("input", "question", "cot", "question")?;  // edges type-validated
-let result = graph.execute(input).await?;
-
-// After optimization, fit back to the typed module
-graph.fit(&mut module);
+let leaf = program.leaf_id("drafter").unwrap();
+let menu = program.legal_edits(leaf);        // the proposer menu (LLM-promptable)
+let child = program.edited(&[Edit::SwapLeaf { leaf, to: swap_target }])?;
+let carried = migrate_overlay(&program, &tuned, &child);  // value progress survives
 ```
 
-**Split** from the paper: a meta planner decides a complex signature should be two steps. It calls `graph.add_node` twice with simpler schemas from `registry::create`, rewires edges with `graph.connect`, removes the original with `graph.replace_node`. Edge type validation catches wiring errors immediately.
+`edited` clones, applies, re-validates with the loader's own rules, and seals a new content hash; the parent program and every hash-bound artifact minted against it stay coherent. **Split**, **fuse**, wrap-in-retry, predict↔agent swaps, and tool add/remove are all expressible as `Edit` batches; data-flow legality stays with the one validator both the builder and the loader use.
 
-**Fuse**: two adjacent nodes with compatible schemas get replaced by a single node with a merged signature. Same mutation APIs.
-
-**The key architectural property**: both the typed path and the graph path use the same `SignatureSchema` → `ChatAdapter` → prompt format pipeline. A `Predict<QA>` and a `registry::create("predict", &qa_schema, ...)` produce identical prompts. The meta planner can restructure the graph without worrying about prompt divergence.
-
-**The cycle**: project → optimize (parameter and/or structural) → fit-back → evaluate → repeat. The graph is the optimizer's scratch space; the user's typed module is the stable interface.
+The key architectural property is unchanged: the typed path and the program path share one rendering pipeline (`SignatureDef` → `ChatAdapter` → prompt). A `Predict<QA>` — which itself executes as a 1-node program — and a loaded `predict` leaf over the same signature produce identical prompts, so restructuring cannot cause prompt divergence.
 
 ---
 
 ## Layer stack
 
 ```
-You're here          What you touch                What's invisible to you
-─────────────────────────────────────────────────────────────────────────
-App developer        Signature, module.call()       Everything below
-Module author        #[derive(Module)], forward()   Discovery, graph
-Optimizer dev        Optimizer::compile internals (`visit_named_predictors_mut`, DynPredictor)  Graph, registry
-Meta planner         ProgramGraph, registry          (bottom layer — Section 1.3)
+You're here          What you touch                          What's invisible to you
+────────────────────────────────────────────────────────────────────────────────────
+App developer        Signature, module.call()                Everything below
+Module author        predictors!, forward()                  IR lowering, interpreter
+Optimizer dev        Optimizer::compile, OptimizeTarget,     IR internals
+                     Engine, Candidate
+Structural optimizer Program, Edit, legal_edits,             validator internals
+                     migrate_overlay
 ```
 
-Each layer only exists if you need it. Simple usage never instantiates the graph layer.
+Each layer only exists if you need it. Simple usage never touches the IR directly.
