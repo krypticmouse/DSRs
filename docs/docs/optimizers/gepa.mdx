@@ -54,11 +54,12 @@ GEPA can optimize at test time, not just training time (see [Inference-time sear
 ```rust
 use dspy_rs::*;
 
-#[derive(Builder, facet::Facet)]
-#[facet(crate = facet)]
+#[derive(Builder)]
 struct MyModule {
     predictor: Predict<MySignature>,
 }
+
+dspy_rs::predictors!(MyModule { predictor });
 
 impl Module for MyModule {
     type Input = MySignatureInput;
@@ -119,70 +120,11 @@ let gepa = GEPA::builder()
     .max_rollouts(500)  // Budget control
     .build();
 
-let result = gepa.compile(&mut module, trainset, &metric).await?;
+let result = gepa.compile_module(&mut module, &trainset, &metric).await?;
 
 println!("Best score: {:.3}", result.best_candidate.average_score());
 println!("Best instruction: {}", result.best_candidate.instruction);
 ```
-
-## Feedback helpers
-
-DSRs provides utilities for common feedback patterns. Each returns a ready-made `Eval` with the score and a formatted feedback string:
-
-### Document retrieval
-```rust
-use dspy_rs::retrieval_feedback;
-
-let eval = retrieval_feedback(
-    &retrieved_docs,
-    &expected_docs,
-    Some(&all_available_docs)
-);
-
-// Feedback:
-// Retrieved 3/5 correct documents (Precision: 0.600, Recall: 0.600, F1: 0.600)
-// Correctly retrieved: doc1, doc2, doc3
-// Missed: doc4, doc5
-```
-
-### Code generation
-```rust
-use dspy_rs::{code_pipeline_feedback, CodeStage, StageResult};
-
-let stages = vec![
-    (CodeStage::Parse, StageResult::Success),
-    (CodeStage::Compile, StageResult::Success),
-    (CodeStage::Execute, StageResult::Failure {
-        error: "Division by zero on line 42".to_string(),
-    }),
-];
-
-let eval = code_pipeline_feedback(&stages, 0.6);
-
-// Feedback:
-// Parse: Success
-// Compile: Success
-// Execute: Division by zero on line 42
-```
-
-### Multi-objective optimization
-```rust
-use dspy_rs::multi_objective_feedback;
-
-let mut objectives = HashMap::new();
-objectives.insert("accuracy".to_string(), (0.9, "High accuracy".to_string()));
-objectives.insert("latency".to_string(), (0.7, "Acceptable latency".to_string()));
-objectives.insert("cost".to_string(), (0.8, "Within budget".to_string()));
-
-let mut weights = HashMap::new();
-weights.insert("accuracy".to_string(), 2.0);
-weights.insert("latency".to_string(), 1.0);
-weights.insert("cost".to_string(), 1.0);
-
-let eval = multi_objective_feedback(&objectives, Some(&weights));
-```
-
-`string_similarity_feedback` and `classification_feedback` are also available.
 
 ## Configuration options
 
@@ -206,16 +148,16 @@ Pass validation data at compile time:
 
 ```rust
 let result = gepa
-    .compile_with_valset(&mut module, trainset, Some(valset), &metric)
+    .compile_module_with_valset(&mut module, &trainset, Some(&valset), &metric)
     .await?;
 ```
 
-With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile` does).
+With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile_module` does).
 
 ## Understanding GEPA results
 
 ```rust
-let result = gepa.compile(&mut module, trainset, &metric).await?;
+let result = gepa.compile_module(&mut module, &trainset, &metric).await?;
 
 // Best candidate found (already installed on the module)
 println!("Best instruction: {}", result.best_candidate.instruction);
@@ -250,10 +192,9 @@ pub struct Eval {
 
 Every rollout runs under trace capture, recording one span per `Predict` invocation. GEPA feeds the mutated component's spans (`trace.for_component(name)`) to the reflection LM alongside the feedback. See [Traces](/docs/components/traces).
 
-**ParetoFrontier**
-- Each candidate tracks which examples it wins on
-- Sampling is proportional to coverage
-- Automatically prunes dominated candidates
+**Pareto bookkeeping**
+
+GEPA uses the engine's score matrix directly: `ParetoView` (see [Optimizer engine](/docs/components/optimizer-engine)) tracks which validation columns each candidate wins on, parent sampling is proportional to that coverage, and candidates with zero wins are dominated.
 
 **GEPACandidate**
 ```rust
@@ -414,12 +355,13 @@ struct MathJudge {
 ### Optimized module
 
 ```rust
-#[derive(Builder, facet::Facet)]
-#[facet(crate = facet)]
+#[derive(Builder)]
 struct MathSolver {
     #[builder(default = Predict::<MathWordProblem>::new())]
     solver: Predict<MathWordProblem>,  // This gets optimized
 }
+
+dspy_rs::predictors!(MathSolver { solver });
 ```
 
 ### TypedMetric with judge
@@ -660,7 +602,7 @@ let gepa = GEPA::builder()
     .build();
 
 let result = gepa
-    .compile_with_valset(&mut module, my_tasks.clone(), Some(my_tasks), &metric)
+    .compile_module_with_valset(&mut module, &my_tasks, Some(&my_tasks), &metric)
     .await?;
 
 // Access per-task best scores and outputs

@@ -36,7 +36,7 @@ Other fields: `prompt_model` (separate LM for generating candidate instructions)
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, Eval, LM, Module, Optimizer, Predict, PredictError,
+    COPRO, Eval, LM, Module, Predict, PredictError,
     Predicted, Signature, Trace, TypedMetric, configure, init_tracing,
 };
 
@@ -49,12 +49,13 @@ struct QA {
     answer: String,
 }
 
-#[derive(Builder, facet::Facet)]
-#[facet(crate = facet)]
+#[derive(Builder)]
 struct MyModule {
     #[builder(default = Predict::<QA>::new())]
     predictor: Predict<QA>,
 }
+
+dspy_rs::predictors!(MyModule { predictor });
 
 impl Module for MyModule {
     type Input = QAInput;
@@ -118,13 +119,13 @@ async fn main() -> Result<()> {
         .build();
     let metric = ExactMatchMetric;
 
-    copro.compile(&mut module, trainset, &metric).await?;
+    copro.compile_module(&mut module, &trainset, &metric).await?;
 
     Ok(())
 }
 ```
 
-The trainset here is a `Vec` of `(QAInput, QAOutput)` tuples, the zero-boilerplate row form. Any row type that implements `ToInput<QAInput>` works, including `#[derive(Example)]` structs carrying gold labels and metric-only fields; see [Data](/docs/components/data).
+The trainset here is a slice of `(QAInput, QAOutput)` tuples, the zero-boilerplate row form. Any row type that implements `ToInput<QAInput>` works, including `#[derive(Example)]` structs carrying gold labels and metric-only fields; see [Data](/docs/components/data). The `predictors!` line names the module's optimizable leaves — without it the module does not satisfy the `Predictors` bound `compile_module` requires.
 
 ### Typed data loading
 
@@ -163,11 +164,11 @@ Recommended: 2-5
 An optional separate LM used to generate candidate instructions. Falls back to the global LM set with `configure` when unset.
 
 ### Track stats
-A per-round statistics flag. COPRO's report type is `()`, so nothing is returned either way; leave it at the default.
+A per-round statistics flag. COPRO's `compile_module` returns `()`, so nothing is returned either way; leave it at the default.
 
 ## Implementation notes
 
-COPRO is a thin strategy over the shared evaluation engine: each candidate instruction is an overlay evaluated through a cached, bounded-concurrency fan-out, and each round's winner is installed through the same mutation seam every optimizer uses. Repeated candidates are deduplicated by content hash and served from the rollout cache, so re-evaluating an instruction it has already seen costs nothing. See the [optimizer engine reference](/docs/components/optimizer-engine) for the machinery.
+COPRO is a thin strategy over the shared evaluation engine: each candidate instruction is a name-keyed `Candidate` injected ambiently per rollout through a cached, bounded-concurrency fan-out — the module is never mutated during evaluation — and the final winner is installed once through `OptimizeTarget::install`. Repeated candidates are deduplicated by content hash and served from the rollout cache, so re-evaluating an instruction it has already seen costs nothing. See the [optimizer engine reference](/docs/components/optimizer-engine) for the machinery.
 
 Cost is approximately `breadth × depth × num_predictors × trainset_size` LM calls, minus cache hits.
 
