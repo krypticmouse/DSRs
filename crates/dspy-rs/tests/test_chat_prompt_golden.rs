@@ -1,4 +1,13 @@
+//! Golden prompt tests: the exact bytes of the `[[ ## field ## ]]` protocol.
+//!
+//! These render through the def lane ([`SignatureDef::of`] + the `*_def`
+//! adapter methods) — the one prompt path since Predict routes through the IR
+//! interpreter. The expected strings are the historical static-lane bytes and
+//! must never change silently.
+
+use dspy_rs::ir::SignatureDef;
 use dspy_rs::{ChatAdapter, Demo, Signature};
+use serde_json::Value;
 
 #[derive(Signature, Clone, Debug)]
 struct GoldenSig {
@@ -9,12 +18,21 @@ struct GoldenSig {
     answer: String,
 }
 
+fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(value).expect("serializable") {
+        Value::Object(map) => map,
+        other => panic!("expected object, got {other:?}"),
+    }
+}
+
 #[test]
 fn golden_system_prompt_is_stable() {
     let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<GoldenSig>()
-        .expect("system prompt should format");
+    let system = adapter.build_system_def(
+        SignatureDef::of::<GoldenSig>(),
+        SignatureDef::types_of::<GoldenSig>(),
+        None,
+    );
 
     let expected = concat!(
         "Your input fields are:\n",
@@ -48,7 +66,7 @@ fn golden_user_prompt_is_stable() {
     let input = GoldenSigInput {
         question: "What is 2+2?".to_string(),
     };
-    let user = adapter.format_user_message_typed::<GoldenSig>(&input);
+    let user = adapter.format_input_def(SignatureDef::of::<GoldenSig>(), &json_map(&input));
 
     let expected = concat!(
         "[[ ## question ## ]]\n",
@@ -66,7 +84,7 @@ fn golden_assistant_prompt_is_stable() {
     let output = GoldenSigOutput {
         answer: "4".to_string(),
     };
-    let assistant = adapter.format_assistant_message_typed::<GoldenSig>(&output);
+    let assistant = adapter.format_output_def(SignatureDef::of::<GoldenSig>(), &json_map(&output));
 
     let expected = concat!(
         "[[ ## answer ## ]]\n",
@@ -89,7 +107,9 @@ fn golden_demo_messages_are_stable() {
         },
     );
 
-    let (user, assistant) = adapter.format_demo_typed::<GoldenSig>(&demo);
+    let def = SignatureDef::of::<GoldenSig>();
+    let user = adapter.format_input_def(def, &json_map(&demo.input));
+    let assistant = adapter.format_output_def(def, &json_map(&demo.output));
 
     let expected_user = concat!(
         "[[ ## question ## ]]\n",

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use indexmap::IndexMap;
 use rig::tool::ToolDyn;
 use serde_json::{Map, Value};
 use std::marker::PhantomData;
@@ -9,9 +10,12 @@ use tracing::{debug, trace};
 use crate as dsrs;
 use crate::core::lm::ToolSet;
 use crate::core::{DynPredictor, Module, PredictAccessorFns, PredictState, Signature, StateUpdate};
+use crate::ir::{
+    self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
+};
 use crate::{
     CallMetadata, Chat, ChatAdapter, FieldSchema, GLOBAL_SETTINGS, LmError, LmUsage, Message,
-    PredictError, Predicted, Schema, SignatureSchema,
+    ParseError, PredictError, Predicted, Schema, SignatureSchema,
 };
 
 /// A typed input/output pair for few-shot prompting.
@@ -128,7 +132,9 @@ pub struct Predict<S: Signature> {
     lm: Option<Arc<crate::core::LM>>,
     /// Formatted system + demo messages, built once per (instruction, demos)
     /// configuration. Reset by every mutator (`set_instruction`,
-    /// `set_demos_from_examples`, `load_state`).
+    /// `set_demos_from_examples`, `load_state`). Serves the conversation seam
+    /// ([`build_chat`](Predict::build_chat)/[`call_and_parse`](Predict::call_and_parse));
+    /// the typed [`call`](Predict::call) path renders through the interpreter.
     #[facet(skip, opaque)]
     prompt_prefix: OnceLock<Vec<Message>>,
     /// Pre-fetched tool definitions + name-indexed executors. Tools are only
@@ -140,6 +146,23 @@ pub struct Predict<S: Signature> {
     /// optimizer naming pass.
     #[facet(skip, opaque)]
     trace_name: Option<String>,
+    /// The cached 1-node IR program this predictor executes: a `predict` leaf
+    /// named [`component_name`](Predict::component_name) over
+    /// [`SignatureDef::of::<S>()`]. Reset by [`set_trace_name`] (the leaf name
+    /// is part of the program).
+    #[facet(skip, opaque)]
+    program: OnceLock<Arc<Program>>,
+    /// Instance state (instruction override + demos) minted as an [`Overlay`]
+    /// against [`program`](Self::program). `None` inner = no overrides (the
+    /// program defaults read through). Reset by every state mutator and by
+    /// `set_trace_name`.
+    #[facet(skip, opaque)]
+    instance_overlay: OnceLock<Option<Arc<Overlay>>>,
+    /// The loaded interpreter, keyed by the LM it was bound with; rebuilt when
+    /// the resolved LM changes (per-instance LM is fixed at build, but the
+    /// global [`configure`](crate::configure)d LM can change between calls).
+    #[facet(skip, opaque)]
+    engine: tokio::sync::Mutex<Option<(Arc<crate::core::LM>, Arc<Interpreter>)>>,
     #[facet(skip, opaque)]
     _marker: PhantomData<S>,
 }
@@ -155,6 +178,9 @@ impl<S: Signature> Predict<S> {
             prompt_prefix: OnceLock::new(),
             toolset: tokio::sync::OnceCell::new(),
             trace_name: None,
+            program: OnceLock::new(),
+            instance_overlay: OnceLock::new(),
+            engine: tokio::sync::Mutex::new(None),
             _marker: PhantomData,
         }
     }
@@ -182,17 +208,27 @@ impl<S: Signature> Predict<S> {
             self.demos = demos;
         }
         self.prompt_prefix = OnceLock::new();
+        self.instance_overlay = OnceLock::new();
     }
 
-    /// The typed direct call: builds the prompt, calls the LM, and parses the response.
+    /// The typed direct call: renders the prompt, calls the LM, and parses the
+    /// response — all through the IR interpreter.
     ///
-    /// The full pipeline:
-    /// 1. Format system message from the signature's schema and instruction override
-    /// 2. Format demo examples as user/assistant exchanges
-    /// 3. Format the input as the final user message
-    /// 4. Call the LM (with any tools attached)
-    /// 5. Parse the response into `S::Output` via the `[[ ## field ## ]]` protocol
-    /// 6. Record a trace span if inside a [`capture()`](crate::trace::capture) scope
+    /// `Predict<S>` is a thin typed handle over a 1-node IR [`Program`] (a
+    /// `predict` leaf over [`SignatureDef::of::<S>()`]) executed by
+    /// [`Interpreter::run_collecting`]:
+    /// 1. Instance state (instruction override + demos) reads through an
+    ///    [`Overlay`]; an ambient optimizer overlay
+    ///    ([`ir::current_overlay`](crate::ir::current_overlay)) composes on
+    ///    top (ambient entries win per slot).
+    /// 2. The interpreter renders system/demos/input via the def-lane
+    ///    [`ChatAdapter`] (byte-identical prompts), calls the bound LM, and
+    ///    parses the `[[ ## field ## ]]` response.
+    /// 3. A trace span is recorded under this predictor's component name when
+    ///    inside a [`capture()`](crate::trace::capture) scope; replay scopes
+    ///    intercept above the LM exactly as before.
+    /// 4. The typed `Predicted<S::Output>` is reassembled from the run's
+    ///    single [`LeafOutcome`](crate::ir::LeafOutcome).
     ///
     /// [`Module::forward`] delegates here; for multi-turn conversations, build the
     /// chat yourself and use [`call_and_parse`](Predict::call_and_parse).
@@ -218,20 +254,223 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
-        // Serialize the input for trace recording only when a scope is active.
-        let capture_input = if crate::trace::is_capturing() {
-            json_map_from_input::<S>(&input).ok()
+        let program = self.program().await?;
+        let overlay = self.effective_overlay(&program)?;
+        let lm = self.resolve_lm();
+        let interpreter = self.interpreter(&program, &lm).await?;
+        let input_map = json_map_from_input::<S>(&input)
+            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+        let run = interpreter
+            .run_collecting(input_map, overlay, Budget::unlimited())
+            .await
+            .map_err(map_run_error::<S>)?;
+        predicted_from_run::<S>(run)
+    }
+
+    /// Returns the cached 1-node program, building it on first use: a
+    /// `predict` leaf, or an `agent` leaf when tools are attached (the IR
+    /// says `Predict` carries no tools — a tooled predictor *is* an agent
+    /// loop).
+    async fn program(&self) -> Result<Arc<Program>, PredictError> {
+        if let Some(program) = self.program.get() {
+            return Ok(Arc::clone(program));
+        }
+        let built = if self.tools.is_empty() {
+            self.build_predict_program()?
         } else {
-            None
+            let toolset = self
+                .cached_toolset()
+                .await
+                .expect("tools are non-empty, so the toolset exists");
+            self.build_agent_program(toolset.definitions())?
         };
-        let chat = self.build_chat(&input)?;
-        // The chat is prefix + one live user message; everything before the
-        // final message is the interned span prefix.
-        let prefix_len = chat.len().saturating_sub(1);
-        let (predicted, _) = self
-            .call_and_parse_with_input(chat, capture_input, prefix_len)
-            .await?;
-        Ok(predicted)
+        // A concurrent call may have won the race — both builds are identical.
+        let _ = self.program.set(Arc::new(built));
+        Ok(Arc::clone(self.program.get().expect("program set above")))
+    }
+
+    /// Builds the 1-node `agent` program for a tooled predictor: same leaf
+    /// name and signature as the `predict` form, plus a host-tool declaration
+    /// per attached tool. Stop behavior is the IR's [`StopSpec`](crate::ir::StopSpec)
+    /// default — `until_parse` with `max_turns = 8` — the closest IR
+    /// expression of the old LM-layer auto tool loop.
+    #[allow(clippy::result_large_err)]
+    fn build_agent_program(
+        &self,
+        definitions: &[rig::completion::ToolDefinition],
+    ) -> Result<Program, PredictError> {
+        let leaf = self.component_name();
+        let def = SignatureDef::of::<S>();
+        let mut b = ir::ProgramBuilder::new(leaf);
+        let model = b.model("default", crate::ir::module_build::unbound_model_config("default"));
+        let sid = b.sig_of::<S>();
+        b.add_types(&<S::Input as crate::typesys::Schema>::output_schema().types);
+
+        let mut tool_ids = Vec::with_capacity(definitions.len());
+        let mut seen = std::collections::HashSet::new();
+        for definition in definitions {
+            // Duplicate names keep the first tool, mirroring `ToolSet::build`.
+            if !seen.insert(definition.name.as_str()) {
+                continue;
+            }
+            let (tool_sig, tool_types) =
+                tool_signature_from_definition(&definition.name, &definition.parameters);
+            b.add_types(&tool_types);
+            let tool_sid = b.sig(tool_sig);
+            tool_ids.push(b.host_tool(&definition.name, &definition.description, tool_sid, &[]));
+        }
+
+        let mut ns = ir::agent(leaf, sid).model(model).tools(tool_ids);
+        for field in def.inputs.iter() {
+            ns = ns.bind(&field.name, ir::input(&field.name));
+        }
+        let mut root = ir::seq([ns]);
+        for field in def.outputs.iter() {
+            root = root.out(&field.name, ir::out(leaf, &field.name));
+        }
+        b.main(sid, root)
+            .map_err(|err| internal_error(format!("failed to build agent program: {err}")))
+    }
+
+    /// Builds the 1-node `predict` program: leaf name = the trace-name
+    /// convention (so span identity and capture/replay keying are unchanged),
+    /// signature = `SignatureDef::of::<S>()`, model = the `default` ref bound
+    /// through [`RuntimeEnv`] at load.
+    #[allow(clippy::result_large_err)]
+    fn build_predict_program(&self) -> Result<Program, PredictError> {
+        let leaf = self.component_name();
+        let def = SignatureDef::of::<S>();
+        let mut b = ir::ProgramBuilder::new(leaf);
+        let model = b.model("default", crate::ir::module_build::unbound_model_config("default"));
+        let sid = b.sig_of::<S>();
+        // `sig_of` merges output-reachable class/enum defs; input-reachable
+        // ones are needed too (the interpreter type-checks run inputs).
+        b.add_types(&<S::Input as crate::typesys::Schema>::output_schema().types);
+        let mut ns = ir::predict(leaf, sid).model(model);
+        for field in def.inputs.iter() {
+            ns = ns.bind(&field.name, ir::input(&field.name));
+        }
+        let mut root = ir::seq([ns]);
+        for field in def.outputs.iter() {
+            root = root.out(&field.name, ir::out(leaf, &field.name));
+        }
+        b.main(sid, root)
+            .map_err(|err| internal_error(format!("failed to build predict program: {err}")))
+    }
+
+    /// The instance overlay: instruction override + demos as slot values
+    /// against this predictor's program. `None` when neither is set.
+    #[allow(clippy::result_large_err)]
+    fn instance_overlay(&self, program: &Arc<Program>) -> Result<Option<Arc<Overlay>>, PredictError>
+    where
+        S::Input: Schema,
+        S::Output: Schema,
+    {
+        if let Some(cached) = self.instance_overlay.get() {
+            return Ok(cached.clone());
+        }
+        let overlay = if self.instruction_override.is_none() && self.demos.is_empty() {
+            None
+        } else {
+            let state = PredictState {
+                demos: DynPredictor::demos_as_json(self),
+                instruction_override: self.instruction_override.clone(),
+            };
+            let minted =
+                crate::ir::bridge::states_to_overlay(program, [(self.component_name(), &state)])
+                    .map_err(|err| {
+                        internal_error(format!("failed to mint instance overlay: {err}"))
+                    })?;
+            Some(Arc::new(minted))
+        };
+        let _ = self.instance_overlay.set(overlay);
+        Ok(self
+            .instance_overlay
+            .get()
+            .expect("instance overlay set above")
+            .clone())
+    }
+
+    /// The overlay a run reads through: instance state composed with any
+    /// ambient optimizer overlay
+    /// ([`ir::current_overlay`](crate::ir::current_overlay)). Ambient entries
+    /// win over instance entries for the same slot — optimizer param
+    /// injection overrides instance state, exactly as the mutation seam did.
+    /// An ambient overlay minted against a *different* program is ignored
+    /// (one scope can span several modules; only the matching one accepts it).
+    #[allow(clippy::result_large_err)]
+    fn effective_overlay(
+        &self,
+        program: &Arc<Program>,
+    ) -> Result<Option<Arc<Overlay>>, PredictError>
+    where
+        S::Input: Schema,
+        S::Output: Schema,
+    {
+        let instance = self.instance_overlay(program)?;
+        let ambient = crate::ir::bridge::current_overlay()
+            .filter(|overlay| overlay.base == program.meta.program_hash);
+        Ok(match (instance, ambient) {
+            (None, None) => None,
+            (Some(instance), None) => Some(instance),
+            (None, Some(ambient)) => Some(ambient),
+            (Some(instance), Some(ambient)) => {
+                let mut merged = (*instance).clone();
+                for (id, value) in ambient.entries() {
+                    merged.set(program, id, value.clone()).map_err(|err| {
+                        internal_error(format!("failed to compose ambient overlay: {err}"))
+                    })?;
+                }
+                Some(Arc::new(merged))
+            }
+        })
+    }
+
+    /// Resolves the LM this call uses: instance LM > global
+    /// [`configure()`](crate::configure) settings. Panics exactly like the
+    /// pre-IR path when no global LM is configured and no instance LM is set.
+    fn resolve_lm(&self) -> Arc<crate::core::LM> {
+        match &self.lm {
+            Some(lm) => Arc::clone(lm),
+            None => {
+                let guard = GLOBAL_SETTINGS.read().unwrap();
+                let settings = guard.as_ref().unwrap();
+                Arc::clone(&settings.lm)
+            }
+        }
+    }
+
+    /// Returns the loaded interpreter for `lm`, reloading when the resolved
+    /// LM changed since the last call (the program is bound to its model at
+    /// load, not per call).
+    async fn interpreter(
+        &self,
+        program: &Arc<Program>,
+        lm: &Arc<crate::core::LM>,
+    ) -> Result<Arc<Interpreter>, PredictError> {
+        let mut slot = self.engine.lock().await;
+        if let Some((bound, interpreter)) = slot.as_ref()
+            && Arc::ptr_eq(bound, lm)
+        {
+            return Ok(Arc::clone(interpreter));
+        }
+        let env = self.runtime_env(lm);
+        let interpreter = Interpreter::load((**program).clone(), env)
+            .await
+            .map_err(|err| internal_error(format!("failed to load predict program: {err}")))?;
+        let interpreter = Arc::new(interpreter);
+        *slot = Some((Arc::clone(lm), Arc::clone(&interpreter)));
+        Ok(interpreter)
+    }
+
+    /// The runtime environment a load binds against: the resolved model under
+    /// the `default` ref, plus every attached tool bound as a host tool.
+    fn runtime_env(&self, lm: &Arc<crate::core::LM>) -> RuntimeEnv {
+        let mut env = RuntimeEnv::new().bind_model("default", Arc::clone(lm));
+        for tool in &self.tools {
+            env = env.bind_host_tool(&tool.name(), Arc::clone(tool));
+        }
+        env
     }
 
     /// Builds the first-turn chat from the signature, demos, and input.
@@ -243,13 +482,20 @@ impl<S: Signature> Predict<S> {
     /// The system message and demo turns are formatted once per (instruction,
     /// demos) configuration and cached on the instance — only the live user
     /// message is formatted per call.
+    ///
+    /// Part of the conversation seam
+    /// (see [`call_and_parse`](Predict::call_and_parse)).
+    // TODO(dsrs-phase4-conversation): fold the caller-owned-chat seam into the
+    // interpreter once it grows a conversation-in/conversation-out surface.
     #[allow(clippy::result_large_err)]
     pub fn build_chat(&self, input: &S::Input) -> Result<Chat, PredictError>
     where
         S::Input: Schema,
     {
         let prefix = self.prompt_prefix()?;
-        let user = ChatAdapter.format_user_message_typed::<S>(input);
+        let input_map = json_map_from_input::<S>(input)
+            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+        let user = ChatAdapter.format_input_def(SignatureDef::of::<S>(), &input_map);
 
         let mut messages = Vec::with_capacity(prefix.len() + 1);
         messages.extend(prefix.iter().cloned());
@@ -282,32 +528,22 @@ impl<S: Signature> Predict<S> {
     where
         S::Input: Schema,
     {
-        let chat_adapter = ChatAdapter;
-        let system = match chat_adapter
-            .format_system_message_typed_with_instruction::<S>(self.instruction_override.as_deref())
-        {
-            Ok(system) => system,
-            Err(err) => {
-                return Err(PredictError::Lm {
-                    source: LmError::Provider {
-                        provider: "internal".to_string(),
-                        message: err.to_string(),
-                        source: None,
-                    },
-                });
-            }
-        };
+        let def = SignatureDef::of::<S>();
+        let types = SignatureDef::types_of::<S>();
+        let system =
+            ChatAdapter.build_system_def(def, types, self.instruction_override.as_deref());
         trace!(system_len = system.len(), "typed system prompt formatted");
 
         let mut messages = Vec::with_capacity(1 + self.demos.len() * 2);
         messages.push(Message::system(system));
         for demo in &self.demos {
-            messages.push(Message::user(
-                chat_adapter.format_user_message_typed::<S>(&demo.input),
-            ));
-            messages.push(Message::assistant(
-                chat_adapter.format_assistant_message_typed::<S>(&demo.output),
-            ));
+            let input = json_map_from_input::<S>(&demo.input)
+                .map_err(|err| internal_error(format!("failed to serialize demo input: {err}")))?;
+            let output = json_map_from_output::<S>(&demo.output).map_err(|err| {
+                internal_error(format!("failed to serialize demo output: {err}"))
+            })?;
+            messages.push(Message::user(ChatAdapter.format_input_def(def, &input)));
+            messages.push(Message::assistant(ChatAdapter.format_output_def(def, &output)));
         }
         Ok(messages)
     }
@@ -354,6 +590,12 @@ impl<S: Signature> Predict<S> {
     /// Every turn parses with the same `[[ ## field ## ]]` protocol; the caller
     /// is responsible for including format instructions in follow-up messages if
     /// the model needs reminding of the output format.
+    ///
+    /// This seam is a compat shim on the LM-layer call path: the interpreter
+    /// has no conversation-in/conversation-out surface yet, so caller-owned
+    /// chats (and the caller-managed tool pattern built on them) stay here.
+    // TODO(dsrs-phase4-conversation): fold this seam into the interpreter
+    // once it can accept and return a caller-owned conversation.
     pub async fn call_and_parse(
         &self,
         chat: Chat,
@@ -426,6 +668,10 @@ impl<S: Signature> Predict<S> {
             Some(crate::trace::replay::ReplayDirective::Live) | None => {}
         }
 
+        // TODO(dsrs-phase4-caller-managed): this LM-layer tool loop only
+        // serves the conversation seam; typed `call`s with tools run through
+        // the interpreter's AgentLoop. Fold this into the interpreter when it
+        // can express caller-managed conversations.
         let toolset = self.cached_toolset().await;
         let empty_toolset = ToolSet::default();
         let toolset_ref = toolset.as_deref().unwrap_or(&empty_toolset);
@@ -473,13 +719,15 @@ impl<S: Signature> Predict<S> {
             events,
         } = response;
 
-        let chat_adapter = ChatAdapter;
         let raw_response = output.content();
         let lm_usage = usage;
 
-        let (typed_output, field_metas) = match chat_adapter.parse_response_typed::<S>(&output) {
+        let def = SignatureDef::of::<S>();
+        let types = SignatureDef::types_of::<S>();
+        let (output_map, def_metas) = match ChatAdapter.parse_output_def(def, types, &output) {
             Ok(parsed) => parsed,
             Err(err) => {
+                let err = translate_parse_error::<S>(err);
                 let failed_fields = err.fields();
                 debug!(
                     failed_fields = failed_fields.len(),
@@ -509,12 +757,37 @@ impl<S: Signature> Predict<S> {
             }
         };
 
+        let typed_output: S::Output = match typed_output_from_map::<S>(&output_map, &raw_response)
+        {
+            Ok(typed) => typed,
+            Err(err) => {
+                if let Some(guard) = guard {
+                    guard.finish(crate::trace::SpanOutcome {
+                        events,
+                        raw_output: Some(raw_response.clone()),
+                        output: None,
+                        usage: lm_usage,
+                        error: Some(crate::trace::SpanError {
+                            kind: crate::trace::SpanErrorKind::Parse,
+                            message: err.to_string(),
+                        }),
+                    });
+                }
+                return Err(PredictError::Parse {
+                    source: err,
+                    raw_response,
+                    lm_usage,
+                });
+            }
+        };
+        let field_metas = translate_field_meta::<S>(&def_metas);
+
         let span_id = guard.as_ref().map(|guard| guard.id());
         if let Some(guard) = guard {
             guard.finish(crate::trace::SpanOutcome {
                 events,
                 raw_output: Some(raw_response.clone()),
-                output: json_map_from_output::<S>(&typed_output).ok(),
+                output: Some(output_map),
                 usage: lm_usage,
                 error: None,
             });
@@ -749,6 +1022,9 @@ impl<S: Signature> PredictBuilder<S> {
             prompt_prefix: OnceLock::new(),
             toolset: tokio::sync::OnceCell::new(),
             trace_name: self.trace_name,
+            program: OnceLock::new(),
+            instance_overlay: OnceLock::new(),
+            engine: tokio::sync::Mutex::new(None),
             _marker: PhantomData,
         };
         predict.apply_state(Some(self.instruction_override), Some(self.demos));
@@ -819,6 +1095,368 @@ where
         Value::Object(map) => Ok(map),
         _ => Err(anyhow::anyhow!("expected object for signature output")),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool schema projection (JSON Schema → SignatureDef)
+// ---------------------------------------------------------------------------
+
+/// Best-effort projection of a rig tool's JSON-Schema `parameters` object
+/// into a tool [`SignatureDef`] (input side) plus the class/enum definitions
+/// it references. The interpreter regenerates the model-facing schema from
+/// this signature via [`ir::input_schema_of`](crate::ir::input_schema_of);
+/// JSON-Schema features outside [`FieldType`](crate::typesys::FieldType)
+/// (open `additionalProperties`, `oneOf`, per-property formats, …) degrade to
+/// their closest `FieldType` equivalent.
+fn tool_signature_from_definition(
+    tool_name: &str,
+    parameters: &Value,
+) -> (SignatureDef, crate::typesys::TypeTable) {
+    let mut types = crate::typesys::TypeTable::default();
+    let empty = Map::new();
+    let properties = parameters
+        .get("properties")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
+    let required: Vec<&str> = parameters
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|entries| entries.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+
+    let mut inputs = Vec::with_capacity(properties.len());
+    for (name, schema) in properties {
+        let token = format!("{tool_name}_{name}");
+        let mut ty = field_type_from_json_schema(&token, schema, &mut types);
+        if !required.contains(&name.as_str()) {
+            ty = crate::typesys::FieldType::optional(ty);
+        }
+        let mut field = ir::FieldDef::new(name, ty);
+        if let Some(docs) = schema.get("description").and_then(Value::as_str) {
+            field = field.with_docs(docs);
+        }
+        inputs.push(field);
+    }
+
+    let def = SignatureDef {
+        name: format!("{tool_name}_tool").into(),
+        instruction: "".into(),
+        inputs: inputs.into_boxed_slice(),
+        // The output side is unused for host tools (results come back as raw
+        // strings); a single string field keeps the signature well-formed.
+        outputs: Box::new([ir::FieldDef::new(
+            "result",
+            crate::typesys::FieldType::String,
+        )]),
+    };
+    (def, types)
+}
+
+fn field_type_from_json_schema(
+    token: &str,
+    schema: &Value,
+    types: &mut crate::typesys::TypeTable,
+) -> crate::typesys::FieldType {
+    use crate::typesys::FieldType;
+
+    if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
+        let items = any_of
+            .iter()
+            .enumerate()
+            .map(|(i, sub)| field_type_from_json_schema(&format!("{token}_{i}"), sub, types))
+            .collect();
+        return FieldType::Union(items);
+    }
+    if let Some(values) = schema.get("enum").and_then(Value::as_array) {
+        let names: Vec<String> = values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        if !names.is_empty() {
+            types.enums.insert(
+                token.to_string(),
+                crate::typesys::EnumDef {
+                    internal_name: token.to_string(),
+                    rendered_name: token.to_string(),
+                    docs: None,
+                    values: names
+                        .into_iter()
+                        .map(|name| crate::typesys::EnumValueDef {
+                            rendered_name: name.clone(),
+                            name,
+                            docs: None,
+                        })
+                        .collect(),
+                },
+            );
+            return FieldType::Enum(token.to_string());
+        }
+    }
+    match schema.get("type").and_then(Value::as_str) {
+        Some("string") => FieldType::String,
+        Some("integer") => FieldType::Int,
+        Some("number") => FieldType::Float,
+        Some("boolean") => FieldType::Bool,
+        Some("array") => FieldType::List(Box::new(
+            schema
+                .get("items")
+                .map(|items| field_type_from_json_schema(&format!("{token}_items"), items, types))
+                .unwrap_or(FieldType::String),
+        )),
+        Some("object") => {
+            if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
+                let required: Vec<&str> = schema
+                    .get("required")
+                    .and_then(Value::as_array)
+                    .map(|entries| entries.iter().filter_map(Value::as_str).collect())
+                    .unwrap_or_default();
+                let fields = properties
+                    .iter()
+                    .map(|(name, sub)| {
+                        let mut ty =
+                            field_type_from_json_schema(&format!("{token}_{name}"), sub, types);
+                        if !required.contains(&name.as_str()) {
+                            ty = crate::typesys::FieldType::optional(ty);
+                        }
+                        crate::typesys::FieldDef {
+                            name: name.clone(),
+                            rendered_name: name.clone(),
+                            field_type: ty,
+                            docs: sub
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .map(str::to_string),
+                            constraints: Vec::new(),
+                        }
+                    })
+                    .collect();
+                types.classes.insert(
+                    token.to_string(),
+                    crate::typesys::ClassDef {
+                        internal_name: token.to_string(),
+                        rendered_name: token.to_string(),
+                        docs: None,
+                        fields,
+                        constraints: Vec::new(),
+                    },
+                );
+                FieldType::Class(token.to_string())
+            } else {
+                let inner = match schema.get("additionalProperties") {
+                    Some(additional) if additional.is_object() => field_type_from_json_schema(
+                        &format!("{token}_value"),
+                        additional,
+                        types,
+                    ),
+                    _ => FieldType::String,
+                };
+                FieldType::Map(Box::new(FieldType::String), Box::new(inner))
+            }
+        }
+        _ => FieldType::String,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interpreter boundary: RunError → PredictError, RunOutput → Predicted
+// ---------------------------------------------------------------------------
+
+/// Internal (non-provider, non-parse) failure surfaced through the historical
+/// `PredictError::Lm { provider: "internal" }` shape.
+fn internal_error(message: String) -> PredictError {
+    PredictError::Lm {
+        source: LmError::Provider {
+            provider: "internal".to_string(),
+            message,
+            source: None,
+        },
+    }
+}
+
+/// Deserializes the canonical output map into the typed output struct —
+/// failure is the historical `ParseError::ExtractionFailed` shape.
+fn typed_output_from_map<S: Signature>(
+    output_map: &Map<String, Value>,
+    raw_response: &str,
+) -> std::result::Result<S::Output, ParseError> {
+    serde_json::from_value(Value::Object(output_map.clone())).map_err(|err| {
+        ParseError::ExtractionFailed {
+            field: "<all>".to_string(),
+            raw_response: raw_response.to_string(),
+            reason: err.to_string(),
+        }
+    })
+}
+
+/// Re-keys def-lane [`FieldMeta`](crate::FieldMeta) entries (canonical
+/// `FieldDef::name`s) to the static lane's `rust_name` keying, preserving
+/// schema field order — the user-visible `CallMetadata` contract.
+fn translate_field_meta<S: Signature>(
+    leaf_meta: &IndexMap<String, crate::FieldMeta>,
+) -> IndexMap<String, crate::FieldMeta> {
+    let mut field_meta = IndexMap::new();
+    for field in S::schema().output_fields() {
+        let leaf_name = field.path().iter().last().unwrap_or(field.lm_name);
+        if let Some(meta) = leaf_meta.get(leaf_name) {
+            field_meta.insert(field.rust_name.clone(), meta.clone());
+        }
+    }
+    field_meta
+}
+
+/// The canonical (leaf) name of an output field → the static lane's
+/// `rust_name` (dotted flatten path). Identity for non-flattened signatures.
+fn output_rust_name<S: Signature>(canonical: &str) -> String {
+    for field in S::schema().output_fields() {
+        let leaf = field.path().iter().last().unwrap_or(field.lm_name);
+        if leaf == canonical {
+            return field.rust_name.clone();
+        }
+    }
+    canonical.to_string()
+}
+
+/// Re-keys a def-lane [`ParseError`] (canonical `FieldDef::name`s) to the
+/// static lane's `rust_name` keying, preserving the user-visible error shape
+/// for flattened signatures.
+fn translate_parse_error<S: Signature>(err: ParseError) -> ParseError {
+    match err {
+        ParseError::MissingField {
+            field,
+            raw_response,
+        } => ParseError::MissingField {
+            field: output_rust_name::<S>(&field),
+            raw_response,
+        },
+        ParseError::ExtractionFailed {
+            field,
+            raw_response,
+            reason,
+        } => ParseError::ExtractionFailed {
+            field: output_rust_name::<S>(&field),
+            raw_response,
+            reason,
+        },
+        ParseError::CoercionFailed {
+            field,
+            expected_type,
+            raw_text,
+            source,
+        } => ParseError::CoercionFailed {
+            field: output_rust_name::<S>(&field),
+            expected_type,
+            raw_text,
+            source,
+        },
+        ParseError::AssertFailed {
+            field,
+            label,
+            expression,
+            value,
+        } => ParseError::AssertFailed {
+            field: output_rust_name::<S>(&field),
+            label,
+            expression,
+            value,
+        },
+        ParseError::Multiple { errors, partial } => ParseError::Multiple {
+            errors: errors.into_iter().map(translate_parse_error::<S>).collect(),
+            partial,
+        },
+    }
+}
+
+/// Maps an interpreter [`RunError`] onto the historical [`PredictError`]
+/// variants: `Lm`/`Parse`/`Replay` map structurally; everything else (input
+/// validation, internal invariants) surfaces as an internal LM error.
+fn map_run_error<S: Signature>(err: RunError) -> PredictError {
+    match err {
+        RunError::Lm { source, .. } => PredictError::Lm { source },
+        RunError::Parse {
+            raw,
+            source,
+            usage,
+            ..
+        } => PredictError::Parse {
+            source: match source {
+                Some(parse) => translate_parse_error::<S>(*parse),
+                None => ParseError::ExtractionFailed {
+                    field: "<all>".to_string(),
+                    raw_response: raw.clone(),
+                    reason: "response did not match the output signature".to_string(),
+                },
+            },
+            raw_response: raw,
+            lm_usage: usage,
+        },
+        RunError::Replay { source, .. } => PredictError::Replay { source },
+        other => internal_error(other.to_string()),
+    }
+}
+
+/// Reassembles the typed [`Predicted`] from a 1-node run: typed deserialize of
+/// the output map + [`CallMetadata`] from the single [`LeafOutcome`](crate::ir::LeafOutcome),
+/// with `FieldMeta` re-keyed from canonical names to the static lane's
+/// `rust_name` keying (schema field order preserved).
+#[allow(clippy::result_large_err)]
+fn predicted_from_run<S: Signature>(run: RunOutput) -> Result<Predicted<S::Output>, PredictError>
+where
+    S::Output: Schema,
+{
+    let leaf = run.leaves.into_iter().next();
+    let (raw_response, lm_usage, span_id, leaf_meta, tool_calls, tool_executions) = match leaf {
+        Some(leaf) => (
+            leaf.raw_response,
+            leaf.usage,
+            leaf.span_id,
+            leaf.field_meta,
+            leaf.tool_calls,
+            leaf.tool_executions,
+        ),
+        None => (
+            String::new(),
+            LmUsage::default(),
+            None,
+            IndexMap::new(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    };
+
+    let typed: S::Output =
+        typed_output_from_map::<S>(&run.output, &raw_response).map_err(|err| {
+            PredictError::Parse {
+                source: err,
+                raw_response: raw_response.clone(),
+                lm_usage,
+            }
+        })?;
+    let field_meta = translate_field_meta::<S>(&leaf_meta);
+
+    let checks_total = field_meta
+        .values()
+        .map(|meta| meta.checks.len())
+        .sum::<usize>();
+    let checks_failed = field_meta
+        .values()
+        .flat_map(|meta| meta.checks.iter())
+        .filter(|check| !check.passed)
+        .count();
+    debug!(
+        output_fields = field_meta.len(),
+        checks_total, checks_failed, "typed parse completed"
+    );
+
+    let metadata = CallMetadata::new(
+        raw_response,
+        lm_usage,
+        tool_calls,
+        tool_executions,
+        span_id,
+        field_meta,
+    );
+    Ok(Predicted::new(typed, metadata))
 }
 
 impl<S> Module for Predict<S>
@@ -894,7 +1532,16 @@ where
     }
 
     fn set_trace_name(&mut self, name: &str) {
+        if self.trace_name.as_deref() == Some(name) {
+            return;
+        }
         self.trace_name = Some(name.to_string());
+        // The leaf name is part of the program (and its hash), so the cached
+        // program, the overlay minted against it, and the loaded interpreter
+        // are all stale.
+        self.program = OnceLock::new();
+        self.instance_overlay = OnceLock::new();
+        *self.engine.get_mut() = None;
     }
 }
 

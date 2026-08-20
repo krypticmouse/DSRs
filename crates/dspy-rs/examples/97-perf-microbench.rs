@@ -239,11 +239,15 @@ async fn main() {
     for _ in 0..iters {
         std::hint::black_box(
             adapter
-                .parse_response_typed::<BenchQA>(&assistant)
+                .parse_output_def(
+                    dspy_rs::ir::SignatureDef::of::<BenchQA>(),
+                    dspy_rs::ir::SignatureDef::types_of::<BenchQA>(),
+                    &assistant,
+                )
                 .unwrap(),
         );
     }
-    report("parse_response_typed (2 fields)", iters, s);
+    report("parse_output_def (2 fields)", iters, s);
 
     // --- 4. Full forward with test client (no demos) ------------------------
     let iters = 50_000u64;
@@ -300,11 +304,15 @@ async fn main() {
     for _ in 0..iters {
         std::hint::black_box(
             adapter
-                .parse_response_typed::<BenchChecked>(&checked_assistant)
+                .parse_output_def(
+                    dspy_rs::ir::SignatureDef::of::<BenchChecked>(),
+                    dspy_rs::ir::SignatureDef::types_of::<BenchChecked>(),
+                    &checked_assistant,
+                )
                 .unwrap(),
         );
     }
-    report("parse_response_typed (2 checks)", iters, s);
+    report("parse_output_def (2 checks)", iters, s);
 
     // --- 9. Forward with 1 tool attached (never called) -----------------------
     let iters = 50_000u64;

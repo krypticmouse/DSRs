@@ -1,7 +1,7 @@
 //! Interpreter per-leaf metadata seam (`Interpreter::run_collecting`):
 //! coercion flags, constraint outcomes, raw response text, usage, and model
 //! config hash surface per `Predict` leaf, in execution order — the exact
-//! parity data the static lane's `parse_output_with_meta` keeps, so a future
+//! parity data the historical static lane kept, so a typed
 //! `Predict<S>` routed through the interpreter loses none of `Predicted`'s
 //! metadata contract.
 #![cfg(feature = "ir")]
@@ -277,7 +277,7 @@ async fn passing_assert_records_no_constraint_result() {
         .unwrap();
 
     // Only #[check] constraints produce ConstraintResults — asserts are
-    // pass-or-error, exactly like `parse_output_with_meta`.
+    // pass-or-error, exactly like the historical typed parse path.
     let checks = &run.leaves[0].field_meta["rating"].checks;
     assert_eq!(checks.len(), 1);
     assert_eq!(checks[0].label, "small");

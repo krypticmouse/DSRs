@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use facet::{Def, Field, Shape, Type, UserType};
 use serde_json::Value;
@@ -122,9 +121,6 @@ pub struct SignatureSchema {
     input_fields: Box<[FieldSchema]>,
     output_fields: Box<[FieldSchema]>,
     output_schema: OutputSchema,
-    /// Memoized response-instructions prompt fragment. Schema-constant, but the
-    /// text is owned by the chat adapter — it hands us a builder on first use.
-    response_instructions: OnceLock<String>,
 }
 
 impl SignatureSchema {
@@ -168,16 +164,7 @@ impl SignatureSchema {
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
             output_schema: <S::Output as crate::typesys::Schema>::output_schema(),
-            response_instructions: OnceLock::new(),
         })
-    }
-
-    /// Returns the memoized response-instructions fragment, building it on first use.
-    ///
-    /// The fragment is a pure function of the schema, but its wording belongs to
-    /// the chat adapter — hence the builder closure instead of building here.
-    pub(crate) fn response_instructions_cached(&self, build: impl FnOnce() -> String) -> &str {
-        self.response_instructions.get_or_init(build)
     }
 
     pub fn instruction(&self) -> &'static str {
@@ -236,9 +223,6 @@ impl SignatureSchema {
             input_fields: input_fields.into_boxed_slice(),
             output_fields: output_fields.into_boxed_slice(),
             output_schema: self.output_schema.clone(),
-            // Fresh memo — the derived schema has different fields, so the
-            // parent's cached response instructions would be wrong.
-            response_instructions: OnceLock::new(),
         }
     }
 

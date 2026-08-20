@@ -149,16 +149,18 @@ impl BudgetMeter {
 /// Parse/coercion metadata from one successful `Predict`-leaf evaluation,
 /// collected by [`Interpreter::run_collecting`] in execution order.
 ///
-/// This is the interpreter-side twin of the static lane's
-/// [`CallMetadata`](crate::CallMetadata): the same [`FieldMeta`] type (jsonish
-/// coercion [`Flag`](crate::Flag)s + `#[check]` [`ConstraintResult`](crate::ConstraintResult)s)
-/// that `ChatAdapter::parse_output_with_meta` produces, so a typed `Predict<S>`
-/// routed through the interpreter loses none of `Predicted`'s metadata contract.
+/// This is what `Predict<S>` reassembles into [`CallMetadata`](crate::CallMetadata):
+/// the same [`FieldMeta`] type (jsonish coercion [`Flag`](crate::Flag)s +
+/// `#[check]` [`ConstraintResult`](crate::ConstraintResult)s) that
+/// `ChatAdapter::parse_output_def` produces, so a typed `Predict<S>` routed
+/// through the interpreter loses none of `Predicted`'s metadata contract.
 ///
 /// Scope and semantics:
-/// - Only `Predict` leaves report. `Hole` leaves make no LM call and parse no
-///   delimited text; `AgentLoop` leaves are a single multi-turn span whose
-///   final output may come from stop-tool args (no parse metadata exists).
+/// - `Predict` and `AgentLoop` leaves report; `Hole` leaves make no LM call
+///   and parse no delimited text. An `AgentLoop` reports once per evaluation
+///   with loop-accumulated usage and its tool call/execution record;
+///   `field_meta` is empty when the final output came from stop-tool args
+///   (no parse metadata exists for those).
 /// - Only *successful* evaluations report — a failed attempt inside `Retry`
 ///   propagates its error and leaves no outcome; the succeeding attempt
 ///   reports one. A leaf re-evaluated by `Refine`/`Loop` reports once per
@@ -181,6 +183,14 @@ pub struct LeafOutcome {
     /// trace's [`ModelEntry::config_hash`](crate::trace::ModelEntry) for the
     /// same config.
     pub model_config_hash: u64,
+    /// The trace span this evaluation recorded, when a capture scope was
+    /// active — what `Predict` surfaces as `CallMetadata::span_id`.
+    pub span_id: Option<crate::trace::SpanId>,
+    /// Tool calls the model requested during an `AgentLoop` evaluation, in
+    /// execution order (stop-tool calls excluded). Empty for `Predict` leaves.
+    pub tool_calls: Vec<rig::message::ToolCall>,
+    /// Results of executed tool calls, aligned with [`tool_calls`](Self::tool_calls).
+    pub tool_executions: Vec<String>,
 }
 
 /// Program output plus per-leaf metadata, returned by
@@ -229,7 +239,17 @@ pub enum RunError {
         source: LmError,
     },
     #[error("parse error at `{at}`")]
-    Parse { at: Box<str>, raw: String },
+    Parse {
+        at: Box<str>,
+        raw: String,
+        /// The structured def-lane parse failure, when the leaf's response
+        /// text was parsed (`Predict`/`AgentLoop` field parsing); `None` for
+        /// structural coercions with no section parse (stop-tool args, hole
+        /// outputs).
+        source: Option<Box<crate::ParseError>>,
+        /// Usage accumulated by the failing leaf evaluation.
+        usage: LmUsage,
+    },
     #[error("tool `{tool}` failed at `{at}`: {message}")]
     Tool {
         at: Box<str>,
@@ -856,6 +876,9 @@ impl Interpreter {
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: Vec::new(),
+                        tool_executions: Vec::new(),
                     });
                 }
                 if let Some(guard) = guard {
@@ -937,6 +960,9 @@ impl Interpreter {
                         usage: response.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: Vec::new(),
+                        tool_executions: Vec::new(),
                     });
                 }
                 if let Some(guard) = guard {
@@ -960,7 +986,12 @@ impl Interpreter {
                         response.usage,
                     ));
                 }
-                Err(RunError::Parse { at: at.into(), raw })
+                Err(RunError::Parse {
+                    at: at.into(),
+                    raw,
+                    source: Some(Box::new(err)),
+                    usage: response.usage,
+                })
             }
         }
     }
@@ -1237,6 +1268,34 @@ impl Interpreter {
                     .output
                     .clone()
                     .expect("replay serves only spans with parsed output");
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    // Served evaluations carry no per-field parse metadata;
+                    // the tool record is reconstructed from the recording.
+                    let tool_calls = span
+                        .completion_messages()
+                        .iter()
+                        .flat_map(|message| message.tool_calls().into_iter().cloned())
+                        .collect();
+                    let tool_executions = span
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            SpanEvent::ToolRun { result, .. } => Some(result.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: span.raw_output.clone().unwrap_or_default(),
+                        field_meta: IndexMap::new(),
+                        usage: span.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls,
+                        tool_executions,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: span.events.clone(),
@@ -1282,20 +1341,30 @@ impl Interpreter {
             #[cfg(feature = "code-mode")]
             code_mode: code_mode.as_ref(),
         };
-        let mut events: Vec<SpanEvent> = Vec::new();
-        let mut usage = LmUsage::default();
-        let outcome = self
-            .agent_loop(&loop_cx, chat, &mut events, &mut usage)
-            .await;
+        let mut run = AgentRun::default();
+        let outcome = self.agent_loop(&loop_cx, chat, &mut run).await;
 
         match outcome {
-            Ok((output, raw)) => {
+            Ok((output, raw, field_meta)) => {
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: raw.clone(),
+                        field_meta,
+                        usage: run.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: run.tool_calls,
+                        tool_executions: run.tool_executions,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
-                        events,
+                        events: run.events,
                         raw_output: Some(raw),
                         output: Some(output.clone()),
-                        usage,
+                        usage: run.usage,
                         error: None,
                     });
                 }
@@ -1308,7 +1377,7 @@ impl Interpreter {
                         RunError::Tool { .. } => crate::trace::SpanErrorKind::Tool,
                         _ => crate::trace::SpanErrorKind::Lm,
                     };
-                    guard.finish(span_error(kind, err.to_string(), events, None, usage));
+                    guard.finish(span_error(kind, err.to_string(), run.events, None, run.usage));
                 }
                 Err(err)
             }
@@ -1319,24 +1388,23 @@ impl Interpreter {
         &self,
         lc: &AgentLoopCx<'_>,
         mut chat: Chat,
-        events: &mut Vec<SpanEvent>,
-        usage: &mut LmUsage,
-    ) -> Result<(JsonMap, String), RunError> {
+        run: &mut AgentRun,
+    ) -> Result<(JsonMap, String, IndexMap<String, FieldMeta>), RunError> {
         let types = &self.program.types;
 
         for turn in 0..lc.n.stop.max_turns.get() {
             if lc.meter.try_reserve_call().is_err() {
                 return match lc.n.budget.on_exhausted {
                     BudgetPolicy::Fail => Err(RunError::Budget { at: lc.at.into() }),
-                    BudgetPolicy::Finalize => self.finalize(lc, chat, events, usage).await,
+                    BudgetPolicy::Finalize => self.finalize(lc, chat, run).await,
                 };
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
             let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at).await?;
             lc.meter.record_usage(&response.usage);
-            *usage = *usage + response.usage;
-            events.extend(response.events.clone());
+            run.usage = run.usage + response.usage;
+            run.events.extend(response.events.clone());
             chat = response.chat;
 
             if !response.tool_calls.is_empty() {
@@ -1348,14 +1416,14 @@ impl Interpreter {
                 {
                     let args = call.function.arguments.clone();
                     let output = coerce_outputs(lc.at, lc.def, types, &args)?;
-                    return Ok((output, args.to_string()));
+                    return Ok((output, args.to_string(), IndexMap::new()));
                 }
 
                 let mut blocks = Vec::with_capacity(response.tool_calls.len());
                 for call in &response.tool_calls {
                     let started = Instant::now();
                     let (result, error) = self.execute_agent_tool(lc, call).await;
-                    events.push(SpanEvent::ToolRun {
+                    run.events.push(SpanEvent::ToolRun {
                         id: call.id.clone(),
                         name: call.function.name.clone(),
                         args: call.function.arguments.clone(),
@@ -1363,6 +1431,8 @@ impl Interpreter {
                         duration_us: started.elapsed().as_micros() as u64,
                         error,
                     });
+                    run.tool_calls.push(call.clone());
+                    run.tool_executions.push(result.clone());
                     blocks.push(tool_result_block(call, result));
                 }
                 chat.push_message(Message::with_content(Role::User, blocks));
@@ -1373,7 +1443,7 @@ impl Interpreter {
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
                 match ChatAdapter.parse_output_def(lc.def, types, &response.output) {
-                    Ok((output, _)) => return Ok((output, raw)),
+                    Ok((output, metas)) => return Ok((output, raw, metas)),
                     Err(err) if turn + 1 < lc.n.stop.max_turns.get() => {
                         chat.push_message(Message::user(format!(
                             "Your response could not be parsed: {err}. Respond again, \
@@ -1381,10 +1451,12 @@ impl Interpreter {
                              `[[ ## field ## ]]` format."
                         )));
                     }
-                    Err(_) => {
+                    Err(err) => {
                         return Err(RunError::Parse {
                             at: lc.at.into(),
                             raw,
+                            source: Some(Box::new(err)),
+                            usage: run.usage,
                         });
                     }
                 }
@@ -1394,7 +1466,7 @@ impl Interpreter {
         // Turns exhausted without an accepted answer.
         match lc.n.budget.on_exhausted {
             BudgetPolicy::Fail => Err(RunError::Budget { at: lc.at.into() }),
-            BudgetPolicy::Finalize => self.finalize(lc, chat, events, usage).await,
+            BudgetPolicy::Finalize => self.finalize(lc, chat, run).await,
         }
     }
 
@@ -1404,9 +1476,8 @@ impl Interpreter {
         &self,
         lc: &AgentLoopCx<'_>,
         mut chat: Chat,
-        events: &mut Vec<SpanEvent>,
-        usage: &mut LmUsage,
-    ) -> Result<(JsonMap, String), RunError> {
+        run: &mut AgentRun,
+    ) -> Result<(JsonMap, String, IndexMap<String, FieldMeta>), RunError> {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
@@ -1427,17 +1498,18 @@ impl Interpreter {
                 },
             })?;
         lc.run_meter.record_usage(&response.usage);
-        *usage = *usage + response.usage;
-        events.extend(response.events.clone());
+        run.usage = run.usage + response.usage;
+        run.events.extend(response.events.clone());
         let raw = response.output.content();
-        let output = ChatAdapter
+        let (output, metas) = ChatAdapter
             .parse_output_def(lc.def, &self.program.types, &response.output)
-            .map_err(|_| RunError::Parse {
+            .map_err(|err| RunError::Parse {
                 at: lc.at.into(),
                 raw: raw.clone(),
-            })?
-            .0;
-        Ok((output, raw))
+                source: Some(Box::new(err)),
+                usage: run.usage,
+            })?;
+        Ok((output, raw, metas))
     }
 
     /// Executes one agent tool call. Failures are conversational: the error
@@ -1772,6 +1844,17 @@ impl Interpreter {
     }
 }
 
+/// Mutable per-invocation loop state: the span's event stream, accumulated
+/// usage, and the tool call/execution record surfaced through
+/// [`LeafOutcome`].
+#[derive(Default)]
+struct AgentRun {
+    events: Vec<SpanEvent>,
+    usage: LmUsage,
+    tool_calls: Vec<rig::message::ToolCall>,
+    tool_executions: Vec<String>,
+}
+
 /// Borrowed context for one agent-loop invocation — keeps `agent_loop` and
 /// its helpers at a sane arity.
 struct AgentLoopCx<'a> {
@@ -1897,6 +1980,8 @@ fn coerce_outputs(
         return Err(RunError::Parse {
             at: at.into(),
             raw: value.to_string(),
+            source: None,
+            usage: LmUsage::default(),
         });
     };
     let mut output = JsonMap::new();
@@ -1912,6 +1997,8 @@ fn coerce_outputs(
                 return Err(RunError::Parse {
                     at: at.into(),
                     raw: value.to_string(),
+                    source: None,
+                    usage: LmUsage::default(),
                 });
             }
         }

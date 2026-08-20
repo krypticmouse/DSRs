@@ -1,8 +1,12 @@
 //! IR-1 (RFC 0002 §1) dynamic rendering proof.
 //!
 //! Two claims under test:
-//! 1. **Lane parity** — a `SignatureDef` bridged from a derive renders byte-identical
-//!    prompt sections (system, input, parse) to the static `SignatureSchema` path.
+//! 1. **Derive-bridged rendering** — a `SignatureDef` bridged from a derive
+//!    ([`SignatureDef::of`]) renders the full prompt protocol: aliases, docs,
+//!    `#[format]`/`#[render]` hints, and constraint metadata. (The historical
+//!    static `SignatureSchema` render lane was collapsed when `Predict` moved
+//!    onto the interpreter; byte-stability is pinned by the golden prompt
+//!    tests.)
 //! 2. **No `'static` anywhere** — a `SignatureDef` constructed at runtime, never
 //!    mentioned in any derive, formats a system prompt + input and round-trips a
 //!    canned LM response through parse, with all data owned and dropped after use.
@@ -75,79 +79,78 @@ fn graded_response() -> Message {
 }
 
 #[test]
-fn system_prompt_parity_between_lanes() {
+fn derive_bridged_system_prompt_renders_aliases_docs_and_types() {
     let adapter = ChatAdapter;
 
-    let static_lane = adapter.build_system(Graded::schema(), None).unwrap();
-    let value_lane = adapter.build_system_def(
+    let system = adapter.build_system_def(
         SignatureDef::of::<Graded>(),
         SignatureDef::types_of::<Graded>(),
         None,
     );
-    assert_eq!(static_lane, value_lane);
+    assert!(system.contains("`question` (string): The question being graded."));
+    assert!(system.contains("[[ ## score ## ]]"));
+    assert!(!system.contains("[[ ## confidence ## ]]"));
+    assert!(system.contains("Output field `score` should be of type: float"));
+    assert!(system.contains("Grade an answer against a question."));
 
-    let static_lane = adapter.build_system(Structured::schema(), None).unwrap();
-    let value_lane = adapter.build_system_def(
+    let system = adapter.build_system_def(
         SignatureDef::of::<Structured>(),
         SignatureDef::types_of::<Structured>(),
         None,
     );
-    assert_eq!(static_lane, value_lane);
+    assert!(system.contains("[[ ## citations ## ]]"));
+    assert!(system.contains("url: string,"));
+    assert!(system.contains("- Support"));
 
     let with_override = "Grade strictly.";
-    let static_lane = adapter
-        .build_system(Graded::schema(), Some(with_override))
-        .unwrap();
-    let value_lane = adapter.build_system_def(
+    let system = adapter.build_system_def(
         SignatureDef::of::<Graded>(),
         SignatureDef::types_of::<Graded>(),
         Some(with_override),
     );
-    assert_eq!(static_lane, value_lane);
+    assert!(system.contains("Grade strictly."));
+    assert!(!system.contains("Grade an answer against a question."));
 }
 
 #[test]
-fn input_format_parity_between_lanes() {
+fn derive_bridged_input_honors_format_hints() {
     let adapter = ChatAdapter;
 
     let typed = GradedInput::new(
         "Is the sky blue?".to_string(),
         vec!["observation log".to_string()],
     );
-    let static_lane = adapter.format_input(Graded::schema(), &typed);
-
     let value_input = serde_json::to_value(&typed)
         .unwrap()
         .as_object()
         .cloned()
         .unwrap();
     let value_lane = adapter.format_input_def(SignatureDef::of::<Graded>(), &value_input);
-    assert_eq!(static_lane, value_lane);
+    assert!(value_lane.contains("[[ ## question ## ]]\nIs the sky blue?"));
+    // `#[format("json")]` renders the list as JSON.
+    assert!(value_lane.contains(r#"["observation log"]"#));
+    assert!(value_lane.contains("starting with the field `[[ ## score ## ]]`"));
 }
 
 #[test]
-fn jinja_input_parity_between_lanes() {
+fn derive_bridged_jinja_input_renders_template() {
     let adapter = ChatAdapter;
 
     let typed = JinjaSigInput::new("What is 2+2?".to_string());
-    let static_lane = adapter.format_input(JinjaSig::schema(), &typed);
-
     let value_input = serde_json::to_value(&typed)
         .unwrap()
         .as_object()
         .cloned()
         .unwrap();
     let value_lane = adapter.format_input_def(SignatureDef::of::<JinjaSig>(), &value_input);
-    assert_eq!(static_lane, value_lane);
     assert!(value_lane.contains("Q: What is 2+2? [What is 2+2?]"));
 }
 
 #[test]
-fn parse_parity_between_lanes() {
+fn derive_bridged_parse_assembles_typed_output_and_checks() {
     let adapter = ChatAdapter;
     let response = graded_response();
 
-    let (typed, typed_meta) = adapter.parse_response_typed::<Graded>(&response).unwrap();
     let (value_map, value_meta) = adapter
         .parse_output_def(
             SignatureDef::of::<Graded>(),
@@ -156,21 +159,18 @@ fn parse_parity_between_lanes() {
         )
         .unwrap();
 
-    assert_eq!(
-        serde_json::to_value(&typed).unwrap(),
-        serde_json::Value::Object(value_map)
-    );
+    // Canonical field-name keying assembles straight into the typed output.
+    let typed: GradedOutput =
+        serde_json::from_value(serde_json::Value::Object(value_map)).unwrap();
+    assert_eq!(typed.confidence, 0.9);
+    assert_eq!(typed.verdict, "Supported");
 
-    // Same per-field metadata: raw text and check outcomes line up.
-    assert_eq!(
-        typed_meta.get("confidence").unwrap().raw_text,
-        value_meta.get("confidence").unwrap().raw_text
-    );
-    let static_checks = &typed_meta.get("confidence").unwrap().checks;
-    let value_checks = &value_meta.get("confidence").unwrap().checks;
-    assert_eq!(static_checks.len(), value_checks.len());
-    assert_eq!(static_checks[0].label, value_checks[0].label);
-    assert_eq!(static_checks[0].passed, value_checks[0].passed);
+    // Per-field metadata: raw text and `#[check]` outcomes.
+    let confidence = value_meta.get("confidence").unwrap();
+    assert_eq!(confidence.raw_text, "0.9");
+    assert_eq!(confidence.checks.len(), 1);
+    assert_eq!(confidence.checks[0].label, "range");
+    assert!(confidence.checks[0].passed);
 }
 
 /// A signature that exists nowhere as a type: built at runtime from owned
