@@ -17,7 +17,6 @@ use rig::{
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::trace::SpanEvent;
@@ -161,7 +160,7 @@ impl Default for LMConfig {
 #[derive(Clone)]
 pub struct LM {
     pub config: LMConfig,
-    pub cache_handler: Option<Arc<Mutex<ResponseCache>>>,
+    pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
 }
 
@@ -241,7 +240,7 @@ impl LM {
 
         let cache_handler = if config.cache {
             debug!("initializing response cache");
-            Some(Arc::new(Mutex::new(ResponseCache::new().await)))
+            Some(Arc::new(ResponseCache::new().await))
         } else {
             None
         };
@@ -770,7 +769,7 @@ impl LM {
             None
         };
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
-            && let Some(entry) = cache.lock().await.get_entry(key).await?
+            && let Some(entry) = cache.get_entry(key).await?
             && let Some(raw_output) = entry.raw_output
         {
             debug!("lm response served from cache");
@@ -912,7 +911,7 @@ impl LM {
                 usage: accumulated_usage,
                 raw_output: Some(first_choice.content()),
             };
-            cache.lock().await.insert_entry(key, entry);
+            cache.insert_entry(key, entry);
             trace!("lm response cached");
         }
 
@@ -975,14 +974,7 @@ impl LM {
         fields(n)
     )]
     pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler
-            .as_ref()
-            .unwrap()
-            .lock()
-            .await
-            .get_history(n)
-            .await
-            .unwrap()
+        self.cache_handler.as_ref().unwrap().get_history(n)
     }
 }
 
