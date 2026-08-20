@@ -165,15 +165,17 @@ macro_rules! predictors {
 ///
 /// # Implementing `Module`
 ///
-/// Implement [`forward`](Module::forward). Derive `Facet` on your struct so the
-/// optimizer's walker can find your [`Predict`](crate::Predict) leaves automatically.
+/// Implement [`forward`](Module::forward). To make the module optimizable and
+/// persistable, also declare its [`Predict`](crate::Predict) leaves via
+/// [`Predictors`] (one `predictors!` line).
 ///
 /// ```ignore
-/// #[derive(Facet)]
 /// struct TwoStepQA {
 ///     retrieve: Predict<RetrieveSig>,
 ///     answer: ChainOfThought<AnswerSig>,
 /// }
+///
+/// dspy_rs::predictors!(TwoStepQA { retrieve, answer });
 ///
 /// impl Module for TwoStepQA {
 ///     type Input = RetrieveInput;

@@ -87,7 +87,7 @@ fn optimizer_compile_rejects_wrong_signature_input_type() {
         "wrong_signature_case",
         r#"
 use anyhow::Result;
-use dspy_rs::{COPRO, ChainOfThought, Eval, Optimizer, Predicted, Signature, TypedMetric, WithReasoning};
+use dspy_rs::{COPRO, ChainOfThought, Eval, Predicted, Signature, TypedMetric, WithReasoning};
 
 #[derive(Signature, Clone, Debug)]
 struct RightSig {
@@ -123,7 +123,7 @@ fn main() {
     // Rows for the wrong signature never project into the module's input.
     let trainset: Vec<(WrongSigInput, WrongSigOutput)> = Vec::new();
     let optimizer = COPRO::builder().breadth(1).depth(1).build();
-    let _future = optimizer.compile(&mut module, trainset, &Metric);
+    let _future = optimizer.compile_module(&mut module, &trainset, &Metric);
 }
 "#,
     );

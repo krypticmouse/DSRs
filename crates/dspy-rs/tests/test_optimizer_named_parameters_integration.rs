@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    COPRO, CallMetadata, Eval, Module, Optimizer, Predict, PredictError, Predicted, Signature,
+    COPRO, CallMetadata, Eval, Module, Predict, PredictError, Predicted, Signature,
     TypedMetric,
 };
 
@@ -13,11 +13,11 @@ struct OptimizerSig {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct InstructionEchoModule {
     predictor: Predict<OptimizerSig>,
 }
+
+dspy_rs::predictors!(InstructionEchoModule { predictor });
 
 impl Module for InstructionEchoModule {
     type Input = OptimizerSigInput;
@@ -83,7 +83,7 @@ async fn optimizer_compile_succeeds_without_public_named_parameter_access() {
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile(&mut module, trainset(), &InstructionLengthMetric)
+        .compile_module(&mut module, &trainset(), &InstructionLengthMetric)
         .await
         .expect("COPRO compile should succeed with internal predictor discovery");
 }

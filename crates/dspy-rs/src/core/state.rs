@@ -7,78 +7,70 @@
 //!
 //! ```ignore
 //! // After optimization:
-//! ModuleState::from_module(&mut module)?.save("optimized.json")?;
+//! ModuleState::from_module(&module)?.save("optimized.json")?;
 //!
 //! // In production:
 //! let mut module = MyPipeline::new();
 //! ModuleState::load("optimized.json")?.apply(&mut module)?;
 //! ```
+//!
+//! Leaves are discovered through the explicit [`Predictors`] contract — state
+//! is keyed by the names the module declares for its leaves.
 
 use std::collections::BTreeMap;
-use std::ops::ControlFlow;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 
-use crate::Facet;
-use crate::core::dyn_predictor::{PredictState, visit_named_predictors_mut};
+use crate::core::{PredictState, Predictors};
 
 /// Serializable snapshot of every [`Predict`](crate::Predict) leaf in a module,
-/// keyed by the dotted path the optimizer walker discovers.
+/// keyed by the leaf name the module declares via [`Predictors`].
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ModuleState {
-    /// Per-predictor state, keyed by dotted path (`BTreeMap` keeps JSON output stable).
+    /// Per-predictor state, keyed by leaf name (`BTreeMap` keeps JSON output stable).
     pub predictors: BTreeMap<String, PredictState>,
 }
 
 impl ModuleState {
     /// Snapshots the current state (instruction overrides + demos) of every
     /// `Predict` leaf in `module`.
-    ///
-    /// Takes `&mut` because leaf discovery uses the exclusive Facet walker; the
-    /// module is not modified.
-    pub fn from_module<M>(module: &mut M) -> Result<Self>
+    pub fn from_module<M>(module: &M) -> Result<Self>
     where
-        M: for<'a> Facet<'a>,
+        M: Predictors + ?Sized,
     {
         let mut predictors = BTreeMap::new();
-        visit_named_predictors_mut(module, |name, predictor| {
-            predictors.insert(name.to_string(), predictor.dump_state());
-            ControlFlow::Continue(())
-        })?;
+        for (name, info) in module.predictors() {
+            predictors.insert(name, info.dump_state());
+        }
         Ok(Self { predictors })
     }
 
-    /// Applies this state to a module in place.
+    /// Applies this state to a module in place, stamping each restored leaf's
+    /// trace name with its declared name.
     ///
-    /// Every path in the state must resolve to a `Predict` leaf in `module` —
-    /// unknown paths are an error, since they mean the saved state and the module
+    /// Every name in the state must resolve to a `Predict` leaf in `module` —
+    /// unknown names are an error, since they mean the saved state and the module
     /// structure have diverged. Predictors not named in the state are left untouched.
     pub fn apply<M>(&self, module: &mut M) -> Result<()>
     where
-        M: for<'a> Facet<'a>,
+        M: Predictors + ?Sized,
     {
         let mut remaining: BTreeMap<&str, &PredictState> = self
             .predictors
             .iter()
             .map(|(name, state)| (name.as_str(), state))
             .collect();
-        let mut load_error: Option<anyhow::Error> = None;
 
-        visit_named_predictors_mut(module, |name, predictor| {
-            if let Some(state) = remaining.remove(name)
-                && let Err(err) = predictor.load_state(state.clone())
-            {
-                load_error = Some(anyhow!("failed to load state for `{name}`: {err}"));
-                return ControlFlow::Break(());
+        for (name, info) in module.predictors_mut() {
+            if let Some(state) = remaining.remove(name.as_str()) {
+                info.set_trace_name(&name);
+                info.load_state(state.clone())
+                    .map_err(|err| anyhow!("failed to load state for `{name}`: {err}"))?;
             }
-            ControlFlow::Continue(())
-        })?;
-
-        if let Some(err) = load_error {
-            return Err(err);
         }
+
         if !remaining.is_empty() {
             let missing = remaining.keys().copied().collect::<Vec<_>>().join("`, `");
             return Err(anyhow!(

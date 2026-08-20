@@ -36,6 +36,8 @@ struct QAPipeline {
     answerer: Predict<QA>,
 }
 
+dspy_rs::predictors!(QAPipeline { answerer });
+
 impl Module for QAPipeline {
     type Input = QAInput;
     type Output = QAOutput;
@@ -66,7 +68,7 @@ fn main() -> Result<()> {
         .build();
 
     // --- Save -------------------------------------------------------------
-    let state = ModuleState::from_module(&mut tuned)?;
+    let state = ModuleState::from_module(&tuned)?;
     println!("Snapshot of {} predictor(s):", state.predictors.len());
     for (path, predictor_state) in &state.predictors {
         println!(
@@ -84,7 +86,7 @@ fn main() -> Result<()> {
     let mut fresh = QAPipeline::builder().build();
     ModuleState::load("qa-pipeline-state.json")?.apply(&mut fresh)?;
 
-    let restored = ModuleState::from_module(&mut fresh)?;
+    let restored = ModuleState::from_module(&fresh)?;
     let answerer = &restored.predictors["answerer"];
     println!(
         "Restored `answerer`: instruction={:?}, demos={}",

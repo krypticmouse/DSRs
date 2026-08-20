@@ -8,21 +8,20 @@ use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
 use bon::Builder;
-use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
+use crate::core::ToInput;
 use crate::evaluate::{Eval, TypedMetric};
 use crate::optimizer::engine::{
-    Budget, Candidate, EngineConfig, EvalEngine, EvalOutcome, GateOutcome, Spend, apply_candidate,
-    canonical_hash,
+    Candidate, Engine, EngineConfig, EvalOutcome, GateOutcome, Spend, canonical_hash,
 };
-use crate::optimizer::gepa::format_schema_for_reflection;
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
-use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
+use crate::optimizer::target::LeafInfo;
+use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::trace::Trace;
 use crate::utils::truncate;
-use crate::core::ToInput;
-use crate::{Facet, Module, Predict, Signature};
+use crate::{Module, Predict, Predictors, Signature};
 
 /// Distill one improvement rule from contrasting rollouts.
 ///
@@ -100,8 +99,8 @@ pub struct SimbaReport {
 
 /// Minibatch introspective ascent — the cheap agentic default (vision §4.3).
 ///
-/// SIMBA is a thin strategy over the shared [`EvalEngine`]. It keeps one
-/// *current* program as an overlay [`Candidate`] and hill-climbs:
+/// SIMBA is a thin strategy over the shared [`Engine`]. It keeps one
+/// *current* program as a name-keyed [`Candidate`] and hill-climbs:
 ///
 /// 1. **Sample** a trainset minibatch (seeded RNG, indices sorted for
 ///    deterministic evaluation order).
@@ -124,8 +123,8 @@ pub struct SimbaReport {
 ///    promote to a full-trainset evaluation and become the new current
 ///    program.
 ///
-/// The winner is installed permanently through the one candidate seam
-/// ([`apply_candidate`]) when `compile` returns.
+/// The winner is installed once — through [`OptimizeTarget::install`] — when
+/// `compile` returns; candidate evaluation never mutates the module.
 ///
 /// # Hyperparameters
 ///
@@ -150,7 +149,7 @@ pub struct SimbaReport {
 ///
 /// ```ignore
 /// let simba = SIMBA::builder().max_steps(8).minibatch_size(8).build();
-/// let report = simba.compile(&mut module, trainset, &metric).await?;
+/// let report = simba.compile_module(&mut module, &trainset, &metric).await?;
 /// println!("{:.3} -> {:.3}", report.baseline_score, report.final_score);
 /// ```
 #[derive(Builder)]
@@ -194,6 +193,16 @@ pub struct SIMBA {
 type RolloutStore = Vec<Option<(Eval, Option<Trace>)>>;
 
 impl SIMBA {
+    fn common(&self) -> OptimizerCommon {
+        OptimizerCommon {
+            eval_concurrency: self.eval_concurrency,
+            max_metric_calls: self.max_metric_calls,
+            max_lm_calls: self.max_lm_calls,
+            seed: self.seed,
+            ..OptimizerCommon::default()
+        }
+    }
+
     /// Formats one rollout (score, feedback, per-span I/O) for the reflection
     /// prompt.
     fn summarize_rollout(eval: &Eval, trace: Option<&Trace>) -> String {
@@ -232,15 +241,15 @@ impl SIMBA {
 
     /// The predictor an append-rule move targets: the one with the most spans
     /// in the worst rollout's trace (first name wins ties or when no trace).
-    fn rule_target<'a>(names: &'a [String], worst_trace: Option<&Trace>) -> &'a str {
-        let mut target = names[0].as_str();
+    fn rule_target<'a>(leaves: &'a [LeafInfo], worst_trace: Option<&Trace>) -> &'a LeafInfo {
+        let mut target = &leaves[0];
         if let Some(trace) = worst_trace {
             let mut most = 0usize;
-            for name in names {
-                let count = trace.for_component(name).count();
+            for leaf in leaves {
+                let count = trace.for_component(&leaf.name).count();
                 if count > most {
                     most = count;
-                    target = name;
+                    target = leaf;
                 }
             }
         }
@@ -251,16 +260,13 @@ impl SIMBA {
     /// the best rollout via the shared trace name-join, appended to the
     /// current effective demo set. Returns `None` when nothing changes (no
     /// qualifying spans, or every harvested demo is already present).
-    fn append_demo_child<M>(
+    fn append_demo_child(
         &self,
-        module: &mut M,
+        leaves: &[LeafInfo],
         current: &Candidate,
         score: f64,
         trace: &Trace,
-    ) -> Result<Option<Candidate>>
-    where
-        M: for<'a> Facet<'a>,
-    {
+    ) -> Option<Candidate> {
         let harvested = select_demos(
             collect_demo_candidates(std::iter::once((score, trace)), self.min_demo_score),
             1,
@@ -269,13 +275,15 @@ impl SIMBA {
         let mut child = current.clone();
         let mut changed = false;
         for (name, new_demos) in harvested {
-            // Effective demo set: the current overlay if it carries one,
-            // otherwise whatever is installed on the module.
-            let mut demos = match current.overlays.get(&name).and_then(|o| o.demos.clone()) {
-                Some(demos) => demos,
-                None => with_named_predictor(module, &name, |predictor| {
-                    Ok(predictor.demos_as_json())
-                })?,
+            // Effective demo set: the current candidate if it carries one,
+            // otherwise the module's own demos (leaf snapshot).
+            let mut demos = match current.demos_of(&name) {
+                Some(demos) => demos.to_vec(),
+                None => leaves
+                    .iter()
+                    .find(|leaf| leaf.name == name)
+                    .map(|leaf| leaf.demos.clone())
+                    .unwrap_or_default(),
             };
             let seen: HashSet<u64> = demos.iter().map(canonical_hash).collect();
 
@@ -295,26 +303,22 @@ impl SIMBA {
                 changed = true;
             }
         }
-        Ok(changed.then_some(child))
+        changed.then_some(child)
     }
 
     /// Proposes the rule text for an append-rule move, preferring LM
     /// reflection. Returns the rule and the number of reflection LM calls
     /// consumed (0 or 1); reflection failures degrade to metric-feedback
     /// concatenation with a warning rather than aborting the run.
-    async fn propose_rule<M>(
+    async fn propose_rule(
         &self,
-        module: &mut M,
-        target: &str,
+        leaf: &LeafInfo,
         current_instruction: &str,
         better_rollout: String,
         worse_rollout: String,
         worst_eval: &Eval,
         reflector: Option<&Predict<IntrospectRollouts>>,
-    ) -> (String, usize)
-    where
-        M: for<'a> Facet<'a>,
-    {
+    ) -> (String, usize) {
         let fallback = || {
             worst_eval.feedback.clone().unwrap_or_else(|| {
                 format!(
@@ -328,13 +332,8 @@ impl SIMBA {
             return (fallback(), 0);
         };
 
-        let task_description = with_named_predictor(module, target, |predictor| {
-            Ok(format_schema_for_reflection(predictor.schema()))
-        })
-        .unwrap_or_default();
-
         let input = IntrospectRolloutsInput {
-            task_description,
+            task_description: leaf.schema_for_reflection(),
             current_instruction: current_instruction.to_string(),
             better_rollout,
             worse_rollout,
@@ -345,7 +344,7 @@ impl SIMBA {
                 let rule = predicted.rule.trim().to_string();
                 if rule.is_empty() {
                     tracing::warn!(
-                        target,
+                        target = leaf.name,
                         "reflection LM returned an empty rule; using metric feedback"
                     );
                 } else {
@@ -354,7 +353,7 @@ impl SIMBA {
             }
             Err(err) => {
                 tracing::warn!(
-                    target,
+                    target = leaf.name,
                     error = %err,
                     "reflection LM call failed; using metric feedback"
                 );
@@ -363,51 +362,53 @@ impl SIMBA {
 
         (fallback(), 1)
     }
-}
 
-impl Optimizer for SIMBA {
-    type Report = SimbaReport;
-
-    async fn compile<E, M, MT>(
+    /// Convenience: optimizes a typed module over a trainset with this
+    /// optimizer's default engine.
+    pub async fn compile_module<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<E>,
+        trainset: &[E],
         metric: &MT,
-    ) -> Result<Self::Report>
+    ) -> Result<SimbaReport>
     where
         E: ToInput<M::Input> + serde::Serialize + Send + Sync,
-        M: Module + for<'a> Facet<'a>,
+        M: Module + Predictors,
         MT: TypedMetric<E, M>,
     {
-        let names = predictor_names(module)?;
-        if names.is_empty() {
+        let mut target = OptimizeTarget::module(module, trainset, metric);
+        let mut engine = Engine::new(Optimizer::engine_config(self));
+        let report = Optimizer::compile(self, &mut target, &mut engine).await?;
+        report
+            .into_simba()
+            .ok_or_else(|| anyhow!("SIMBA must return a SIMBA report"))
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Optimizer for SIMBA {
+    fn engine_config(&self) -> EngineConfig {
+        self.common().engine_config()
+    }
+
+    async fn compile(
+        &self,
+        target: &mut OptimizeTarget<'_>,
+        engine: &mut Engine,
+    ) -> Result<Report> {
+        let leaves = target.leaves().to_vec();
+        if leaves.is_empty() {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
-        let mut engine = EvalEngine::new(
-            trainset,
-            metric,
-            EngineConfig {
-                concurrency: self.eval_concurrency,
-                budget: Budget {
-                    max_metric_calls: self.max_metric_calls,
-                    max_lm_calls: self.max_lm_calls,
-                    max_tokens: None,
-                },
-                cache_salt: 0,
-            },
-        );
-        let num_examples = engine.num_examples();
+        let num_examples = target.num_examples();
         let all_indices: Vec<usize> = (0..num_examples).collect();
 
         let reflector = self
             .prompt_model
             .as_ref()
             .map(|lm| Predict::<IntrospectRollouts>::builder().lm(lm.clone()).build());
-        let mut rng = match self.seed {
-            Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
-        };
+        let mut rng = self.common().rng();
 
         // Baseline: the empty candidate over the full trainset, traced. This
         // seeds the rollout store; because every later *current* program is
@@ -415,7 +416,7 @@ impl Optimizer for SIMBA {
         // needs extra rollouts.
         let mut current = Candidate::new();
         let current_idx = engine.register(current.clone());
-        let baseline_eval = match engine.evaluate(module, current_idx, None).await? {
+        let baseline_eval = match engine.evaluate(target, current_idx, None).await? {
             EvalOutcome::Complete(eval) => eval,
             EvalOutcome::BudgetExhausted { needed } => {
                 return Err(anyhow!(
@@ -478,7 +479,7 @@ impl Optimizer for SIMBA {
             let demo_child = if best_eval.score >= self.min_demo_score {
                 match &best_trace {
                     Some(trace) => {
-                        self.append_demo_child(module, &current, best_eval.score, trace)?
+                        self.append_demo_child(&leaves, &current, best_eval.score, trace)
                     }
                     None => None,
                 }
@@ -489,21 +490,14 @@ impl Optimizer for SIMBA {
             let (child, move_kind) = match demo_child {
                 Some(child) => (child, SimbaMove::AppendDemo),
                 None => {
-                    let target = Self::rule_target(&names, worst_trace.as_ref());
-                    let base_instruction = match current
-                        .overlays
-                        .get(target)
-                        .and_then(|overlay| overlay.instruction.clone())
-                    {
-                        Some(instruction) => instruction,
-                        None => with_named_predictor(module, target, |predictor| {
-                            Ok(predictor.instruction())
-                        })?,
+                    let leaf = Self::rule_target(&leaves, worst_trace.as_ref());
+                    let base_instruction = match current.instruction_of(&leaf.name) {
+                        Some(instruction) => instruction.to_string(),
+                        None => leaf.instruction.clone(),
                     };
                     let (rule, reflection_calls) = self
                         .propose_rule(
-                            module,
-                            target,
+                            leaf,
                             &base_instruction,
                             Self::summarize_rollout(&best_eval, best_trace.as_ref()),
                             Self::summarize_rollout(&worst_eval, worst_trace.as_ref()),
@@ -514,7 +508,10 @@ impl Optimizer for SIMBA {
                     engine.charge(0, reflection_calls);
 
                     let mut child = current.clone();
-                    child.set_instruction(target, format!("{base_instruction}\n\n[SIMBA rule] {rule}"));
+                    child.set_instruction(
+                        &leaf.name,
+                        format!("{base_instruction}\n\n[SIMBA rule] {rule}"),
+                    );
                     (child, SimbaMove::AppendRule)
                 }
             };
@@ -522,7 +519,7 @@ impl Optimizer for SIMBA {
             // 4. Accept through the engine's minibatch gate.
             let child_idx = engine.register(child.clone());
             match engine
-                .evaluate_gated(module, child_idx, &minibatch, threshold)
+                .evaluate_gated(target, child_idx, &minibatch, threshold)
                 .await?
             {
                 GateOutcome::BudgetExhausted { .. } => break,
@@ -569,18 +566,18 @@ impl Optimizer for SIMBA {
             }
         }
 
-        // Install the winner permanently through the one candidate seam.
+        // The one mutation of the run: install the winner.
         if !current.is_empty() {
-            let _undo = apply_candidate(module, &current)?;
+            target.install(&current)?;
         }
 
-        Ok(SimbaReport {
+        Ok(Report::Simba(SimbaReport {
             baseline_score,
             final_score,
             steps,
             accepted,
             rejected,
             spend: *engine.spend(),
-        })
+        }))
     }
 }

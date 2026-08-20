@@ -1,17 +1,17 @@
 use anyhow::{Context, Result, anyhow};
 use bon::Builder;
-use rand::{Rng, SeedableRng, rngs::StdRng, seq::SliceRandom};
+use rand::{Rng, rngs::StdRng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
+use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
 use crate::optimizer::engine::{
-    Budget, Candidate, CandidateEval, EngineConfig, EvalEngine, EvalOutcome, ParetoStatistics,
-    ParetoView, apply_candidate,
+    Candidate, CandidateEval, Engine, EngineConfig, EvalOutcome, ParetoStatistics, ParetoView,
 };
-use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
+use crate::optimizer::target::LeafInfo;
+use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::utils::truncate;
-use crate::core::ToInput;
-use crate::{Facet, Module, Predict, Schema, Signature, SignatureSchema};
+use crate::{Module, Predict, Predictors, Signature};
 
 /// Improve an LLM-pipeline module's instruction using execution feedback.
 ///
@@ -40,30 +40,11 @@ struct ReflectOnInstruction {
     improved_instruction: String,
 }
 
-/// Renders a predictor's input/output contract for reflection prompts.
-/// Shared with [`SIMBA`](crate::SIMBA)'s introspection call.
-pub(crate) fn format_schema_for_reflection(schema: &SignatureSchema) -> String {
-    let mut result = String::new();
-    result.push_str("Input fields:\n");
-    for field in schema.input_fields() {
-        let docs = if field.docs.is_empty() {
-            "No description"
-        } else {
-            field.docs.as_str()
-        };
-        result.push_str(&format!("  - {}: {}\n", field.lm_name, docs));
-    }
-    result.push_str("Output fields:\n");
-    for field in schema.output_fields() {
-        let docs = if field.docs.is_empty() {
-            "No description"
-        } else {
-            field.docs.as_str()
-        };
-        result.push_str(&format!("  - {}: {}\n", field.lm_name, docs));
-    }
-    result
-}
+/// Character budget for the feedback appended by the *no-prompt-model*
+/// fallback mutation. Without a cap the child instruction would grow by a
+/// full trace dump every generation (unbounded quadratic growth across a
+/// lineage); the reflection-LM path is unaffected.
+const CONCAT_FEEDBACK_BUDGET: usize = 2000;
 
 /// A single instruction candidate tracked through GEPA's evolutionary search.
 ///
@@ -126,10 +107,11 @@ pub struct GEPAResult {
 
 /// Genetic-Pareto instruction optimizer with feedback-driven evolution.
 ///
-/// GEPA is a thin strategy over the shared [`EvalEngine`]: candidates are
-/// instruction overlays, evaluation is the engine's cached bounded-concurrency
-/// fan-out, budgets are engine budgets, and the per-instance Pareto frontier is
-/// a view over the engine's (candidates × examples) score matrix.
+/// GEPA is a thin strategy over the shared [`Engine`]: candidates are
+/// instruction [`Candidate`]s injected ambiently, evaluation is the engine's
+/// cached bounded-concurrency fan-out, budgets are engine budgets, and the
+/// per-instance Pareto frontier is a view over the engine's
+/// (candidates × examples) score matrix.
 ///
 /// GEPA uses an evolutionary search guided by per-example feedback from your metric.
 /// Unlike [`COPRO`](crate::COPRO) which only uses numerical scores, GEPA requires your
@@ -139,8 +121,9 @@ pub struct GEPAResult {
 /// feedback, and the mutated component's per-invocation execution trace
 /// ([`Trace::for_component`](crate::Trace::for_component)), then writes an improved
 /// instruction each generation; without one, the feedback is appended to the
-/// instruction as a deterministic mutation. Either way the quality of your feedback
-/// directly determines the quality of GEPA's search.
+/// instruction as a deterministic mutation (capped at a fixed character budget
+/// so lineages can't grow unboundedly). Either way the quality of your
+/// feedback directly determines the quality of GEPA's search.
 ///
 /// The Pareto frontier tracks candidates that aren't dominated on any individual
 /// training example, not just by average score. This means GEPA finds instructions
@@ -148,6 +131,15 @@ pub struct GEPAResult {
 ///
 /// Only searches instruction space — no demo mutation, no crossover between candidates.
 /// Each child has exactly one parent.
+///
+/// # Validation sets
+///
+/// Build the target with
+/// [`OptimizeTarget::module_with_valset`] (or use
+/// [`compile_module_with_valset`](GEPA::compile_module_with_valset)): initial
+/// evaluation and child scoring use the target's validation columns, parent
+/// re-evaluation samples from its trainset columns. Without a valset the
+/// trainset serves both roles.
 ///
 /// # Hyperparameters
 ///
@@ -164,7 +156,8 @@ pub struct GEPAResult {
 /// - **`track_best_outputs`** (default: false) — re-run the best instruction on the
 ///   eval set and record outputs.
 /// - **`prompt_model`** — reflection LM that rewrites instructions from feedback.
-///   Strongly recommended; without it mutation degrades to feedback concatenation.
+///   Strongly recommended; without it mutation degrades to (budget-capped)
+///   feedback concatenation.
 /// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
 /// - **`seed`** — fixes minibatch sampling and parent selection for reproducible runs.
 ///
@@ -185,7 +178,7 @@ pub struct GEPAResult {
 ///     .num_iterations(20)
 ///     .max_lm_calls(Some(500))
 ///     .build();
-/// let report = gepa.compile(&mut module, trainset, &feedback_metric).await?;
+/// let report = gepa.compile_module(&mut module, &trainset, &feedback_metric).await?;
 /// println!("Best score: {:.3}", report.best_candidate.average_score());
 /// ```
 #[derive(Builder)]
@@ -301,6 +294,16 @@ impl Lineage {
 }
 
 impl GEPA {
+    fn common(&self) -> OptimizerCommon {
+        OptimizerCommon {
+            eval_concurrency: self.eval_concurrency,
+            max_metric_calls: self.max_rollouts,
+            max_lm_calls: self.max_lm_calls,
+            seed: self.seed,
+            ..OptimizerCommon::default()
+        }
+    }
+
     fn require_feedback(eval: &CandidateEval, module_name: &str, generation: usize) -> Result<()> {
         if eval
             .rollouts
@@ -380,7 +383,9 @@ impl GEPA {
 
     /// Deterministic fallback mutation: append the feedback to the parent
     /// instruction. Used when no `prompt_model` is configured or the reflection
-    /// call fails.
+    /// call fails. The appended feedback is capped at
+    /// [`CONCAT_FEEDBACK_BUDGET`] characters so instructions can't grow by a
+    /// full trace dump every generation.
     fn concat_child_instruction(
         parent_instruction: &str,
         feedback_summary: &str,
@@ -391,7 +396,7 @@ impl GEPA {
             "{}\n\n[GEPA gen {}] Improve based on feedback:\n{}\n(Parent score {:.3})",
             parent_instruction,
             generation + 1,
-            feedback_summary,
+            truncate(feedback_summary, CONCAT_FEEDBACK_BUDGET),
             parent_score,
         )
     }
@@ -402,20 +407,16 @@ impl GEPA {
     /// Returns the proposed instruction and the number of reflection LM calls
     /// consumed (0 or 1). Reflection failures degrade to the deterministic
     /// concatenation mutation with a warning rather than aborting the run.
-    #[allow(clippy::too_many_arguments)]
-    async fn propose_child_instruction<M>(
+    async fn propose_child_instruction(
         &self,
-        module: &mut M,
+        leaves: &[LeafInfo],
         module_name: &str,
         parent_instruction: &str,
         feedback_summary: &str,
         parent_score: f64,
         generation: usize,
         reflector: Option<&Predict<ReflectOnInstruction>>,
-    ) -> (String, usize)
-    where
-        M: for<'a> Facet<'a>,
-    {
+    ) -> (String, usize) {
         let Some(reflector) = reflector else {
             return (
                 Self::concat_child_instruction(
@@ -428,10 +429,11 @@ impl GEPA {
             );
         };
 
-        let task_description = with_named_predictor(module, module_name, |predictor| {
-            Ok(format_schema_for_reflection(predictor.schema()))
-        })
-        .unwrap_or_default();
+        let task_description = leaves
+            .iter()
+            .find(|leaf| leaf.name == module_name)
+            .map(LeafInfo::schema_for_reflection)
+            .unwrap_or_default();
 
         let input = ReflectOnInstructionInput {
             task_description,
@@ -475,116 +477,91 @@ impl GEPA {
         )
     }
 
-    async fn collect_best_outputs<E, M>(
-        module: &M,
-        eval_set: &[E],
-    ) -> Result<Vec<serde_json::Value>>
-    where
-        E: ToInput<M::Input>,
-        M: Module,
-        M::Output: Schema,
-    {
-        let mut outputs = Vec::with_capacity(eval_set.len());
-        for example in eval_set {
-            let input = example.to_input()?;
-            let predicted = module.call(input).await.map_err(|err| anyhow!("{err}"))?;
-            outputs.push(serde_json::to_value(predicted.into_inner()).unwrap_or(serde_json::Value::Null));
-        }
-        Ok(outputs)
-    }
-
-    /// Runs GEPA with an explicit validation set separate from the trainset.
-    ///
-    /// When `valset` is `Some`, initial evaluation and child scoring use the validation
-    /// set, while parent re-evaluation uses the trainset minibatch. When `None`, the
-    /// trainset serves both roles.
-    ///
-    /// # Errors
-    ///
-    /// - No optimizable predictors found
-    /// - Any metric evaluation returns `feedback: None`
-    /// - LM call failure during evaluation
-    pub async fn compile_with_valset<E, M, MT>(
+    /// Convenience: optimizes a typed module over a trainset with this
+    /// optimizer's default engine.
+    pub async fn compile_module<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<E>,
-        valset: Option<Vec<E>>,
+        trainset: &[E],
         metric: &MT,
     ) -> Result<GEPAResult>
     where
         E: ToInput<M::Input> + serde::Serialize + Send + Sync,
-        M: Module + for<'a> Facet<'a>,
+        M: Module + Predictors,
         MT: TypedMetric<E, M>,
     {
-        let predictor_names = predictor_names(module)?;
-        if predictor_names.is_empty() {
+        self.compile_module_with_valset(module, trainset, None, metric)
+            .await
+    }
+
+    /// [`compile_module`](Self::compile_module) with an explicit validation
+    /// set: initial evaluation and child scoring use the valset, parent
+    /// re-evaluation samples trainset minibatches. Sugar over
+    /// [`OptimizeTarget::module_with_valset`] + the [`Optimizer`] trait.
+    pub async fn compile_module_with_valset<E, M, MT>(
+        &self,
+        module: &mut M,
+        trainset: &[E],
+        valset: Option<&[E]>,
+        metric: &MT,
+    ) -> Result<GEPAResult>
+    where
+        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
+        M: Module + Predictors,
+        MT: TypedMetric<E, M>,
+    {
+        let mut target = OptimizeTarget::module_with_valset(module, trainset, valset, metric);
+        let mut engine = Engine::new(Optimizer::engine_config(self));
+        let report = Optimizer::compile(self, &mut target, &mut engine).await?;
+        report
+            .into_gepa()
+            .ok_or_else(|| anyhow!("GEPA must return a GEPA report"))
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Optimizer for GEPA {
+    fn engine_config(&self) -> EngineConfig {
+        self.common().engine_config()
+    }
+
+    async fn compile(
+        &self,
+        target: &mut OptimizeTarget<'_>,
+        engine: &mut Engine,
+    ) -> Result<Report> {
+        let leaves = target.leaves().to_vec();
+        if leaves.is_empty() {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
-        // One engine over one example universe: the validation columns come
-        // first (the Pareto/score columns), the trainset minibatch pool after
-        // them when a separate valset is supplied.
-        let train_len = trainset.len();
-        let (engine_examples, val_cols, train_pool): (Vec<E>, Vec<usize>, Vec<usize>) =
-            match valset {
-                Some(mut valset) => {
-                    let val_len = valset.len();
-                    valset.extend(trainset);
-                    (
-                        valset,
-                        (0..val_len).collect(),
-                        (val_len..val_len + train_len).collect(),
-                    )
-                }
-                None => (
-                    trainset,
-                    (0..train_len).collect(),
-                    (0..train_len).collect(),
-                ),
-            };
-
-        let mut engine = EvalEngine::new(
-            engine_examples,
-            metric,
-            EngineConfig {
-                concurrency: self.eval_concurrency,
-                budget: Budget {
-                    max_metric_calls: self.max_rollouts,
-                    max_lm_calls: self.max_lm_calls,
-                    max_tokens: None,
-                },
-                cache_salt: 0,
-            },
-        );
+        // The validation columns are the Pareto/score columns; the trainset
+        // columns are the minibatch pool (identical without a valset).
+        let val_cols = target.val_columns();
+        let train_pool = target.train_columns();
 
         let reflector = self
             .prompt_model
             .as_ref()
             .map(|lm| Predict::<ReflectOnInstruction>::builder().lm(lm.clone()).build());
-        let mut rng = match self.seed {
-            Some(seed) => StdRng::seed_from_u64(seed),
-            None => StdRng::from_entropy(),
-        };
+        let mut rng = self.common().rng();
 
         let mut lineage = Lineage::new();
 
         // Seed the frontier: each predictor's current instruction, scored on
         // the validation columns.
-        for module_name in &predictor_names {
-            let instruction = with_named_predictor(module, module_name, |predictor| {
-                Ok(predictor.instruction())
-            })?;
-            let row = engine.register(Candidate::with_instruction(module_name, &instruction));
-            let eval = match engine.evaluate(module, row, Some(&val_cols)).await? {
+        for leaf in &leaves {
+            let row = engine.register(Candidate::with_instruction(&leaf.name, &leaf.instruction));
+            let eval = match engine.evaluate(target, row, Some(&val_cols)).await? {
                 EvalOutcome::Complete(eval) => eval,
                 EvalOutcome::BudgetExhausted { .. } => break,
             };
-            Self::require_feedback(&eval, module_name, 0)?;
+            Self::require_feedback(&eval, &leaf.name, 0)?;
             lineage.add(
                 GEPACandidate {
                     id: 0,
-                    instruction,
-                    module_name: module_name.clone(),
+                    instruction: leaf.instruction.clone(),
+                    module_name: leaf.name.clone(),
                     example_scores: Vec::new(),
                     parent_id: None,
                     generation: 0,
@@ -621,7 +598,7 @@ impl GEPA {
                 .collect();
 
             let parent_eval = match engine
-                .evaluate(module, parent_row, Some(&minibatch))
+                .evaluate(target, parent_row, Some(&minibatch))
                 .await?
             {
                 EvalOutcome::Complete(eval) => eval,
@@ -639,7 +616,7 @@ impl GEPA {
 
             let (child_instruction, reflection_calls) = self
                 .propose_child_instruction(
-                    module,
+                    &leaves,
                     &parent.module_name,
                     &parent.instruction,
                     &feedback_summary,
@@ -655,7 +632,7 @@ impl GEPA {
                 &child.module_name,
                 &child.instruction,
             ));
-            let child_eval = match engine.evaluate(module, child_row, Some(&val_cols)).await? {
+            let child_eval = match engine.evaluate(target, child_row, Some(&val_cols)).await? {
                 EvalOutcome::Complete(eval) => eval,
                 EvalOutcome::BudgetExhausted { .. } => break,
             };
@@ -681,11 +658,8 @@ impl GEPA {
             .cloned()
             .context("no candidates available on Pareto frontier")?;
 
-        // Install the winner permanently through the one candidate seam.
-        let _undo = apply_candidate(
-            module,
-            &Candidate::with_instruction(&best_candidate.module_name, &best_candidate.instruction),
-        )?;
+        let winner =
+            Candidate::with_instruction(&best_candidate.module_name, &best_candidate.instruction);
 
         let highest_score_achieved_per_val_task: Vec<f32> = if lineage.entries.is_empty() {
             Vec::new()
@@ -697,11 +671,10 @@ impl GEPA {
                 .collect()
         };
 
-        let eval_set = &engine.examples()[..val_cols.len()];
         let best_outputs_valset = if self.track_best_outputs {
-            if !engine.budget_allows(eval_set.len()) {
+            if !engine.budget_allows(val_cols.len()) {
                 tracing::debug!(
-                    eval_examples = eval_set.len(),
+                    eval_examples = val_cols.len(),
                     spend = ?engine.spend(),
                     max_lm_calls = ?self.max_lm_calls,
                     max_rollouts = ?self.max_rollouts,
@@ -709,15 +682,18 @@ impl GEPA {
                 );
                 None
             } else {
-                let outputs = Self::collect_best_outputs::<E, _>(module, eval_set).await?;
-                engine.charge(eval_set.len(), eval_set.len());
+                let outputs = target.candidate_outputs(&val_cols, &winner).await?;
+                engine.charge(val_cols.len(), val_cols.len());
                 Some(outputs)
             }
         } else {
             None
         };
 
-        Ok(GEPAResult {
+        // The one mutation of the run: install the winner.
+        target.install(&winner)?;
+
+        Ok(Report::Gepa(GEPAResult {
             best_candidate,
             all_candidates,
             total_rollouts: engine.spend().metric_calls,
@@ -726,26 +702,7 @@ impl GEPA {
             highest_score_achieved_per_val_task,
             best_outputs_valset,
             frontier_history,
-        })
-    }
-}
-
-impl Optimizer for GEPA {
-    type Report = GEPAResult;
-
-    async fn compile<E, M, MT>(
-        &self,
-        module: &mut M,
-        trainset: Vec<E>,
-        metric: &MT,
-    ) -> Result<Self::Report>
-    where
-        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
-        M: Module + for<'a> Facet<'a>,
-        MT: TypedMetric<E, M>,
-    {
-        self.compile_with_valset(module, trainset, None, metric)
-            .await
+        }))
     }
 }
 
@@ -756,7 +713,7 @@ mod tests {
     use super::*;
     use crate::evaluate::{Eval, TypedMetric};
     use crate::trace::Trace;
-    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature};
 
     #[derive(Signature, Clone, Debug)]
     struct GepaStateSig {
@@ -767,11 +724,11 @@ mod tests {
         answer: String,
     }
 
-    #[derive(facet::Facet)]
-    #[facet(crate = facet)]
     struct GepaStateModule {
         predictor: Predict<GepaStateSig>,
     }
+
+    crate::predictors!(GepaStateModule { predictor });
 
     impl Module for GepaStateModule {
         type Input = GepaStateSigInput;
@@ -817,7 +774,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_restores_state_when_metric_errors() {
+    async fn compile_leaves_state_untouched_when_metric_errors() {
         let optimizer = GEPA::builder().num_iterations(1).minibatch_size(1).build();
         let mut module = GepaStateModule {
             predictor: Predict::<GepaStateSig>::builder()
@@ -826,15 +783,22 @@ mod tests {
         };
 
         let err = optimizer
-            .compile(&mut module, eval_set(), &AlwaysFailMetric)
+            .compile_module(&mut module, &eval_set(), &AlwaysFailMetric)
             .await
             .expect_err("candidate evaluation should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));
 
-        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
-            Ok(predictor.instruction())
-        })
-        .expect("predictor lookup should succeed");
-        assert_eq!(instruction, "seed-instruction");
+        assert_eq!(
+            PredictorInfo::instruction(&module.predictor),
+            "seed-instruction"
+        );
+    }
+
+    #[test]
+    fn concat_mutation_caps_appended_feedback() {
+        let huge = "x".repeat(50_000);
+        let child = GEPA::concat_child_instruction("seed", &huge, 0.5, 3);
+        assert!(child.len() < 3_000, "feedback must be capped: {}", child.len());
+        assert!(child.starts_with("seed\n\n[GEPA gen 4]"));
     }
 }
