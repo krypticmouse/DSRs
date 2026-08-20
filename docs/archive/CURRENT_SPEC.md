@@ -1,3 +1,5 @@
+> Archived 2026-08-19: superseded by docs/v1-vision-report.md and docs/rfcs/. Retained for history.
+
 # DSRs + BAML Integration Specification
 
 **Version:** 0.1.0  
