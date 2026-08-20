@@ -99,6 +99,20 @@ pub enum PredictError {
         #[source]
         source: crate::trace::ReplayError,
     },
+
+    /// Candidate parameters could not be bound to the predictor they address.
+    ///
+    /// Raised before any LM call when a named parameter slot (an ambient
+    /// [`fx::Params`](crate::fx::Params) entry or a saved state) doesn't fit
+    /// the predictor's signature — a harness/optimizer configuration bug, not
+    /// an LM failure. **Not retryable** — the same params fail the same way.
+    #[error("params for predictor `{name}` don't fit its signature")]
+    Params {
+        /// The predictor name the params were addressed to.
+        name: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 }
 
 impl PredictError {
@@ -108,6 +122,7 @@ impl PredictError {
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
             Self::Replay { .. } => ErrorClass::Internal,
+            Self::Params { .. } => ErrorClass::Internal,
         }
     }
 
@@ -117,6 +132,7 @@ impl PredictError {
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
             Self::Replay { .. } => false,
+            Self::Params { .. } => false,
         }
     }
 }
