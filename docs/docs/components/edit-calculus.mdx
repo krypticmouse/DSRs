@@ -1,0 +1,92 @@
+---
+title: "The edit calculus"
+description: "Structural program mutation: the Edit enum, Program::edited, legal_edits, and carrying overlays across an edit with migrate_overlay"
+icon: "scissors"
+---
+
+The edit calculus is the *structural* mutation half of the IR. An [`Overlay`](/docs/components/program-and-nodes) mutates parameter **values** over a fixed skeleton; an `Edit` mutates the skeleton itself — add a reasoning field, swap a `Predict` for an `AgentLoop`, wrap a flaky step in a `Retry`, remove a step. Edits are plain serde values — inspectable, diffable, replayable — and are only ever applied through `Program::edited`, which is pure: it clones the arenas, applies the edits in order, re-runs the same load-time validation the builder and loader use, and seals a **new** content hash. A program value is never mutated in place, so every hash-bound artifact (overlays, traces, caches) minted against the parent stays coherent.
+
+All items are exported from `dspy_rs::ir`: `Edit`, `EditKind`, `SwapTarget`, `EditError`, `ApplyError`, `migrate_overlay`.
+
+## The edits
+
+An optimizer's structural proposal is data, not code — it can be logged, replayed against the same parent, and diffed.
+
+| `Edit` variant | Plain words |
+|---|---|
+| `AugmentSig { leaf, prepend }` | Prepend an output field to a `Predict`/`AgentLoop` leaf's signature — the CoT move (mirrors `SignatureDef::augmented_with`). Copy-on-write: a new `SigId` is created; nodes sharing the old signature keep it. |
+| `SwapLeaf { leaf, to }` | Swap a leaf's kind: `Predict` → `AgentLoop` (with tools ⊆ `program.tools`, a stop spec, and a budget) or `AgentLoop` → `Predict`. Name, signature, bindings, and the instruction/demos/model param slots are preserved; the agent direction mints a `<leaf>.context` slot, the predict direction drops it. |
+| `WrapRetry { node, max_attempts, backoff_ms, feedback }` | Wrap an existing node in a `Retry`, rewiring the parent reference and redirecting downstream `Out` ports to the wrapper. |
+| `Remove { node }` | Remove a node from its parent `Seq` body (subtree and its params are garbage-collected). If a later binding still references its outputs, `validate()` rejects the batch. |
+| `AddTool { agent, tool }` / `RemoveTool { agent, tool }` | Declare or undeclare an existing program tool on an agent leaf (removal also drops it from `stop_tools`). |
+| `SetStop { agent, stop }` | Replace an agent leaf's `StopSpec`. |
+| `SetInstructionDefault { leaf, text }` | Set the leaf's instruction slot *default* — a bake-like change without an overlay, for structural optimizers that also seed text. |
+
+`SwapTarget` is the target kind of `SwapLeaf`: `Agent { tools, stop, budget }` or `Predict`.
+
+## `Program::edited`
+
+```rust
+pub fn edited(&self, edits: &[Edit]) -> Result<Program, EditError>
+```
+
+Applies `edits` in order to a clone of `self` and returns the sealed, validated result. The child gets a **new** content hash and `lineage.parent` set to the parent's hash — exactly like `Program::bake`; the other provenance fields are left empty for the optimizer to fill (an edit is not an optimization run record).
+
+Behavior worth knowing:
+
+- **NodeIds are positional handles against the parent.** Within one `edited()` batch, ids stay stable (swaps happen in place, removals only detach); dead nodes, signatures, and params are garbage-collected once at the end. Ids in the child may therefore differ from the parent — re-locate leaves by name (`Program::leaf_id(name)`, leaf names are program-unique and survive edits) and params by path.
+- **Batch validation.** Edits are validated as a *sequence*: intermediate states may be inconsistent (remove a producer, then its consumer); only the final program must pass validation. Apply-time errors cover what is checkable locally; everything data-flow shaped is deliberately left to the load-time validator, so the edit layer and the loader can never disagree.
+- **Identity is preserved.** `edited(&[])` returns a program with the parent's hash — only lineage differs, and lineage is outside the hash preimage. Signatures that were already unreferenced in the parent are kept; only *newly* orphaned ones are collected.
+- **CoT re-sugars.** When the prepended field is exactly the `cot` reasoning field on a `Predict`, the augmented signature copy keeps the base name so the canonical printer re-sugars it as `cot <Sig>`; otherwise it gets a fresh unique name (`<Sig>_<field>`).
+
+## Errors
+
+| Error | Meaning |
+|---|---|
+| `EditError::Apply { index, edit, reason }` | Edit `index` could not be applied to the (partially edited) program; carries the offending edit and an `ApplyError`. |
+| `EditError::Invalid(ValidateError)` | Every edit applied, but the resulting program failed the load-time rules — the error is the validator's own. |
+
+`ApplyError` is the locally-checkable failure set: `StaleNode`, `WrongKind` (e.g. `SetStop` on a `Predict`), `DuplicateField`, `UnknownTool`, `ToolCapsExceedProgram` (a tool's caps exceed the program ceiling), `ToolAlreadyDeclared`, `ToolNotDeclared`, `NotInSeq` (only `Seq` steps can be removed), `Unparented`.
+
+## `legal_edits`: the proposer menu
+
+```rust
+pub fn legal_edits(&self, at: NodeId) -> Vec<EditKind>
+```
+
+The menu of edit kinds structurally admissible at a node — lightweight, serializable `EditKind` descriptors suitable for prompting an LLM proposer:
+
+| Node | Menu |
+|---|---|
+| `Predict` leaf | `AugmentSig`, `SetInstructionDefault`, `SwapToAgent` |
+| `AgentLoop` leaf | `AugmentSig`, `SetInstructionDefault`, `SwapToPredict`, `SetStop`, plus one `AddTool { tool }` or `RemoveTool { tool }` entry per program tool |
+| Any non-root node that is not a `Refine` judge | `WrapRetry` (judges must stay bare leaves) |
+| Any `Seq` step | `Remove` |
+
+The menu is purely structural — data-flow legality (whether a removal orphans a downstream binding) is still `validate()`'s call, surfaced by `edited`. A stale id yields an empty menu.
+
+## `migrate_overlay`: carrying tuned values across an edit
+
+```rust
+pub fn migrate_overlay(parent: &Program, overlay: &Overlay, child: &Program) -> Overlay
+```
+
+An edit changes the program hash, so overlays minted against the parent no longer apply to the child. `migrate_overlay` carries value-level progress across the structural change: for every entry in the overlay, it re-mints the entry against the child when the child has a slot at the same path and kind whose owning leaf/tool still has a *carrying* signature — inputs identical (names and types, in order) and every parent output present in the child's outputs. Outputs may widen: that is what lets instruction and demos survive `AugmentSig` (demo rows still map onto the base fields; the new field is simply absent from the row). `ModelRef` entries are re-minted by model *name*, not ordinal. Entries that no longer fit are dropped; a base-mismatched overlay yields an empty result.
+
+```rust
+use dspy_rs::ir::{Edit, migrate_overlay};
+
+let leaf = program.leaf_id("drafter").expect("leaf exists");
+let child = program.edited(&[Edit::SetInstructionDefault {
+    leaf,
+    text: "Answer in one short sentence.".into(),
+}])?;
+let carried = migrate_overlay(&program, &tuned_overlay, &child);
+```
+
+## See also
+
+- [Program and nodes](/docs/components/program-and-nodes): the value half — params, `Overlay`, and `bake`
+- [Optimizer engine](/docs/components/optimizer-engine): how candidates are evaluated; a structural optimizer proposes `Edit`s where a prompt optimizer proposes overlays
+- [Runtime](/docs/components/runtime): loading and running the edited program
+- [The .dsrs file](/docs/components/dsrs-file): the canonical text the child prints to
