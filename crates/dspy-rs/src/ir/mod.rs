@@ -71,8 +71,8 @@ pub use graph::{
 };
 #[cfg(feature = "ir")]
 pub use interp::{
-    Budget, BudgetMeter, Exhausted, HostHoleFn, Interpreter, LoadError, RunError, RuntimeEnv,
-    input_schema_of,
+    Budget, BudgetMeter, Exhausted, HostHoleFn, Interpreter, LeafOutcome, LoadError, RunError,
+    RunOutput, RuntimeEnv, input_schema_of,
 };
 #[cfg(feature = "ir")]
 pub use params::{

@@ -21,9 +21,11 @@ use std::time::Instant;
 
 use cranelift_entity::SecondaryMap;
 use futures::future::BoxFuture;
+use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use crate::adapter::chat::ChatAdapter;
+use crate::core::FieldMeta;
 use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
     PortRef, PredictNode, Program, ToolId, ToolKind,
@@ -138,6 +140,58 @@ impl BudgetMeter {
     pub fn tokens(&self) -> u64 {
         self.tokens.load(Ordering::Relaxed)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Leaf metadata
+// ---------------------------------------------------------------------------
+
+/// Parse/coercion metadata from one successful `Predict`-leaf evaluation,
+/// collected by [`Interpreter::run_collecting`] in execution order.
+///
+/// This is the interpreter-side twin of the static lane's
+/// [`CallMetadata`](crate::CallMetadata): the same [`FieldMeta`] type (jsonish
+/// coercion [`Flag`](crate::Flag)s + `#[check]` [`ConstraintResult`](crate::ConstraintResult)s)
+/// that `ChatAdapter::parse_output_with_meta` produces, so a typed `Predict<S>`
+/// routed through the interpreter loses none of `Predicted`'s metadata contract.
+///
+/// Scope and semantics:
+/// - Only `Predict` leaves report. `Hole` leaves make no LM call and parse no
+///   delimited text; `AgentLoop` leaves are a single multi-turn span whose
+///   final output may come from stop-tool args (no parse metadata exists).
+/// - Only *successful* evaluations report — a failed attempt inside `Retry`
+///   propagates its error and leaves no outcome; the succeeding attempt
+///   reports one. A leaf re-evaluated by `Refine`/`Loop` reports once per
+///   evaluation.
+/// - A replay-served leaf reports raw text and usage from the recorded span
+///   with **empty** `field_meta`, matching the static lane ("served
+///   predictions carry no per-field parse metadata").
+#[derive(Debug, Clone)]
+pub struct LeafOutcome {
+    /// The program-unique leaf name (the trace span `component`).
+    pub name: String,
+    /// The full text the LM returned, before parsing.
+    pub raw_response: String,
+    /// Per-field parse details keyed by canonical field name
+    /// (`FieldDef::name`) — raw section text, coercion flags, check results.
+    pub field_meta: IndexMap<String, FieldMeta>,
+    /// Token usage for this leaf's LM call.
+    pub usage: LmUsage,
+    /// Stable hash of the redacted model config used — identical to the
+    /// trace's [`ModelEntry::config_hash`](crate::trace::ModelEntry) for the
+    /// same config.
+    pub model_config_hash: u64,
+}
+
+/// Program output plus per-leaf metadata, returned by
+/// [`Interpreter::run_collecting`].
+#[derive(Debug, Clone)]
+pub struct RunOutput {
+    /// The program's output map — exactly what [`Interpreter::run`] returns.
+    pub output: JsonMap,
+    /// One entry per successful `Predict`-leaf evaluation, in execution
+    /// order. `ForkJoin` branches append in declared branch order.
+    pub leaves: Vec<LeafOutcome>,
 }
 
 // ---------------------------------------------------------------------------
@@ -499,6 +553,31 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<JsonMap, RunError> {
+        self.run_inner(input, overlay, budget, false)
+            .await
+            .map(|out| out.output)
+    }
+
+    /// Like [`run`](Interpreter::run), additionally collecting a
+    /// [`LeafOutcome`] per successful `Predict`-leaf evaluation (raw response,
+    /// per-field flags and check results, usage, model config hash). See
+    /// [`LeafOutcome`] for the exact scope and semantics.
+    pub async fn run_collecting(
+        &self,
+        input: JsonMap,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+    ) -> Result<RunOutput, RunError> {
+        self.run_inner(input, overlay, budget, true).await
+    }
+
+    async fn run_inner(
+        &self,
+        input: JsonMap,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+        collect: bool,
+    ) -> Result<RunOutput, RunError> {
         if let Some(overlay) = &overlay
             && overlay.base != self.program.meta.program_hash
         {
@@ -540,8 +619,13 @@ impl Interpreter {
             inputs: vec![input],
             feedback: None,
             refine_feedback: None,
+            leaves: collect.then(Vec::new),
         };
-        self.eval(self.program.root, &mut cx).await
+        let output = self.eval(self.program.root, &mut cx).await?;
+        Ok(RunOutput {
+            output,
+            leaves: cx.leaves.unwrap_or_default(),
+        })
     }
 
     // -- node dispatch --------------------------------------------------------
@@ -569,19 +653,25 @@ impl Interpreter {
                             .into_iter()
                             .map(|(branch, mut branch_cx)| async move {
                                 self.eval(branch, &mut branch_cx).await?;
-                                Ok::<_, RunError>(branch_cx.frames)
+                                Ok::<_, RunError>((branch_cx.frames, branch_cx.leaves))
                             });
                     // First error aborts siblings: try_join_all drops the
                     // remaining futures, whose open spans record Cancelled
                     // via guard-drop (RFC 0001 §3.1).
                     let all_frames = futures::future::try_join_all(futures).await?;
-                    for frames in all_frames {
+                    for (frames, leaves) in all_frames {
                         for (node, out) in frames.iter() {
                             if let Some(out) = out
                                 && cx.frames[node].is_none()
                             {
                                 cx.frames[node] = Some(out.clone());
                             }
+                        }
+                        // Branch outcomes merge in declared branch order.
+                        if let (Some(collected), Some(branch_leaves)) =
+                            (cx.leaves.as_mut(), leaves)
+                        {
+                            collected.extend(branch_leaves);
                         }
                     }
                     self.resolve_exports(&n.join, cx)?
@@ -754,6 +844,20 @@ impl Interpreter {
                     .output
                     .clone()
                     .expect("replay serves only spans with parsed output");
+                // Parity with the static lane's `serve_recorded_span`: served
+                // predictions carry no per-field parse metadata — the
+                // recording stores the parsed output, not the parser's
+                // field-level bookkeeping.
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: span.raw_output.clone().unwrap_or_default(),
+                        field_meta: IndexMap::new(),
+                        usage: span.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: span.events.clone(),
@@ -824,7 +928,17 @@ impl Interpreter {
 
         let raw = response.output.content();
         match ChatAdapter.parse_output_def(def, &p.types, &response.output) {
-            Ok((output, _metas)) => {
+            Ok((output, metas)) => {
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: raw.clone(),
+                        field_meta: metas,
+                        usage: response.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: response.events,
@@ -2009,11 +2123,16 @@ struct Cx {
     feedback: Option<String>,
     /// Refine feedback injection: (child leaf, input field, value).
     refine_feedback: Option<(NodeId, String, Value)>,
+    /// `Some` when the caller asked for per-leaf metadata
+    /// ([`Interpreter::run_collecting`]); successful `Predict` leaves push
+    /// here in execution order. `None` = plain `run`, zero collection cost.
+    leaves: Option<Vec<LeafOutcome>>,
 }
 
 impl Cx {
     /// A branch context for `ForkJoin`: shared overlay/meter, snapshotted
-    /// frames and inputs, branch-local feedback.
+    /// frames and inputs, branch-local feedback. Branch-local leaf collection
+    /// when the parent collects; merged back in branch order at the join.
     fn branch(&self) -> Cx {
         Cx {
             overlay: self.overlay.clone(),
@@ -2022,6 +2141,7 @@ impl Cx {
             inputs: self.inputs.clone(),
             feedback: None,
             refine_feedback: None,
+            leaves: self.leaves.as_ref().map(|_| Vec::new()),
         }
     }
 }
