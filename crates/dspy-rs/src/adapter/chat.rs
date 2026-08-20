@@ -19,16 +19,12 @@ use crate::{
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
 ///
-/// The adapter is stateless — all state comes from the [`SignatureSchema`](crate::SignatureSchema)
-/// passed to each method. Two usage patterns:
-///
-/// - **High-level** (what [`Predict`](crate::Predict) uses): `format_system_message_typed`,
-///   `format_user_message_typed`, `parse_response_typed` — all parameterized by `S: Signature`.
-/// - **Building blocks** (for module authors): `build_system`, `format_input`, `format_output`,
-///   `parse_output`, `parse_sections` — parameterized by `&SignatureSchema`, not a Signature type.
-///
-/// The building blocks exist so module authors can compose custom prompt flows (e.g.
-/// an agent's action/extract loop) without reimplementing the delimiter protocol.
+/// The adapter is stateless — all state comes from the [`SignatureDef`] passed to
+/// each method: `build_system_def`, `format_input_def`, `format_output_def`,
+/// `parse_output_def`, plus the free `parse_sections`. This is the single prompt
+/// lane; [`Predict`](crate::Predict) reaches it through the IR interpreter, and
+/// module authors can call the `*_def` building blocks directly to compose custom
+/// prompt flows without reimplementing the delimiter protocol.
 #[derive(Default, Clone)]
 pub struct ChatAdapter;
 
@@ -537,9 +533,8 @@ fn format_json_value_for_prompt(value: &Value) -> String {
 
 /// Renders one input field of a [`SignatureDef`], honoring its [`RenderSpec`].
 ///
-/// The Jinja arm compiles the template per call: dynamic templates are owned
-/// strings, so the process-global template cache (keyed on `&'static str`)
-/// deliberately stays static-lane-only.
+/// The Jinja arm compiles the template per call: templates are owned strings on
+/// a runtime [`SignatureDef`], so there is no `&'static str` key to cache on.
 fn render_input_field_def(
     def: &SignatureDef,
     field: &crate::ir::FieldDef,
