@@ -4,8 +4,7 @@
 //! manages the conversation loop, not the LM layer's auto tool loop.
 
 use dspy_rs::{
-    LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel,
-    ToolLoopMode, configure,
+    LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, ToolLoopMode, configure,
 };
 use rig::completion::AssistantContent;
 use rig::message::{Text, ToolCall, ToolFunction};
@@ -83,6 +82,7 @@ async fn caller_managed_tool_loop_with_conversation() {
     // Turn 1: Build chat and call LM
     let chat = predict
         .build_chat(&input)
+        .await
         .expect("build_chat should succeed");
     let (first_result, mut chat) = predict
         .call_and_parse(chat)
@@ -178,7 +178,7 @@ async fn parse_failure_on_second_turn_includes_correct_raw_response() {
     };
 
     // Turn 1: succeeds
-    let chat = predict.build_chat(&input).expect("build_chat");
+    let chat = predict.build_chat(&input).await.expect("build_chat");
     let (first_result, mut chat) = predict.call_and_parse(chat).await.expect("turn 1");
     assert_eq!(first_result.into_inner().result, "first answer");
 
