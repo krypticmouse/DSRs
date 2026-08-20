@@ -33,6 +33,8 @@ pub mod bridge;
 #[cfg(feature = "ir")]
 pub mod builder;
 #[cfg(feature = "ir")]
+pub mod edit;
+#[cfg(feature = "ir")]
 pub mod graph;
 #[cfg(feature = "ir")]
 pub mod interp;
@@ -61,6 +63,8 @@ pub use builder::{
     AsNodeName, BuildError, NodeSpec, Port, ProgramBuilder, agent, carried, cot, extern_hole, fork,
     hole, input, lit, loop_, out, predict, refine, retry, route, seq,
 };
+#[cfg(feature = "ir")]
+pub use edit::{ApplyError, Edit, EditError, EditKind, SwapTarget, migrate_overlay};
 #[cfg(feature = "ir")]
 pub use graph::{
     AgentLoopNode, BakeError, Binding, BudgetPolicy, CapSet, ForkJoinNode, HoleImpl, HoleNode,
