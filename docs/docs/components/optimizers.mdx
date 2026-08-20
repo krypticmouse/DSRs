@@ -19,7 +19,9 @@ optimizer
     .await?;
 ```
 
-The module must declare its optimizable leaves via [`Predictors`](/docs/components/modules#predictor-discovery-predictors) (one `predictors!` line). All five optimizers are thin strategies over the shared evaluation engine. Candidates are **data, never mutation**: each candidate is a name-keyed `Candidate` injected *ambiently* per rollout (`fx::with_params`) — nothing touches the module during evaluation, so different candidates evaluate concurrently — and the winner is installed exactly once at the end (`OptimizeTarget::install`). The engine types (`Engine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
+The module must declare its optimizable leaves via [`Predictors`](/docs/components/modules#predictor-discovery-predictors) (one `predictors!` line). All six optimizers are thin strategies over the shared evaluation engine. Candidates are **data, never mutation**: each candidate is a name-keyed `Candidate` injected *ambiently* per rollout (`fx::with_params`) — nothing touches the module during evaluation, so different candidates evaluate concurrently — and the winner is installed exactly once at the end (`OptimizeTarget::install`). The engine types (`Engine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
+
+Five strategies tune parameter values through overlays; the sixth, [`Structural`](#structural), proposes graph edits over the [edit calculus](/docs/components/edit-calculus) and runs on the program lane only.
 
 <svg viewBox="0 0 760 420" role="img" aria-label="Three translucent tracing-paper overlays fanned above the base map, each changing one grid-referenced dial; the base program is never marked" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
   <rect x="90" y="210" width="580" height="180" rx="8" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
@@ -64,7 +66,7 @@ The module must declare its optimizable leaves via [`Predictors`](/docs/componen
   <text x="380" y="412" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">candidates are overlays; the base program is never mutated</text>
 </svg>
 
-Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), and [GEPA](/docs/optimizers/gepa).
+Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), and [Structural](/docs/optimizers/structural).
 
 ## The Optimizer trait
 
@@ -100,6 +102,8 @@ For the common case you never build these by hand — each optimizer's `compile_
 | `SIMBA` | `SimbaReport` |
 | `BootstrapFewShot` | `BootstrapReport` |
 
+`Structural` is the exception to this table and to the trait: it edits program structure, so its input is an interpreter-loaded program rather than a lane-erased target, and its entry point is [`compile_program`](#structural) instead of `compile_module`/`compile`.
+
 ## Choosing an optimizer
 
 | Optimizer | Strategy | Needs feedback? | Cost |
@@ -109,6 +113,7 @@ For the common case you never build these by hand — each optimizer's `compile_
 | `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 | `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 | `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+| `Structural` | LM-guided graph edits over `ir::Edit` (program lane only) | No | Medium (examples + iterations × minibatch) |
 
 GEPA is the only optimizer that requires textual feedback from the metric. The others use numerical scores alone.
 
@@ -257,6 +262,51 @@ The simplest complete optimizer: one teacher pass, one candidate, one comparison
 `adopted: false` with a populated `demos_per_predictor` means demos were harvested but did not beat the baseline; the module is left unchanged.
 </Note>
 
+## Structural
+
+LM-guided hill-climbing over the [edit calculus](/docs/components/edit-calculus), program lane only. Each generation gathers the `legal_edits` menu for every leaf, has a reflection LM (`prompt_model`) choose one edit from the serialized menu plus the incumbent's evaluation feedback, applies it with `Program::edited`, carries the incumbent overlay across the change with `migrate_overlay`, loads the child through a caller-supplied `RuntimeEnv` factory, and accepts it through the engine's minibatch gate: only a strict win on the shared minibatch promotes the child to a full-set evaluation and makes it the new incumbent. Edits that fail to apply, children that fail to load, and reflection replies that do not parse are recorded and skipped. How-to: [Structural](/docs/optimizers/structural).
+
+Entry points: `compile_program(&interp, &examples, &metric, env)` and `compile_program_with_overlay(&interp, Some(overlay), &examples, &metric, env)`, where `env: Fn() -> RuntimeEnv` supplies fresh bindings for each child load. The winner is returned in the report (program plus migrated overlay), never installed; bake it with `Program::bake`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_iterations` | `usize` | `8` | Generations to attempt; each proposes exactly one edit. |
+| `minibatch_size` | `usize` | `8` | Examples in the shared minibatch parent and child are compared on. |
+| `prompt_model` | `Option<LM>` | `None` | Reflection LM that chooses an edit from the menu. Without it the choice is a seeded-uniform pick. |
+| `max_rollouts` | `Option<usize>` | `None` | Hard cap on evaluation rollouts. Every child is a fresh program that re-scores from scratch. |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units (rollouts plus reflection). |
+| `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling and the fallback edit choice. |
+
+### StructuralStep and StructuralReport
+
+Each `StructuralStep` records one generation:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `generation` | `usize` | Generation index, 0-based. |
+| `leaf` | `String` | The leaf the chosen edit targets. |
+| `edit` | `Edit` | The concrete proposed edit (serde data, replayable against `parent_hash`). |
+| `parent_hash` | `u64` | `program_hash` of the parent the edit was applied to. |
+| `parent_minibatch_score` | `f64` | Parent's mean on the shared minibatch, the gate threshold. |
+| `child_minibatch_score` | `Option<f64>` | Child's mean on the same minibatch; `None` when the child never scored. |
+| `accepted` | `bool` | Whether the gate promoted the child. |
+| `full_score` | `Option<f64>` | Full-set mean of the child; `Some` only when accepted. |
+| `rejection` | `Option<String>` | Why the child never scored (apply/load failure), when it didn't. |
+
+The `StructuralReport` summarizes the run:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `program` | `Arc<Program>` | The winning program (the input program when nothing was accepted). |
+| `overlay` | `Overlay` | The incumbent overlay re-minted against the winner at every accepted edit. |
+| `baseline_score` | `f64` | Mean metric score of the input program (plus overlay) over the examples. |
+| `final_score` | `f64` | Full-set mean of the final program; equals the baseline when nothing was accepted. |
+| `edits` | `Vec<Edit>` | The accepted edits, in order (a lineage, not one batch). |
+| `steps` | `Vec<StructuralStep>` | Per-generation outcomes, in order. |
+| `accepted` / `rejected` | `usize` | Generations promoted / not promoted. |
+| `spend` | `Spend` | Engine spend for the whole run, reflection calls included. |
+
 ## Demo harvesting
 
 Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the leaf name the module declares via `Predictors` (stamped by the target's naming pass), so successful spans (parsed output present) from rollouts scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are ranked by whole-rollout score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
@@ -266,7 +316,8 @@ Demo harvesting is a pure name join over captured traces. A rollout trace record
 - [Optimizer engine](/docs/components/optimizer-engine): `Engine`, `OptimizeTarget`, `Candidate`, `Budget`, `Spend`, and `ParetoView`
 - [Evaluation](/docs/components/evaluation): `TypedMetric`, `Eval`, and `Eval::with_feedback`
 - [Traces](/docs/components/traces): the span capture that feeds demo harvesting and reflection
-- How-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa)
+- [The edit calculus](/docs/components/edit-calculus): the structural moves `Structural` proposes
+- How-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), [Structural](/docs/optimizers/structural)
 - Runnable examples:
   - COPRO: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs and https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs
   - MIPROv2: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs

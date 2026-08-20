@@ -40,6 +40,7 @@
 //! | [`SIMBA`] | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 //! | [`GEPA`] | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+//! | [`Structural`] | LM-guided graph edits over [`ir::Edit`](crate::ir::Edit) (program lane only) | No | Medium (examples + iterations × minibatch) |
 
 pub mod bootstrap;
 pub mod copro;
@@ -48,6 +49,7 @@ pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
 pub mod simba;
+pub mod structural;
 pub mod target;
 
 pub use bootstrap::*;
@@ -56,6 +58,7 @@ pub use engine::*;
 pub use gepa::*;
 pub use mipro::*;
 pub use simba::*;
+pub use structural::*;
 pub use target::{LeafInfo, OptimizeTarget, ProgramMetric};
 
 use anyhow::Result;

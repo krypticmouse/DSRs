@@ -4,7 +4,7 @@ description: "Engine, OptimizeTarget, Candidate, Budget, RolloutCache, ScoreMatr
 icon: "gauge-high"
 ---
 
-The optimizer engine is the shared evaluation core under every optimizer. Strategies register candidates and ask the engine to evaluate them against an `OptimizeTarget`; the engine handles candidate binding, rollout fan-out, caching, budget accounting, and score bookkeeping. Every optimizer in DSRs (COPRO, GEPA, MIPROv2, SIMBA, bootstrap) is a thin strategy over this one core.
+The optimizer engine is the shared evaluation core under every optimizer. Strategies register candidates and ask the engine to evaluate them against an `OptimizeTarget`; the engine handles candidate binding, rollout fan-out, caching, budget accounting, and score bookkeeping. Every optimizer in DSRs (COPRO, GEPA, MIPROv2, SIMBA, bootstrap, Structural) is a thin strategy over this one core.
 
 There is **one** `Engine`. What varies is the target — the lane-erased pair of (thing under optimization, evaluation harness):
 

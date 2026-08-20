@@ -65,6 +65,8 @@ The menu of edit kinds structurally admissible at a node — lightweight, serial
 
 The menu is purely structural — data-flow legality (whether a removal orphans a downstream binding) is still `validate()`'s call, surfaced by `edited`. A stale id yields an empty menu.
 
+This is exactly how the shipped [Structural optimizer](/docs/optimizers/structural) proposes edits: it serializes the menu, has a reflection LM choose one entry, applies the choice through `edited`, and gates the child against the parent on a shared minibatch.
+
 ## `migrate_overlay`: carrying tuned values across an edit
 
 ```rust
@@ -87,6 +89,7 @@ let carried = migrate_overlay(&program, &tuned_overlay, &child);
 ## See also
 
 - [Program and nodes](/docs/components/program-and-nodes): the value half — params, `Overlay`, and `bake`
+- [Structural](/docs/optimizers/structural): the shipped optimizer over this calculus — LM-guided edit choice, `migrate_overlay`, minibatch gating
 - [Optimizer engine](/docs/components/optimizer-engine): how candidates are evaluated; a structural optimizer proposes `Edit`s where a prompt optimizer proposes overlays
 - [Runtime](/docs/components/runtime): loading and running the edited program
 - [The .dsrs file](/docs/components/dsrs-file): the canonical text the child prints to

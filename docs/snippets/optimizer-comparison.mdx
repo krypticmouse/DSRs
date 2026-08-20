@@ -5,5 +5,6 @@
 | `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 | `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 | `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+| `Structural` | LM-guided graph edits over `ir::Edit` (program lane only) | No | Medium (examples + iterations × minibatch) |
 
-GEPA is the only optimizer that requires textual feedback from the metric (`Eval::with_feedback`). The others use numerical scores alone. Full configuration tables for all five live in the [optimizers reference](/docs/components/optimizers).
+GEPA is the only optimizer that requires textual feedback from the metric (`Eval::with_feedback`). The others use numerical scores alone. Full configuration tables for all six live in the [optimizers reference](/docs/components/optimizers).

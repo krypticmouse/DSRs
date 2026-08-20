@@ -666,7 +666,8 @@ pub(crate) enum BoundCandidate {
 /// The shared evaluation core (vision §5.4).
 ///
 /// Owns the candidate registry, the score matrix, the rollout cache, and the
-/// budget meter. Strategies (GEPA, COPRO, MIPRO, SIMBA, bootstrap) register
+/// budget meter. Strategies (GEPA, COPRO, MIPRO, SIMBA, bootstrap,
+/// Structural) register
 /// [`Candidate`]s and call [`evaluate`](Self::evaluate) /
 /// [`evaluate_many`](Self::evaluate_many) /
 /// [`evaluate_gated`](Self::evaluate_gated) against an

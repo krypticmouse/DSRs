@@ -65,11 +65,10 @@
 //!
 //! # What doesn't work (yet)
 //!
-//! - **No structural optimization.** The [`ir`] layer ships a dynamic program
-//!   graph ([`ir::Program`]) with an interpreter, an edit calculus
-//!   ([`ir::Edit`]), and the `.dsrs` text format, but the shipped optimizers
-//!   only tune instructions and demos — none of them rewrite graph structure
-//!   yet.
+//! - **Structural optimization is program-lane only.** [`Structural`]
+//!   proposes graph edits ([`ir::Edit`]) over an interpreter-loaded
+//!   [`ir::Program`]; typed modules have no editable skeleton, so the other
+//!   optimizers tune their instructions and demos only.
 //! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
 //!   [`ChainOfThought`]. Agentic tool loops live in the IR instead
 //!   (`AgentLoopNode` via the `#[agent]` macro); the module trait and
@@ -175,10 +174,10 @@ pub mod prelude {
     };
     pub use crate::trace::Eval;
 
-    // Optimization: the trait, the five strategies, and the engine surface.
+    // Optimization: the trait, the six strategies, and the engine surface.
     pub use crate::optimizer::{
         BootstrapFewShot, COPRO, Candidate, Engine, GEPA, MIPROv2, OptimizeTarget, Optimizer,
-        SIMBA,
+        SIMBA, Structural,
     };
 
     // Trace capture and replay entry points.
