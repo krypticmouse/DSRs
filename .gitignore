@@ -42,3 +42,18 @@ thoughts/
 # Reference copies of upstream source
 /reference/
 .claude/worktrees/
+
+# GEPA runs
+docs-chat-worker/gepa/runs/
+
+# Python caches
+__pycache__/
+
+# Wrangler caches
+.wrangler/
+
+# GEPA artifacts
+docs-chat-worker/gepa/*.json
+docs-chat-worker/gepa/*.jsonl
+docs-chat-worker/gepa/*.log
+docs-chat-worker/gepa/*.txt
