@@ -3,10 +3,11 @@
     reason = "Signature derive emits multi-field constructors for schema coverage tests."
 )]
 
-use dspy_rs::{BamlType, ChatAdapter, Signature};
+use dspy_rs::ir::SignatureDef;
+use dspy_rs::{Schema, ChatAdapter, Signature};
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 /// A citation reference.
 struct Citation {
     /// Document identifier
@@ -16,7 +17,7 @@ struct Citation {
 }
 
 #[derive(Clone, Debug)]
-#[BamlType]
+#[Schema]
 /// Sentiment classification.
 enum Sentiment {
     Positive,
@@ -49,10 +50,11 @@ struct ComprehensiveSignature {
 }
 
 fn system_message() -> String {
-    let adapter = ChatAdapter;
-    adapter
-        .format_system_message_typed::<ComprehensiveSignature>()
-        .expect("system message")
+    ChatAdapter.build_system_def(
+        SignatureDef::of::<ComprehensiveSignature>(),
+        SignatureDef::types_of::<ComprehensiveSignature>(),
+        None,
+    )
 }
 
 fn extract_field_block(message: &str, field_name: &str) -> String {

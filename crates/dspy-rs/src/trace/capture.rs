@@ -128,19 +128,12 @@ impl TraceSink {
 
         let id = SpanId(inner.trace.spans.len() as u32);
         let parent = inner.open.last().copied();
-        let links = inner
-            .trace
-            .spans
-            .last()
-            .map(|span| vec![span.id])
-            .unwrap_or_default();
 
         inner.trace.spans.push(Span {
             id,
             component,
             seq,
             parent,
-            links,
             prefix,
             suffix: req.suffix.to_vec(),
             input: req.input,
@@ -151,6 +144,7 @@ impl TraceSink {
             output: None,
             usage: LmUsage::default(),
             error: None,
+            eval: None,
             started_at_us: now_us(),
             duration_us: 0,
             complete: true,

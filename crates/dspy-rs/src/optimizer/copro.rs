@@ -1,14 +1,13 @@
 use anyhow::{Result, anyhow};
 use bon::Builder;
+use std::collections::BTreeMap;
 
-use crate::core::DynPredictor;
-use crate::evaluate::TypedMetric;
-use crate::optimizer::engine::{
-    Budget, Candidate, EngineConfig, EvalEngine, EvalOutcome, apply_candidate,
-};
-use crate::optimizer::{Optimizer, predictor_names, with_named_predictor};
 use crate::core::ToInput;
-use crate::{Facet, Module};
+use crate::evaluate::TypedMetric;
+use crate::optimizer::engine::{Candidate, Engine, EngineConfig, EvalOutcome};
+use crate::optimizer::target::LeafInfo;
+use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
+use crate::{Module, Predictors};
 
 /// Breadth-first instruction optimizer.
 ///
@@ -17,12 +16,14 @@ use crate::{Facet, Module};
 /// `depth` rounds. Simple and predictable — good for quick iteration when you want
 /// better instructions without complex search.
 ///
-/// COPRO is a thin strategy over the shared [`EvalEngine`]: each candidate
-/// instruction is an overlay [`Candidate`] evaluated through the engine's
-/// cached bounded-concurrency fan-out, and each round's winner is installed
-/// permanently through the one candidate seam ([`apply_candidate`]). Repeated
-/// candidates within a round (the base instruction always competes) are
-/// deduplicated by content hash and served from the rollout cache.
+/// COPRO is a thin strategy over the shared [`Engine`]: each candidate
+/// instruction is a name-keyed [`Candidate`] layered on the winners
+/// accumulated so far, evaluated through the engine's cached
+/// bounded-concurrency ambient-injection fan-out. Nothing mutates the module
+/// during the search; the accumulated winner is installed once at the end
+/// through [`OptimizeTarget::install`]. Repeated candidates (the base
+/// instruction always competes) deduplicate by content hash and are served
+/// from the rollout cache.
 ///
 /// Does not use feedback from the metric — only the numerical score matters. If you
 /// have rich textual feedback, use [`GEPA`](crate::GEPA) instead.
@@ -40,12 +41,13 @@ use crate::{Facet, Module};
 ///
 /// # Cost
 ///
-/// Total LM calls ≈ `breadth × depth × num_predictors × trainset_size`. For a module
+/// Total LM calls ≈ `breadth × depth × num_predictors × trainset_size`, minus
+/// rollout-cache hits (previous winners re-compete for free). For a module
 /// with 2 predictors, breadth=10, depth=3, and 50 training examples: ~3000 calls.
 ///
 /// ```ignore
 /// let copro = COPRO::builder().breadth(10).depth(3).build();
-/// copro.compile(&mut module, trainset, &metric).await?;
+/// copro.compile_module(&mut module, &trainset, &metric).await?;
 /// ```
 #[derive(Builder)]
 pub struct COPRO {
@@ -70,29 +72,26 @@ pub struct COPRO {
 }
 
 impl COPRO {
-    fn current_instruction<M>(module: &mut M, predictor_name: &str) -> Result<String>
-    where
-        M: for<'a> Facet<'a>,
-    {
-        with_named_predictor(module, predictor_name, |predictor| {
-            Ok(predictor.instruction())
-        })
+    fn common(&self) -> OptimizerCommon {
+        OptimizerCommon {
+            eval_concurrency: self.eval_concurrency,
+            ..OptimizerCommon::default()
+        }
     }
 
     fn candidate_instructions(
         &self,
         base_instruction: &str,
-        predictor: &dyn DynPredictor,
+        leaf: &LeafInfo,
         depth: usize,
     ) -> Vec<String> {
         let mut candidates = Vec::with_capacity(self.breadth.max(1));
         candidates.push(base_instruction.to_string());
 
-        let output_hint = predictor
-            .schema()
-            .output_fields()
+        let output_hint = leaf
+            .output_fields
             .last()
-            .map(|field| field.lm_name)
+            .map(|(name, _)| name.as_str())
             .unwrap_or("output");
 
         for idx in 0..self.breadth.saturating_sub(1) {
@@ -106,59 +105,70 @@ impl COPRO {
 
         candidates
     }
-}
 
-impl Optimizer for COPRO {
-    type Report = ();
-
-    async fn compile<E, M, MT>(
+    /// Convenience: optimizes a typed module over a trainset with this
+    /// optimizer's default engine, installing the winning instructions.
+    pub async fn compile_module<E, M, MT>(
         &self,
         module: &mut M,
-        trainset: Vec<E>,
+        trainset: &[E],
         metric: &MT,
-    ) -> Result<Self::Report>
+    ) -> Result<()>
     where
         E: ToInput<M::Input> + serde::Serialize + Send + Sync,
-        M: Module + for<'a> Facet<'a>,
+        M: Module + Predictors,
         MT: TypedMetric<E, M>,
     {
+        let mut target = OptimizeTarget::module(module, trainset, metric);
+        let mut engine = Engine::new(Optimizer::engine_config(self));
+        Optimizer::compile(self, &mut target, &mut engine).await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait(?Send)]
+impl Optimizer for COPRO {
+    fn engine_config(&self) -> EngineConfig {
+        self.common().engine_config()
+    }
+
+    async fn compile(
+        &self,
+        target: &mut OptimizeTarget<'_>,
+        engine: &mut Engine,
+    ) -> Result<Report> {
         if self.breadth <= 1 {
             return Err(anyhow!("breadth must be greater than 1"));
         }
 
-        let predictor_names = predictor_names(module)?;
-
-        if predictor_names.is_empty() {
+        let leaves = target.leaves().to_vec();
+        if leaves.is_empty() {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
-        let mut engine = EvalEngine::new(
-            trainset,
-            metric,
-            EngineConfig {
-                concurrency: self.eval_concurrency,
-                budget: Budget::unlimited(),
-                cache_salt: 0,
-            },
-        );
+        // Winners accumulate here; the module itself is never touched until
+        // the final install.
+        let mut current = Candidate::new();
+        let mut current_instructions: BTreeMap<String, String> = leaves
+            .iter()
+            .map(|leaf| (leaf.name.clone(), leaf.instruction.clone()))
+            .collect();
 
         for depth in 0..self.depth {
-            for predictor_name in &predictor_names {
-                let base_instruction = Self::current_instruction(module, predictor_name)?;
-
-                let candidates = with_named_predictor(module, predictor_name, |predictor| {
-                    Ok(self.candidate_instructions(&base_instruction, predictor, depth))
-                })?;
+            for leaf in &leaves {
+                let base_instruction = current_instructions[&leaf.name].clone();
+                let instructions = self.candidate_instructions(&base_instruction, leaf, depth);
 
                 let mut best: Option<(f64, String)> = None;
-                for instruction in candidates {
-                    let row =
-                        engine.register(Candidate::with_instruction(predictor_name, &instruction));
-                    let eval = match engine.evaluate(module, row, None).await? {
+                for instruction in instructions {
+                    let mut candidate = current.clone();
+                    candidate.set_instruction(&leaf.name, &instruction);
+                    let row = engine.register(candidate);
+                    let eval = match engine.evaluate(target, row, None).await? {
                         EvalOutcome::Complete(eval) => eval,
                         EvalOutcome::BudgetExhausted { needed } => {
                             return Err(anyhow!(
-                                "unexpected budget exhaustion ({needed} rollouts) with an unlimited budget"
+                                "budget exhausted ({needed} rollouts needed) during COPRO round"
                             ));
                         }
                     };
@@ -170,17 +180,15 @@ impl Optimizer for COPRO {
 
                 let (_, best_instruction) =
                     best.expect("breadth > 1 guarantees at least one candidate");
-                // Permanent install through the one candidate seam. The engine's
-                // baseline hash changes with it, correctly invalidating cached
-                // rollouts recorded against the previous round's skeleton.
-                let _undo = apply_candidate(
-                    module,
-                    &Candidate::with_instruction(predictor_name, best_instruction),
-                )?;
+                current.set_instruction(&leaf.name, &best_instruction);
+                current_instructions.insert(leaf.name.clone(), best_instruction);
             }
         }
 
-        Ok(())
+        // The one mutation of the run: install the accumulated winner.
+        target.install(&current)?;
+
+        Ok(Report::None)
     }
 }
 
@@ -191,7 +199,7 @@ mod tests {
     use super::*;
     use crate::evaluate::{Eval, TypedMetric};
     use crate::trace::Trace;
-    use crate::{CallMetadata, Predict, PredictError, Predicted, Signature};
+    use crate::{CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature};
 
     #[derive(Signature, Clone, Debug)]
     struct CoproStateSig {
@@ -202,11 +210,11 @@ mod tests {
         answer: String,
     }
 
-    #[derive(facet::Facet)]
-    #[facet(crate = facet)]
     struct CoproStateModule {
         predictor: Predict<CoproStateSig>,
     }
+
+    crate::predictors!(CoproStateModule { predictor });
 
     impl Module for CoproStateModule {
         type Input = CoproStateSigInput;
@@ -252,7 +260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn compile_restores_state_when_metric_errors() {
+    async fn compile_leaves_state_untouched_when_metric_errors() {
         let optimizer = COPRO::builder().breadth(2).depth(1).build();
         let mut module = CoproStateModule {
             predictor: Predict::<CoproStateSig>::builder()
@@ -261,15 +269,15 @@ mod tests {
         };
 
         let err = optimizer
-            .compile(&mut module, trainset(), &AlwaysFailMetric)
+            .compile_module(&mut module, &trainset(), &AlwaysFailMetric)
             .await
             .expect_err("candidate scoring should propagate metric failure");
         assert!(err.to_string().contains("metric failure"));
 
-        let instruction = with_named_predictor(&mut module, "predictor", |predictor| {
-            Ok(predictor.instruction())
-        })
-        .expect("predictor lookup should succeed");
-        assert_eq!(instruction, "seed-instruction");
+        // Candidates are ambient — a failed run can't have leaked state.
+        assert_eq!(
+            PredictorInfo::instruction(&module.predictor),
+            "seed-instruction"
+        );
     }
 }

@@ -31,7 +31,6 @@ struct HeaderRef<'a> {
     h: &'a TraceMeta,
     components: &'a [String],
     /// RFC 0001 §1's reserved join column — additive, omitted when empty.
-    #[cfg(feature = "ir")]
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     param_ids: &'a [Option<Vec<crate::ir::ParamId>>],
     models: &'a [ModelEntry],
@@ -43,7 +42,6 @@ struct HeaderOwned {
     h: TraceMeta,
     #[serde(default)]
     components: Vec<String>,
-    #[cfg(feature = "ir")]
     #[serde(default)]
     param_ids: Vec<Option<Vec<crate::ir::ParamId>>>,
     #[serde(default)]
@@ -65,7 +63,6 @@ impl Trace {
         out.push_str(&serde_json::to_string(&HeaderRef {
             h: &self.meta,
             components: &self.components,
-            #[cfg(feature = "ir")]
             param_ids: &self.param_ids,
             models: &self.models,
             prefixes: &self.prefixes,
@@ -105,7 +102,6 @@ impl Trace {
         let mut trace = Trace {
             meta: header.h,
             components: header.components,
-            #[cfg(feature = "ir")]
             param_ids: header.param_ids,
             models: header.models,
             prefixes: header.prefixes,
@@ -216,7 +212,6 @@ mod tests {
             component: CompId(0),
             seq: 0,
             parent: None,
-            links: Vec::new(),
             prefix: None,
             suffix: vec![Message::user(suffix_text)],
             input: None,
@@ -230,6 +225,7 @@ mod tests {
             output: None,
             usage: LmUsage::default(),
             error: None,
+            eval: None,
             started_at_us: 1,
             duration_us: 2,
             complete: true,
@@ -273,6 +269,28 @@ mod tests {
         let jsonl = trace.to_jsonl().expect("serialize");
         let err = Trace::from_jsonl(&jsonl).expect_err("should reject v99");
         assert!(err.to_string().contains("newer than supported"));
+    }
+
+    #[test]
+    fn span_eval_roundtrips_and_stays_off_the_wire_when_absent() {
+        use crate::trace::span::Eval;
+
+        // Absent span eval: the span line carries no `eval` key at all, so
+        // pre-RFC-0004 traces and eval-free traces serialize byte-identically.
+        let trace = test_trace(test_span("hi"));
+        let jsonl = trace.to_jsonl().expect("serialize");
+        let span_line = jsonl.lines().nth(1).expect("span line");
+        assert!(!span_line.contains("\"eval\""));
+
+        // Present span eval: survives a write/read cycle intact.
+        let mut span = test_span("hi");
+        span.eval = Some(Eval::with_feedback(0.25, "partial credit"));
+        let trace = test_trace(span);
+        let parsed = Trace::from_jsonl(&trace.to_jsonl().expect("serialize")).expect("deserialize");
+        assert_eq!(
+            parsed.spans[0].eval,
+            Some(Eval::with_feedback(0.25, "partial credit"))
+        );
     }
 
     #[test]

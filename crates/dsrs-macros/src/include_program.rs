@@ -2,16 +2,16 @@
 //!
 //! See [`expand`] and the macro's rustdoc in `lib.rs` for the layering
 //! contract. The short version: **syntax** is validated here at macro
-//! expansion (via [`crate::dsrs_syntax`]); **semantics** are validated by the
-//! real parser at first use of the emitted `LazyLock`, and forced at CI time
-//! by an emitted `#[cfg(test)]` test — the sqlx-offline analogue.
+//! expansion (via [`dsrs_syntax::check`], the shared structural grammar over
+//! the same lexer `Program::from_dsrs` uses); **semantics** are validated by
+//! the full parser at first use of the emitted `LazyLock`, and forced at CI
+//! time by an emitted `#[cfg(test)]` test — the sqlx-offline analogue.
 
 use std::path::{Path, PathBuf};
 
 use proc_macro2::Span;
 use quote::{format_ident, quote};
 
-use crate::dsrs_syntax;
 use crate::runtime_path::resolve_dspy_rs_path;
 
 /// Parsed macro input: a single string-literal path.
@@ -92,8 +92,9 @@ pub(crate) fn expand(
         ))
     })?;
 
-    // Build-time gate: syntax only. Semantic validation happens through the
-    // real parser in the emitted runtime/test code below.
+    // Build-time gate: syntax only, through the shared dsrs-syntax grammar.
+    // Semantic validation happens through the full parser in the emitted
+    // runtime/test code below.
     dsrs_syntax::check(&text).map_err(|e| {
         err_at(format!(
             "include_program!(\"{rel}\"): line {}, column {}: {}",

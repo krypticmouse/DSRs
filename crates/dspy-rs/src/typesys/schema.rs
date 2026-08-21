@@ -8,12 +8,12 @@
 
 use std::collections::HashMap;
 
-use facet::{Def, Facet, Field, ScalarType, Shape, Type, UserType};
+use facet::{Def, Facet, ScalarType, Shape, Type, UserType};
 use indexmap::IndexMap;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use super::constraint::{Constraint, ConstraintKind};
+use super::constraint::Constraint;
 
 /// Structural type of a signature/nested field, mirroring the subset of BAML's `TypeIR`
 /// that DSRs actually uses. Class/enum variants carry the *internal name* used as a key
@@ -331,7 +331,10 @@ impl SchemaBuilder {
                 rendered_name: field.effective_name().to_string(),
                 field_type,
                 docs: doc_to_description(field.doc),
-                constraints: constraints_from_field(field),
+                // Constraints on signature fields are attached via
+                // `FieldMetadataSpec` in `core/schema.rs`; nested-type field
+                // constraints are only populated by the .dsrs text parser.
+                constraints: Vec::new(),
             });
         }
 
@@ -427,12 +430,3 @@ fn doc_to_description(doc: &'static [&'static str]) -> Option<String> {
     }
 }
 
-/// Reads `#[check]`/`#[assert]` constraints declared directly on a facet field via the
-/// `bamltype`-namespaced attrs the derive still emits.
-fn constraints_from_field(field: &Field) -> Vec<Constraint> {
-    // Constraints on signature fields are attached via `FieldMetadataSpec` in
-    // `core/schema.rs`; nested-type field constraints are not currently surfaced.
-    let _ = field;
-    let _ = ConstraintKind::Check;
-    Vec::new()
-}

@@ -9,11 +9,7 @@ cargo run --example 04-optimize-hotpotqa --features dataloaders
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    COPRO, DataLoader, Example, LM, Eval, Module, ModuleState, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
-    configure, evaluate_trainset, init_tracing,
-};
+use dspy_rs::prelude::*;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -41,6 +37,8 @@ struct QAModule {
     #[builder(default = Predict::<QA>::builder().instruction("Answer clearly and briefly.").build())]
     answerer: Predict<QA>,
 }
+
+dspy_rs::predictors!(QAModule { answerer });
 
 impl Module for QAModule {
     type Input = QAInput;
@@ -96,14 +94,14 @@ async fn main() -> Result<()> {
         .eval_concurrency(16) // candidate evaluations fan out 16 LM calls at a time
         .build();
     optimizer
-        .compile(&mut module, examples.clone(), &metric)
+        .compile_module(&mut module, &examples, &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &examples, &metric).await?);
     println!("optimized score: {optimized:.3}");
 
     // Persist the tuned instructions for later `ModuleState::load(...).apply(...)`.
-    ModuleState::from_module(&mut module)?.save("optimized-hotpotqa.json")?;
+    ModuleState::from_module(&module)?.save("optimized-hotpotqa.json")?;
     println!("saved optimized module state to optimized-hotpotqa.json");
 
     Ok(())

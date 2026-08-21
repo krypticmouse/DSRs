@@ -60,6 +60,8 @@ struct MathSolver {
     solver: Predict<MathWordProblem>,
 }
 
+dspy_rs::predictors!(MathSolver { solver });
+
 impl Module for MathSolver {
     type Input = MathWordProblemInput;
     type Output = MathWordProblemOutput;
@@ -194,7 +196,7 @@ async fn main() -> Result<()> {
         .track_stats(true)
         .build();
 
-    let result = gepa.compile(&mut module, trainset.clone(), &metric).await?;
+    let result = gepa.compile_module(&mut module, &trainset, &metric).await?;
 
     println!("Best score: {:.3}", result.best_candidate.average_score());
     println!("Total rollouts: {}", result.total_rollouts);

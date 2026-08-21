@@ -35,6 +35,7 @@ public-API change, run from the repository root:
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dspy-rs --lib --all-features -- -Z unstable-options --output-format json
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-tools --lib -- -Z unstable-options --output-format json
 RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs_macros --lib -- -Z unstable-options --output-format json
+RUSTC_BOOTSTRAP=1 cargo rustdoc -p dsrs-syntax --lib -- -Z unstable-options --output-format json
 python3 docs/scripts/gen_api.py
 ```
 

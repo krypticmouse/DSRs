@@ -1,4 +1,9 @@
+//! Prompt composition through the def lane — the one prompt path since
+//! Predict routes through the IR interpreter.
+
+use dspy_rs::ir::SignatureDef;
 use dspy_rs::{ChatAdapter, Demo, Signature};
+use serde_json::Value;
 
 #[derive(Signature, Clone, Debug)]
 /// Answer the prompt using the provided context.
@@ -25,6 +30,21 @@ struct EmptyInstructionSig {
     summary: String,
 }
 
+fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(value).expect("serializable") {
+        Value::Object(map) => map,
+        other => panic!("expected object, got {other:?}"),
+    }
+}
+
+fn system_prompt<S: Signature>(instruction_override: Option<&str>) -> String {
+    ChatAdapter.build_system_def(
+        SignatureDef::of::<S>(),
+        SignatureDef::types_of::<S>(),
+        instruction_override,
+    )
+}
+
 fn find_required(haystack: &str, needle: &str) -> usize {
     haystack
         .find(needle)
@@ -40,10 +60,7 @@ fn response_instruction_line(message: &str) -> &str {
 
 #[test]
 fn system_prompt_includes_all_sections_in_order_with_boundaries() {
-    let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<PromptPartsSig>()
-        .expect("system prompt should format");
+    let system = system_prompt::<PromptPartsSig>(None);
 
     let descriptions_idx = find_required(&system, "Your input fields are:");
     let structure_idx = find_required(
@@ -80,10 +97,7 @@ fn system_prompt_includes_all_sections_in_order_with_boundaries() {
 
 #[test]
 fn system_prompt_field_descriptions_and_structure_are_present() {
-    let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<PromptPartsSig>()
-        .expect("system prompt should format");
+    let system = system_prompt::<PromptPartsSig>(None);
 
     assert!(system.contains("`question` (string): User question"));
     assert!(system.contains("`context` (string): Retrieved context"));
@@ -101,10 +115,7 @@ fn system_prompt_field_descriptions_and_structure_are_present() {
 
 #[test]
 fn response_instruction_line_orders_output_fields() {
-    let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<PromptPartsSig>()
-        .expect("system prompt should format");
+    let system = system_prompt::<PromptPartsSig>(None);
     let line = response_instruction_line(&system);
 
     let answer_idx = find_required(line, "[[ ## answer ## ]]");
@@ -115,11 +126,8 @@ fn response_instruction_line_orders_output_fields() {
 
 #[test]
 fn instruction_override_is_used_in_objective_section() {
-    let adapter = ChatAdapter;
     let override_instruction = "Follow the rubric.\nCite the context.";
-    let system = adapter
-        .format_system_message_typed_with_instruction::<PromptPartsSig>(Some(override_instruction))
-        .expect("system prompt should format with override");
+    let system = system_prompt::<PromptPartsSig>(Some(override_instruction));
 
     assert!(system.contains("In adhering to this structure, your objective is:"));
     assert!(system.contains("        Follow the rubric."));
@@ -129,57 +137,37 @@ fn instruction_override_is_used_in_objective_section() {
 
 #[test]
 fn empty_instruction_uses_generated_fallback_objective() {
-    let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<EmptyInstructionSig>()
-        .expect("system prompt should format");
+    let system = system_prompt::<EmptyInstructionSig>(None);
 
     assert!(system.contains("In adhering to this structure, your objective is:"));
     assert!(system.contains("Given the fields `topic`, produce the fields `summary`."));
 }
 
 #[test]
-fn typed_and_schema_system_builders_match() {
-    let adapter = ChatAdapter;
-    let typed = adapter
-        .format_system_message_typed_with_instruction::<PromptPartsSig>(Some("Override objective"))
-        .expect("typed system prompt");
-    let schema = adapter
-        .build_system(PromptPartsSig::schema(), Some("Override objective"))
-        .expect("schema system prompt");
-
-    assert_eq!(typed, schema);
-}
-
-#[test]
-fn typed_and_schema_user_builders_match_and_append_requirements() {
+fn user_builder_appends_requirements() {
     let adapter = ChatAdapter;
     let input = PromptPartsSigInput {
         question: "What is the capital of France?".to_string(),
         context: "Facts: Paris is the capital city of France.".to_string(),
     };
 
-    let typed = adapter.format_user_message_typed::<PromptPartsSig>(&input);
-    let schema = adapter.format_input(PromptPartsSig::schema(), &input);
-    assert_eq!(typed, schema);
+    let user = adapter.format_input_def(SignatureDef::of::<PromptPartsSig>(), &json_map(&input));
 
-    assert!(typed.contains("[[ ## question ## ]]"));
-    assert!(typed.contains("What is the capital of France?"));
-    assert!(typed.contains("[[ ## context ## ]]"));
-    assert!(typed.contains("Facts: Paris is the capital city of France."));
+    assert!(user.contains("[[ ## question ## ]]"));
+    assert!(user.contains("What is the capital of France?"));
+    assert!(user.contains("[[ ## context ## ]]"));
+    assert!(user.contains("Facts: Paris is the capital city of France."));
 
-    let context_idx = find_required(&typed, "Facts: Paris is the capital city of France.");
-    let instruction_idx = find_required(&typed, "Respond with the corresponding output fields");
+    let context_idx = find_required(&user, "Facts: Paris is the capital city of France.");
+    let instruction_idx = find_required(&user, "Respond with the corresponding output fields");
     assert!(context_idx < instruction_idx);
     assert_eq!(
-        typed
-            .matches("Respond with the corresponding output fields")
+        user.matches("Respond with the corresponding output fields")
             .count(),
         1
     );
     assert!(
-        typed
-            .trim_end()
+        user.trim_end()
             .ends_with("and then ending with the marker for `[[ ## completed ## ]]`.")
     );
 }
@@ -198,7 +186,9 @@ fn demo_format_composes_user_and_assistant_parts() {
         },
     );
 
-    let (user_msg, assistant_msg) = adapter.format_demo_typed::<PromptPartsSig>(&demo);
+    let def = SignatureDef::of::<PromptPartsSig>();
+    let user_msg = adapter.format_input_def(def, &json_map(&demo.input));
+    let assistant_msg = adapter.format_output_def(def, &json_map(&demo.output));
 
     assert!(user_msg.contains("[[ ## question ## ]]"));
     assert!(user_msg.contains("[[ ## context ## ]]"));
@@ -212,19 +202,18 @@ fn demo_format_composes_user_and_assistant_parts() {
 }
 
 #[test]
-fn typed_and_schema_assistant_builders_match_and_end_with_completed_marker() {
+fn assistant_builder_orders_fields_and_ends_with_completed_marker() {
     let adapter = ChatAdapter;
     let output = PromptPartsSigOutput {
         answer: "Paris".to_string(),
         confidence: 0.9,
     };
 
-    let typed = adapter.format_assistant_message_typed::<PromptPartsSig>(&output);
-    let schema = adapter.format_output(PromptPartsSig::schema(), &output);
-    assert_eq!(typed, schema);
+    let assistant =
+        adapter.format_output_def(SignatureDef::of::<PromptPartsSig>(), &json_map(&output));
 
-    let answer_idx = find_required(&typed, "[[ ## answer ## ]]");
-    let confidence_idx = find_required(&typed, "[[ ## confidence ## ]]");
+    let answer_idx = find_required(&assistant, "[[ ## answer ## ]]");
+    let confidence_idx = find_required(&assistant, "[[ ## confidence ## ]]");
     assert!(answer_idx < confidence_idx);
-    assert!(typed.trim_end().ends_with("[[ ## completed ## ]]"));
+    assert!(assistant.trim_end().ends_with("[[ ## completed ## ]]"));
 }

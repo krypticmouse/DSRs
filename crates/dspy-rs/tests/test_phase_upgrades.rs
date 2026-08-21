@@ -5,7 +5,7 @@
 use anyhow::Result;
 use dspy_rs::{
     CallMetadata, Chat, Demo, Eval, GEPA, LM, LMClient, MIPROv2, Message, Module, ModuleState,
-    Optimizer, Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
+    Predict, PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
     evaluate_trainset,
 };
 use rig::completion::AssistantContent;
@@ -105,10 +105,6 @@ async fn capture_records_inputs_edges_and_component_names() {
         "intermediate"
     );
 
-    // The second span is chained to the first.
-    assert!(first.links.is_empty());
-    assert_eq!(second.links, vec![first.id]);
-
     // Outputs are recorded.
     assert_eq!(
         first.output.as_ref().expect("first output")["answer"],
@@ -129,11 +125,11 @@ async fn capture_records_inputs_edges_and_component_names() {
 
 // --- ModuleState: save / load round trip -----------------------------------
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct OneStep {
     predictor: Predict<QA>,
 }
+
+dspy_rs::predictors!(OneStep { predictor });
 
 #[test]
 fn module_state_round_trips_through_json() {
@@ -263,11 +259,11 @@ impl TypedMetric<(QAInput, QAOutput), OneStepEcho> for FeedbackEcho {
     }
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct OneStepEcho {
     predictor: Predict<QA>,
 }
+
+dspy_rs::predictors!(OneStepEcho { predictor });
 
 impl Module for OneStepEcho {
     type Input = QAInput;
@@ -322,7 +318,7 @@ async fn gepa_uses_reflection_lm_to_rewrite_instructions() {
     )];
 
     let report = optimizer
-        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackEcho)
+        .compile_module_with_valset(&mut module, &trainset, Some(&valset), &FeedbackEcho)
         .await
         .expect("gepa compile should succeed");
 
@@ -410,7 +406,7 @@ async fn gepa_reflection_receives_component_subtrace() {
     )];
 
     optimizer
-        .compile_with_valset(&mut module, trainset, Some(valset), &FeedbackForPredict)
+        .compile_module_with_valset(&mut module, &trainset, Some(&valset), &FeedbackForPredict)
         .await
         .expect("gepa compile should succeed");
 
@@ -454,11 +450,11 @@ impl TypedMetric<(QAInput, QAOutput), OneStepPredict> for ExactMatch {
     }
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct OneStepPredict {
     predictor: Predict<QA>,
 }
+
+dspy_rs::predictors!(OneStepPredict { predictor });
 
 impl Module for OneStepPredict {
     type Input = QAInput;
@@ -498,7 +494,7 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
     )];
 
     optimizer
-        .compile(&mut module, trainset, &ExactMatch)
+        .compile_module(&mut module, &trainset, &ExactMatch)
         .await
         .expect("mipro compile should succeed");
 

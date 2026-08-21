@@ -1,4 +1,6 @@
+use dspy_rs::ir::SignatureDef;
 use dspy_rs::{ChatAdapter, Message, Signature};
+use serde_json::Value;
 
 #[derive(Signature, Clone, Debug, PartialEq)]
 struct BasicSignature {
@@ -49,12 +51,21 @@ struct DeepFlattenSig {
     answer: String,
 }
 
+fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(value).expect("serializable") {
+        Value::Object(map) => map,
+        other => panic!("expected object, got {other:?}"),
+    }
+}
+
 #[test]
 fn chat_adapter_formats_typed_system_prompt() {
     let adapter = ChatAdapter;
-    let system = adapter
-        .format_system_message_typed::<BasicSignature>()
-        .expect("system prompt should format");
+    let system = adapter.build_system_def(
+        SignatureDef::of::<BasicSignature>(),
+        SignatureDef::types_of::<BasicSignature>(),
+        None,
+    );
 
     assert!(system.contains("Your input fields are:"));
     assert!(system.contains("`problem`"));
@@ -66,14 +77,20 @@ fn chat_adapter_formats_typed_system_prompt() {
 #[test]
 fn chat_adapter_formats_user_and_assistant_messages() {
     let adapter = ChatAdapter;
+    let def = SignatureDef::of::<BasicSignature>();
 
-    let user = adapter.format_user_message_typed::<BasicSignature>(&BasicSignatureInput {
-        problem: "What is the capital of France?".to_string(),
-    });
-    let assistant =
-        adapter.format_assistant_message_typed::<BasicSignature>(&BasicSignatureOutput {
+    let user = adapter.format_input_def(
+        def,
+        &json_map(&BasicSignatureInput {
+            problem: "What is the capital of France?".to_string(),
+        }),
+    );
+    let assistant = adapter.format_output_def(
+        def,
+        &json_map(&BasicSignatureOutput {
             answer: "Paris".to_string(),
-        });
+        }),
+    );
 
     assert!(user.contains("[[ ## problem ## ]]"));
     assert!(user.contains("What is the capital of France?"));
@@ -90,10 +107,16 @@ fn chat_adapter_parses_typed_response() {
     let adapter = ChatAdapter;
     let response = Message::assistant("[[ ## answer ## ]]\nParis\n\n[[ ## completed ## ]]");
 
-    let (output, field_meta) = adapter
-        .parse_response_typed::<BasicSignature>(&response)
+    let (output_map, field_meta) = adapter
+        .parse_output_def(
+            SignatureDef::of::<BasicSignature>(),
+            SignatureDef::types_of::<BasicSignature>(),
+            &response,
+        )
         .expect("typed response should parse");
 
+    let output: BasicSignatureOutput =
+        serde_json::from_value(Value::Object(output_map)).expect("typed assembly");
     assert_eq!(output.answer, "Paris");
     assert_eq!(
         field_meta.get("answer").map(|meta| meta.raw_text.as_str()),
@@ -115,14 +138,19 @@ fn parse_sections_accepts_non_word_field_names() {
 #[test]
 fn chat_adapter_formats_user_messages_with_multi_level_flatten_paths() {
     let adapter = ChatAdapter;
-    let user = adapter.format_user_message_typed::<DeepFlattenSig>(&DeepFlattenSigInput {
-        question: "What should we answer?".to_string(),
-        middle: FlattenMiddleSigInput {
-            inner: FlattenLeafSigInput {
-                leaf: "flattened-value".to_string(),
+    // Multi-level `#[flatten]` inputs serialize flat, keyed by leaf name —
+    // exactly the canonical `FieldDef::name` keys the def lane renders from.
+    let user = adapter.format_input_def(
+        SignatureDef::of::<DeepFlattenSig>(),
+        &json_map(&DeepFlattenSigInput {
+            question: "What should we answer?".to_string(),
+            middle: FlattenMiddleSigInput {
+                inner: FlattenLeafSigInput {
+                    leaf: "flattened-value".to_string(),
+                },
             },
-        },
-    });
+        }),
+    );
 
     assert!(
         user.contains("[[ ## question ## ]]"),

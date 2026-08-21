@@ -41,6 +41,7 @@
               "docs/components/holes",
               "docs/components/capabilities",
               "docs/components/program-and-nodes",
+              "docs/components/edit-calculus",
               "docs/components/dsrs-file",
               "docs/components/runtime",
               "docs/components/cli",
@@ -63,6 +64,7 @@
               "docs/optimizers/copro",
               "docs/optimizers/miprov2",
               "docs/optimizers/gepa",
+              "docs/optimizers/structural",
               "docs/components/optimizer-engine"
             ]
           },
@@ -97,6 +99,7 @@
               "docs/api/modules",
               "docs/api/optimizer",
               "docs/api/predictors",
+              "docs/api/prelude",
               "docs/api/trace",
               "docs/api/typesys",
               "docs/api/utils"
@@ -106,7 +109,8 @@
             "group": "Companion crates",
             "pages": [
               "docs/api/dsrs-tools",
-              "docs/api/dsrs-macros"
+              "docs/api/dsrs-macros",
+              "docs/api/dsrs-syntax"
             ]
           }
         ]
@@ -114,70 +118,262 @@
     ]
   },
   "redirects": [
-    { "source": "/docs/building-blocks/signature", "destination": "/docs/components/signatures" },
-    { "source": "/docs/building-blocks/types", "destination": "/docs/components/signatures" },
-    { "source": "/docs/building-blocks/constraints", "destination": "/docs/components/signatures" },
-    { "source": "/docs/building-blocks/predictors", "destination": "/docs/components/predict" },
-    { "source": "/docs/building-blocks/adapter", "destination": "/docs/components/adapters" },
-    { "source": "/docs/building-blocks/lm", "destination": "/docs/components/lm" },
-    { "source": "/docs/building-blocks/module", "destination": "/docs/components/modules" },
-    { "source": "/docs/data/dataloader", "destination": "/docs/components/data" },
-    { "source": "/docs/data/examples", "destination": "/docs/components/data" },
-    { "source": "/docs/data/prediction", "destination": "/docs/components/predict" },
-    { "source": "/docs/getting-started/introduction", "destination": "/docs/getting-started/how-dsrs-thinks" },
-    { "source": "/docs/tutorials/overview", "destination": "/docs/components/module-macro" },
-    { "source": "/docs/tutorials/your-first-module", "destination": "/docs/components/module-macro" },
-    { "source": "/docs/tutorials/agent-with-tools", "destination": "/docs/components/tools-and-agents" },
-    { "source": "/docs/tutorials/record-and-replay", "destination": "/docs/components/traces" },
-    { "source": "/docs/tutorials/tune-a-module", "destination": "/docs/components/optimizers" },
-    { "source": "/docs/concepts/harness-as-data", "destination": "/docs/getting-started/how-dsrs-thinks" },
-    { "source": "/docs/concepts/three-lanes", "destination": "/docs/getting-started/how-dsrs-thinks" },
-    { "source": "/docs/concepts/compilation", "destination": "/docs/getting-started/how-dsrs-thinks" },
-    { "source": "/docs/concepts/holes", "destination": "/docs/components/holes" },
-    { "source": "/docs/concepts/traces-and-replay", "destination": "/docs/components/traces" },
-    { "source": "/docs/concepts/capabilities", "destination": "/docs/components/capabilities" },
-    { "source": "/docs/reference/macros", "destination": "/docs/components/module-macro" },
-    { "source": "/docs/reference/signatures-and-types", "destination": "/docs/components/signatures" },
-    { "source": "/docs/reference/predict", "destination": "/docs/components/predict" },
-    { "source": "/docs/reference/modules", "destination": "/docs/components/modules" },
-    { "source": "/docs/reference/adapters", "destination": "/docs/components/adapters" },
-    { "source": "/docs/reference/lm", "destination": "/docs/components/lm" },
-    { "source": "/docs/reference/data", "destination": "/docs/components/data" },
-    { "source": "/docs/reference/state", "destination": "/docs/components/state" },
-    { "source": "/docs/reference/fx", "destination": "/docs/components/fx" },
-    { "source": "/docs/reference/evaluate", "destination": "/docs/components/evaluation" },
-    { "source": "/docs/reference/optimizers", "destination": "/docs/components/optimizers" },
-    { "source": "/docs/reference/optimizer-engine", "destination": "/docs/components/optimizer-engine" },
-    { "source": "/docs/reference/code-mode", "destination": "/docs/components/code-mode" },
-    { "source": "/docs/reference/dsrs-file", "destination": "/docs/components/dsrs-file" },
-    { "source": "/docs/reference/program-and-nodes", "destination": "/docs/components/program-and-nodes" },
-    { "source": "/docs/reference/runtime", "destination": "/docs/components/runtime" },
-    { "source": "/docs/reference/cli", "destination": "/docs/components/cli" },
-    { "source": "/docs/reference/traces", "destination": "/docs/components/traces" },
-    { "source": "/docs/reference/traces-and-cli", "destination": "/docs/components/traces" },
-    { "source": "/docs/reference/utils", "destination": "/docs/components/utils" },
-    { "source": "/docs/learn/you-never-write-the-prompt", "destination": "/docs/getting-started/quickstart" },
-    { "source": "/docs/learn/the-contract-is-the-prompt", "destination": "/docs/components/signatures" },
-    { "source": "/docs/learn/who-calls-the-model", "destination": "/docs/components/predict" },
-    { "source": "/docs/learn/what-the-model-sees", "destination": "/docs/components/adapters" },
-    { "source": "/docs/learn/pipelines-are-just-structs", "destination": "/docs/components/modules" },
-    { "source": "/docs/learn/one-parse-two-projections", "destination": "/docs/components/module-macro" },
-    { "source": "/docs/learn/here-be-dragons", "destination": "/docs/components/holes" },
-    { "source": "/docs/learn/give-the-model-hands", "destination": "/docs/components/tools-and-agents" },
-    { "source": "/docs/learn/nothing-to-declare", "destination": "/docs/components/capabilities" },
-    { "source": "/docs/learn/the-expedition-log", "destination": "/docs/components/traces" },
-    { "source": "/docs/learn/what-does-better-mean", "destination": "/docs/components/evaluation" },
-    { "source": "/docs/learn/tracing-paper", "destination": "/docs/components/optimizers" },
-    { "source": "/docs/learn/when-the-judge-is-a-model", "destination": "/docs/optimizers/gepa" },
-    { "source": "/docs/learn/the-map-leaves-home", "destination": "/docs/components/cli" },
-    { "source": "/docs/learn/running-in-the-wild", "destination": "/docs/components/traces" },
-    { "source": "/docs/guides/write-steps", "destination": "/docs/components/module-macro" },
-    { "source": "/docs/guides/add-tools", "destination": "/docs/components/tools-and-agents" },
-    { "source": "/docs/guides/use-holes", "destination": "/docs/components/holes" },
-    { "source": "/docs/guides/print-and-serve", "destination": "/docs/components/cli" },
-    { "source": "/docs/guides/bake-a-candidate", "destination": "/docs/components/program-and-nodes" },
-    { "source": "/docs/optimizers/gepa-llm-judge", "destination": "/docs/optimizers/gepa" },
-    { "source": "/community", "destination": "/" }
+    {
+      "source": "/docs/building-blocks/signature",
+      "destination": "/docs/components/signatures"
+    },
+    {
+      "source": "/docs/building-blocks/types",
+      "destination": "/docs/components/signatures"
+    },
+    {
+      "source": "/docs/building-blocks/constraints",
+      "destination": "/docs/components/signatures"
+    },
+    {
+      "source": "/docs/building-blocks/predictors",
+      "destination": "/docs/components/predict"
+    },
+    {
+      "source": "/docs/building-blocks/adapter",
+      "destination": "/docs/components/adapters"
+    },
+    {
+      "source": "/docs/building-blocks/lm",
+      "destination": "/docs/components/lm"
+    },
+    {
+      "source": "/docs/building-blocks/module",
+      "destination": "/docs/components/modules"
+    },
+    {
+      "source": "/docs/data/dataloader",
+      "destination": "/docs/components/data"
+    },
+    {
+      "source": "/docs/data/examples",
+      "destination": "/docs/components/data"
+    },
+    {
+      "source": "/docs/data/prediction",
+      "destination": "/docs/components/predict"
+    },
+    {
+      "source": "/docs/getting-started/introduction",
+      "destination": "/docs/getting-started/how-dsrs-thinks"
+    },
+    {
+      "source": "/docs/tutorials/overview",
+      "destination": "/docs/components/module-macro"
+    },
+    {
+      "source": "/docs/tutorials/your-first-module",
+      "destination": "/docs/components/module-macro"
+    },
+    {
+      "source": "/docs/tutorials/agent-with-tools",
+      "destination": "/docs/components/tools-and-agents"
+    },
+    {
+      "source": "/docs/tutorials/record-and-replay",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/tutorials/tune-a-module",
+      "destination": "/docs/components/optimizers"
+    },
+    {
+      "source": "/docs/concepts/harness-as-data",
+      "destination": "/docs/getting-started/how-dsrs-thinks"
+    },
+    {
+      "source": "/docs/concepts/three-lanes",
+      "destination": "/docs/getting-started/how-dsrs-thinks"
+    },
+    {
+      "source": "/docs/concepts/compilation",
+      "destination": "/docs/getting-started/how-dsrs-thinks"
+    },
+    {
+      "source": "/docs/concepts/holes",
+      "destination": "/docs/components/holes"
+    },
+    {
+      "source": "/docs/concepts/traces-and-replay",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/concepts/capabilities",
+      "destination": "/docs/components/capabilities"
+    },
+    {
+      "source": "/docs/reference/macros",
+      "destination": "/docs/components/module-macro"
+    },
+    {
+      "source": "/docs/reference/signatures-and-types",
+      "destination": "/docs/components/signatures"
+    },
+    {
+      "source": "/docs/reference/predict",
+      "destination": "/docs/components/predict"
+    },
+    {
+      "source": "/docs/reference/modules",
+      "destination": "/docs/components/modules"
+    },
+    {
+      "source": "/docs/reference/adapters",
+      "destination": "/docs/components/adapters"
+    },
+    {
+      "source": "/docs/reference/lm",
+      "destination": "/docs/components/lm"
+    },
+    {
+      "source": "/docs/reference/data",
+      "destination": "/docs/components/data"
+    },
+    {
+      "source": "/docs/reference/state",
+      "destination": "/docs/components/state"
+    },
+    {
+      "source": "/docs/reference/fx",
+      "destination": "/docs/components/fx"
+    },
+    {
+      "source": "/docs/reference/evaluate",
+      "destination": "/docs/components/evaluation"
+    },
+    {
+      "source": "/docs/reference/optimizers",
+      "destination": "/docs/components/optimizers"
+    },
+    {
+      "source": "/docs/reference/optimizer-engine",
+      "destination": "/docs/components/optimizer-engine"
+    },
+    {
+      "source": "/docs/reference/code-mode",
+      "destination": "/docs/components/code-mode"
+    },
+    {
+      "source": "/docs/reference/dsrs-file",
+      "destination": "/docs/components/dsrs-file"
+    },
+    {
+      "source": "/docs/reference/program-and-nodes",
+      "destination": "/docs/components/program-and-nodes"
+    },
+    {
+      "source": "/docs/reference/runtime",
+      "destination": "/docs/components/runtime"
+    },
+    {
+      "source": "/docs/reference/cli",
+      "destination": "/docs/components/cli"
+    },
+    {
+      "source": "/docs/reference/traces",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/reference/traces-and-cli",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/reference/utils",
+      "destination": "/docs/components/utils"
+    },
+    {
+      "source": "/docs/learn/you-never-write-the-prompt",
+      "destination": "/docs/getting-started/quickstart"
+    },
+    {
+      "source": "/docs/learn/the-contract-is-the-prompt",
+      "destination": "/docs/components/signatures"
+    },
+    {
+      "source": "/docs/learn/who-calls-the-model",
+      "destination": "/docs/components/predict"
+    },
+    {
+      "source": "/docs/learn/what-the-model-sees",
+      "destination": "/docs/components/adapters"
+    },
+    {
+      "source": "/docs/learn/pipelines-are-just-structs",
+      "destination": "/docs/components/modules"
+    },
+    {
+      "source": "/docs/learn/one-parse-two-projections",
+      "destination": "/docs/components/module-macro"
+    },
+    {
+      "source": "/docs/learn/here-be-dragons",
+      "destination": "/docs/components/holes"
+    },
+    {
+      "source": "/docs/learn/give-the-model-hands",
+      "destination": "/docs/components/tools-and-agents"
+    },
+    {
+      "source": "/docs/learn/nothing-to-declare",
+      "destination": "/docs/components/capabilities"
+    },
+    {
+      "source": "/docs/learn/the-expedition-log",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/learn/what-does-better-mean",
+      "destination": "/docs/components/evaluation"
+    },
+    {
+      "source": "/docs/learn/tracing-paper",
+      "destination": "/docs/components/optimizers"
+    },
+    {
+      "source": "/docs/learn/when-the-judge-is-a-model",
+      "destination": "/docs/optimizers/gepa"
+    },
+    {
+      "source": "/docs/learn/the-map-leaves-home",
+      "destination": "/docs/components/cli"
+    },
+    {
+      "source": "/docs/learn/running-in-the-wild",
+      "destination": "/docs/components/traces"
+    },
+    {
+      "source": "/docs/guides/write-steps",
+      "destination": "/docs/components/module-macro"
+    },
+    {
+      "source": "/docs/guides/add-tools",
+      "destination": "/docs/components/tools-and-agents"
+    },
+    {
+      "source": "/docs/guides/use-holes",
+      "destination": "/docs/components/holes"
+    },
+    {
+      "source": "/docs/guides/print-and-serve",
+      "destination": "/docs/components/cli"
+    },
+    {
+      "source": "/docs/guides/bake-a-candidate",
+      "destination": "/docs/components/program-and-nodes"
+    },
+    {
+      "source": "/docs/optimizers/gepa-llm-judge",
+      "destination": "/docs/optimizers/gepa"
+    },
+    {
+      "source": "/community",
+      "destination": "/"
+    }
   ],
   "logo": {
     "light": "/logo/main.png",

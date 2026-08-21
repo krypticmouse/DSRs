@@ -1,10 +1,10 @@
 ---
 title: "Traces"
-description: "Capture a run as a trace, replay it strictly or until divergence, and export it to OpenTelemetry or RL rollout formats"
+description: "Capture a run as a trace and replay it strictly or until divergence"
 icon: "wave-pulse"
 ---
 
-A trace records what a run did: one span per `Predict` call, carrying the rendered prompt, the parsed output, and a request fingerprint. Replay serves a later run back from that recording instead of a live provider, and exports project a finished trace onto external observability and training conventions. The `dsrs` CLI that checks, formats, and serves `.dsrs` artifacts has its own page: [CLI](/docs/components/cli).
+A trace records what a run did: one span per `Predict` call, carrying the rendered prompt, the parsed output, and a request fingerprint. Replay serves a later run back from that recording instead of a live provider. The `dsrs` CLI that checks, formats, and serves `.dsrs` artifacts has its own page: [CLI](/docs/components/cli).
 
 ## Recording and replaying a run
 
@@ -65,6 +65,7 @@ One span is one `Predict` invocation. At a high level it records:
 - **What went in**: the rendered prompt (an interned system-and-demos prefix plus the live suffix), the typed input fields as JSON, and the redacted model config.
 - **What happened inside**: ordered events, one `Exchange` per provider round-trip and one `ToolRun` per tool execution.
 - **What came out**: the raw assistant text, the parsed output fields, aggregated token usage, and any error (kinds: `lm`, `parse`, `tool`, `cancelled`).
+- **What it was worth** (optional): a span-level `Eval`, present only when a metric assigned per-span credit through `TypedMetric::evaluate_spans` (see [Evaluation](/docs/components/evaluation)). Demo harvesting prefers it over the whole-rollout score; the field is omitted from the JSONL entirely when absent, so eval-free traces serialize exactly as before.
 - **A request fingerprint**: `request_hash`, a stable hash over the redacted model config plus the full rendered prompt. This is the replay key and the determinism check.
 - **Timing and completeness**: start time, duration, and a `complete` flag (false when the span was truncated or redacted; replay refuses incomplete spans).
 
@@ -143,80 +144,9 @@ let (out, report) = dspy_rs::trace::replay(&trace, ReplayMode::Strict, || pipeli
 
 Replay scoping mirrors capture: task-local, not inherited by spawned subtasks, innermost scope wins. Compose replay outside with capture inside to record a counterfactual rollout while serving its unchanged prefix from the base trace.
 
-## Exports
-
-Exports are pure serialization-side projections of a finished `Trace`: no new capture machinery, no external dependencies. Both live under `dspy_rs::trace`.
-
 <Note>
-Exports serialize traces after a run finishes. For live, human-readable console output while a program runs, call `init_tracing` (documented on [Utils](/docs/components/utils)): it installs a process-global pretty `tracing` subscriber (respecting `RUST_LOG`, defaulting to `dspy_rs=debug`) and is independent of trace capture.
+Traces serialize after a run finishes (`Trace::to_jsonl`). For live, human-readable console output while a program runs, call `init_tracing` (documented on [Utils](/docs/components/utils)): it installs a process-global pretty `tracing` subscriber (respecting `RUST_LOG`, defaulting to `dspy_rs=debug`) and is independent of trace capture. There are no built-in exporters — the JSONL trace format is stable and self-describing, so external projections (observability, RL datasets) are serialization-side work on top of it.
 </Note>
-
-### OpenTelemetry
-
-`Trace::to_otel_spans(include_content: bool)` maps a trace onto OpenTelemetry GenAI semantic conventions as plain serializable structs in the OTLP/JSON wire shape (proto3 JSON mapping: camelCase keys, 64-bit integers as decimal strings, ids as lowercase hex), with no OpenTelemetry dependency. `Trace::to_otlp_json(service_name, include_content)` wraps those spans in a complete `resourceSpans` envelope that any OTLP/HTTP collector (Jaeger, Tempo, otel-collector) accepts at `POST /v1/traces` as-is.
-
-| Trace format | OTel |
-|---|---|
-| `meta.trace_id` | Trace id: used verbatim when already 32 lowercase hex (the capture scope mints exactly this shape), otherwise stable-hashed into one. |
-| The rollout | Root span `dsrs.rollout`, kind `INTERNAL`, carrying `dsrs.trace_id`, `dsrs.candidate_hash` (when set), and one `dsrs.tag.{key}` attribute per meta tag. |
-| `Span` | One span per `Predict` invocation, name = component name, kind = `CLIENT`, parented to its recorded parent span, else the root. |
-| `started_at_us` / `duration_us` | Start and end timestamps in nanoseconds. |
-| Interned model config | `gen_ai.request.model`, `gen_ai.request.temperature`, `gen_ai.request.max_tokens`. |
-| `usage.prompt_tokens` / `usage.completion_tokens` | `gen_ai.usage.input_tokens` / `gen_ai.usage.output_tokens`. |
-| Rendered prompt (content opt-in) | One `gen_ai.prompt` event per prompt message (`gen_ai.prompt.role`, `gen_ai.prompt.content`). |
-| `raw_output` (content opt-in) | One `gen_ai.completion` event (`gen_ai.completion.content`). |
-| `SpanEvent::ToolRun` | Child span `tool:{name}`, kind `INTERNAL`, with `gen_ai.tool.name` and `gen_ai.tool.call.id`; arguments and result attributes are content opt-in. |
-| `span.error` | Status `ERROR` with message `{kind}: {message}`. |
-| `component` / `seq` / `request_hash` | `dsrs.component`, `dsrs.seq`, `dsrs.request_hash` attributes (plus `dsrs.candidate_hash` when set). |
-
-Prompt, completion, and tool payloads are opt-in via `include_content`, mirroring OTel's GenAI content-capture switch: with `include_content: false` the spans carry identity, usage, and timing attributes only, so they stay exportable to shared collectors without leaking prompt text.
-
-The emitted types, all `Serialize` structs:
-
-| Type | Shape |
-|---|---|
-| `OtelSpan` | `trace_id` (32 hex chars), `span_id` (16 hex chars), optional `parent_span_id`, `name`, `kind`, `start_time_unix_nano` and `end_time_unix_nano` (decimal strings), `attributes`, `events`, optional `status`. |
-| `OtelKeyValue` | `key` plus an `OtelValue`. |
-| `OtelValue` | The `AnyValue` oneof arms this export emits: `StringValue`, `IntValue` (a decimal string, per proto3 JSON), `DoubleValue`. |
-| `OtelEvent` | `time_unix_nano`, `name`, `attributes`. |
-| `OtelStatus` | `code`, `message` (omitted when empty). |
-
-The OTLP enum constants are exported as plain integers: `SPAN_KIND_INTERNAL = 1`, `SPAN_KIND_CLIENT = 3`, `STATUS_CODE_ERROR = 2`.
-
-<Note>
-`ToolRun` events record only their duration, so tool child spans start at their parent span's start time: durations are exact, offsets within the parent are not.
-</Note>
-
-### RL dataset
-
-`Trace::to_rl_rollout()` projects the trace onto the Agent Lightning / verifiers rollout convention: one rollout as message lists plus a reward plus per-subcall transitions. It returns `None` when no eval was recorded (`trace.outcome.eval` unset); a rollout without a reward is not trainable. Because spans keep full `Message` structure (tool-call blocks, reasoning blocks), the projection needs no lossy text munging.
-
-```rust
-let (result, mut trace) = capture(|| pipeline(input)).await;
-trace.outcome = Some(TraceOutcome { eval: Some(metric_eval), ..Default::default() });
-let rollout = trace.to_rl_rollout().expect("eval recorded");
-writeln!(dataset, "{}", rollout.to_json_line()?)?;
-```
-
-`RlRollout` serializes to a single JSON object; `RlRollout::to_json_line()` produces the one-line JSONL record RL trainers consume.
-
-| `RlRollout` field | Meaning |
-|---|---|
-| `trace_id` | The trace id. |
-| `reward` | The rollout-level reward: `trace.outcome.eval.score`. |
-| `transitions` | One `RlTransition` per surviving span, in trace order. |
-| `metadata` | The free-form run tags (`trace.meta.tags`). |
-
-| `RlTransition` field | Meaning |
-|---|---|
-| `component` | The optimizable unit this subcall belongs to; the per-agent credit assignment key. |
-| `seq` | 0-based invocation index of the component within the rollout. |
-| `messages` | The full rendered prompt as messages (interned prefix plus live suffix), provider-agnostic roles. |
-| `completion` | Everything the policy emitted for this subcall, rebuilt from the span's events: each `Exchange`'s assistant message verbatim, with `ToolRun`s as intervening tool-result context. |
-| `usage` | The span's aggregated `LmUsage` (prompt, completion, and total tokens). |
-| `model` | The model identifier from the span's interned config. |
-
-Spans whose policy emitted nothing (provider failures, cancelled spans: no `Exchange` event) are omitted; they contribute no completion to train on. Parse-failure spans keep their transition: the emitted text exists even though it did not parse.
 
 ## See also
 

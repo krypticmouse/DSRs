@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -343,88 +341,6 @@ impl Message {
         msg
     }
 
-    fn from_json_value(message: &Value) -> Result<Self> {
-        let role_str = message
-            .get("role")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("chat message missing string role"))?;
-
-        let role = match role_str {
-            "system" => Role::System,
-            "user" => Role::User,
-            "assistant" => Role::Assistant,
-            other => return Err(anyhow::anyhow!("unsupported chat message role: {other}")),
-        };
-
-        let id = message.get("id").and_then(Value::as_str).map(String::from);
-
-        let content_val = message.get("content");
-
-        // Support both formats:
-        //   New: "content": [{ "type": "text", "text": "..." }, ...]
-        //   Legacy: "content": "plain string"
-        let content = match content_val {
-            Some(Value::Array(arr)) => arr
-                .iter()
-                .map(parse_content_block)
-                .collect::<Result<Vec<_>>>()?,
-            Some(Value::String(s)) => vec![ContentBlock::text(s.clone())],
-            _ => {
-                // Legacy type-tagged format: { "type": "tool_call", "tool_call": {...} }
-                match message.get("type").and_then(Value::as_str) {
-                    Some("tool_call") => {
-                        let tc: ToolCall = serde_json::from_value(message["tool_call"].clone())?;
-                        vec![ContentBlock::tool_call(tc)]
-                    }
-                    Some("tool_result") => {
-                        let tr: ToolResult =
-                            serde_json::from_value(message["tool_result"].clone())?;
-                        vec![ContentBlock::tool_result(tr)]
-                    }
-                    Some("reasoning") => {
-                        let r: Reasoning = serde_json::from_value(message["reasoning"].clone())?;
-                        vec![ContentBlock::reasoning(r)]
-                    }
-                    Some(other) => {
-                        return Err(anyhow::anyhow!("unsupported chat message type: {other}"));
-                    }
-                    None => return Err(anyhow::anyhow!("chat message missing content field")),
-                }
-            }
-        };
-
-        Ok(Self { role, content, id })
-    }
-}
-
-fn parse_content_block(value: &Value) -> Result<ContentBlock> {
-    let block_type = value
-        .get("type")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("content block missing type"))?;
-
-    match block_type {
-        "text" => {
-            let text = value
-                .get("text")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("text block missing text field"))?;
-            Ok(ContentBlock::text(text))
-        }
-        "tool_call" => {
-            let tc: ToolCall = serde_json::from_value(value["tool_call"].clone())?;
-            Ok(ContentBlock::tool_call(tc))
-        }
-        "tool_result" => {
-            let tr: ToolResult = serde_json::from_value(value["tool_result"].clone())?;
-            Ok(ContentBlock::tool_result(tr))
-        }
-        "reasoning" => {
-            let r: Reasoning = serde_json::from_value(value["reasoning"].clone())?;
-            Ok(ContentBlock::reasoning(r))
-        }
-        other => Err(anyhow::anyhow!("unsupported content block type: {other}")),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -516,17 +432,6 @@ impl Chat {
 
     pub fn pop(&mut self) -> Option<Message> {
         self.messages.pop()
-    }
-
-    pub fn from_json(&self, json_dump: Value) -> Result<Self> {
-        let messages = json_dump
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("chat dump must be an array"))?;
-        let messages = messages
-            .iter()
-            .map(Message::from_json_value)
-            .collect::<Result<Vec<_>>>()?;
-        Ok(Self { messages })
     }
 
     pub fn to_json(&self) -> Value {

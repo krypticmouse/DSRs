@@ -63,29 +63,30 @@ let predict = Predict::<QA>::builder()
     .build();
 ```
 
-`Demo<S>` is the typed input/output pair for few-shot prompting: `Demo::new(input, output)` with public fields `input: S::Input` and `output: S::Output`. Demos render as user/assistant exchanges in the prompt, and the types guarantee a demo matches the signature — a `Demo<QA>` cannot be attached to a `Predict<SummarizeSig>`. To seed a demo from a labeled trainset row, project the row through its `ToInput`/`ToOutput` impls: `Demo::new(row.to_input()?, row.to_output()?)`, see [Data](/docs/components/data). Tools are settable only at build time. Demos and the instruction override are also writable after construction through the optimizer seam (`DynPredictor::apply_update`, `load_state`), see [State](/docs/components/state). The formatted system message and demo turns are cached once per (instruction, demos) configuration; every state mutation invalidates the cache.
+`Demo<S>` is the typed input/output pair for few-shot prompting: `Demo::new(input, output)` with public fields `input: S::Input` and `output: S::Output`. Demos render as user/assistant exchanges in the prompt, and the types guarantee a demo matches the signature — a `Demo<QA>` cannot be attached to a `Predict<SummarizeSig>`. To seed a demo from a labeled trainset row, project the row through its `ToInput`/`ToOutput` impls: `Demo::new(row.to_input()?, row.to_output()?)`, see [Data](/docs/components/data). Tools are settable only at build time. Demos and the instruction override are also writable after construction through the state-install seam (`PredictorInfo::load_state`, used by `ModuleState::apply` and the optimizer's final install of the winning candidate), see [State](/docs/components/state). Every state mutation invalidates the cached instance overlay.
 
 ## Calling
 
 | Method | Returns | Use |
 |--------|---------|-----|
-| `.call(input)` | `Result<Predicted<S::Output>, PredictError>` | The typed direct call |
+| `.call(input)` | `Result<Predicted<S::Output>, PredictError>` | The typed direct call — runs through the IR interpreter |
 | `.forward(input)` | Same as `call` | `Module` trait hook; delegates to `call`. Callers should invoke `Module::call`, which exists as the future middleware seam |
-| `.build_chat(&input)` | `Result<Chat, PredictError>` | Inspect or modify the first-turn prompt before sending |
+| `.build_chat(&input).await` | `Result<Chat, PredictError>` | Inspect or modify the first-turn prompt before sending |
 | `.call_and_parse(chat)` | `Result<(Predicted<S::Output>, Chat), PredictError>` | Multi-turn: the caller owns the `Chat` between turns |
 
-Each `call` executes this pipeline:
+`Predict<S>` executes as a 1-node IR [Program](/docs/components/program-and-nodes): a `predict` leaf named after the component, over `SignatureDef::of::<S>()` — or an `agent` leaf when tools are attached (the IR says `Predict` carries no tools; a tooled predictor *is* an agent loop). Each `call` executes this pipeline:
 
-1. Build the chat: cached system + demo prefix, plus the input formatted as the live user message.
-2. Resolve the LM: the per-instance `.lm(...)` if set, otherwise the global `configure()` LM.
-3. Consult any active replay scope (see below).
-4. Send via `LM::call_with_toolset` in `ToolLoopMode::Auto`, executing tool calls up to `max_tool_iterations`.
-5. Parse the response into `S::Output` through the `[[ ## field ## ]]` protocol, evaluating `#[check]` and `#[assert]` constraints.
-6. Record a trace span when inside a `capture()` scope.
+1. Build (once, then cache) the 1-node program. The leaf name is the component name, so span identity and capture/replay keying are unchanged.
+2. Resolve the LM — the per-instance `.lm(...)` if set, otherwise the global `configure()` LM — and load the [Interpreter](/docs/components/runtime) against it (cached; reloaded when the resolved LM changes).
+3. Compose the effective `ir::Overlay`: instance state (instruction override + demos, minted once as an overlay against the cached program) plus any ambient optimizer candidate (`fx::with_params` / `fx::with_overlay`), ambient values winning per slot.
+4. Run the interpreter (`run_collecting`), which renders the prompt, consults any active replay scope, calls the LM (for an `agent` leaf: the tool loop, with the default `StopSpec` — `until_parse`, `max_turns = 8`), and parses the response through the `[[ ## field ## ]]` protocol, evaluating `#[check]` and `#[assert]` constraints.
+5. Reassemble the run's per-leaf metadata (`LeafOutcome`) into `CallMetadata`, and record a trace span when inside a `capture()` scope.
+
+`build_chat`/`call_and_parse` are the **conversation surface**: the caller owns the `Chat` between turns. Both are thin wrappers over the interpreter's conversation entry ([Runtime](/docs/components/runtime)): `build_chat` renders the opening turn through `Interpreter::conversation_opening`, and `call_and_parse` sends the chat through `Interpreter::run_conversation` — the same overlay-resolved rendering, span recording, and replay interception as the typed `call` path, so a conversation turn and a typed call over the same state produce byte-identical prompts. A turn is not a run: each `call_and_parse` records one trace span, and `seq` increments per turn. When tools are attached, the turn runs the same `AgentLoop` as the typed path, dispatching tool calls through the attached executors; for the "return me the tool calls, I'll execute them" pattern, use `Interpreter::run_conversation_caller_managed` directly.
 
 ### Replay interception
 
-Before constructing any client, `Predict` consults the active replay scope. A `Serve` directive returns the recorded span with zero provider calls and zero tool re-executions; a `Refuse` directive returns `PredictError::Replay`; `Live` (or no scope) proceeds normally. Served predictions carry no per-field parse metadata. See [Traces](/docs/components/traces).
+Before any provider call, the interpreter consults the active replay scope — typed `call`s and conversation turns alike. A `Serve` directive returns the recorded span with zero provider calls and zero tool re-executions; a `Refuse` directive returns `PredictError::Replay`; `Live` (or no scope) proceeds normally. Served predictions carry no per-field parse metadata. See [Traces](/docs/components/traces).
 
 ## `Predicted<O>`
 
@@ -114,12 +115,12 @@ Each `FieldMeta` records `raw_text` (the text the LM produced for that field), `
 
 | Variant | Payload | Fires when | Retryable |
 |---------|---------|------------|-----------|
-| `Lm` | `source: LmError` | The provider failed before returning a usable response: network, rate limit, timeout, bad status | Per `LmError::is_retryable()` |
+| `Lm` | `source: LmError` | The provider failed before returning a usable response. Everything the provider stack reports arrives as `LmError::Provider` (provider name, message, source) | No — the underlying rig client owns transport-level retries |
 | `Parse` | `source: ParseError`, `raw_response`, `lm_usage` | The LM responded but the expected fields could not be extracted or coerced, or an `#[assert]` failed | Yes |
 | `Conversion` | `source: ConversionError`, `parsed` | The parsed JSON value does not fit the typed output struct | No |
 | `Replay` | `source: ReplayError` | A strict replay scope refused the call: the live request diverged from its recording, or the recorded span is unusable | No |
 
-`PredictError::class()` buckets into `ErrorClass` (`BadRequest`, `NotFound`, `Forbidden`, `Temporary`, `BadResponse`, `Internal`); `is_retryable()` drives retry logic. `Parse` errors include the raw response and the token usage: failed parses still consume tokens.
+`PredictError::class()` buckets into `ErrorClass` (`BadRequest`, `Temporary`, `BadResponse`, `Internal`); `is_retryable()` drives retry logic. `Parse` errors include the raw response and the token usage: failed parses still consume tokens.
 
 ## `ToolSet`
 

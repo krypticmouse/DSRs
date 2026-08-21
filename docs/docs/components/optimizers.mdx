@@ -4,10 +4,10 @@ description: "The Optimizer trait, every optimizer configuration, and every repo
 icon: "sliders"
 ---
 
-An optimizer proposes candidates (instruction or demo overlays), evaluates them with your metric on your trainset, and keeps the best. `compile` is the entry point: it takes a module, a training set, and a metric, then searches for better instructions, and in some cases demos, for each `Predict` leaf. The module is mutated in place: after `compile` returns, calling the module produces better results with no code changes.
+An optimizer proposes candidates (instruction or demo overlays), evaluates them with your metric on your trainset, and keeps the best. The convenience entry point is each optimizer's `compile_module` method: it takes a module, a training set, and a metric, then searches for better instructions, and in some cases demos, for each `Predict` leaf. After it returns, the winner is installed and calling the module produces better results with no code changes.
 
 ```rust
-use dspy_rs::{COPRO, Optimizer};
+use dspy_rs::COPRO;
 
 let optimizer = COPRO::builder()
     .breadth(10)
@@ -15,11 +15,13 @@ let optimizer = COPRO::builder()
     .eval_concurrency(16)
     .build();
 optimizer
-    .compile(&mut module, examples.clone(), &metric)
+    .compile_module(&mut module, &trainset, &metric)
     .await?;
 ```
 
-All five optimizers are thin strategies over the shared evaluation engine. Candidates are overlays evaluated through a cached, budget-metered, bounded-concurrency fan-out, and winners are installed through the `apply_candidate` seam. The engine types (`EvalEngine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
+The module must declare its optimizable leaves via [`Predictors`](/docs/components/modules#predictor-discovery-predictors) (one `predictors!` line). All six optimizers are thin strategies over the shared evaluation engine. Candidates are **data, never mutation**: each candidate is a name-keyed `Candidate` injected *ambiently* per rollout (`fx::with_params`) — nothing touches the module during evaluation, so different candidates evaluate concurrently — and the winner is installed exactly once at the end (`OptimizeTarget::install`). The engine types (`Engine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
+
+Five strategies tune parameter values through overlays; the sixth, [`Structural`](#structural), proposes graph edits over the [edit calculus](/docs/components/edit-calculus) and runs on the program lane only.
 
 <svg viewBox="0 0 760 420" role="img" aria-label="Three translucent tracing-paper overlays fanned above the base map, each changing one grid-referenced dial; the base program is never marked" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
   <rect x="90" y="210" width="580" height="180" rx="8" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
@@ -64,39 +66,43 @@ All five optimizers are thin strategies over the shared evaluation engine. Candi
   <text x="380" y="412" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">candidates are overlays; the base program is never mutated</text>
 </svg>
 
-Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), and [GEPA](/docs/optimizers/gepa).
+Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), and [Structural](/docs/optimizers/structural).
 
 ## The Optimizer trait
 
 ```rust
-#[allow(async_fn_in_trait)]
-pub trait Optimizer {
-    type Report;
+#[async_trait::async_trait(?Send)]
+pub trait Optimizer: Send + Sync {
+    fn engine_config(&self) -> EngineConfig { EngineConfig::default() }
 
-    async fn compile<E, M, MT>(
+    async fn compile(
         &self,
-        module: &mut M,
-        trainset: Vec<E>,
-        metric: &MT,
-    ) -> Result<Self::Report>
-    where
-        E: ToInput<M::Input> + serde::Serialize + Send + Sync,
-        M: Module + for<'a> Facet<'a>,
-        MT: TypedMetric<E, M>;
+        target: &mut OptimizeTarget<'_>,
+        engine: &mut Engine,
+    ) -> Result<Report>;
 }
 ```
 
-`compile` takes exclusive `&mut` access to the module: no concurrent `call()` during optimization. The trainset is `Vec<E>` for any [row type](/docs/components/data) that projects into the module's input via `ToInput` — a `#[derive(Example)]` struct, an `(Input, Output)` tuple, or a hand-written impl; the `Serialize` bound feeds rollout-cache uids, which content-hash the whole row. All type parameters are inferred from the arguments, so no turbofish is needed: `optimizer.compile(&mut module, trainset, &metric)`. The `Facet` bound is what lets the optimizer discover `Predict` leaves by reflection and address them by dotted path. `compile` returns an error when no optimizable predictors are found, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
+The trait is **object-safe** by design: optimizers compose (`Box<dyn Optimizer>` pipelines can share one `Engine` — one budget, one rollout cache, one score matrix — across stages). The target carries the thing under optimization and its example set *by reference*; the engine carries the spend.
 
-Each optimizer declares its own `Report`:
+`OptimizeTarget` is the lane-erased pair of (thing under optimization, evaluation harness), one of two lanes:
 
-| Optimizer | `Report` type |
-|-----------|---------------|
+- **`OptimizeTarget::module(&mut module, &trainset, &metric)`** — a typed `Module` (+ `Predictors` discovery), a trainset slice, and a `TypedMetric`. The trainset is `&[E]` for any [row type](/docs/components/data) that projects into the module's input via `ToInput`; the `Serialize` bound feeds rollout-cache uids, which content-hash the whole row. `OptimizeTarget::module_with_valset(...)` adds an optional validation set (the layout GEPA's Pareto bookkeeping uses). Construction runs the **naming pass**: every declared leaf is stamped with its declared name, so trace spans, candidate entries, and persistence all address the same names.
+- **`OptimizeTarget::program(&interp, &examples, &metric)`** — an interpreter-loaded IR [`Program`](/docs/components/program-and-nodes), labeled `DemoRow` examples, and a JSON-native `ProgramMetric`. The winner is retrievable as an `ir::Overlay` (`OptimizeTarget::winner_overlay`) for `Program::bake`.
+
+For the common case you never build these by hand — each optimizer's `compile_module(&mut module, &trainset, &metric)` inherent method constructs a module target and a default engine, runs `compile`, and installs the winner. `compile` returns an error when the target has no optimizable leaves, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
+
+`compile` returns the `Report` enum (`Report::None`, `Report::Gepa(GEPAResult)`, `Report::Simba(SimbaReport)`, `Report::Bootstrap(BootstrapReport)`, and `Report::Custom(serde_json::Value)` as the third-party extension point), with `into_gepa()`/`into_simba()`/`into_bootstrap()` accessors. The typed `compile_module` sugar unwraps it:
+
+| Optimizer | `compile_module` returns |
+|-----------|--------------------------|
 | `COPRO` | `()` |
 | `MIPROv2` | `()` |
 | `GEPA` | `GEPAResult` |
 | `SIMBA` | `SimbaReport` |
 | `BootstrapFewShot` | `BootstrapReport` |
+
+`Structural` is the exception to this table and to the trait: it edits program structure, so its input is an interpreter-loaded program rather than a lane-erased target, and its entry point is [`compile_program`](#structural) instead of `compile_module`/`compile`.
 
 ## Choosing an optimizer
 
@@ -107,6 +113,7 @@ Each optimizer declares its own `Report`:
 | `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 | `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 | `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
+| `Structural` | LM-guided graph edits over `ir::Edit` (program lane only) | No | Medium (examples + iterations × minibatch) |
 
 GEPA is the only optimizer that requires textual feedback from the metric. The others use numerical scores alone.
 
@@ -135,11 +142,11 @@ Trace-guided instruction and demo optimizer. Four phases: one traced teacher pas
 | `num_trials` | `usize` | `20` | Maximum candidates evaluated per predictor. When lower than `num_candidates`, only the first `num_trials` are evaluated. |
 | `minibatch_size` | `usize` | `25` | Examples per candidate evaluation. |
 | `max_bootstrapped_demos` | `usize` | `4` | Demos installed per predictor from successful traces. |
-| `min_demo_score` | `f64` | `0.0` | Minimum whole-program score for a trace to qualify as a demo source. |
+| `min_demo_score` | `f64` | `0.0` | Minimum score for a span to qualify as a demo source: its own span eval when present, the whole-program score otherwise. |
 | `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
 | `seed` | `Option<u64>` | `None` | Fixes minibatch sampling. `None` is nondeterministic. |
 
-Public helper types: `PromptCandidate` (an instruction with its evaluated `score: f64`) and `PromptingTips` (the rotation of prompting best practices appended to candidates, `default_tips()` and `format_for_prompt()`). Public methods on `MIPROv2`: `select_best_traces`, `create_prompt_candidates`, `format_schema_fields`. The report is `()`.
+Public helper type: `PromptingTips` (the rotation of prompting best practices appended to candidates, `default_tips()` and `format_for_prompt()`). `compile_module` returns `()`; through the trait, the report is `Report::None`.
 
 ## GEPA
 
@@ -163,7 +170,7 @@ GEPA errors if any `Eval` from the metric has `feedback: None`. Build metrics wi
 | `eval_concurrency` | `usize` | `16` | Concurrent LM calls during candidate evaluation. |
 | `seed` | `Option<u64>` | `None` | Fixes minibatch sampling and parent selection. |
 
-GEPA additionally exposes `compile_with_valset(module, trainset, valset, metric)`. With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile` does).
+GEPA additionally exposes `compile_module_with_valset(module, trainset, valset, metric)` — sugar over `OptimizeTarget::module_with_valset` plus the `Optimizer` trait. With `Some(valset)`, initial evaluation and child scoring use the validation set while parent re-evaluation uses trainset minibatches; with `None`, the trainset serves both roles (this is what `compile_module` does).
 
 ### GEPAResult
 
@@ -236,7 +243,7 @@ The simplest complete optimizer: one teacher pass, one candidate, one comparison
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `max_demos` | `usize` | `4` | Maximum demos installed per predictor. |
-| `min_demo_score` | `f64` | `1.0` | Minimum whole-rollout score for a rollout's spans to qualify as demos. The default assumes a 0 to 1 metric; lower it for graded metrics. |
+| `min_demo_score` | `f64` | `1.0` | Minimum score for a span to qualify as a demo: its own span eval when the metric attached one, the whole-rollout score otherwise. The default assumes a 0 to 1 metric; lower it for graded metrics. |
 | `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
 | `max_metric_calls` | `Option<usize>` | `None` | Hard cap on metric calls (rollouts). |
 | `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units. |
@@ -248,23 +255,71 @@ The simplest complete optimizer: one teacher pass, one candidate, one comparison
 | `baseline_score` | `f64` | Mean metric score of the unmodified module over the trainset. |
 | `candidate_score` | `Option<f64>` | Mean score with demos attached. `None` when no demos were harvested or the budget stopped before the candidate evaluation. |
 | `adopted` | `bool` | Whether the demo candidate beat the baseline and was installed. |
-| `demos_per_predictor` | `BTreeMap<String, usize>` | Demos harvested per predictor, keyed by dotted path. |
+| `demos_per_predictor` | `BTreeMap<String, usize>` | Demos harvested per predictor, keyed by leaf name. |
 | `spend` | `Spend` | Engine spend for the whole run. |
 
 <Note>
 `adopted: false` with a populated `demos_per_predictor` means demos were harvested but did not beat the baseline; the module is left unchanged.
 </Note>
 
+## Structural
+
+LM-guided hill-climbing over the [edit calculus](/docs/components/edit-calculus), program lane only. Each generation gathers the `legal_edits` menu for every leaf, has a reflection LM (`prompt_model`) choose one edit from the serialized menu plus the incumbent's evaluation feedback, applies it with `Program::edited`, carries the incumbent overlay across the change with `migrate_overlay`, loads the child through a caller-supplied `RuntimeEnv` factory, and accepts it through the engine's minibatch gate: only a strict win on the shared minibatch promotes the child to a full-set evaluation and makes it the new incumbent. Edits that fail to apply, children that fail to load, and reflection replies that do not parse are recorded and skipped. How-to: [Structural](/docs/optimizers/structural).
+
+Entry points: `compile_program(&interp, &examples, &metric, env)` and `compile_program_with_overlay(&interp, Some(overlay), &examples, &metric, env)`, where `env: Fn() -> RuntimeEnv` supplies fresh bindings for each child load. The winner is returned in the report (program plus migrated overlay), never installed; bake it with `Program::bake`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `num_iterations` | `usize` | `8` | Generations to attempt; each proposes exactly one edit. |
+| `minibatch_size` | `usize` | `8` | Examples in the shared minibatch parent and child are compared on. |
+| `prompt_model` | `Option<LM>` | `None` | Reflection LM that chooses an edit from the menu. Without it the choice is a seeded-uniform pick. |
+| `max_rollouts` | `Option<usize>` | `None` | Hard cap on evaluation rollouts. Every child is a fresh program that re-scores from scratch. |
+| `max_lm_calls` | `Option<usize>` | `None` | Hard cap on LM call units (rollouts plus reflection). |
+| `eval_concurrency` | `usize` | `16` | Concurrent rollouts during evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes minibatch sampling and the fallback edit choice. |
+
+### StructuralStep and StructuralReport
+
+Each `StructuralStep` records one generation:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `generation` | `usize` | Generation index, 0-based. |
+| `leaf` | `String` | The leaf the chosen edit targets. |
+| `edit` | `Edit` | The concrete proposed edit (serde data, replayable against `parent_hash`). |
+| `parent_hash` | `u64` | `program_hash` of the parent the edit was applied to. |
+| `parent_minibatch_score` | `f64` | Parent's mean on the shared minibatch, the gate threshold. |
+| `child_minibatch_score` | `Option<f64>` | Child's mean on the same minibatch; `None` when the child never scored. |
+| `accepted` | `bool` | Whether the gate promoted the child. |
+| `full_score` | `Option<f64>` | Full-set mean of the child; `Some` only when accepted. |
+| `rejection` | `Option<String>` | Why the child never scored (apply/load failure), when it didn't. |
+
+The `StructuralReport` summarizes the run:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `program` | `Arc<Program>` | The winning program (the input program when nothing was accepted). |
+| `overlay` | `Overlay` | The incumbent overlay re-minted against the winner at every accepted edit. |
+| `baseline_score` | `f64` | Mean metric score of the input program (plus overlay) over the examples. |
+| `final_score` | `f64` | Full-set mean of the final program; equals the baseline when nothing was accepted. |
+| `edits` | `Vec<Edit>` | The accepted edits, in order (a lineage, not one batch). |
+| `steps` | `Vec<StructuralStep>` | Per-generation outcomes, in order. |
+| `accepted` / `rejected` | `usize` | Generations promoted / not promoted. |
+| `spend` | `Spend` | Engine spend for the whole run, reflection calls included. |
+
 ## Demo harvesting
 
-Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the same dotted-path component name the mutation seam addresses, so successful spans (parsed output present) from rollouts scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are ranked by whole-rollout score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
+Demo harvesting is a pure name join over captured traces. A rollout trace records one span per `Predict` invocation under the leaf name the module declares via `Predictors` (stamped by the target's naming pass), so successful spans (parsed output present) scoring at least the optimizer's `min_demo_score` become flat demo rows for exactly the predictor that produced them: no pointer identity, identical behavior for fx and struct harnesses. Rows are gated and ranked by their effective score, deduplicated on input fields so repeated inputs do not crowd the demo set, and capped per predictor. `BootstrapFewShot`, `MIPROv2`, and `SIMBA` share this machinery; it is internal to the crate and not part of the public API.
+
+A span's effective score is the whole-rollout metric score unless the metric attached a span-level eval through `TypedMetric::evaluate_spans` (see [Evaluation](/docs/components/evaluation)), which then takes precedence in both directions: a span scored down stays out of the demo pool even when its rollout won, and a span scored up qualifies even when its rollout lost. Without span evals the behavior is exactly the whole-rollout join described above.
 
 ## See also
 
-- [Optimizer engine](/docs/components/optimizer-engine): `EvalEngine`, `Candidate`, `Budget`, `Spend`, `ParetoView`, and checkpointing
+- [Optimizer engine](/docs/components/optimizer-engine): `Engine`, `OptimizeTarget`, `Candidate`, `Budget`, `Spend`, and `ParetoView`
 - [Evaluation](/docs/components/evaluation): `TypedMetric`, `Eval`, and `Eval::with_feedback`
 - [Traces](/docs/components/traces): the span capture that feeds demo harvesting and reflection
-- How-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa)
+- [The edit calculus](/docs/components/edit-calculus): the structural moves `Structural` proposes
+- How-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), [Structural](/docs/optimizers/structural)
 - Runnable examples:
   - COPRO: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/04-optimize-hotpotqa.rs and https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs
   - MIPROv2: https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/08-optimize-mipro.rs

@@ -13,7 +13,7 @@ cargo run --example 05-heterogenous-examples
 */
 
 use anyhow::Result;
-use dspy_rs::{LM, Predict, Signature, configure, init_tracing};
+use dspy_rs::prelude::*;
 use serde_json::json;
 
 #[derive(Signature, Clone, Debug)]

@@ -108,12 +108,12 @@ Resource limits applied to every sandbox instance. `Copy`, so it is passed by va
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `memory_limit` | `usize` | 32 MiB | Max heap for one call, in bytes. Exceeding it kills the call as `MemoryExceeded`. |
-| `deadline` | `Duration` | 500 ms | Wall-clock budget for one call, enforced by the engine's interrupt handler. Time inside a capability counts against the budget but cannot be interrupted mid-call; the deadline re-arms when control returns to JS. |
+| `deadline` | `Duration` | 500 ms | Wall-clock budget for one call. JS execution is interrupted by the engine's interrupt handler; a capability call is host code the interrupt handler cannot reach, so the executor bounds it with the *remaining* budget via `tokio::time::timeout` — a handler that runs past it is dropped and the call surfaces in JS as a deadline timeout. |
 | `max_stack` | `usize` | 512 KiB | Max JS stack, in bytes. |
 
 ### `CacheStats`
 
-Sources compile once per unique content (BLAKE3-keyed) and the bytecode is shared across calls and tool names. `CacheStats` carries `entries: usize`, `hits: u64`, `misses: u64`.
+Sources compile once per unique content (BLAKE3-keyed) and the bytecode is shared across calls and tool names. `CacheStats` carries `entries: usize`, `hits: u64`, `misses: u64`. The cache is bounded at 128 entries with a deliberately simple cap-and-clear eviction (an optimizer generating thousands of candidate tool bodies stays bounded instead of leaking them all); registered tools hold their own reference to their bytecode, so eviction only costs a recompile on the next miss. `deregister` evicts the tool's entry unless another registered tool shares the same source hash.
 
 ### `run_script`
 
@@ -144,12 +144,13 @@ Accessors: `name()` and `description()`. `CapabilityHandler` is the public handl
 
 For wrapped tools, the args object is serialized to JSON, handed to `ToolDyn::call`, and the result string is parsed back to JSON (or returned as a plain string if it is not valid JSON). A tool error becomes a JS exception whose message names the original tool: `` tool `<name>` failed: <error> ``.
 
-Capability names become JS globals, so they must be valid identifiers; the `__dsrs` prefix is reserved by the runtime. `js_identifier(name)` mangles an arbitrary tool name into a valid identifier, in order:
+Capability names become JS globals, so they must be valid identifiers; the `__dsrs` prefix is reserved by the runtime, and a name that collides with a JavaScript reserved word or ambient global (`class`, `JSON`, `Object`, ...) is refused. `js_identifier(name)` mangles an arbitrary tool name into a valid identifier, in order:
 
 1. Every character outside `[A-Za-z0-9_$]` becomes `_` (`my-tool.v2` becomes `my_tool_v2`).
 2. A leading digit gets a `_` prepended (`2fast` becomes `_2fast`).
 3. An empty name becomes `_tool`.
 4. A result starting with `__dsrs` gets one more leading `_`.
+5. A result colliding with a JavaScript reserved word or ambient global gets a `_tool` suffix (`JSON` becomes `JSON_tool`, `class` becomes `class_tool`) — declaring a `const` named `class` would break the sandbox contract outright, and shadowing `JSON` would sabotage every script that touches it.
 
 The mapping is not injective: distinct names can mangle to the same identifier, so every batch wrapper refuses collisions at registration or load time instead of silently shadowing a tool.
 

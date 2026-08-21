@@ -1,4 +1,4 @@
-use std::{error::Error as StdError, time::Duration};
+use std::error::Error as StdError;
 
 use crate::LmUsage;
 
@@ -32,10 +32,6 @@ impl From<anyhow::Error> for JsonishError {
 pub enum ErrorClass {
     /// The request itself was malformed.
     BadRequest,
-    /// The requested resource doesn't exist.
-    NotFound,
-    /// Access denied by the provider.
-    Forbidden,
     /// Transient failure (network, rate limit, timeout, server 5xx) — retry may help.
     Temporary,
     /// The LM responded, but the output couldn't be parsed — prompt-engineering problem.
@@ -49,7 +45,8 @@ pub enum ErrorClass {
 /// A call can fail at three stages, and which stage tells you what to do about it:
 ///
 /// 1. **[`Lm`](PredictError::Lm)** — couldn't reach the LM or it errored. Network,
-///    rate limit, timeout. Generally retryable.
+///    rate limit, timeout. Reported as a provider error; the rig client owns
+///    transport-level retries.
 /// 2. **[`Parse`](PredictError::Parse)** — the LM responded, but we couldn't extract
 ///    the expected fields from its output. Prompt-engineering problem. Retryable (the
 ///    LM might produce different output). Includes the raw response for debugging.
@@ -102,6 +99,20 @@ pub enum PredictError {
         #[source]
         source: crate::trace::ReplayError,
     },
+
+    /// Candidate parameters could not be bound to the predictor they address.
+    ///
+    /// Raised before any LM call when a named parameter slot (an ambient
+    /// [`fx::Params`](crate::fx::Params) entry or a saved state) doesn't fit
+    /// the predictor's signature — a harness/optimizer configuration bug, not
+    /// an LM failure. **Not retryable** — the same params fail the same way.
+    #[error("params for predictor `{name}` don't fit its signature")]
+    Params {
+        /// The predictor name the params were addressed to.
+        name: String,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
 }
 
 impl PredictError {
@@ -111,6 +122,7 @@ impl PredictError {
             Self::Parse { .. } => ErrorClass::BadResponse,
             Self::Conversion { .. } => ErrorClass::Internal,
             Self::Replay { .. } => ErrorClass::Internal,
+            Self::Params { .. } => ErrorClass::Internal,
         }
     }
 
@@ -120,6 +132,7 @@ impl PredictError {
             Self::Parse { .. } => true,
             Self::Conversion { .. } => false,
             Self::Replay { .. } => false,
+            Self::Params { .. } => false,
         }
     }
 }
@@ -218,31 +231,12 @@ pub enum ConversionError {
 
 /// The LM provider failed before returning a usable response.
 ///
-/// All variants except [`Provider`](LmError::Provider) are retryable.
-/// Use [`is_retryable`](LmError::is_retryable) for retry logic.
+/// Everything the provider stack reports arrives as [`Provider`](LmError::Provider):
+/// the provider name plus its error message and source. Not retryable — the
+/// underlying rig client owns transport-level retry behavior.
 #[derive(Debug, thiserror::Error)]
 pub enum LmError {
-    /// Could not reach the provider endpoint (DNS, connection refused, etc.).
-    #[error("could not reach {endpoint}")]
-    Network {
-        endpoint: String,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// The provider returned a rate limit response (HTTP 429).
-    #[error("rate limited by provider")]
-    RateLimit { retry_after: Option<Duration> },
-
-    /// The provider returned an unexpected HTTP status.
-    #[error("invalid response from provider: HTTP {status}")]
-    InvalidResponse { status: u16, body: String },
-
-    /// The request exceeded the configured timeout.
-    #[error("request timed out after {after:?}")]
-    Timeout { after: Duration },
-
-    /// A provider-specific error that doesn't fit the other categories.
+    /// A provider-reported error.
     #[error("provider error from {provider}: {message}")]
     Provider {
         provider: String,
@@ -254,23 +248,10 @@ pub enum LmError {
 
 impl LmError {
     pub fn class(&self) -> ErrorClass {
-        match self {
-            Self::Network { .. } => ErrorClass::Temporary,
-            Self::RateLimit { .. } => ErrorClass::Temporary,
-            Self::InvalidResponse { status, .. } if *status >= 500 => ErrorClass::Temporary,
-            Self::InvalidResponse { .. } => ErrorClass::BadRequest,
-            Self::Timeout { .. } => ErrorClass::Temporary,
-            Self::Provider { .. } => ErrorClass::Internal,
-        }
+        ErrorClass::Internal
     }
 
     pub fn is_retryable(&self) -> bool {
-        match self {
-            Self::Network { .. } => true,
-            Self::RateLimit { .. } => true,
-            Self::Timeout { .. } => true,
-            Self::InvalidResponse { status, .. } => *status >= 500,
-            Self::Provider { .. } => false,
-        }
+        false
     }
 }

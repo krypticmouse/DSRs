@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `f7d67a6`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 Execution trace capture (RFC 0001).
@@ -15,7 +15,6 @@ Execution trace capture (RFC 0001).
 | Item | Description |
 |---|---|
 | `capture::*` | Glob re-export. |
-| `export::*` | Glob re-export. |
 | [`is_replaying`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/fn.is_replaying.html) | Re-export of `replay::is_replaying`. |
 | [`replay`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/fn.replay.html) | Re-export of `replay::replay`. |
 | [`ReplayError`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/enum.ReplayError.html) | Re-export of `replay::ReplayError`. |
@@ -29,7 +28,6 @@ Execution trace capture (RFC 0001).
 | Item | Description |
 |---|---|
 | [`capture`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/index.html) | Task-local capture scope for the unified trace format. |
-| [`export`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/index.html) | Exports: projections of the trace format onto external training and observability conventions (RFC 0001 §4f/§4g). |
 | [`replay`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/replay/index.html) | Replay scope: serve `Predict` calls from a recorded `Trace` (RFC 0001 §4d/§4e). |
 | [`serialize`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/serialize/index.html) | JSONL wire format for `Trace`: header line, span lines, optional footer. |
 | [`span`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/span/index.html) | The unified trace format (RFC 0001): one `Span` per `Predict` invocation, one `Trace` per rollout. |
@@ -55,60 +53,6 @@ Task-local capture scope for the unified trace format.
 | [`capture_with_meta`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.capture_with_meta.html) | `capture` with caller-provided rollout metadata (input, candidate hash, tags). Missing `trace_id`/`started_at_us` are minted at scope start. |
 | [`capture`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.capture.html) | Runs `f` while recording every `Predict` call on this task into a `Trace`. |
 | [`is_capturing`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/capture/fn.is_capturing.html) | Returns `true` if the current task is inside a `capture` scope. |
-
-## `trace::export`
-
-Exports: projections of the trace format onto external training and observability conventions (RFC 0001 §4f/§4g).
-
-### Re-exports
-
-| Item | Description |
-|---|---|
-| [`OtelEvent`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelEvent.html) | Re-export of `otel::OtelEvent`. |
-| [`OtelKeyValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelKeyValue.html) | Re-export of `otel::OtelKeyValue`. |
-| [`OtelSpan`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelSpan.html) | Re-export of `otel::OtelSpan`. |
-| [`OtelStatus`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelStatus.html) | Re-export of `otel::OtelStatus`. |
-| [`OtelValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/enum.OtelValue.html) | Re-export of `otel::OtelValue`. |
-| [`RlRollout`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlRollout.html) | Re-export of `rl::RlRollout`. |
-| [`RlTransition`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlTransition.html) | Re-export of `rl::RlTransition`. |
-
-## `trace::export::otel`
-
-OTel export (RFC 0001 §4g): one-way batch mapping of a finished `Trace` onto OpenTelemetry GenAI semantic conventions — as plain serializable structs in the OTLP/JSON wire shape, w...
-
-### Structs
-
-| Item | Description |
-|---|---|
-| [`OtelEvent`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelEvent.html) | OTLP span `Event`. |
-| [`OtelKeyValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelKeyValue.html) | OTLP `KeyValue`. |
-| [`OtelSpan`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelSpan.html) | One span in the OTLP/JSON wire shape (proto3 JSON mapping: camelCase keys, 64-bit integers as decimal strings, ids as lowercase hex). |
-| [`OtelStatus`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/struct.OtelStatus.html) | OTLP span `Status`. |
-
-### Enums
-
-| Item | Description |
-|---|---|
-| [`OtelValue`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/enum.OtelValue.html) | OTLP `AnyValue` (the oneof arms this export emits). |
-
-### Constants
-
-| Item | Description |
-|---|---|
-| [`SPAN_KIND_CLIENT`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/constant.SPAN_KIND_CLIENT.html) | OTLP `SPAN_KIND_CLIENT`. |
-| [`SPAN_KIND_INTERNAL`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/constant.SPAN_KIND_INTERNAL.html) | OTLP `SPAN_KIND_INTERNAL`. |
-| [`STATUS_CODE_ERROR`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/otel/constant.STATUS_CODE_ERROR.html) | OTLP `STATUS_CODE_ERROR`. |
-
-## `trace::export::rl`
-
-RL rollout export (RFC 0001 §4f): the Agent Lightning / verifiers span convention — one rollout as message lists + reward + per-subcall transitions.
-
-### Structs
-
-| Item | Description |
-|---|---|
-| [`RlRollout`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlRollout.html) | One rollout: reward plus per-subcall transitions. Serializes to a single JSON object — the JSONL record RL trainers consume. |
-| [`RlTransition`](https://docs.rs/dspy-rs/latest/dspy_rs/trace/export/rl/struct.RlTransition.html) | One policy subcall — a `Predict` invocation as (prompt messages, emitted completion) with its span metadata. |
 
 ## `trace::replay`
 

@@ -18,9 +18,10 @@ syn   = { version = "2", features = ["full", "visit", "visit-mut"] }
 quote = "1"
 proc-macro2 = "1"
 proc-macro-crate = "3.2"
-serde_json = { version = "1.0.143", features = ["preserve_order"] }
-minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false, features = ["serde"] }
+# Shared .dsrs lexer/structural grammar — include_program!'s build-time syntax gate.
+dsrs-syntax = { workspace = true }
+minijinja = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
-dspy-rs = { path = "../dspy-rs" }
+dspy-rs = { workspace = true }
 trybuild = "1.0.110"

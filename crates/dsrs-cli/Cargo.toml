@@ -15,17 +15,17 @@ name = "dsrs"
 path = "src/main.rs"
 
 [dependencies]
-dspy-rs = { version = "0.7.3", path = "../dspy-rs" }
-dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
-anyhow = "1"
+dspy-rs = { workspace = true }
+dsrs-tools = { workspace = true }
+anyhow = { workspace = true }
 axum = "0.8"
 clap = { version = "4", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net"] }
 
 [dev-dependencies]
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { workspace = true, features = ["json"] }
 # Same pin as dspy-rs: needed to construct canned AssistantContent responses
 # for the TestCompletionModel in server integration tests.
-rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
-tempfile = "3"
+rig-core = { workspace = true }
+tempfile = { workspace = true }

@@ -1,0 +1,45 @@
+---
+title: "dsrs_syntax"
+description: "Shared syntax layer for the `.dsrs` text format (RFC 0002 §4)."
+icon: "cube"
+---
+
+<Note>
+Generated from rustdoc JSON at `dsrs-syntax v0.1.0` (commit `f7d67a6`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+</Note>
+
+Shared syntax layer for the `.dsrs` text format (RFC 0002 §4).
+
+## Re-exports
+
+| Item | Description |
+|---|---|
+| [`check`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/structure/fn.check.html) | Re-export of `structure::check`. |
+
+## Modules
+
+| Item | Description |
+|---|---|
+| [`lex`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/lex/index.html) | Lexer for the `.dsrs` text format (RFC 0002 §4). |
+
+## Structs
+
+| Item | Description |
+|---|---|
+| [`ParseError`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/struct.ParseError.html) | A parse failure with the source position and what was expected — designed to be actionable feedback for a model regenerating the program. |
+
+## `dsrs_syntax::lex`
+
+### Structs
+
+| Item | Description |
+|---|---|
+| [`Lexed`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/lex/struct.Lexed.html) | One lexed token with its source position and byte extent. |
+| [`Lexer`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/lex/struct.Lexer.html) |  |
+| [`Span`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/lex/struct.Span.html) | A source position, 1-based. |
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`Tok`](https://docs.rs/dsrs-syntax/latest/dsrs_syntax/lex/enum.Tok.html) |  |

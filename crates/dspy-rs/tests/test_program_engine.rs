@@ -2,7 +2,6 @@
 //! evaluated over ONE shared program through the interpreter with true
 //! candidate-level parallelism, per-candidate rollout caching keyed on the
 //! overlay hash, budget gating, and the minibatch gate.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -14,8 +13,8 @@ use dspy_rs::ir::{
 };
 use dspy_rs::trace::JsonMap;
 use dspy_rs::{
-    Budget, EngineConfig, Eval, EvalOutcome, GateOutcome, LM, LMClient, LMConfig,
-    ProgramEvalEngine, ProgramEvalOutcome, ProgramMetric, TestCompletionModel, Trace,
+    BatchEvalOutcome, Budget, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM, LMClient,
+    LMConfig, OptimizeTarget, ProgramMetric, TestCompletionModel, Trace,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -189,14 +188,15 @@ async fn candidates_evaluate_concurrently_with_per_candidate_outputs_and_cache()
     let metric = RendezvousMetric {
         barrier: Barrier::new(2),
     };
-    let mut engine =
-        ProgramEvalEngine::new(vec![example("q", "any")], &metric, EngineConfig::default());
-    let a = engine.register(cand_a);
-    let b = engine.register(cand_b);
+    let examples = vec![example("q", "any")];
+    let target = OptimizeTarget::program(&interp, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
+    let a = engine.register_overlay(cand_a);
+    let b = engine.register_overlay(cand_b);
 
     // --- One batch, two candidates, one shared Arc<Program>. ---
     let evals = engine
-        .evaluate_program_candidates(&interp, &[a, b], None)
+        .evaluate_many(&target, &[a, b], None)
         .await
         .unwrap()
         .completed()
@@ -259,7 +259,7 @@ async fn candidates_evaluate_concurrently_with_per_candidate_outputs_and_cache()
     // The canned queues are empty, so any live call would error, and the
     // metric is never re-run for cached rollouts (the barrier stays idle).
     let cached = engine
-        .evaluate_program_candidates(&interp, &[a, b], None)
+        .evaluate_many(&target, &[a, b], None)
         .await
         .unwrap()
         .completed()
@@ -293,32 +293,27 @@ async fn budget_gate_runs_nothing_when_the_batch_does_not_fit() {
         .unwrap();
 
     let metric = ExactMatch;
-    let mut engine = ProgramEvalEngine::new(
-        vec![example("q", "any")],
-        &metric,
-        EngineConfig {
-            budget: Budget {
-                max_metric_calls: Some(1),
-                ..Budget::unlimited()
-            },
-            ..EngineConfig::default()
+    let examples = vec![example("q", "any")];
+    let target = OptimizeTarget::program(&interp, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(1),
+            ..Budget::unlimited()
         },
-    );
+        ..EngineConfig::default()
+    });
     let mut cand_a = Overlay::new(&program);
     cand_a.set_instruction(instr, "A");
     let mut cand_b = Overlay::new(&program);
     cand_b.set_instruction(instr, "B");
-    let a = engine.register(cand_a);
-    let b = engine.register(cand_b);
+    let a = engine.register_overlay(cand_a);
+    let b = engine.register_overlay(cand_b);
 
     // Two pending rollouts against a one-rollout budget: nothing runs.
-    let outcome = engine
-        .evaluate_program_candidates(&interp, &[a, b], None)
-        .await
-        .unwrap();
+    let outcome = engine.evaluate_many(&target, &[a, b], None).await.unwrap();
     assert!(matches!(
         outcome,
-        ProgramEvalOutcome::BudgetExhausted { needed: 2 }
+        BatchEvalOutcome::BudgetExhausted { needed: 2 }
     ));
     assert_eq!(engine.spend().metric_calls, 0);
     assert_eq!(engine.spend().lm_calls, 0);
@@ -352,21 +347,19 @@ async fn minibatch_gate_promotes_and_rejects() {
         .unwrap();
 
     let metric = ExactMatch;
-    let mut engine = ProgramEvalEngine::new(
-        vec![example("q0", "ok"), example("q1", "ok")],
-        &metric,
-        EngineConfig::default(),
-    );
+    let examples = vec![example("q0", "ok"), example("q1", "ok")];
+    let target = OptimizeTarget::program(&interp, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
     let mut cand_1 = Overlay::new(&program);
     cand_1.set_instruction(instr, "GATE 1");
     let mut cand_2 = Overlay::new(&program);
     cand_2.set_instruction(instr, "GATE 2");
-    let c1 = engine.register(cand_1);
-    let c2 = engine.register(cand_2);
+    let c1 = engine.register_overlay(cand_1);
+    let c2 = engine.register_overlay(cand_2);
 
     // Minibatch mean 1.0 > 0.5: promoted to the full set, where the
     // minibatch example replays from the cache.
-    match engine.evaluate_gated(&interp, c1, &[0], 0.5).await.unwrap() {
+    match engine.evaluate_gated(&target, c1, &[0], 0.5).await.unwrap() {
         GateOutcome::Promoted { minibatch, full } => {
             assert_eq!(minibatch.mean(), 1.0);
             assert_eq!(full.rollouts.len(), 2);
@@ -377,13 +370,13 @@ async fn minibatch_gate_promotes_and_rejects() {
     }
 
     // Minibatch mean 1.0 <= 2.0: rejected, no full evaluation.
-    match engine.evaluate_gated(&interp, c2, &[0], 2.0).await.unwrap() {
+    match engine.evaluate_gated(&target, c2, &[0], 2.0).await.unwrap() {
         GateOutcome::Rejected { minibatch } => assert_eq!(minibatch.mean(), 1.0),
         other => panic!("expected rejection, got {other:?}"),
     }
 
     // Single-candidate convenience path reuses the same cache.
-    match engine.evaluate(&interp, c1, Some(&[0])).await.unwrap() {
+    match engine.evaluate(&target, c1, Some(&[0])).await.unwrap() {
         EvalOutcome::Complete(eval) => assert!(eval.rollouts[0].trace.is_none()),
         other => panic!("expected completion, got {other:?}"),
     }
@@ -407,19 +400,17 @@ async fn stale_candidate_fails_the_batch() {
     .unwrap();
 
     let metric = ExactMatch;
-    let mut engine =
-        ProgramEvalEngine::new(vec![example("q", "any")], &metric, EngineConfig::default());
+    let examples = vec![example("q", "any")];
+    let target = OptimizeTarget::program(&interp, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig::default());
     // Minted against nothing: the interpreter's base check refuses it.
-    let stale = engine.register(Overlay::default());
+    let stale = engine.register_overlay(Overlay::default());
     let err = engine
-        .evaluate_program_candidates(&interp, &[stale], None)
+        .evaluate_many(&target, &[stale], None)
         .await
         .unwrap_err();
     assert!(err.to_string().contains("overlay minted against program"));
 
-    let unregistered = engine
-        .evaluate_program_candidates(&interp, &[7], None)
-        .await
-        .unwrap_err();
+    let unregistered = engine.evaluate_many(&target, &[7], None).await.unwrap_err();
     assert!(unregistered.to_string().contains("not registered"));
 }

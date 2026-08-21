@@ -21,9 +21,11 @@ use std::time::Instant;
 
 use cranelift_entity::SecondaryMap;
 use futures::future::BoxFuture;
+use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use crate::adapter::chat::ChatAdapter;
+use crate::core::FieldMeta;
 use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
     PortRef, PredictNode, Program, ToolId, ToolKind,
@@ -141,6 +143,139 @@ impl BudgetMeter {
 }
 
 // ---------------------------------------------------------------------------
+// Leaf metadata
+// ---------------------------------------------------------------------------
+
+/// Parse/coercion metadata from one successful `Predict`-leaf evaluation,
+/// collected by [`Interpreter::run_collecting`] in execution order.
+///
+/// This is what `Predict<S>` reassembles into [`CallMetadata`](crate::CallMetadata):
+/// the same [`FieldMeta`] type (jsonish coercion [`Flag`](crate::Flag)s +
+/// `#[check]` [`ConstraintResult`](crate::ConstraintResult)s) that
+/// `ChatAdapter::parse_output_def` produces, so a typed `Predict<S>` routed
+/// through the interpreter loses none of `Predicted`'s metadata contract.
+///
+/// Scope and semantics:
+/// - `Predict` and `AgentLoop` leaves report; `Hole` leaves make no LM call
+///   and parse no delimited text. An `AgentLoop` reports once per evaluation
+///   with loop-accumulated usage and its tool call/execution record;
+///   `field_meta` is empty when the final output came from stop-tool args
+///   (no parse metadata exists for those).
+/// - Only *successful* evaluations report — a failed attempt inside `Retry`
+///   propagates its error and leaves no outcome; the succeeding attempt
+///   reports one. A leaf re-evaluated by `Refine`/`Loop` reports once per
+///   evaluation.
+/// - A replay-served leaf reports raw text and usage from the recorded span
+///   with **empty** `field_meta`, matching the static lane ("served
+///   predictions carry no per-field parse metadata").
+#[derive(Debug, Clone)]
+pub struct LeafOutcome {
+    /// The program-unique leaf name (the trace span `component`).
+    pub name: String,
+    /// The full text the LM returned, before parsing.
+    pub raw_response: String,
+    /// Per-field parse details keyed by canonical field name
+    /// (`FieldDef::name`) — raw section text, coercion flags, check results.
+    pub field_meta: IndexMap<String, FieldMeta>,
+    /// Token usage for this leaf's LM call.
+    pub usage: LmUsage,
+    /// Stable hash of the redacted model config used — identical to the
+    /// trace's [`ModelEntry::config_hash`](crate::trace::ModelEntry) for the
+    /// same config.
+    pub model_config_hash: u64,
+    /// The trace span this evaluation recorded, when a capture scope was
+    /// active — what `Predict` surfaces as `CallMetadata::span_id`.
+    pub span_id: Option<crate::trace::SpanId>,
+    /// Tool calls the model requested during an `AgentLoop` evaluation, in
+    /// execution order (stop-tool calls excluded). Empty for `Predict` leaves.
+    pub tool_calls: Vec<rig::message::ToolCall>,
+    /// Results of executed tool calls, aligned with [`tool_calls`](Self::tool_calls).
+    pub tool_executions: Vec<String>,
+}
+
+/// Program output plus per-leaf metadata, returned by
+/// [`Interpreter::run_collecting`].
+#[derive(Debug, Clone)]
+pub struct RunOutput {
+    /// The program's output map — exactly what [`Interpreter::run`] returns.
+    pub output: JsonMap,
+    /// One entry per successful `Predict`-leaf evaluation, in execution
+    /// order. `ForkJoin` branches append in declared branch order.
+    pub leaves: Vec<LeafOutcome>,
+}
+
+// ---------------------------------------------------------------------------
+// Conversation surface (RFC 0004 §1–2)
+// ---------------------------------------------------------------------------
+
+/// One caller-driven conversation turn, returned by
+/// [`Interpreter::run_conversation_caller_managed`] and
+/// [`Interpreter::resume_conversation`].
+#[derive(Debug)]
+pub enum ConversationTurn {
+    /// The leaf produced its final output; `chat` is the conversation
+    /// extended with everything the turn generated.
+    Complete { run: RunOutput, chat: Chat },
+    /// The model requested tool calls the caller must execute. Run them and
+    /// feed the results back through
+    /// [`Interpreter::resume_conversation`].
+    Suspended(ToolSuspension),
+}
+
+/// A caller-managed agent turn suspended on pending tool calls (RFC 0004 §2).
+///
+/// Everything the loop needs to continue travels inside: the open trace span,
+/// the loop and run budget meters, the accumulated event/usage record, and
+/// the turn cursor. Dropping a suspension without resuming closes its span as
+/// `Cancelled` — the same contract as cancelling a run mid-flight.
+pub struct ToolSuspension {
+    calls: Vec<rig::message::ToolCall>,
+    chat: Chat,
+    state: SuspendState,
+}
+
+impl ToolSuspension {
+    /// The tool calls the model requested, in request order. Stop-tool calls
+    /// never appear here — they complete the turn instead of suspending it.
+    pub fn calls(&self) -> &[rig::message::ToolCall] {
+        &self.calls
+    }
+
+    /// The conversation so far, including the assistant tool-call turn.
+    pub fn chat(&self) -> &Chat {
+        &self.chat
+    }
+}
+
+impl std::fmt::Debug for ToolSuspension {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolSuspension")
+            .field("calls", &self.calls)
+            .field("chat_len", &self.chat.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The private half of a [`ToolSuspension`]: resumption state for
+/// [`Interpreter::resume_conversation`].
+struct SuspendState {
+    node: NodeId,
+    overlay: Option<Arc<Overlay>>,
+    /// The loop's child meter — chained under `run_meter` exactly as in
+    /// dispatching mode.
+    meter: Arc<BudgetMeter>,
+    run_meter: Arc<BudgetMeter>,
+    guard: Option<crate::trace::SpanGuard>,
+    run: AgentRun,
+    /// The loop turn `resume_conversation` re-enters at.
+    next_turn: u32,
+    prefix_len: usize,
+    /// When the loop suspended — the `ToolRun` events recorded at resume
+    /// meter the time the calls were outstanding.
+    suspended_at: Instant,
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -175,7 +310,17 @@ pub enum RunError {
         source: LmError,
     },
     #[error("parse error at `{at}`")]
-    Parse { at: Box<str>, raw: String },
+    Parse {
+        at: Box<str>,
+        raw: String,
+        /// The structured def-lane parse failure, when the leaf's response
+        /// text was parsed (`Predict`/`AgentLoop` field parsing); `None` for
+        /// structural coercions with no section parse (stop-tool args, hole
+        /// outputs).
+        source: Option<Box<crate::ParseError>>,
+        /// Usage accumulated by the failing leaf evaluation.
+        usage: LmUsage,
+    },
     #[error("tool `{tool}` failed at `{at}`: {message}")]
     Tool {
         at: Box<str>,
@@ -260,7 +405,6 @@ pub struct RuntimeEnv {
     /// the serialized program. `ToolKind` is also per-tool, while code mode
     /// collapses a whole loop's tool surface; and leaving the closed enum
     /// untouched keeps the `.dsrs` text format stable.
-    #[cfg(feature = "code-mode")]
     pub code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
@@ -303,7 +447,6 @@ impl RuntimeEnv {
     /// Enables Code Mode for every `AgentLoop` (see
     /// [`code_mode`](Self::code_mode)): tools are presented to the model as a
     /// JS API behind one `run_js` tool executing under `config`.
-    #[cfg(feature = "code-mode")]
     pub fn with_code_mode(mut self, config: dsrs_tools::SandboxConfig) -> Self {
         self.code_mode = Some(config);
         self
@@ -338,7 +481,6 @@ pub struct Interpreter {
     /// default code gene; overlay code variants register on first use.
     registered: tokio::sync::Mutex<HashMap<u64, String>>,
     /// Code Mode sandbox config (see [`RuntimeEnv::code_mode`]).
-    #[cfg(feature = "code-mode")]
     code_mode: Option<dsrs_tools::SandboxConfig>,
 }
 
@@ -422,7 +564,6 @@ impl Interpreter {
 
         // Code Mode: JS-identifier collisions among a loop's non-stop tool
         // names are a load-time refusal (nothing lazy, nothing at call time).
-        #[cfg(feature = "code-mode")]
         if env.code_mode.is_some() {
             for (_, node) in program.nodes.iter() {
                 let Node::AgentLoop(agent) = node else {
@@ -482,7 +623,6 @@ impl Interpreter {
             host_holes,
             sandbox,
             registered: tokio::sync::Mutex::new(registered),
-            #[cfg(feature = "code-mode")]
             code_mode: env.code_mode,
         })
     }
@@ -499,7 +639,708 @@ impl Interpreter {
         overlay: Option<Arc<Overlay>>,
         budget: Budget,
     ) -> Result<JsonMap, RunError> {
-        if let Some(overlay) = &overlay
+        self.run_inner(input, overlay, budget, false)
+            .await
+            .map(|out| out.output)
+    }
+
+    /// Like [`run`](Interpreter::run), additionally collecting a
+    /// [`LeafOutcome`] per successful `Predict`-leaf evaluation (raw response,
+    /// per-field flags and check results, usage, model config hash). See
+    /// [`LeafOutcome`] for the exact scope and semantics.
+    pub async fn run_collecting(
+        &self,
+        input: JsonMap,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+    ) -> Result<RunOutput, RunError> {
+        self.run_inner(input, overlay, budget, true).await
+    }
+
+    /// Conversation-in/conversation-out evaluation (RFC 0004 §1): one turn
+    /// with the program's single leaf over a caller-owned [`Chat`].
+    ///
+    /// A turn is not a run: each call evaluates the leaf once against the
+    /// given conversation and returns the extended conversation alongside the
+    /// turn's [`RunOutput`] (one [`LeafOutcome`], same semantics as
+    /// [`run_collecting`](Self::run_collecting)). Call again with the
+    /// returned chat — plus your follow-up message or a fresh `input` — for
+    /// the next turn. Each turn records one trace span (`seq` increments per
+    /// turn), meters against its own `budget`, and replays like any other
+    /// leaf evaluation: the span keys on the full chat sent, so a recorded
+    /// conversation serves turn by turn.
+    ///
+    /// `chat`/`input` combinations:
+    /// - **empty chat + `Some(input)`** — opening turn: renders system +
+    ///   demos + the formatted input, exactly like
+    ///   [`conversation_opening`](Self::conversation_opening).
+    /// - **non-empty chat + `None`** — continuation: the chat is sent as-is
+    ///   (append your follow-up first).
+    /// - **non-empty chat + `Some(input)`** — typed continuation: the
+    ///   formatted input is appended as the next user message.
+    ///
+    /// Tools on an agent leaf dispatch through their bound executors, exactly
+    /// like [`run`](Self::run). For the suspend-on-tools variant see
+    /// [`run_conversation_caller_managed`](Self::run_conversation_caller_managed).
+    ///
+    /// Only single-leaf programs (what `Predict<S>` compiles to) have a
+    /// conversation surface; a multi-node graph is refused with
+    /// [`RunError::Input`].
+    pub async fn run_conversation(
+        &self,
+        chat: Chat,
+        input: Option<JsonMap>,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+    ) -> Result<(RunOutput, Chat), RunError> {
+        match self
+            .conversation_turn(chat, input, overlay, budget, false)
+            .await?
+        {
+            ConversationTurn::Complete { run, chat } => Ok((run, chat)),
+            ConversationTurn::Suspended(_) => {
+                unreachable!("dispatching conversations never suspend")
+            }
+        }
+    }
+
+    /// [`run_conversation`](Self::run_conversation) in caller-managed mode
+    /// (RFC 0004 §2): when the model requests tool calls on an agent leaf,
+    /// the loop *suspends* instead of dispatching — you get the pending calls
+    /// plus a resumption token ([`ToolSuspension`]) and feed results back
+    /// through [`resume_conversation`](Self::resume_conversation).
+    ///
+    /// Everything else is identical to dispatching mode: one span per turn
+    /// with the same `Exchange`/`ToolRun` event stream, the same meters (the
+    /// node budget chained under the run budget), and the same stop-tool
+    /// semantics — a stop-tool call completes the turn, it never suspends.
+    /// Two deliberate differences: Code Mode does not apply (the caller
+    /// executes tools, so the host's execution strategy can't), and a replay
+    /// scope never suspends (served turns have every tool effect baked in).
+    pub async fn run_conversation_caller_managed(
+        &self,
+        chat: Chat,
+        input: Option<JsonMap>,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+    ) -> Result<ConversationTurn, RunError> {
+        self.conversation_turn(chat, input, overlay, budget, true)
+            .await
+    }
+
+    /// Continues a suspended caller-managed turn with the results of the
+    /// pending tool calls, aligned with [`ToolSuspension::calls`].
+    ///
+    /// Results land in the conversation and the trace exactly as dispatched
+    /// executions would: one `ToolRun` event per call (metering the time the
+    /// suspension was outstanding), one batched tool-result user turn, and
+    /// the loop continues under the same meters and turn budget. Feed a
+    /// failed tool's error text as its result to keep dispatching mode's
+    /// LATM-style conversational repair.
+    pub async fn resume_conversation(
+        &self,
+        suspension: ToolSuspension,
+        results: Vec<String>,
+    ) -> Result<ConversationTurn, RunError> {
+        let ToolSuspension {
+            calls,
+            mut chat,
+            state,
+        } = suspension;
+        let SuspendState {
+            node,
+            overlay,
+            meter,
+            run_meter,
+            guard,
+            mut run,
+            next_turn,
+            prefix_len,
+            suspended_at,
+        } = state;
+        let p = &*self.program;
+        let at = p
+            .leaf_name(node)
+            .expect("conversation leaves are named")
+            .to_string();
+        let Node::AgentLoop(n) = &p.nodes[node] else {
+            return Err(RunError::Internal {
+                at: at.into(),
+                message: "suspension does not reference an agent leaf".to_string(),
+            });
+        };
+        if results.len() != calls.len() {
+            return Err(RunError::Input {
+                at: at.into(),
+                message: format!(
+                    "expected {} tool results, got {}",
+                    calls.len(),
+                    results.len()
+                ),
+            });
+        }
+        let cx = self.conversation_cx(overlay.clone(), Arc::clone(&run_meter));
+        let def = &p.sigs[n.sig];
+        let lm = self.p_model(&at, &cx, n.model)?;
+        let policy = self.p_context(&cx, n.context_policy);
+
+        // Feed the caller's results back: same event, record, and
+        // conversation shape as dispatched executions.
+        let duration_us = suspended_at.elapsed().as_micros() as u64;
+        let mut blocks = Vec::with_capacity(calls.len());
+        for (call, result) in calls.iter().zip(results) {
+            let result = clip_tool_result(result, &policy);
+            run.events.push(SpanEvent::ToolRun {
+                id: call.id.clone(),
+                name: call.function.name.clone(),
+                args: call.function.arguments.clone(),
+                result: result.clone(),
+                duration_us,
+                error: None,
+            });
+            run.tool_calls.push(call.clone());
+            run.tool_executions.push(result.clone());
+            blocks.push(tool_result_block(call, result));
+        }
+        chat.push_message(Message::with_content(Role::User, blocks));
+
+        let surface = self.build_agent_surface(&at, n, &cx, false).await?;
+        let lc = AgentLoopCx {
+            at: &at,
+            n,
+            def,
+            lm: &lm,
+            toolset: &surface.toolset,
+            by_name: &surface.by_name,
+            sandbox_code: &surface.sandbox_code,
+            stop_names: &surface.stop_names,
+            prefix_len,
+            meter: &meter,
+            run_meter: &run_meter,
+            policy: &policy,
+            code_mode: None,
+        };
+        let outcome = self.agent_loop(&lc, chat, &mut run, next_turn, true).await;
+        self.conclude_agent_turn(
+            &at,
+            &lm,
+            guard,
+            run,
+            outcome,
+            AgentTurnCtx {
+                node,
+                overlay,
+                meter: Arc::clone(&meter),
+                run_meter,
+                prefix_len,
+            },
+        )
+    }
+
+    /// Renders the opening [`Chat`] of a conversation with the program's
+    /// leaf — system + demos (+ the agent playbook) + the formatted `input`
+    /// turn — reading instruction/demos through `overlay` exactly like a run
+    /// would. Inspect or edit the result, then hand it to
+    /// [`run_conversation`](Self::run_conversation); or skip this and pass
+    /// `run_conversation` an empty chat plus the input — same rendering.
+    pub fn conversation_opening(
+        &self,
+        input: &JsonMap,
+        overlay: Option<Arc<Overlay>>,
+    ) -> Result<Chat, RunError> {
+        self.check_overlay(overlay.as_ref())?;
+        let node = self.conversation_leaf()?;
+        let at = self
+            .program
+            .leaf_name(node)
+            .expect("conversation leaves are named")
+            .to_string();
+        self.validate_input(&at, self.leaf_sig(node), input)?;
+        let cx = self.conversation_cx(overlay, Arc::new(BudgetMeter::new(Budget::unlimited())));
+        let (mut messages, suffix) = self.render_leaf_opening(node, input, &cx)?;
+        messages.extend(suffix);
+        Ok(Chat::new(messages))
+    }
+
+    /// One conversation turn against the program's single leaf: assembles
+    /// this turn's messages, opens the span, consults replay, and evaluates
+    /// the leaf (single exchange for `Predict`, the agent loop for
+    /// `AgentLoop` — suspending on tool calls when `suspend_on_tools`).
+    async fn conversation_turn(
+        &self,
+        mut chat: Chat,
+        input: Option<JsonMap>,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+        suspend_on_tools: bool,
+    ) -> Result<ConversationTurn, RunError> {
+        self.check_overlay(overlay.as_ref())?;
+        let node = self.conversation_leaf()?;
+        let p = &*self.program;
+        let at = p
+            .leaf_name(node)
+            .expect("conversation leaves are named")
+            .to_string();
+        let def = self.leaf_sig(node);
+        let cx = self.conversation_cx(overlay.clone(), Arc::new(BudgetMeter::new(budget)));
+
+        // This turn's messages, plus the rendered prefix when we own it (an
+        // opening turn interns system+demos; a caller-owned continuation has
+        // no known prefix split — the span records the full chat as suffix).
+        let (prefix, suffix) = if chat.is_empty() {
+            let input_map = input.as_ref().ok_or_else(|| RunError::Input {
+                at: at.clone().into(),
+                message: "an empty conversation needs an opening `input`".to_string(),
+            })?;
+            self.validate_input(&at, def, input_map)?;
+            self.render_leaf_opening(node, input_map, &cx)?
+        } else {
+            if let Some(input_map) = input.as_ref() {
+                self.validate_input(&at, def, input_map)?;
+                chat.push_message(Message::user(ChatAdapter.format_input_def(def, input_map)));
+            }
+            (Vec::new(), chat.messages)
+        };
+        let prefix_len = if prefix.is_empty() {
+            // Continuation: shield the leading system prompt from history
+            // truncation, the only thing `prefix_len` is used for downstream.
+            suffix
+                .iter()
+                .take_while(|message| message.role == Role::System)
+                .count()
+        } else {
+            prefix.len()
+        };
+
+        let lm = match &p.nodes[node] {
+            Node::Predict(n) => self.p_model(&at, &cx, n.model)?,
+            Node::AgentLoop(n) => self.p_model(&at, &cx, n.model)?,
+            _ => unreachable!("conversation_leaf returns only leaves"),
+        };
+
+        let guard = begin_span(SpanRequest {
+            component: &at,
+            prefix: (!prefix.is_empty()).then_some(prefix.as_slice()),
+            suffix: &suffix,
+            input: input.clone(),
+            model: &lm.config,
+            request_hash: None,
+        });
+
+        let mut messages = prefix;
+        messages.extend(suffix);
+
+        // Replay (RFC 0001 §4d/e): a conversation turn keys on the full chat
+        // it would send — the same preimage the span records (`request_hash`
+        // streams prefix ++ suffix, so the split is irrelevant). Serving a
+        // turn extends the chat with the recorded completion; tool effects
+        // are baked in, so caller-managed turns never suspend under replay.
+        match crate::trace::replay::intercept(&at, &lm.config, &messages) {
+            Some(crate::trace::replay::ReplayDirective::Serve(span)) => {
+                return self.serve_conversation_turn(&at, &lm, *span, messages, guard);
+            }
+            Some(crate::trace::replay::ReplayDirective::Refuse(err)) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Lm,
+                        err.to_string(),
+                        Vec::new(),
+                        None,
+                        LmUsage::default(),
+                    ));
+                }
+                return Err(RunError::Replay {
+                    at: at.into(),
+                    source: err,
+                });
+            }
+            Some(crate::trace::replay::ReplayDirective::Live) | None => {}
+        }
+
+        match &p.nodes[node] {
+            Node::Predict(_) => {
+                self.predict_conversation_turn(&at, def, &lm, &cx, messages, guard)
+                    .await
+            }
+            Node::AgentLoop(n) => {
+                let policy = self.p_context(&cx, n.context_policy);
+                let surface = self
+                    .build_agent_surface(&at, n, &cx, !suspend_on_tools)
+                    .await?;
+                let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
+                let lc = AgentLoopCx {
+                    at: &at,
+                    n,
+                    def,
+                    lm: &lm,
+                    toolset: &surface.toolset,
+                    by_name: &surface.by_name,
+                    sandbox_code: &surface.sandbox_code,
+                    stop_names: &surface.stop_names,
+                    prefix_len,
+                    meter: &meter,
+                    run_meter: &cx.meter,
+                    policy: &policy,
+                    code_mode: surface.code_mode.as_ref(),
+                };
+                let mut run = AgentRun::default();
+                let outcome = self
+                    .agent_loop(&lc, Chat::new(messages), &mut run, 0, suspend_on_tools)
+                    .await;
+                self.conclude_agent_turn(
+                    &at,
+                    &lm,
+                    guard,
+                    run,
+                    outcome,
+                    AgentTurnCtx {
+                        node,
+                        overlay,
+                        meter: Arc::clone(&meter),
+                        run_meter: Arc::clone(&cx.meter),
+                        prefix_len,
+                    },
+                )
+            }
+            _ => unreachable!("conversation_leaf returns only leaves"),
+        }
+    }
+
+    /// A `Predict` leaf's conversation turn: one exchange over the assembled
+    /// chat, parsed against the leaf signature — `eval_predict` minus the
+    /// binding resolution and prompt rendering the conversation already owns.
+    async fn predict_conversation_turn(
+        &self,
+        at: &str,
+        def: &SignatureDef,
+        lm: &Arc<LM>,
+        cx: &Cx,
+        messages: Vec<Message>,
+        guard: Option<crate::trace::SpanGuard>,
+    ) -> Result<ConversationTurn, RunError> {
+        if cx.meter.try_reserve_call().is_err() {
+            if let Some(guard) = guard {
+                guard.finish(span_error(
+                    crate::trace::SpanErrorKind::Lm,
+                    "budget exhausted".to_string(),
+                    Vec::new(),
+                    None,
+                    LmUsage::default(),
+                ));
+            }
+            return Err(RunError::Budget { at: at.into() });
+        }
+
+        let response = match lm.call(Chat::new(messages), Vec::new()).await {
+            Ok(response) => response,
+            Err(err) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Lm,
+                        err.to_string(),
+                        Vec::new(),
+                        None,
+                        LmUsage::default(),
+                    ));
+                }
+                return Err(RunError::Lm {
+                    at: at.into(),
+                    source: LmError::Provider {
+                        provider: lm.config.model.clone(),
+                        message: err.to_string(),
+                        source: None,
+                    },
+                });
+            }
+        };
+        cx.meter.record_usage(&response.usage);
+
+        let raw = response.output.content();
+        match ChatAdapter.parse_output_def(def, &self.program.types, &response.output) {
+            Ok((output, metas)) => {
+                let leaf = LeafOutcome {
+                    name: at.to_string(),
+                    raw_response: raw.clone(),
+                    field_meta: metas,
+                    usage: response.usage,
+                    model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                        .config_hash,
+                    span_id: guard.as_ref().map(|guard| guard.id()),
+                    tool_calls: Vec::new(),
+                    tool_executions: Vec::new(),
+                };
+                if let Some(guard) = guard {
+                    guard.finish(SpanOutcome {
+                        events: response.events,
+                        raw_output: Some(raw),
+                        output: Some(output.clone()),
+                        usage: response.usage,
+                        error: None,
+                    });
+                }
+                Ok(ConversationTurn::Complete {
+                    run: RunOutput {
+                        output,
+                        leaves: vec![leaf],
+                    },
+                    chat: response.chat,
+                })
+            }
+            Err(err) => {
+                if let Some(guard) = guard {
+                    guard.finish(span_error(
+                        crate::trace::SpanErrorKind::Parse,
+                        err.to_string(),
+                        response.events,
+                        Some(raw.clone()),
+                        response.usage,
+                    ));
+                }
+                Err(RunError::Parse {
+                    at: at.into(),
+                    raw,
+                    source: Some(Box::new(err)),
+                    usage: response.usage,
+                })
+            }
+        }
+    }
+
+    /// Serves one conversation turn from a recorded span: the chat extends
+    /// with the recorded completion (exchanges verbatim, tool results
+    /// batched), and the [`LeafOutcome`] carries the recorded usage with no
+    /// per-field parse metadata — the same contract as every served leaf.
+    fn serve_conversation_turn(
+        &self,
+        at: &str,
+        lm: &Arc<LM>,
+        span: crate::trace::Span,
+        messages: Vec<Message>,
+        guard: Option<crate::trace::SpanGuard>,
+    ) -> Result<ConversationTurn, RunError> {
+        let output = span
+            .output
+            .clone()
+            .expect("replay serves only spans with parsed output");
+        let mut completion = span.completion_messages();
+        if completion.is_empty()
+            && let Some(raw) = span.raw_output.as_deref().filter(|raw| !raw.is_empty())
+        {
+            completion.push(Message::assistant(raw));
+        }
+        let tool_calls: Vec<rig::message::ToolCall> = completion
+            .iter()
+            .flat_map(|message| message.tool_calls().into_iter().cloned())
+            .collect();
+        let tool_executions: Vec<String> = span
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                SpanEvent::ToolRun { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .collect();
+        let mut chat = Chat::new(messages);
+        for message in &completion {
+            chat.push_message(message.clone());
+        }
+        let leaf = LeafOutcome {
+            name: at.to_string(),
+            raw_response: span.raw_output.clone().unwrap_or_default(),
+            field_meta: IndexMap::new(),
+            usage: span.usage,
+            model_config_hash: crate::trace::ModelEntry::from_config(&lm.config).config_hash,
+            span_id: guard.as_ref().map(|guard| guard.id()),
+            tool_calls,
+            tool_executions,
+        };
+        if let Some(guard) = guard {
+            guard.finish(SpanOutcome {
+                events: span.events.clone(),
+                raw_output: span.raw_output.clone(),
+                output: Some(output.clone()),
+                usage: span.usage,
+                error: None,
+            });
+        }
+        Ok(ConversationTurn::Complete {
+            run: RunOutput {
+                output,
+                leaves: vec![leaf],
+            },
+            chat,
+        })
+    }
+
+    /// Closes out an agent-leaf conversation turn: finishes the span and
+    /// builds the [`ConversationTurn`] — `Complete` on `Done`, a
+    /// [`ToolSuspension`] carrying the open span and meters on `Suspend`.
+    /// Shared by [`conversation_turn`](Self::conversation_turn) and
+    /// [`resume_conversation`](Self::resume_conversation).
+    fn conclude_agent_turn(
+        &self,
+        at: &str,
+        lm: &Arc<LM>,
+        guard: Option<crate::trace::SpanGuard>,
+        run: AgentRun,
+        outcome: Result<LoopOutcome, RunError>,
+        ctx: AgentTurnCtx,
+    ) -> Result<ConversationTurn, RunError> {
+        match outcome {
+            Ok(LoopOutcome::Done {
+                output,
+                raw,
+                field_meta,
+                chat,
+            }) => {
+                let leaf = LeafOutcome {
+                    name: at.to_string(),
+                    raw_response: raw.clone(),
+                    field_meta,
+                    usage: run.usage,
+                    model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                        .config_hash,
+                    span_id: guard.as_ref().map(|guard| guard.id()),
+                    tool_calls: run.tool_calls,
+                    tool_executions: run.tool_executions,
+                };
+                if let Some(guard) = guard {
+                    guard.finish(SpanOutcome {
+                        events: run.events,
+                        raw_output: Some(raw),
+                        output: Some(output.clone()),
+                        usage: run.usage,
+                        error: None,
+                    });
+                }
+                Ok(ConversationTurn::Complete {
+                    run: RunOutput {
+                        output,
+                        leaves: vec![leaf],
+                    },
+                    chat,
+                })
+            }
+            Ok(LoopOutcome::Suspend {
+                calls,
+                chat,
+                next_turn,
+            }) => Ok(ConversationTurn::Suspended(ToolSuspension {
+                calls,
+                chat,
+                state: SuspendState {
+                    node: ctx.node,
+                    overlay: ctx.overlay,
+                    meter: ctx.meter,
+                    run_meter: ctx.run_meter,
+                    guard,
+                    run,
+                    next_turn,
+                    prefix_len: ctx.prefix_len,
+                    suspended_at: Instant::now(),
+                },
+            })),
+            Err(err) => {
+                if let Some(guard) = guard {
+                    let kind = match &err {
+                        RunError::Parse { .. } => crate::trace::SpanErrorKind::Parse,
+                        RunError::Tool { .. } => crate::trace::SpanErrorKind::Tool,
+                        _ => crate::trace::SpanErrorKind::Lm,
+                    };
+                    guard.finish(span_error(
+                        kind,
+                        err.to_string(),
+                        run.events,
+                        None,
+                        run.usage,
+                    ));
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// The conversation leaf: the program's single `Predict` or `AgentLoop`
+    /// node, unwrapped through single-child `Seq`s. The conversation surface
+    /// deliberately covers only 1-leaf programs (what `Predict<S>` compiles
+    /// to) — a multi-node graph has no single conversation to own.
+    fn conversation_leaf(&self) -> Result<NodeId, RunError> {
+        let mut node = self.program.root;
+        loop {
+            match &self.program.nodes[node] {
+                Node::Predict(_) | Node::AgentLoop(_) => return Ok(node),
+                Node::Seq(n) if n.body.len() == 1 => node = n.body[0],
+                _ => {
+                    return Err(RunError::Input {
+                        at: "$".into(),
+                        message: "the conversation surface requires a single-leaf program \
+                                  (one predict or agent node)"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// The declared signature of a conversation leaf.
+    fn leaf_sig(&self, node: NodeId) -> &SignatureDef {
+        match &self.program.nodes[node] {
+            Node::Predict(n) => &self.program.sigs[n.sig],
+            Node::AgentLoop(n) => &self.program.sigs[n.sig],
+            _ => unreachable!("conversation_leaf returns only leaves"),
+        }
+    }
+
+    /// Renders a conversation's opening (prefix, suffix) for the leaf with
+    /// overlay-resolved instruction/demos (and the agent playbook) — exactly
+    /// what a map-in evaluation of the same leaf would send.
+    fn render_leaf_opening(
+        &self,
+        node: NodeId,
+        input: &JsonMap,
+        cx: &Cx,
+    ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
+        let p = &*self.program;
+        Ok(match &p.nodes[node] {
+            Node::Predict(n) => {
+                let instruction = self.p_text(cx, n.instruction);
+                let demos = self.p_demos(cx, n.demos);
+                render_prompt(&p.sigs[n.sig], &p.types, &instruction, &demos, input, None)
+            }
+            Node::AgentLoop(n) => {
+                let instruction = self.p_text(cx, n.instruction);
+                let demos = self.p_demos(cx, n.demos);
+                let policy = self.p_context(cx, n.context_policy);
+                render_prompt(
+                    &p.sigs[n.sig],
+                    &p.types,
+                    &instruction,
+                    &demos,
+                    input,
+                    policy.playbook.as_deref(),
+                )
+            }
+            _ => unreachable!("conversation_leaf returns only leaves"),
+        })
+    }
+
+    /// A conversation's run state: overlay + run meter, no frames, no
+    /// collection — conversation turns build their [`LeafOutcome`] directly.
+    fn conversation_cx(&self, overlay: Option<Arc<Overlay>>, meter: Arc<BudgetMeter>) -> Cx {
+        Cx {
+            overlay,
+            meter,
+            frames: SecondaryMap::new(),
+            inputs: Vec::new(),
+            feedback: None,
+            refine_feedback: None,
+            leaves: None,
+        }
+    }
+
+    /// Overlay/program pairing check, shared by every entry point.
+    fn check_overlay(&self, overlay: Option<&Arc<Overlay>>) -> Result<(), RunError> {
+        if let Some(overlay) = overlay
             && overlay.base != self.program.meta.program_hash
         {
             return Err(RunError::Overlay {
@@ -507,15 +1348,22 @@ impl Interpreter {
                 got: self.program.meta.program_hash,
             });
         }
+        Ok(())
+    }
 
-        // Input surface check against the program's external signature.
-        let sig = &self.program.sigs[self.program.sig];
+    /// Validates an input map against a signature's declared input fields.
+    fn validate_input(
+        &self,
+        at: &str,
+        sig: &SignatureDef,
+        input: &JsonMap,
+    ) -> Result<(), RunError> {
         for field in sig.inputs.iter() {
             match input.get(&*field.name) {
                 Some(value) => {
                     if !json_matches_type(value, &field.ty, &self.program.types) {
                         return Err(RunError::Input {
-                            at: "$".into(),
+                            at: at.into(),
                             message: format!(
                                 "field `{}` does not match its declared type",
                                 field.name
@@ -526,12 +1374,26 @@ impl Interpreter {
                 None if field.ty.is_optional() => {}
                 None => {
                     return Err(RunError::Input {
-                        at: "$".into(),
+                        at: at.into(),
                         message: format!("missing input field `{}`", field.name),
                     });
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn run_inner(
+        &self,
+        input: JsonMap,
+        overlay: Option<Arc<Overlay>>,
+        budget: Budget,
+        collect: bool,
+    ) -> Result<RunOutput, RunError> {
+        self.check_overlay(overlay.as_ref())?;
+
+        // Input surface check against the program's external signature.
+        self.validate_input("$", &self.program.sigs[self.program.sig], &input)?;
 
         let mut cx = Cx {
             overlay,
@@ -540,8 +1402,13 @@ impl Interpreter {
             inputs: vec![input],
             feedback: None,
             refine_feedback: None,
+            leaves: collect.then(Vec::new),
         };
-        self.eval(self.program.root, &mut cx).await
+        let output = self.eval(self.program.root, &mut cx).await?;
+        Ok(RunOutput {
+            output,
+            leaves: cx.leaves.unwrap_or_default(),
+        })
     }
 
     // -- node dispatch --------------------------------------------------------
@@ -569,19 +1436,24 @@ impl Interpreter {
                             .into_iter()
                             .map(|(branch, mut branch_cx)| async move {
                                 self.eval(branch, &mut branch_cx).await?;
-                                Ok::<_, RunError>(branch_cx.frames)
+                                Ok::<_, RunError>((branch_cx.frames, branch_cx.leaves))
                             });
                     // First error aborts siblings: try_join_all drops the
                     // remaining futures, whose open spans record Cancelled
                     // via guard-drop (RFC 0001 §3.1).
                     let all_frames = futures::future::try_join_all(futures).await?;
-                    for frames in all_frames {
+                    for (frames, leaves) in all_frames {
                         for (node, out) in frames.iter() {
                             if let Some(out) = out
                                 && cx.frames[node].is_none()
                             {
                                 cx.frames[node] = Some(out.clone());
                             }
+                        }
+                        // Branch outcomes merge in declared branch order.
+                        if let (Some(collected), Some(branch_leaves)) = (cx.leaves.as_mut(), leaves)
+                        {
+                            collected.extend(branch_leaves);
                         }
                     }
                     self.resolve_exports(&n.join, cx)?
@@ -754,6 +1626,23 @@ impl Interpreter {
                     .output
                     .clone()
                     .expect("replay serves only spans with parsed output");
+                // Parity with the static lane's `serve_recorded_span`: served
+                // predictions carry no per-field parse metadata — the
+                // recording stores the parsed output, not the parser's
+                // field-level bookkeeping.
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: span.raw_output.clone().unwrap_or_default(),
+                        field_meta: IndexMap::new(),
+                        usage: span.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: Vec::new(),
+                        tool_executions: Vec::new(),
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: span.events.clone(),
@@ -824,7 +1713,20 @@ impl Interpreter {
 
         let raw = response.output.content();
         match ChatAdapter.parse_output_def(def, &p.types, &response.output) {
-            Ok((output, _metas)) => {
+            Ok((output, metas)) => {
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: raw.clone(),
+                        field_meta: metas,
+                        usage: response.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: Vec::new(),
+                        tool_executions: Vec::new(),
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: response.events,
@@ -846,7 +1748,12 @@ impl Interpreter {
                         response.usage,
                     ));
                 }
-                Err(RunError::Parse { at: at.into(), raw })
+                Err(RunError::Parse {
+                    at: at.into(),
+                    raw,
+                    source: Some(Box::new(err)),
+                    usage: response.usage,
+                })
             }
         }
     }
@@ -1026,10 +1933,12 @@ impl Interpreter {
                     at: at.into(),
                     message: "host hole not bound (load should have refused)".into(),
                 })?;
-                let value = host(input.clone()).await.map_err(|message| RunError::Hole {
-                    at: at.into(),
-                    source: dsrs_tools::ExecError::Internal { message },
-                })?;
+                let value = host(input.clone())
+                    .await
+                    .map_err(|message| RunError::Hole {
+                        at: at.into(),
+                        source: dsrs_tools::ExecError::Internal { message },
+                    })?;
                 Ok((at.to_string(), value))
             }
         }
@@ -1062,41 +1971,7 @@ impl Interpreter {
         }
         let lm = self.p_model(&at, cx, n.model)?;
 
-        // Tool surface: definitions from declared signatures with
-        // overlay-resolved descriptions (ToolDesc is a first-class gene), and
-        // overlay-resolved code for sandboxed tools.
-        let mut definitions = Vec::with_capacity(n.tools.len());
-        let mut by_name: HashMap<String, ToolId> = HashMap::new();
-        let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
-        for &tool_id in n.tools.iter() {
-            let tool = &p.tools[tool_id];
-            let name = p.syms.get(tool.name).to_string();
-            definitions.push(rig::completion::ToolDefinition {
-                name: name.clone(),
-                description: self.p_text(cx, tool.desc),
-                parameters: input_schema_of(&p.sigs[tool.sig], &p.types),
-            });
-            by_name.insert(name, tool_id);
-            if let ToolKind::Sandboxed { code } = tool.kind
-                && let ParamValue::Code { source, hash, .. } = self.p_value(cx, code)
-            {
-                sandbox_code.insert(tool_id, (source.clone(), *hash));
-            }
-        }
-        let stop_names: Vec<String> = n
-            .stop
-            .stop_tools
-            .iter()
-            .map(|&t| p.syms.get(p.tools[t].name).to_string())
-            .collect();
-        // Code Mode: collapse the non-stop tool surface into one `run_js`
-        // definition (stop tools stay individual — the loop must see their
-        // calls by name to end).
-        #[cfg(feature = "code-mode")]
-        let code_mode = self
-            .build_code_mode_surface(&at, n, &mut definitions, &sandbox_code, &stop_names)
-            .await?;
-        let toolset = ToolSet::from_definitions(definitions);
+        let surface = self.build_agent_surface(&at, n, cx, true).await?;
 
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
 
@@ -1123,6 +1998,34 @@ impl Interpreter {
                     .output
                     .clone()
                     .expect("replay serves only spans with parsed output");
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    // Served evaluations carry no per-field parse metadata;
+                    // the tool record is reconstructed from the recording.
+                    let tool_calls = span
+                        .completion_messages()
+                        .iter()
+                        .flat_map(|message| message.tool_calls().into_iter().cloned())
+                        .collect();
+                    let tool_executions = span
+                        .events
+                        .iter()
+                        .filter_map(|event| match event {
+                            SpanEvent::ToolRun { result, .. } => Some(result.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: span.raw_output.clone().unwrap_or_default(),
+                        field_meta: IndexMap::new(),
+                        usage: span.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls,
+                        tool_executions,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
                         events: span.events.clone(),
@@ -1157,31 +2060,51 @@ impl Interpreter {
             n,
             def,
             lm: &lm,
-            toolset: &toolset,
-            by_name: &by_name,
-            sandbox_code: &sandbox_code,
-            stop_names: &stop_names,
+            toolset: &surface.toolset,
+            by_name: &surface.by_name,
+            sandbox_code: &surface.sandbox_code,
+            stop_names: &surface.stop_names,
             prefix_len,
             meter: &meter,
             run_meter: &cx.meter,
             policy: &policy,
-            #[cfg(feature = "code-mode")]
-            code_mode: code_mode.as_ref(),
+            code_mode: surface.code_mode.as_ref(),
         };
-        let mut events: Vec<SpanEvent> = Vec::new();
-        let mut usage = LmUsage::default();
-        let outcome = self
-            .agent_loop(&loop_cx, chat, &mut events, &mut usage)
-            .await;
+        let mut run = AgentRun::default();
+        let outcome = match self.agent_loop(&loop_cx, chat, &mut run, 0, false).await {
+            Ok(LoopOutcome::Done {
+                output,
+                raw,
+                field_meta,
+                ..
+            }) => Ok((output, raw, field_meta)),
+            Ok(LoopOutcome::Suspend { .. }) => {
+                unreachable!("dispatching loops never suspend")
+            }
+            Err(err) => Err(err),
+        };
 
         match outcome {
-            Ok((output, raw)) => {
+            Ok((output, raw, field_meta)) => {
+                if let Some(leaves) = cx.leaves.as_mut() {
+                    leaves.push(LeafOutcome {
+                        name: at.clone(),
+                        raw_response: raw.clone(),
+                        field_meta,
+                        usage: run.usage,
+                        model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
+                            .config_hash,
+                        span_id: guard.as_ref().map(|guard| guard.id()),
+                        tool_calls: run.tool_calls,
+                        tool_executions: run.tool_executions,
+                    });
+                }
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
-                        events,
+                        events: run.events,
                         raw_output: Some(raw),
                         output: Some(output.clone()),
-                        usage,
+                        usage: run.usage,
                         error: None,
                     });
                 }
@@ -1194,35 +2117,49 @@ impl Interpreter {
                         RunError::Tool { .. } => crate::trace::SpanErrorKind::Tool,
                         _ => crate::trace::SpanErrorKind::Lm,
                     };
-                    guard.finish(span_error(kind, err.to_string(), events, None, usage));
+                    guard.finish(span_error(
+                        kind,
+                        err.to_string(),
+                        run.events,
+                        None,
+                        run.usage,
+                    ));
                 }
                 Err(err)
             }
         }
     }
 
+    /// Runs the agent loop from `start_turn`. Dispatching mode
+    /// (`suspend_on_tools = false`) executes tool calls through their bound
+    /// executors; suspending mode returns [`LoopOutcome::Suspend`] instead,
+    /// leaving execution to the caller
+    /// ([`resume_conversation`](Self::resume_conversation) re-enters here at
+    /// `next_turn`). Stop-tool and budget semantics are identical in both
+    /// modes.
     async fn agent_loop(
         &self,
         lc: &AgentLoopCx<'_>,
         mut chat: Chat,
-        events: &mut Vec<SpanEvent>,
-        usage: &mut LmUsage,
-    ) -> Result<(JsonMap, String), RunError> {
+        run: &mut AgentRun,
+        start_turn: u32,
+        suspend_on_tools: bool,
+    ) -> Result<LoopOutcome, RunError> {
         let types = &self.program.types;
 
-        for turn in 0..lc.n.stop.max_turns.get() {
+        for turn in start_turn..lc.n.stop.max_turns.get() {
             if lc.meter.try_reserve_call().is_err() {
                 return match lc.n.budget.on_exhausted {
                     BudgetPolicy::Fail => Err(RunError::Budget { at: lc.at.into() }),
-                    BudgetPolicy::Finalize => self.finalize(lc, chat, events, usage).await,
+                    BudgetPolicy::Finalize => self.finalize(lc, chat, run).await,
                 };
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
             let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at).await?;
             lc.meter.record_usage(&response.usage);
-            *usage = *usage + response.usage;
-            events.extend(response.events.clone());
+            run.usage = run.usage + response.usage;
+            run.events.extend(response.events.clone());
             chat = response.chat;
 
             if !response.tool_calls.is_empty() {
@@ -1234,14 +2171,27 @@ impl Interpreter {
                 {
                     let args = call.function.arguments.clone();
                     let output = coerce_outputs(lc.at, lc.def, types, &args)?;
-                    return Ok((output, args.to_string()));
+                    return Ok(LoopOutcome::Done {
+                        output,
+                        raw: args.to_string(),
+                        field_meta: IndexMap::new(),
+                        chat,
+                    });
+                }
+
+                if suspend_on_tools {
+                    return Ok(LoopOutcome::Suspend {
+                        calls: response.tool_calls,
+                        chat,
+                        next_turn: turn + 1,
+                    });
                 }
 
                 let mut blocks = Vec::with_capacity(response.tool_calls.len());
                 for call in &response.tool_calls {
                     let started = Instant::now();
                     let (result, error) = self.execute_agent_tool(lc, call).await;
-                    events.push(SpanEvent::ToolRun {
+                    run.events.push(SpanEvent::ToolRun {
                         id: call.id.clone(),
                         name: call.function.name.clone(),
                         args: call.function.arguments.clone(),
@@ -1249,6 +2199,8 @@ impl Interpreter {
                         duration_us: started.elapsed().as_micros() as u64,
                         error,
                     });
+                    run.tool_calls.push(call.clone());
+                    run.tool_executions.push(result.clone());
                     blocks.push(tool_result_block(call, result));
                 }
                 chat.push_message(Message::with_content(Role::User, blocks));
@@ -1259,7 +2211,14 @@ impl Interpreter {
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
                 match ChatAdapter.parse_output_def(lc.def, types, &response.output) {
-                    Ok((output, _)) => return Ok((output, raw)),
+                    Ok((output, metas)) => {
+                        return Ok(LoopOutcome::Done {
+                            output,
+                            raw,
+                            field_meta: metas,
+                            chat,
+                        });
+                    }
                     Err(err) if turn + 1 < lc.n.stop.max_turns.get() => {
                         chat.push_message(Message::user(format!(
                             "Your response could not be parsed: {err}. Respond again, \
@@ -1267,10 +2226,12 @@ impl Interpreter {
                              `[[ ## field ## ]]` format."
                         )));
                     }
-                    Err(_) => {
+                    Err(err) => {
                         return Err(RunError::Parse {
                             at: lc.at.into(),
                             raw,
+                            source: Some(Box::new(err)),
+                            usage: run.usage,
                         });
                     }
                 }
@@ -1280,7 +2241,7 @@ impl Interpreter {
         // Turns exhausted without an accepted answer.
         match lc.n.budget.on_exhausted {
             BudgetPolicy::Fail => Err(RunError::Budget { at: lc.at.into() }),
-            BudgetPolicy::Finalize => self.finalize(lc, chat, events, usage).await,
+            BudgetPolicy::Finalize => self.finalize(lc, chat, run).await,
         }
     }
 
@@ -1290,9 +2251,8 @@ impl Interpreter {
         &self,
         lc: &AgentLoopCx<'_>,
         mut chat: Chat,
-        events: &mut Vec<SpanEvent>,
-        usage: &mut LmUsage,
-    ) -> Result<(JsonMap, String), RunError> {
+        run: &mut AgentRun,
+    ) -> Result<LoopOutcome, RunError> {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
@@ -1313,17 +2273,23 @@ impl Interpreter {
                 },
             })?;
         lc.run_meter.record_usage(&response.usage);
-        *usage = *usage + response.usage;
-        events.extend(response.events.clone());
+        run.usage = run.usage + response.usage;
+        run.events.extend(response.events.clone());
         let raw = response.output.content();
-        let output = ChatAdapter
+        let (output, metas) = ChatAdapter
             .parse_output_def(lc.def, &self.program.types, &response.output)
-            .map_err(|_| RunError::Parse {
+            .map_err(|err| RunError::Parse {
                 at: lc.at.into(),
                 raw: raw.clone(),
-            })?
-            .0;
-        Ok((output, raw))
+                source: Some(Box::new(err)),
+                usage: run.usage,
+            })?;
+        Ok(LoopOutcome::Done {
+            output,
+            raw,
+            field_meta: metas,
+            chat: response.chat,
+        })
     }
 
     /// Executes one agent tool call. Failures are conversational: the error
@@ -1333,31 +2299,17 @@ impl Interpreter {
         lc: &AgentLoopCx<'_>,
         call: &rig::message::ToolCall,
     ) -> (String, Option<String>) {
-        #[cfg(feature = "code-mode")]
         let outcome: Result<String, String> = match lc.code_mode {
             Some(surface) if call.function.name == dsrs_tools::RUN_JS_TOOL_NAME => {
                 execute_code_mode_script(surface, &call.function.arguments).await
             }
             _ => self.dispatch_agent_tool(lc, call).await,
         };
-        #[cfg(not(feature = "code-mode"))]
-        let outcome = self.dispatch_agent_tool(lc, call).await;
-        let (mut text, error) = match outcome {
+        let (text, error) = match outcome {
             Ok(text) => (text, None),
             Err(message) => (message.clone(), Some(message)),
         };
-        if let Some(max) = lc.policy.tool_result_max_bytes {
-            let max = max as usize;
-            if text.len() > max {
-                let mut cut = max;
-                while cut > 0 && !text.is_char_boundary(cut) {
-                    cut -= 1;
-                }
-                text.truncate(cut);
-                text.push_str("… [truncated]");
-            }
-        }
-        (text, error)
+        (clip_tool_result(text, lc.policy), error)
     }
 
     /// Routes one tool call to its bound executor (host `ToolDyn` or the
@@ -1416,6 +2368,69 @@ impl Interpreter {
             .map_err(|err| err.to_llm_json())
     }
 
+    /// Resolves one agent loop's model-facing tool surface: definitions from
+    /// the declared signatures with overlay-resolved descriptions (`ToolDesc`
+    /// is a first-class gene) and overlay-resolved code for sandboxed tools,
+    /// plus the stop-tool names and (when `allow_code_mode`) the Code Mode
+    /// collapse. Caller-managed conversations pass `allow_code_mode = false`:
+    /// the caller executes tools itself, so the host's code-mode execution
+    /// strategy cannot apply and the declared per-tool surface is presented.
+    async fn build_agent_surface(
+        &self,
+        at: &str,
+        n: &AgentLoopNode,
+        cx: &Cx,
+        allow_code_mode: bool,
+    ) -> Result<AgentSurface, RunError> {
+        let p = &*self.program;
+        // Tool surface: the ToolSet gene selects which *declared* tools the
+        // loop carries this run (absent overlay entry = the slot default =
+        // the full declared table). `by_name` is built from the same
+        // selection, so a deselected tool cannot execute even if the model
+        // hallucinates its name.
+        let tools = self.p_tool_set(cx, n.tool_set, &n.tools);
+        let mut definitions = Vec::with_capacity(tools.len());
+        let mut by_name: HashMap<String, ToolId> = HashMap::new();
+        let mut sandbox_code: HashMap<ToolId, (String, u64)> = HashMap::new();
+        for &tool_id in tools.iter() {
+            let tool = &p.tools[tool_id];
+            let name = p.syms.get(tool.name).to_string();
+            definitions.push(rig::completion::ToolDefinition {
+                name: name.clone(),
+                description: self.p_text(cx, tool.desc),
+                parameters: input_schema_of(&p.sigs[tool.sig], &p.types),
+            });
+            by_name.insert(name, tool_id);
+            if let ToolKind::Sandboxed { code } = tool.kind
+                && let ParamValue::Code { source, hash, .. } = self.p_value(cx, code)
+            {
+                sandbox_code.insert(tool_id, (source.clone(), *hash));
+            }
+        }
+        let stop_names: Vec<String> = n
+            .stop
+            .stop_tools
+            .iter()
+            .map(|&t| p.syms.get(p.tools[t].name).to_string())
+            .collect();
+        // Code Mode: collapse the non-stop tool surface into one `run_js`
+        // definition (stop tools stay individual — the loop must see their
+        // calls by name to end).
+        let code_mode = if allow_code_mode {
+            self.build_code_mode_surface(at, &tools, &mut definitions, &sandbox_code, &stop_names)
+                .await?
+        } else {
+            None
+        };
+        Ok(AgentSurface {
+            toolset: ToolSet::from_definitions(definitions),
+            by_name,
+            sandbox_code,
+            stop_names,
+            code_mode,
+        })
+    }
+
     /// Builds one agent loop's Code Mode surface: wraps every non-stop tool
     /// as a sandbox [`Capability`](dsrs_tools::Capability) (host tools call
     /// straight through `ToolDyn`; sandboxed tools route through the
@@ -1424,11 +2439,10 @@ impl Interpreter {
     /// the *overlay-resolved* tool descriptions — `ToolDesc` genes keep
     /// flowing into the surface the model sees. Returns `None` when code
     /// mode is off or the loop has no non-stop tools.
-    #[cfg(feature = "code-mode")]
     async fn build_code_mode_surface(
         &self,
         at: &str,
-        n: &AgentLoopNode,
+        tools: &[ToolId],
         definitions: &mut Vec<rig::completion::ToolDefinition>,
         sandbox_code: &HashMap<ToolId, (String, u64)>,
         stop_names: &[String],
@@ -1444,8 +2458,9 @@ impl Interpreter {
         let mut kept = Vec::new();
         let mut apis = Vec::new();
         let mut capabilities = Vec::new();
-        // `definitions[i]` was built from `n.tools[i]` — same order.
-        for (&tool_id, definition) in n.tools.iter().zip(definitions.iter()) {
+        // `definitions[i]` was built from `tools[i]` (the ToolSet-selected
+        // surface) — same order.
+        for (&tool_id, definition) in tools.iter().zip(definitions.iter()) {
             if stop_names.contains(&definition.name) {
                 kept.push(definition.clone());
                 continue;
@@ -1541,6 +2556,21 @@ impl Interpreter {
         match self.p_value(cx, id) {
             ParamValue::Demos { rows } => rows.clone(),
             other => panic!("demos slot resolved to {:?}", other.kind()),
+        }
+    }
+
+    /// The ToolSet gene's effective selection. Membership in `declared` was
+    /// enforced when the value entered ([`Overlay::set`] / load-time
+    /// validation); the filter here only keeps downstream arena indexing
+    /// total against hostile ids.
+    fn p_tool_set(&self, cx: &Cx, id: ParamId, declared: &[ToolId]) -> Box<[ToolId]> {
+        match self.p_value(cx, id) {
+            ParamValue::ToolSet { tools } => tools
+                .iter()
+                .copied()
+                .filter(|tool| declared.contains(tool))
+                .collect(),
+            other => panic!("tool_set slot resolved to {:?}", other.kind()),
         }
     }
 
@@ -1658,6 +2688,56 @@ impl Interpreter {
     }
 }
 
+/// Mutable per-invocation loop state: the span's event stream, accumulated
+/// usage, and the tool call/execution record surfaced through
+/// [`LeafOutcome`].
+#[derive(Default)]
+struct AgentRun {
+    events: Vec<SpanEvent>,
+    usage: LmUsage,
+    tool_calls: Vec<rig::message::ToolCall>,
+    tool_executions: Vec<String>,
+}
+
+/// How one `agent_loop` invocation ended (short of an error): the accepted
+/// final output, or — caller-managed conversations only — a suspension on
+/// pending tool calls.
+enum LoopOutcome {
+    Done {
+        output: JsonMap,
+        raw: String,
+        field_meta: IndexMap<String, FieldMeta>,
+        /// The conversation as of the accepting turn — what the conversation
+        /// surface returns; map-in/map-out evaluation drops it.
+        chat: Chat,
+    },
+    Suspend {
+        calls: Vec<rig::message::ToolCall>,
+        chat: Chat,
+        next_turn: u32,
+    },
+}
+
+/// One agent loop's resolved tool surface (see
+/// [`Interpreter::build_agent_surface`]).
+struct AgentSurface {
+    toolset: ToolSet,
+    by_name: HashMap<String, ToolId>,
+    sandbox_code: HashMap<ToolId, (String, u64)>,
+    stop_names: Vec<String>,
+    code_mode: Option<CodeModeSurface>,
+}
+
+/// Owned context threaded into [`Interpreter::conclude_agent_turn`] — what a
+/// [`ToolSuspension`] needs to carry when the loop suspends.
+struct AgentTurnCtx {
+    node: NodeId,
+    overlay: Option<Arc<Overlay>>,
+    meter: Arc<BudgetMeter>,
+    run_meter: Arc<BudgetMeter>,
+    prefix_len: usize,
+}
+
 /// Borrowed context for one agent-loop invocation — keeps `agent_loop` and
 /// its helpers at a sane arity.
 struct AgentLoopCx<'a> {
@@ -1673,13 +2753,11 @@ struct AgentLoopCx<'a> {
     meter: &'a Arc<BudgetMeter>,
     run_meter: &'a Arc<BudgetMeter>,
     policy: &'a ContextPolicy,
-    #[cfg(feature = "code-mode")]
     code_mode: Option<&'a CodeModeSurface>,
 }
 
 /// One agent loop's Code Mode surface: the wrapped tool capabilities and the
 /// sandbox config `run_js` scripts execute under.
-#[cfg(feature = "code-mode")]
 struct CodeModeSurface {
     capabilities: Vec<dsrs_tools::Capability>,
     config: dsrs_tools::SandboxConfig,
@@ -1687,7 +2765,6 @@ struct CodeModeSurface {
 
 /// Executes one `run_js` call against the loop's Code Mode surface. Failures
 /// are conversational, like every agent tool failure.
-#[cfg(feature = "code-mode")]
 async fn execute_code_mode_script(
     surface: &CodeModeSurface,
     args: &Value,
@@ -1783,6 +2860,8 @@ fn coerce_outputs(
         return Err(RunError::Parse {
             at: at.into(),
             raw: value.to_string(),
+            source: None,
+            usage: LmUsage::default(),
         });
     };
     let mut output = JsonMap::new();
@@ -1798,6 +2877,8 @@ fn coerce_outputs(
                 return Err(RunError::Parse {
                     at: at.into(),
                     raw: value.to_string(),
+                    source: None,
+                    usage: LmUsage::default(),
                 });
             }
         }
@@ -1901,6 +2982,24 @@ fn truncate_history(chat: Chat, prefix_len: usize, policy: &ContextPolicy) -> Ch
     let skip = messages.len() - max_turns;
     kept.extend(messages.into_iter().skip(skip));
     Chat::new(kept)
+}
+
+/// Applies `ContextPolicy.tool_result_max_bytes` to one tool result — the
+/// same clip whether the tool was dispatched or the result came back through
+/// [`Interpreter::resume_conversation`].
+fn clip_tool_result(mut text: String, policy: &ContextPolicy) -> String {
+    if let Some(max) = policy.tool_result_max_bytes {
+        let max = max as usize;
+        if text.len() > max {
+            let mut cut = max;
+            while cut > 0 && !text.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            text.truncate(cut);
+            text.push_str("… [truncated]");
+        }
+    }
+    text
 }
 
 /// Builds a tool-result content block for the conversation.
@@ -2009,11 +3108,16 @@ struct Cx {
     feedback: Option<String>,
     /// Refine feedback injection: (child leaf, input field, value).
     refine_feedback: Option<(NodeId, String, Value)>,
+    /// `Some` when the caller asked for per-leaf metadata
+    /// ([`Interpreter::run_collecting`]); successful `Predict` leaves push
+    /// here in execution order. `None` = plain `run`, zero collection cost.
+    leaves: Option<Vec<LeafOutcome>>,
 }
 
 impl Cx {
     /// A branch context for `ForkJoin`: shared overlay/meter, snapshotted
-    /// frames and inputs, branch-local feedback.
+    /// frames and inputs, branch-local feedback. Branch-local leaf collection
+    /// when the parent collects; merged back in branch order at the join.
     fn branch(&self) -> Cx {
         Cx {
             overlay: self.overlay.clone(),
@@ -2022,6 +3126,7 @@ impl Cx {
             inputs: self.inputs.clone(),
             feedback: None,
             refine_feedback: None,
+            leaves: self.leaves.as_ref().map(|_| Vec::new()),
         }
     }
 }

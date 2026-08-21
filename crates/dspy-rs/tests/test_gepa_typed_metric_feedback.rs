@@ -1,6 +1,6 @@
 use anyhow::Result;
 use dspy_rs::{
-    CallMetadata, Eval, GEPA, Module, Optimizer, Predict, PredictError, Predicted, Signature,
+    CallMetadata, Eval, GEPA, Module, Predict, PredictError, Predicted, Signature,
     TypedMetric,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,11 +15,11 @@ struct OptimizerSig {
     answer: String,
 }
 
-#[derive(facet::Facet)]
-#[facet(crate = facet)]
 struct InstructionEchoModule {
     predictor: Predict<OptimizerSig>,
 }
+
+dspy_rs::predictors!(InstructionEchoModule { predictor });
 
 impl Module for InstructionEchoModule {
     type Input = OptimizerSigInput;
@@ -200,7 +200,7 @@ async fn gepa_compile_succeeds_when_feedback_present() {
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("GEPA compile should succeed when feedback is present");
 
@@ -220,7 +220,7 @@ async fn gepa_compile_fails_without_feedback() {
     let optimizer = GEPA::builder().num_iterations(1).minibatch_size(2).build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect_err("GEPA should reject score-only metrics");
 
@@ -242,7 +242,7 @@ async fn gepa_compile_fails_when_feedback_is_partial() {
     let optimizer = GEPA::builder().num_iterations(1).minibatch_size(2).build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect_err("GEPA should reject partially-populated feedback outcomes");
 
@@ -272,7 +272,7 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
         .build();
 
     let err = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect_err("GEPA should fail once feedback becomes unavailable mid-loop");
 
@@ -304,12 +304,7 @@ async fn gepa_compile_with_valset_uses_valset_and_tracks_best_outputs_when_enabl
         .build();
 
     let result = optimizer
-        .compile_with_valset(
-            &mut module,
-            trainset(),
-            Some(valset.clone()),
-            &metric,
-        )
+        .compile_module_with_valset(&mut module, &trainset(), Some(&valset), &metric)
         .await
         .expect("GEPA compile should succeed with a dedicated valset");
 
@@ -356,7 +351,7 @@ async fn gepa_compile_respects_max_lm_calls_budget() {
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("GEPA compile should succeed under LM call budget");
 
@@ -383,7 +378,7 @@ async fn gepa_compile_respects_max_rollouts_budget() {
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("GEPA compile should succeed under rollout budget");
 
@@ -411,7 +406,7 @@ async fn gepa_track_best_outputs_respects_lm_call_budget() {
         .build();
 
     let result = optimizer
-        .compile(&mut module, trainset(), &metric)
+        .compile_module(&mut module, &trainset(), &metric)
         .await
         .expect("GEPA compile should respect LM call budget when tracking outputs");
 

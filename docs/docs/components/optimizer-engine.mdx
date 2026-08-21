@@ -1,65 +1,94 @@
 ---
 title: "Optimizer Engine"
-description: "EvalEngine, ProgramEvalEngine, Candidate, Budget, RolloutCache, ScoreMatrix, and the Pareto and outcome types every optimizer shares"
+description: "Engine, OptimizeTarget, Candidate, Budget, RolloutCache, ScoreMatrix, and the Pareto and outcome types every optimizer shares"
 icon: "gauge-high"
 ---
 
-The optimizer engine is the shared evaluation core under every optimizer. Strategies register candidates and ask the engine to evaluate them; the engine handles overlay application, rollout fan-out, caching, budget accounting, and score bookkeeping. Every optimizer in DSRs (COPRO, GEPA, MIPROv2, bootstrap) is a thin strategy over this core, which exists in two lanes:
+The optimizer engine is the shared evaluation core under every optimizer. Strategies register candidates and ask the engine to evaluate them against an `OptimizeTarget`; the engine handles candidate binding, rollout fan-out, caching, budget accounting, and score bookkeeping. Every optimizer in DSRs (COPRO, GEPA, MIPROv2, SIMBA, bootstrap, Structural) is a thin strategy over this one core.
 
-| Lane | Engine | Candidate type | Parallelism |
+There is **one** `Engine`. What varies is the target — the lane-erased pair of (thing under optimization, evaluation harness):
+
+| Lane | Constructor | Candidate currency | Winner |
 |---|---|---|---|
-| Module lane | `EvalEngine` | `Candidate` (named overlays), applied and restored through the mutation seam | Examples within one candidate; candidates are serialized |
-| Program lane (`ir` feature) | `ProgramEvalEngine` | `ir::Overlay`, read through at render time, never applied | Candidates and examples together in one fan-out |
+| Module lane | `OptimizeTarget::module(&mut module, &trainset, &metric)` | `Candidate` (name-keyed slots), injected *ambiently* per rollout via `fx::with_params` — never applied by mutation | Installed onto the module through `PredictorInfo::load_state`, once, by `OptimizeTarget::install` |
+| Program lane (`ir` feature) | `OptimizeTarget::program(&interp, &examples, &metric)` | `ir::Overlay` (or a `Candidate` bound through `fx::Params::bind`), read through at render time | Retrievable as an `Arc<Overlay>` via `OptimizeTarget::winner_overlay`, for `Program::bake` |
 
-Both lanes share the same `EngineConfig`, `Budget`, `Spend`, `RolloutCache`, `ScoreMatrix`, Pareto bookkeeping, outcome types, and minibatch gate. All items on this page are exported from the crate root except where a feature gate is noted.
+Because candidate injection is ambient in both lanes — nothing is ever applied to shared state during evaluation — rollouts for *different candidates* share one bounded-concurrency fan-out. All items on this page are exported from the crate root except where a feature gate is noted.
 
-## `EvalEngine<'m, E, MT>`
+## `OptimizeTarget<'a>`
 
-Owns the example set, the candidate registry, the score matrix, the rollout cache, and the budget meter. `E` is the trainset [row type](/docs/components/data); construction requires `E: Serialize`. Strategies register candidates and call `evaluate` or `evaluate_gated`; the engine handles application, fan-out, caching, accounting, and bookkeeping.
+The thing an optimizer optimizes: a module or a program, packaged with its example set (by reference) and metric.
 
 | Method | What it does |
 |---|---|
-| `new(examples, metric, config)` | Builds an engine over `Vec<E>`, a `&MT` metric, and an `EngineConfig`. Example uids are content hashes of the whole row. |
-| `evaluate(module, candidate, subset)` | Evaluates one registered candidate over `subset` example indices (`None` means the full set). Applies the overlay, fans out uncached rollouts with bounded concurrency under per-rollout trace capture, restores the module, records scores. Returns `EvalOutcome`. |
-| `evaluate_gated(module, candidate, minibatch, threshold)` | The GEPA acceptance pattern: evaluates on `minibatch`; only a minibatch mean strictly greater than `threshold` promotes to a full-set evaluation. Returns `GateOutcome`. |
-| `register(candidate)` | Registers a `Candidate`, deduplicating by content hash. Returns its index; a duplicate returns the existing index. |
-| `candidate(i)`, `candidate_hash(i)`, `num_candidates()` | Candidate registry access. |
-| `examples()`, `num_examples()`, `config()`, `spend()`, `matrix()` | State access. |
+| `module(module, trainset, metric)` | Module-lane target: a typed `Module + Predictors`, a `&[E]` trainset (`E: ToInput<M::Input> + Serialize`), and a `TypedMetric`. Runs the **naming pass**: every leaf declared via `Predictors` is stamped with its declared name (`PredictorInfo::set_trace_name`), so trace spans, candidate entries, and persistence all address the same names. |
+| `module_with_valset(module, trainset, valset, metric)` | Same, with an optional validation set. When `Some`, the valset examples become the *leading* columns and the trainset the trailing ones — the layout GEPA's Pareto bookkeeping uses. |
+| `program(interp, examples, metric)` | Program-lane target: an interpreter-loaded `Program`, labeled `DemoRow` examples, and a `ProgramMetric`. |
+| `leaves() -> &[LeafInfo]` | The optimizable leaves' read surface, snapshotted at construction: per leaf, `name`, current `instruction`, `default_instruction`, `demos` as flat JSON rows, and `input_fields`/`output_fields` as `(lm name, docs)` pairs. `LeafInfo::schema_for_reflection()` renders the field contract for reflection prompts. |
+| `num_examples()`, `has_valset()` | Example-set access. |
+| `val_columns()`, `train_columns()` | The scoring columns (validation prefix, or every example) and the minibatch-sampling pool (trainset suffix, or every example). |
+| `install(&winner)` | Installs the winning `Candidate` — the **one** mutation of the run. Module lane: merges each slot into the named leaf's state through `PredictorInfo::load_state`. Program lane: binds the winner to an overlay. |
+| `winner_overlay()` | The installed winner as a bound `Arc<Overlay>` (program lane only). |
+| `candidate_outputs(indices, &candidate)` | Runs the given examples under the candidate and returns bare output values, no metric and no trace capture — GEPA's best-output collection. |
+
+`ProgramMetric` is the JSON-native sibling of `TypedMetric`: loaded programs have no static output type, so the metric scores the interpreter's output `JsonMap` against a labeled `DemoRow`.
+
+```rust
+pub trait ProgramMetric: Send + Sync {
+    async fn evaluate(
+        &self,
+        example: &DemoRow,
+        output: &JsonMap,
+        trace: Option<&Trace>,
+    ) -> Result<Eval>;
+}
+```
+
+## `Engine`
+
+Owns the candidate registry, the score matrix, the rollout cache, and the budget meter. Strategies register candidates and call the evaluate methods against a target; the engine handles binding, fan-out, caching, accounting, and bookkeeping.
+
+| Method | What it does |
+|---|---|
+| `new(config)` | Builds an engine from an `EngineConfig`. Examples and metric live on the target, not the engine — one engine can serve successive targets (a `Box<dyn Optimizer>` pipeline sharing one budget). |
+| `evaluate_many(target, candidates, subset)` | Evaluates N registered candidates over `subset` example indices (`None` = the target's full set) in **one** bounded-concurrency fan-out — candidate-level parallelism in both lanes. Cached rollouts return their `Eval` with `trace: None` and consume no budget. Returns `BatchEvalOutcome`. |
+| `evaluate(target, candidate, subset)` | Single-candidate convenience over `evaluate_many`. Returns `EvalOutcome`. |
+| `evaluate_gated(target, candidate, minibatch, threshold)` | The minibatch gate (the GEPA/SIMBA acceptance pattern): evaluates on `minibatch`; only a minibatch mean strictly greater than `threshold` promotes to a full-set evaluation. Returns `GateOutcome`. |
+| `register(candidate)` | Registers a module-lane `Candidate`, deduplicating by content hash. Returns its index; a duplicate returns the existing index. |
+| `register_overlay(overlay)` | Registers a program-lane `ir::Overlay`, deduplicating by `Overlay::hash()`. Returns its index. |
+| `candidate(i) -> Option<&Candidate>`, `candidate_hash(i)`, `num_candidates()` | Candidate registry access (`candidate` is `None` for an overlay entry). |
+| `config()`, `spend()`, `matrix()`, `cache()` | State access. |
 | `pareto()`, `pareto_over(columns)` | Dominance views over the score matrix (all columns, or a subset). |
 | `budget_allows(n)` | Whether `n` more rollouts fit the remaining budget. |
 | `charge(metric_calls, lm_calls)` | Charges auxiliary spend the engine did not run itself: reflection LM calls, teacher passes. |
-| `checkpoint()` | Serializes engine state (example uids, candidates, matrix, cache, spend) to a JSON string, format version 1. |
-| `resume(examples, metric, config, checkpoint)` | Rebuilds an engine from a checkpoint. Fails if the version or the example set does not match. Completed rollouts are served from the restored cache instead of re-executing. |
+| `peak_candidate_concurrency()` | High-water mark of *distinct candidates* with rollouts in flight simultaneously — the parallelism gauge. |
 
-`evaluate` requires `E: ToInput<M::Input> + Sync`, `M: Module + Facet`, and `MT: TypedMetric<E, M>`. The metric runs outside the trace capture scope, so LM-as-judge metrics do not pollute the execution trace.
-
-**Concurrency model.** Candidates mutate shared predictor state, so the engine serializes candidate application and parallelizes across examples within one candidate (bounded by `EngineConfig::concurrency`). Candidate-level parallelism requires overlays resolved at render time; that is the program lane below.
+The metric runs outside the trace capture scope, so LM-as-judge metrics do not pollute the execution trace. If the uncached portion of a batch does not fit the remaining budget, the engine runs nothing, leaves spend unchanged, and returns `BudgetExhausted`.
 
 ## `EngineConfig`
 
 | Field | Default | Meaning |
 |---|---|---|
-| `concurrency: usize` | `16` (`DEFAULT_EVAL_CONCURRENCY`) | Rollouts in flight at once within one fan-out. |
+| `concurrency: usize` | `16` (`DEFAULT_EVAL_CONCURRENCY`) | Rollouts in flight at once within one evaluation batch. |
 | `budget: Budget` | `Budget::unlimited()` | Hard spend caps; the engine stops cleanly when a batch would not fit. |
-| `cache_salt: u64` | `0` | Folded into every cache key. Bump it when changing LM sampling settings outside the candidate; sampling params are not yet part of candidate identity. |
+| `cache_salt: u64` | `0` | Folded into every cache key. Bump it when changing LM sampling settings outside the candidate; sampling params are not part of candidate identity. |
 
-## Candidates and the mutation seam
+## Candidates
 
-A `Candidate` is data: `overlays: BTreeMap<String, Overlay>` mapping predictor name to a partial parameter update, plus a stable content hash. The empty candidate (`Candidate::default()`) is the baseline, the module exactly as it is.
+A `Candidate` is data: `slots: BTreeMap<String, CandidateSlot>` mapping leaf name (the `Predictors` contract name) to a partial per-leaf configuration, plus a stable content hash. It is cheap to clone, serializable, and **never applied by mutation**: the engine scopes it ambiently around each rollout (`fx::with_params`); the single mutating step is the caller-driven final `OptimizeTarget::install`. The empty candidate (`Candidate::default()`) is the baseline, the module exactly as it is.
 
 | Item | Signature or fields |
 |---|---|
-| `Overlay` | `instruction: Option<String>`, `demos: Option<Vec<JsonMap>>`. `None` leaves the current value untouched. Demo rows are flat JSON objects, input and output fields merged. |
+| `CandidateSlot` | `instruction: Option<String>`, `clear_instruction: bool`, `demos: Option<Vec<JsonMap>>`. Unset fields leave the leaf's incumbent value untouched; `clear_instruction` explicitly resets to the signature default, winning over any instance override. Demo rows are flat JSON objects, input and output fields merged. |
 | `Candidate::new()` | The empty candidate. |
 | `Candidate::with_instruction(name, text)` | Single-predictor instruction candidate, the COPRO and MIPRO case. |
-| `set_instruction(name, text)`, `set_demos(name, rows)` | Builder-style mutators. |
-| `is_empty()`, `stable_hash()` | The hash is canonical: identical content hashes identically across processes and map orderings. It is the cache and checkpoint identity. |
-| `CandidateUndo` | Opaque snapshot of pre-overlay `PredictState` for every predictor the candidate touched. |
-| `apply_candidate(&mut module, &candidate) -> Result<CandidateUndo>` | The one place candidate state is written, through `DynPredictor::apply_update`. If any overlay fails to apply, the overlays applied so far are rolled back before the error returns. |
-| `restore_candidate(&mut module, undo) -> Result<()>` | Restores the saved state. Attempts every predictor even if one fails, then reports the first error. |
+| `set_instruction(name, text)`, `clear_instruction(name)`, `set_demos(name, rows)` | Builder-style mutators. `set_demos` with an empty vec clears the demo set. |
+| `instruction_of(name)`, `demos_of(name)` | Read accessors. |
+| `is_empty()`, `stable_hash()` | The hash is canonical: identical content hashes identically across processes and map orderings. It is the cache identity. |
+| `to_params()` | Converts to the ambient-injection currency: name-keyed [`fx::Params`](/docs/components/fx) with explicit clears preserved. `fx::Params::bind(program)` turns the same value into an `ir::Overlay` for the program lane. |
 
 <Note>
-This module-lane `Overlay` (instruction plus demos per predictor) is a different type from the IR `ir::Overlay`, which maps `ParamId` to `ParamValue` over a compiled `Program`. The program lane below consumes the IR type.
+`CandidateSlot` (instruction plus demos per leaf name) is a different type from the IR `ir::Overlay`, which maps `ParamId` to `ParamValue` over a compiled `Program`. The program lane consumes the IR type; `Candidate::to_params()` + `Params::bind` is the bridge between them.
 </Note>
 
 ## `Budget` and `Spend`
@@ -74,7 +103,7 @@ This module-lane `Overlay` (instruction plus demos per predictor) is a different
 
 `Budget::allows(&spend, upcoming_rollouts)` reports whether the batch fits. Zero upcoming rollouts always fit, so cache-only batches never stall. Call and metric caps are enforced prospectively (the batch must fit under the cap); the token cap is retrospective (a batch may overshoot, and the following batch is refused).
 
-`Spend` is what the engine has consumed so far, serialized into checkpoints:
+`Spend` is what the engine has consumed so far:
 
 | `Spend` field | Meaning |
 |---|---|
@@ -90,13 +119,13 @@ This `Budget` is not the IR runtime `Budget` documented on [Runtime](/docs/compo
 
 ## `RolloutCache`
 
-In-memory map from a rollout key to its `Eval` (score plus optional feedback). A candidate re-evaluated on a seen example returns the cached `Eval` with no LM call and no metric call. The cache is serialized into checkpoints, so a resumed run skips completed rollouts.
+In-memory map from a rollout key to its `Eval` (score plus optional feedback). A candidate re-evaluated on a seen example returns the cached `Eval` with no LM call and no metric call.
 
 The key recipe is `(baseline, candidate, example, salt)`, formatted as four 16-digit hex hashes joined by colons:
 
 | Component | Module lane | Program lane |
 |---|---|---|
-| `baseline` | Content hash of the module's `ModuleState` before the overlay is applied. Permanently installing a winner mid-run changes it, invalidating stale entries. | `program.meta.program_hash`. |
+| `baseline` | Content hash of the `predictors()` state snapshot (`{name → PredictState}`), computed once at target construction. Installing a winner and building a new target yields a new baseline, invalidating stale entries. | `program.meta.program_hash`. |
 | `candidate` | `Candidate::stable_hash()` | `Overlay::hash()` |
 | `example` | Content hash of the example | Content hash of the `DemoRow` |
 | `salt` | `EngineConfig::cache_salt` | `EngineConfig::cache_salt` |
@@ -107,9 +136,7 @@ Public surface: `get`, `insert`, `len`, `is_empty`.
 
 **`ScoreMatrix`** is a per-instance matrix of candidates (rows, registration order) by examples (columns). Cells are `None` until scored. Methods: `new(columns)`, `candidates()`, `examples()`, `ensure_rows(n)`, `record(candidate, example, score)`, `score(candidate, example)`, `row(candidate)`, `mean(candidate)`, `best_by_mean()`, `pareto()`, `pareto_over(columns)`. The column-restricted view supports GEPA-style setups where train and validation examples share one matrix.
 
-**`ParetoView`** is a dominance snapshot computed from the matrix. `best_scores()` gives the best score per viewed column; `wins(candidate)` counts columns the candidate wins or ties on (tolerance `1e-6`); `frontier()` lists candidates winning on at least one column; `statistics()` summarizes. A candidate with zero wins is dominated.
-
-**`ParetoFrontier`** is a standalone convenience wrapper over the same bookkeeping for callers that track candidate payloads outside an engine; GEPA itself uses the engine's matrix directly. It stores `GEPACandidate` payloads, prunes dominated candidates automatically, and offers `add_candidate(candidate, scores) -> bool`, `sample_proportional_to_coverage()`, `best_by_average()`, `candidates()`, `len()`, `is_empty()`, `statistics()`.
+**`ParetoView`** is a dominance snapshot computed from the matrix. `best_scores()` gives the best score per viewed column; `wins(candidate)` counts columns the candidate wins or ties on (tolerance `1e-6`); `frontier()` lists candidates winning on at least one column; `statistics()` summarizes. A candidate with zero wins is dominated. GEPA samples parents proportional to their Pareto coverage directly from this view.
 
 **`ParetoStatistics`** fields: `num_candidates`, `num_examples_covered`, `avg_coverage: f32`, `max_coverage`, `min_coverage`. A healthy search grows `num_candidates` slowly while `avg_coverage` rises; `num_candidates == 1` means the search has collapsed.
 
@@ -120,39 +147,12 @@ Public surface: `get`, `insert`, `len`, `is_empty`.
 | `RolloutOutcome` | `example: usize`, `eval: Eval`, `trace: Option<Trace>`. The trace is `None` when the rollout was served from the cache. |
 | `CandidateEval` | `candidate: usize`, `rollouts: Vec<RolloutOutcome>` in request order. `mean()` is the arithmetic mean over the batch (`0.0` when empty); `scores()` collects the raw scores. |
 | `EvalOutcome` | `Complete(CandidateEval)` or `BudgetExhausted { needed }`. When exhausted, nothing ran and spend is unchanged; `needed` is the uncached rollout count. `completed()` converts to `Option<CandidateEval>`. |
+| `BatchEvalOutcome` | `Complete(Vec<CandidateEval>)`, one per requested candidate in request order, or `BudgetExhausted { needed }`. `completed()` converts to `Option<Vec<CandidateEval>>`. |
 | `GateOutcome` | `BudgetExhausted { needed }`, `Rejected { minibatch }`, or `Promoted { minibatch, full }`. |
-| `ProgramEvalOutcome` | `Complete(Vec<CandidateEval>)`, one per requested candidate in request order, or `BudgetExhausted { needed }`. `completed()` converts to `Option<Vec<CandidateEval>>`. (`ir` feature) |
 
-## Program lane: `ProgramEvalEngine<'m, MT: ProgramMetric>`
+## Rollout mechanics
 
-Behind the `ir` feature. The IR-native evaluation path: candidate `ir::Overlay`s evaluated over one shared `Arc<Program>` through the `Interpreter`, with true candidate-level parallelism. The interpreter reads instructions, demos, and code through the overlay at render time, so there is no mutation, no apply, and no restore. Every uncached `(candidate, example)` pair across all requested candidates joins one bounded-concurrency stream.
-
-```rust
-pub trait ProgramMetric: Send + Sync {
-    async fn evaluate(
-        &self,
-        example: &DemoRow,
-        output: &JsonMap,
-        trace: Option<&Trace>,
-    ) -> Result<Eval>;
-}
-```
-
-`ProgramMetric` is the JSON-native sibling of `TypedMetric`: loaded programs have no static output type, so the metric scores the interpreter's output `JsonMap` against a labeled `DemoRow`.
-
-| Method | What it does |
-|---|---|
-| `new(examples, metric, config)` | Builds over `Vec<DemoRow>`, a `&MT`, and the same `EngineConfig` as the module lane. |
-| `evaluate_program_candidates(interp, candidates, subset)` | The IR-native entry point: evaluates N registered candidates over `subset` in one fan-out. Each rollout runs `interp.run(input, Some(overlay), Budget::unlimited())` under its own capture scope with `TraceMeta.candidate_hash` set to the overlay hash and a `program` tag carrying the program hash. Returns `ProgramEvalOutcome`. |
-| `evaluate(interp, candidate, subset)` | Single-candidate convenience; returns the module-lane `EvalOutcome`. |
-| `evaluate_gated(interp, candidate, minibatch, threshold)` | The same minibatch gate as the module lane; returns `GateOutcome`. |
-| `register(overlay)` | Registers an `ir::Overlay`, deduplicating by `Overlay::hash()`. Returns its index. |
-| `candidate(i) -> &Arc<Overlay>`, `candidate_hash(i)`, `num_candidates()` | Registry access. |
-| `cache()` | The rollout cache; program-lane keys are listed in the table above. |
-| `peak_candidate_concurrency()` | High-water mark of distinct candidates with rollouts in flight simultaneously. A value of 2 or more is positive evidence that candidate-level parallelism happened; the module lane is structurally pinned to 1. |
-| `examples()`, `num_examples()`, `config()`, `spend()`, `matrix()`, `pareto()`, `pareto_over()`, `budget_allows()`, `charge()` | Identical to the module lane. |
-
-The program lane shares `Spend` accounting, budget gating, and matrix bookkeeping with the module lane, but it does not offer `checkpoint` or `resume`; those exist only on `EvalEngine`.
+Each program-lane rollout runs `interp.run(input, Some(overlay), Budget::unlimited())` under its own capture scope with `TraceMeta.candidate_hash` set to the candidate's hash and a `program` tag carrying the program hash. Each module-lane rollout scopes the candidate's `fx::Params` ambiently around the whole traced rollout (`rollout_traced`), so every `Predict` leaf binds its own entry at call time. After the metric scores a module-lane rollout, any span-level evals it returns from `TypedMetric::evaluate_spans` are stamped onto the trace's spans; demo-harvesting optimizers prefer these over the rollout score (see [Evaluation](/docs/components/evaluation)). Every pending `(candidate, example)` pair — across all candidates, in both lanes — joins one `buffer_unordered` stream bounded by `EngineConfig::concurrency`.
 
 ## See also
 

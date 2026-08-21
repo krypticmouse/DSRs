@@ -1,7 +1,6 @@
 //! RFC 0001 §1's reserved `param_ids` column + RFC 0002 §3.3's
 //! `Trace::attach_program`: joining span components to a program's global
 //! `ParamId`s — one addressing story across traces, overlays, and slots.
-#![cfg(feature = "ir")]
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -258,6 +257,7 @@ async fn attach_program_resolves_the_join_for_every_leaf_span() {
             "researcher.demos",
             "researcher.model",
             "researcher.context",
+            "researcher.tool_set",
         ]
         .into_iter()
         .map(String::from)
@@ -299,21 +299,4 @@ async fn param_ids_survive_the_jsonl_round_trip_and_stay_additive() {
     let restored = Trace::from_jsonl(&jsonl).unwrap();
     assert_eq!(restored.meta.v, trace.meta.v, "no format version bump");
     assert_eq!(restored.param_ids, trace.param_ids);
-}
-
-#[tokio::test]
-async fn absorb_keeps_the_column_parallel() {
-    let (program, mut attached) = captured_run().await;
-    attached.attach_program(&program);
-
-    // Absorb an unattached trace with a foreign component.
-    let mut other = Trace::default();
-    other.components.push("foreign".to_string());
-    attached.absorb(other);
-
-    assert_eq!(attached.param_ids.len(), attached.components.len());
-    let foreign = attached.component_id("foreign").unwrap();
-    assert!(attached.param_ids[foreign.0 as usize].is_none());
-    let drafter = attached.component_id("drafter").unwrap();
-    assert!(attached.param_ids[drafter.0 as usize].is_some());
 }

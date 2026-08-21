@@ -9,7 +9,6 @@ use syn::{
     visit::Visit,
 };
 
-mod dsrs_syntax;
 mod example_derive;
 mod include_program;
 mod module_macro;
@@ -53,8 +52,13 @@ pub fn tool(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// `context(max_history_turns = N, tool_result_max_bytes = N, playbook = "…")`.
 ///
 /// Inside `#[module]` bodies this lowers to a first-class `AgentLoop` node.
-/// Called standalone it runs the static-lane tool loop (`Predict` +
-/// `ToolLoopMode::Auto`) — loop options apply to the lowered form only.
+/// Called standalone it executes the same 1-node `AgentLoop` program, with
+/// the loop options honored: `max_turns`/`stop_tools`/`until_parse` land in
+/// the node's `StopSpec`, `budget` in its `NodeBudget`, `context` in its
+/// `ContextPolicy`. The exception is `model`: model refs bind only inside a
+/// `#[module]` program, so setting `model = "…"` removes the standalone fn —
+/// calling it is a compile error rather than a silent fallback to the
+/// globally configured LM.
 #[proc_macro_attribute]
 pub fn agent(attr: TokenStream, item: TokenStream) -> TokenStream {
     tool_agent::expand_agent(attr, item)
@@ -103,14 +107,16 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The full `.dsrs` parser lives in `dspy-rs`, which depends on this macro
 /// crate — it cannot be called from here without a dependency cycle. The
-/// macro therefore validates **syntax only** at build time: the `dsrs 1`
-/// pragma, the top-level keyword vocabulary and declaration shapes, balanced
-/// delimiters, strings/numbers/code fences — a standalone check against the
-/// same surface grammar (see `docs/dsrs-format.md`). Types, dataflow,
-/// capability subsets, and everything else semantic are checked by the real
-/// parser at first use of `program()`/`try_program()` — and at CI time by the
-/// generated test, which is the sqlx-offline analogue: run `cargo test` and a
-/// semantically invalid artifact fails the suite even if never executed.
+/// macro therefore validates **syntax only** at build time, via the shared
+/// `dsrs-syntax` crate: the `dsrs 1` pragma, the top-level keyword
+/// vocabulary and declaration shapes, balanced delimiters,
+/// strings/numbers/code fences (see `docs/dsrs-format.md`). `dsrs-syntax`
+/// also supplies the lexer `Program::from_dsrs` parses with, so the two
+/// layers cannot drift. Types, dataflow, capability subsets, and everything
+/// else semantic are checked by the full parser at first use of
+/// `program()`/`try_program()` — and at CI time by the generated test, which
+/// is the sqlx-offline analogue: run `cargo test` and a semantically invalid
+/// artifact fails the suite even if never executed.
 #[proc_macro]
 pub fn include_program(input: TokenStream) -> TokenStream {
     let source_dir = proc_macro::Span::call_site()
@@ -175,22 +181,10 @@ pub fn derive_signature(input: TokenStream) -> TokenStream {
 ///
 /// Expands to `#[derive(facet::Facet, serde::Serialize, serde::Deserialize)]` (plus the
 /// crate-path attrs), which is all a type needs to satisfy the blanket `Schema` impl.
-/// Replaces the old BAML `#[BamlType]` attribute.
+/// Replaced the old BAML `#[BamlType]` attribute (the compat alias is gone).
 #[proc_macro_attribute]
 #[allow(non_snake_case)]
 pub fn Schema(_attr: TokenStream, item: TokenStream) -> TokenStream {
-    expand_schema_attr(item)
-}
-
-/// Backwards-compatible alias for [`macro@Schema`].
-///
-/// The old vendored BAML integration exposed a `#[BamlType]` attribute that derived the
-/// type-system plumbing. BAML is gone, but this alias keeps existing signatures/tests that
-/// still spell it `#[BamlType]` compiling — it expands to exactly the same facet + serde
-/// derives as `#[Schema]`.
-#[proc_macro_attribute]
-#[allow(non_snake_case)]
-pub fn BamlType(_attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_schema_attr(item)
 }
 

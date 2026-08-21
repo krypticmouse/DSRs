@@ -1018,16 +1018,15 @@ dependencies = [
  "bon",
  "cranelift-entity",
  "csv",
+ "dsrs-syntax",
  "dsrs-tools",
  "dsrs_macros",
  "enum_dispatch",
  "facet",
- "facet-reflect",
  "foyer",
  "futures",
  "hf-hub",
  "indexmap",
- "kdam",
  "minijinja",
  "parquet",
  "rand 0.8.5",
@@ -1063,6 +1062,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dsrs-syntax"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "dsrs-tools"
 version = "0.1.0"
 dependencies = [
@@ -1082,11 +1088,11 @@ name = "dsrs_macros"
 version = "0.7.2"
 dependencies = [
  "dspy-rs",
+ "dsrs-syntax",
  "minijinja",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
- "serde_json",
  "syn 2.0.106",
  "trybuild",
 ]
@@ -1187,7 +1193,8 @@ dependencies = [
 [[package]]
 name = "facet"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e338357cf598728b41e45744d024bdc063338214992361766928a1421bd7541d"
 dependencies = [
  "autocfg",
  "facet-core",
@@ -1197,7 +1204,8 @@ dependencies = [
 [[package]]
 name = "facet-core"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a63e0ade4c53b40220614b8fc2a0a0ce21975941b553081521a195c848b2e9c2"
 dependencies = [
  "autocfg",
  "const-fnv1a-hash",
@@ -1208,7 +1216,8 @@ dependencies = [
 [[package]]
 name = "facet-macro-parse"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83ea29147986d0e184600cec533c41d6065c3c3d4b5b5745a8403494ca216b09"
 dependencies = [
  "facet-macro-types",
  "proc-macro2",
@@ -1218,7 +1227,8 @@ dependencies = [
 [[package]]
 name = "facet-macro-types"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "31b0035cf41c0d4eeee82effc9161512d216d1378dd89c4d8721258429e38597"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1228,7 +1238,8 @@ dependencies = [
 [[package]]
 name = "facet-macros"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a784f2fa36d3165b95639af790249dee0d8efdef7d53f9417cace91697e2e3"
 dependencies = [
  "facet-macros-impl",
 ]
@@ -1236,33 +1247,14 @@ dependencies = [
 [[package]]
 name = "facet-macros-impl"
 version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8f45c6380398bf74e59b97a20012de571502c609e580d84579d1140e491c1c"
 dependencies = [
  "facet-macro-parse",
  "facet-macro-types",
  "proc-macro2",
  "quote",
  "unsynn",
-]
-
-[[package]]
-name = "facet-path"
-version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
-dependencies = [
- "facet-core",
-]
-
-[[package]]
-name = "facet-reflect"
-version = "0.43.2"
-source = "git+https://github.com/darinkishore/facet?rev=cc8613c97cd1ec03e63659db34a947989b45c8a5#cc8613c97cd1ec03e63659db34a947989b45c8a5"
-dependencies = [
- "facet-core",
- "facet-path",
- "hashbrown 0.16.1",
- "regex",
- "smallvec 2.0.0-alpha.12",
 ]
 
 [[package]]
@@ -1661,8 +1653,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 dependencies = [
  "allocator-api2",
- "equivalent",
- "foldhash 0.2.0",
 ]
 
 [[package]]
@@ -1776,7 +1766,7 @@ dependencies = [
  "itoa",
  "pin-project-lite",
  "pin-utils",
- "smallvec 1.15.1",
+ "smallvec",
  "tokio",
  "want",
 ]
@@ -1900,7 +1890,7 @@ dependencies = [
  "icu_normalizer_data",
  "icu_properties",
  "icu_provider",
- "smallvec 1.15.1",
+ "smallvec",
  "zerovec",
 ]
 
@@ -1975,7 +1965,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b0875f23caa03898994f6ddc501886a45c7d3d62d04d2d90788d47be1b1e4de"
 dependencies = [
  "idna_adapter",
- "smallvec 1.15.1",
+ "smallvec",
  "utf8_iter",
 ]
 
@@ -2113,16 +2103,6 @@ checksum = "8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "kdam"
-version = "0.6.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5740f66a8d86a086ebcacfb937070e8be6eb2f8fb45e4ae7fa428ca2a98a7b1f"
-dependencies = [
- "terminal_size",
- "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2705,7 +2685,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "redox_syscall",
- "smallvec 1.15.1",
+ "smallvec",
  "windows-targets 0.52.6",
 ]
 
@@ -3628,12 +3608,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "smallvec"
-version = "2.0.0-alpha.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef784004ca8777809dcdad6ac37629f0a97caee4c685fcea805278d81dd8b857"
-
-[[package]]
 name = "snap"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3798,16 +3772,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "terminal_size"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "60b8cb979cb11c32ce1603f8137b22262a9d131aaa5c37b5678025f22b8becd0"
-dependencies = [
- "rustix",
- "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4134,7 +4098,7 @@ dependencies = [
  "once_cell",
  "regex-automata",
  "sharded-slab",
- "smallvec 1.15.1",
+ "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",

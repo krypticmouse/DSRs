@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile(&mut module, trainset, &SmokeMetric)
+        .compile_module(&mut module, &trainset, &SmokeMetric)
         .await?;
 
     let output = module

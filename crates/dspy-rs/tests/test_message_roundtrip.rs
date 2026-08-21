@@ -1,8 +1,7 @@
 //! Round-trip tests for the new Message model.
 //!
 //! Verifies that the grouped Role + ContentBlock representation preserves
-//! all content through: DSRs Message → rig Message → DSRs Message, and
-//! through JSON serialization/deserialization.
+//! all content through: DSRs Message → rig Message → DSRs Message.
 
 use dspy_rs::core::lm::chat::{Chat, ContentBlock, Message, Role};
 use rig::OneOrMany;
@@ -170,77 +169,6 @@ fn multi_turn_conversation_preserves_earlier_reasoning() {
         2,
         "turn 1 must have both reasoning and text"
     );
-}
-
-// ---------------------------------------------------------------------------
-// JSON serialization round-trip
-// ---------------------------------------------------------------------------
-
-/// Full multi-content message survives JSON serialization.
-#[test]
-fn grouped_message_json_roundtrip() {
-    let original = Chat::new(vec![
-        Message::system("Be helpful"),
-        Message::with_content(
-            Role::Assistant,
-            vec![
-                ContentBlock::reasoning(Reasoning::new("let me think")),
-                ContentBlock::text("the answer is 42"),
-                ContentBlock::tool_call(ToolCall::new(
-                    "tc-1".to_string(),
-                    ToolFunction {
-                        name: "verify".to_string(),
-                        arguments: json!({"answer": 42}),
-                    },
-                )),
-            ],
-        ),
-        Message::with_content(
-            Role::User,
-            vec![
-                ContentBlock::tool_result(ToolResult {
-                    id: "tc-1".to_string(),
-                    call_id: None,
-                    content: OneOrMany::one(ToolResultContent::text("confirmed")),
-                }),
-                ContentBlock::text("Thanks! Can you also check 43?"),
-            ],
-        ),
-    ]);
-
-    let json = original.to_json();
-    let reparsed = Chat::new(vec![]).from_json(json).unwrap();
-
-    assert_eq!(reparsed.len(), 3);
-
-    // Verify the assistant message preserved all 3 content blocks
-    let asst = &reparsed.messages[1];
-    assert_eq!(asst.role, Role::Assistant);
-    assert_eq!(asst.content.len(), 3);
-    assert!(asst.has_reasoning());
-    assert!(asst.has_tool_calls());
-
-    // Verify the user message preserved both blocks
-    let user = &reparsed.messages[2];
-    assert_eq!(user.role, Role::User);
-    assert_eq!(user.content.len(), 2);
-    assert!(user.has_tool_results());
-}
-
-/// Legacy JSON format (content as plain string) still parses correctly.
-#[test]
-fn legacy_plain_string_json_parses_into_new_model() {
-    let legacy_json = json!([
-        {"role": "system", "content": "Be helpful"},
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi there!"}
-    ]);
-
-    let chat = Chat::new(vec![]).from_json(legacy_json).unwrap();
-    assert_eq!(chat.len(), 3);
-    assert_eq!(chat.messages[0].role, Role::System);
-    assert_eq!(chat.messages[0].content(), "Be helpful");
-    assert_eq!(chat.messages[2].text_content(), "Hi there!");
 }
 
 // ---------------------------------------------------------------------------

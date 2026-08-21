@@ -19,13 +19,17 @@
 //!
 //! A [`Predict`] is the leaf — the only thing that actually calls the LM. Every other
 //! module ([`ChainOfThought`], custom pipelines) delegates to one or more `Predict` leaves.
-//! Optimizers discover these leaves automatically via Facet reflection and mutate their
-//! instructions and few-shot demos.
+//! Modules name their leaves explicitly via [`Predictors`] (see the `predictors!` macro);
+//! optimizers tune those leaves' instructions and few-shot demos by injecting candidates
+//! ambiently per call, installing only the winner.
 //!
 //! # Quick start
 //!
+//! The recommended import is [`prelude`] — the curated core surface. (The
+//! crate root also glob re-exports everything for backwards compatibility.)
+//!
 //! ```no_run
-//! use dspy_rs::*;
+//! use dspy_rs::prelude::*;
 //!
 //! #[derive(Signature, Clone, Debug)]
 //! /// Answer questions accurately and concisely.
@@ -61,19 +65,20 @@
 //!
 //! # What doesn't work (yet)
 //!
-//! - **No dynamic graph / structural optimization.** The type-erased `ProgramGraph`,
-//!   `DynModule`, `StrategyFactory` layer was prototyped and intentionally removed.
-//!   Everything here is statically typed, which is both the strength and the constraint.
-//! - **No `ReAct`, `BestOfN`, `Refine`, or other advanced modules** beyond `ChainOfThought`.
-//!   The module trait and augmentation system are designed for them, but nobody's built
-//!   them yet.
+//! - **Structural optimization is program-lane only.** [`Structural`]
+//!   proposes graph edits ([`ir::Edit`]) over an interpreter-loaded
+//!   [`ir::Program`]; typed modules have no editable skeleton, so the other
+//!   optimizers tune their instructions and demos only.
+//! - **No `BestOfN`, `Refine`, or other advanced modules** beyond
+//!   [`ChainOfThought`]. Agentic tool loops live in the IR instead
+//!   (`AgentLoopNode` via the `#[agent]` macro); the module trait and
+//!   augmentation system could host the rest, but nobody's built them.
 //! - **`CallMetadata` is not extensible.** Modules can't attach custom metadata (e.g.
 //!   "which attempt won in BestOfN"). This should probably be a trait with associated
 //!   types, but it isn't.
-//! - **Container traversal is partial.** The optimizer walker handles `Option`, `Vec`,
-//!   `HashMap<String, _>`, and `Box`. `Rc`/`Arc` containing `Predict` leaves return
-//!   explicit container errors (not silent skips), and `Predict` discovery requires
-//!   a valid shape-local accessor payload (`TODO(dsrs-shared-ptr-policy)`).
+//! - **Leaf discovery is explicit.** Optimizable [`Predict`] leaves are whatever a
+//!   module declares in its [`Predictors`] impl — there is no reflection walker.
+//!   A leaf you forget to declare simply isn't optimized or persisted.
 //!
 //! # Crate organization
 //!
@@ -84,13 +89,10 @@
 //! - [`modules`] — [`ChainOfThought`] and augmentation types
 //! - [`evaluate`] — [`TypedMetric`] trait, [`evaluate_trainset`], scoring utilities
 //! - [`optimizer`] — [`Optimizer`] trait, [`COPRO`], [`GEPA`], [`MIPROv2`]
+//! - [`ir`] — dynamic program graph, interpreter, and the `.dsrs` text format
 //! - [`data`] — [`DataLoader`] for JSON/CSV/Parquet/HuggingFace datasets
 //! - [`trace`] — Execution trace capture (spans per `Predict` call, JSONL serialization)
 //! - [`utils`] — Response caching
-
-// TODO(dsrs-facet-lint-scope): remove this crate-level allow once Facet's generated
-// extension-attr dispatch no longer triggers rust-lang/rust#52234 on in-crate usage.
-#![allow(macro_expanded_macro_exports_accessed_by_absolute_paths)]
 
 extern crate self as dspy_rs;
 
@@ -118,9 +120,8 @@ pub use optimizer::*;
 pub use predictors::*;
 // The unified trace format (RFC 0001).
 pub use trace::{
-    CompId, Eval, JsonMap, ModelEntry, ModelId, OtelEvent, OtelKeyValue, OtelSpan, OtelStatus,
-    OtelValue, PrefixEntry, PrefixId, ReplayError, ReplayMode, ReplayReport, RlRollout,
-    RlTransition, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
+    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, ReplayError, ReplayMode,
+    ReplayReport, Span, SpanError, SpanErrorKind, SpanEvent, SpanGuard, SpanId, SpanOutcome,
     SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
     is_capturing, is_replaying, replay,
 };
@@ -128,16 +129,70 @@ pub use utils::*;
 
 // Code Mode (vision report §5.5): tools as a sandboxed JS API. See
 // `ToolSet::code_mode` for the module lane and `RuntimeEnv` for the IR lane.
-#[cfg(feature = "code-mode")]
 pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
 
 pub mod typesys;
 pub use dsrs_macros::*;
 pub use facet::{Facet, Shape};
-pub use typesys::{
-    Constraint, ConstraintLevel, ConstraintOutcome, FieldType, Flag, OutputSchema, ResponseCheck,
-    Schema, evaluate_constraints,
-};
+pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Schema};
+
+/// The curated core surface — the recommended import for DSRs programs.
+///
+/// ```no_run
+/// use dspy_rs::prelude::*;
+/// ```
+///
+/// Covers the basic path end to end: declare a [`Signature`], pick a module
+/// ([`Predict`], [`ChainOfThought`]), [`configure`] an [`LM`], load data,
+/// evaluate with a [`TypedMetric`], optimize with any [`Optimizer`], and
+/// capture/replay traces. The crate root's glob re-exports remain for the
+/// long tail (adapters, schema internals, fx, the full [`ir`] surface).
+pub mod prelude {
+    // Signatures: the trait and the derive share a name across namespaces.
+    pub use crate::core::signature::Signature;
+    pub use dsrs_macros::{Example, Signature};
+
+    // Modules and predictors.
+    pub use crate::core::{
+        CallMetadata, Module, ModuleState, PredictError, PredictState, Predicted, Predictors,
+    };
+    pub use crate::modules::{ChainOfThought, WithReasoning};
+    pub use crate::predictors::{Demo, Predict};
+    // The `predictors!` leaf-declaration macro (and, same name, the module).
+    pub use crate::predictors;
+
+    // LM configuration.
+    pub use crate::core::lm::{LM, LMConfig};
+    pub use crate::core::settings::configure;
+
+    // Data loading.
+    pub use crate::data::dataloader::{DataLoader, TypedLoadOptions};
+
+    // Evaluation.
+    pub use crate::evaluate::{
+        TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
+    };
+    // `SpanId` keys per-span evals (`TypedMetric::evaluate_spans`).
+    pub use crate::trace::{Eval, SpanId};
+
+    // Optimization: the trait, the six strategies, and the engine surface.
+    pub use crate::optimizer::{
+        BootstrapFewShot, COPRO, Candidate, Engine, GEPA, MIPROv2, OptimizeTarget, Optimizer,
+        SIMBA, Structural,
+    };
+
+    // Trace capture and replay entry points.
+    pub use crate::trace::{
+        ReplayMode, ReplayReport, Trace, capture, capture_with_meta, is_capturing, is_replaying,
+        replay,
+    };
+
+    // The IR: programs as data.
+    pub use crate::ir::{Edit, Interpreter, Overlay, Program};
+
+    // Telemetry sugar every quickstart uses.
+    pub use crate::utils::init_tracing;
+}
 
 /// Pre-built signature for use in doc examples. Not part of the public API.
 #[doc(hidden)]
@@ -163,41 +218,4 @@ pub mod __macro_support {
     pub use tokio;
 }
 
-#[macro_export]
-macro_rules! sign {
-    // Example Usage: signature! {
-    //     question: String, random: bool -> answer: String
-    // }
-    //
-    // Example Output:
-    //
-    // #[derive(Signature, Clone)]
-    // struct InlineSignature {
-    //     #[input]
-    //     question: String,
-    //     #[input]
-    //     random: bool,
-    //     #[output]
-    //     answer: String,
-    // }
-    //
-    // Predict::<InlineSignature>::new()
-
-    // Pattern: input fields -> output fields
-    { ($($input_name:ident : $input_type:ty),* $(,)?) -> $($output_name:ident : $output_type:ty),* $(,)? } => {{
-        #[derive($crate::Signature, Clone)]
-        struct __InlineSignature {
-            $(
-                #[input]
-                $input_name: $input_type,
-            )*
-            $(
-                #[output]
-                $output_name: $output_type,
-            )*
-        }
-
-        $crate::Predict::<__InlineSignature>::new()
-    }};
-}
 

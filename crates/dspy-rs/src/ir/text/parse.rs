@@ -21,7 +21,7 @@ use crate::ir::validate::ValidateError;
 use crate::typesys::{ClassDef, EnumDef, EnumValueDef, FieldType, TypeTable};
 
 use super::ParseError;
-use super::lex::{Lexed, Lexer, Span, Tok};
+use dsrs_syntax::lex::{Lexed, Lexer, Span, Tok};
 
 /// Words that cannot be used as node/sig/tool/model/class/enum names.
 const RESERVED: &[&str] = &[
@@ -1208,6 +1208,7 @@ impl<'a> Parser<'a> {
             let (key, key_span) = self.expect_ident("as an agent option")?;
             match key.as_str() {
                 "tools" => spec = spec.tools(self.tool_list("tools")?),
+                "tool_set" => spec = spec.tool_set(self.tool_list("tool_set")?),
                 "stop_tools" => spec = spec.stop_tools(self.tool_list("stop_tools")?),
                 "max_turns" => {
                     let (turns, span) = self.expect_int::<u32>("after `max_turns`")?;
@@ -1303,9 +1304,9 @@ impl<'a> Parser<'a> {
                     return Err(ParseError::at(
                         key_span,
                         format!(
-                            "unknown agent option `{other}`: expected `tools`, `stop_tools`, \
-                             `max_turns`, `until_parse`, `budget`, `context`, `instruction`, \
-                             or `demos`"
+                            "unknown agent option `{other}`: expected `tools`, `tool_set`, \
+                             `stop_tools`, `max_turns`, `until_parse`, `budget`, `context`, \
+                             `instruction`, or `demos`"
                         ),
                     ));
                 }
@@ -1885,6 +1886,8 @@ fn validate_error_handles(v: &ValidateError) -> (Option<&str>, Option<(&str, &st
         | E::ParamKindMismatch { at, .. }
         | E::ParamOwnerMismatch { at, .. }
         | E::StopToolNotDeclared { at }
+        | E::ToolSetUndeclared { at, .. }
+        | E::ToolSetDuplicate { at, .. }
         | E::RefineJudgeNotLeaf { at }
         | E::RefineJudgeInterface { at }
         | E::WhileNotBool { at, .. } => (Some(at), None),

@@ -36,6 +36,7 @@ fn to_unit_completion_response<T>(response: CompletionResponse<T>) -> Completion
 pub struct TestCompletionModel {
     responses: Arc<Mutex<VecDeque<AssistantContent>>>,
     last_request: Arc<Mutex<Option<CompletionRequest>>>,
+    usage: Arc<Mutex<Usage>>,
 }
 
 impl TestCompletionModel {
@@ -43,6 +44,7 @@ impl TestCompletionModel {
         Self {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             last_request: Arc::new(Mutex::new(None)),
+            usage: Arc::new(Mutex::new(Usage::new())),
         }
     }
 
@@ -52,6 +54,12 @@ impl TestCompletionModel {
 
     pub fn last_request(&self) -> Option<CompletionRequest> {
         self.last_request.lock().unwrap().clone()
+    }
+
+    /// Sets the token usage reported with every subsequent canned response
+    /// (defaults to zero usage).
+    pub fn set_usage(&self, usage: Usage) {
+        *self.usage.lock().unwrap() = usage;
     }
 }
 
@@ -66,7 +74,7 @@ impl CompletionProvider for TestCompletionModel {
         })?;
         Ok(CompletionResponse {
             choice: OneOrMany::one(response),
-            usage: Usage::new(),
+            usage: *self.usage.lock().unwrap(),
             raw_response: (),
             message_id: None,
         })

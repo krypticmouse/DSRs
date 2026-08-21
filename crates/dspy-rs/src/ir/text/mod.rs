@@ -16,31 +16,15 @@ use std::path::Path;
 
 use crate::ir::graph::Program;
 
-pub(crate) mod lex;
 pub(crate) mod parse;
 pub(crate) mod print;
 
 /// A parse failure with the source position and what was expected — designed
 /// to be actionable feedback for a model regenerating the program.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("line {line}, column {col}: {message}")]
-pub struct ParseError {
-    /// 1-based source line.
-    pub line: u32,
-    /// 1-based source column (bytes).
-    pub col: u32,
-    pub message: String,
-}
-
-impl ParseError {
-    pub(crate) fn at(span: lex::Span, message: impl Into<String>) -> Self {
-        Self {
-            line: span.line,
-            col: span.col,
-            message: message.into(),
-        }
-    }
-}
+///
+/// Re-exported from `dsrs-syntax`, the shared home of the `.dsrs` lexer and
+/// structural grammar (also used by `include_program!` at macro expansion).
+pub use dsrs_syntax::ParseError;
 
 /// Failure loading or saving a `.dsrs` artifact file.
 #[derive(Debug, thiserror::Error)]

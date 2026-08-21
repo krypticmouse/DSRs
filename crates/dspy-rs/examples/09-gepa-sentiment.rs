@@ -41,6 +41,8 @@ struct SentimentAnalyzer {
     predictor: Predict<SentimentSignature>,
 }
 
+dspy_rs::predictors!(SentimentAnalyzer { predictor });
+
 impl Module for SentimentAnalyzer {
     type Input = SentimentSignatureInput;
     type Output = SentimentSignatureOutput;
@@ -130,7 +132,7 @@ async fn main() -> Result<()> {
         .track_stats(true)
         .build();
 
-    let result = gepa.compile(&mut module, trainset.clone(), &metric).await?;
+    let result = gepa.compile_module(&mut module, &trainset, &metric).await?;
 
     println!(
         "Best average score: {:.3}",
@@ -159,7 +161,7 @@ async fn main() -> Result<()> {
 
     // Persist the optimized instructions/demos so production can reload them
     // with `ModuleState::load(...)?.apply(&mut module)?` — no re-optimization.
-    ModuleState::from_module(&mut module)?.save("optimized-sentiment.json")?;
+    ModuleState::from_module(&module)?.save("optimized-sentiment.json")?;
     println!("Saved optimized module state to optimized-sentiment.json");
 
     Ok(())

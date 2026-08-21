@@ -18,6 +18,138 @@ use serde_json::Value;
 
 use crate::error::RegisterError;
 
+/// JavaScript reserved words and ambient globals that must never be used as
+/// capability names. A capability becomes a `globalThis` property: shadowing
+/// `JSON` would break every capability shim (each depends on
+/// `JSON.stringify`/`JSON.parse`), shadowing `globalThis`/`undefined` breaks
+/// the sandbox contract outright, and a reserved word like `class` is not
+/// callable from script code at all.
+const RESERVED_JS_NAMES: &[&str] = &[
+    // Reserved words, contextual keywords, and literals.
+    "arguments",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "eval",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "get",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "of",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "return",
+    "set",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "undefined",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+    // Ambient globals the sandbox (and its own shims) depend on.
+    "globalThis",
+    "NaN",
+    "Infinity",
+    "JSON",
+    "Object",
+    "Function",
+    "Array",
+    "String",
+    "Number",
+    "Boolean",
+    "Symbol",
+    "BigInt",
+    "Math",
+    "Date",
+    "RegExp",
+    "Error",
+    "AggregateError",
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "InternalError",
+    "Promise",
+    "Proxy",
+    "Reflect",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "WeakRef",
+    "FinalizationRegistry",
+    "ArrayBuffer",
+    "SharedArrayBuffer",
+    "DataView",
+    "Atomics",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+    "decodeURI",
+    "decodeURIComponent",
+    "encodeURI",
+    "encodeURIComponent",
+    "escape",
+    "unescape",
+    "parseFloat",
+    "parseInt",
+    "isNaN",
+    "isFinite",
+    "structuredClone",
+    "console",
+    "print",
+];
+
+/// Whether `name` is a JavaScript reserved word or an ambient global the
+/// sandbox depends on (see [`RESERVED_JS_NAMES`]).
+pub(crate) fn is_reserved_js_name(name: &str) -> bool {
+    RESERVED_JS_NAMES.contains(&name)
+}
+
 /// Mangle an arbitrary tool name into a valid JavaScript identifier.
 ///
 /// The mangling rule, in order:
@@ -28,7 +160,11 @@ use crate::error::RegisterError;
 ///    (`2fast` → `_2fast`),
 /// 3. an empty name becomes `_tool`,
 /// 4. a result starting with the runtime-reserved `__dsrs` prefix gets one
-///    more leading `_` (`__dsrs_x` → `___dsrs_x`).
+///    more leading `_` (`__dsrs_x` → `___dsrs_x`),
+/// 5. a result colliding with a JavaScript reserved word or ambient global
+///    gets a `_tool` suffix (`JSON` → `JSON_tool`, `class` → `class_tool`) —
+///    installing such a name as a global would break the sandbox bootstrap
+///    or be uncallable from script code.
 ///
 /// The result always passes capability-name validation. The mapping is not
 /// injective — distinct tool names can mangle to the same identifier —
@@ -54,6 +190,9 @@ pub fn js_identifier(name: &str) -> String {
     if out.starts_with("__dsrs") {
         out.insert(0, '_');
     }
+    if is_reserved_js_name(&out) {
+        out.push_str("_tool");
+    }
     out
 }
 
@@ -67,9 +206,10 @@ pub type CapabilityHandler =
 /// From JavaScript the capability looks synchronous — `const rows = query({q:
 /// "..."})` — the executor bridges the call onto the host's Tokio runtime and
 /// blocks the sandbox thread until it resolves. Capability calls are host
-/// code: the sandbox deadline cannot interrupt them mid-flight (it re-arms as
-/// soon as control returns to JS), so handlers should enforce their own
-/// timeouts.
+/// code, so the engine's interrupt handler cannot fire mid-call; instead the
+/// executor bounds every call with the sandbox's *remaining* wall-clock
+/// deadline (`tokio::time::timeout`): a handler that runs past it is dropped
+/// and the call surfaces in JS as a deadline timeout.
 #[derive(Clone)]
 pub struct Capability {
     name: String,
@@ -191,7 +331,15 @@ impl Capability {
     }
 
     /// Capability names become JS globals, so they must be valid identifiers
-    /// and must not collide with the runtime's reserved `__dsrs_*` namespace.
+    /// (`[A-Za-z_$][A-Za-z0-9_$]*`), must not collide with the runtime's
+    /// reserved `__dsrs_*` namespace, and must not shadow a JavaScript
+    /// reserved word or ambient global (see [`RESERVED_JS_NAMES`]).
+    ///
+    /// Enforced on **every** install path — [`add_capability`], the builder,
+    /// and per-sandbox installation (which covers `run_script` and Code
+    /// Mode) — so a hostile name can never reach the sandbox bootstrap.
+    ///
+    /// [`add_capability`]: crate::QuickJsExecutor::add_capability
     pub(crate) fn validate_name(name: &str) -> Result<(), RegisterError> {
         let invalid = |reason: &str| RegisterError::InvalidCapability {
             name: name.to_string(),
@@ -211,6 +359,11 @@ impl Capability {
         }
         if name.starts_with("__dsrs") {
             return Err(invalid("the `__dsrs` prefix is reserved by the runtime"));
+        }
+        if is_reserved_js_name(name) {
+            return Err(invalid(
+                "collides with a JavaScript reserved word or built-in global",
+            ));
         }
         Ok(())
     }

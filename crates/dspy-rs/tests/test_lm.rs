@@ -145,7 +145,7 @@ async fn test_lm_cache_direct_operations() {
     let key: CacheKey = 0xDEAD_BEEF;
 
     // Initially cache should be empty
-    let cached = cache.lock().await.get_entry(key).await.unwrap();
+    let cached = cache.get_entry(key).await.unwrap();
     assert!(cached.is_none());
 
     // Insert an entry
@@ -154,12 +154,10 @@ async fn test_lm_cache_direct_operations() {
         usage: LmUsage::default(),
         raw_output: Some("answer: Paris".to_string()),
     };
-    cache.lock().await.insert_entry(key, entry.clone());
+    cache.insert_entry(key, entry.clone());
 
     // Now cache should return the entry
     let cached = cache
-        .lock()
-        .await
         .get_entry(key)
         .await
         .unwrap()
@@ -168,7 +166,7 @@ async fn test_lm_cache_direct_operations() {
     assert_eq!(cached.raw_output, entry.raw_output);
 
     // Unknown keys still miss
-    let missing = cache.lock().await.get_entry(key ^ 1).await.unwrap();
+    let missing = cache.get_entry(key ^ 1).await.unwrap();
     assert!(missing.is_none());
 }
 
@@ -229,10 +227,10 @@ async fn test_cache_preserves_usage_and_history() {
         raw_output: Some("answer: A fox jumps over a dog".to_string()),
     };
 
-    cache.lock().await.insert_entry(key, entry.clone());
+    cache.insert_entry(key, entry.clone());
 
     // The cache stores and retrieves the full entry including usage stats.
-    let cached = cache.lock().await.get_entry(key).await.unwrap().unwrap();
+    let cached = cache.get_entry(key).await.unwrap().unwrap();
     assert_eq!(cached.prompt, entry.prompt);
     assert_eq!(cached.raw_output, entry.raw_output);
     assert_eq!(cached.usage.prompt_tokens, 50);
@@ -245,9 +243,9 @@ async fn test_cache_preserves_usage_and_history() {
         usage: LmUsage::default(),
         raw_output: None,
     };
-    cache.lock().await.insert_entry(43, later.clone());
+    cache.insert_entry(43, later.clone());
 
-    let history = cache.lock().await.get_history(2).await.unwrap();
+    let history = cache.get_history(2);
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].prompt, later.prompt);
     assert_eq!(history[1].prompt, entry.prompt);

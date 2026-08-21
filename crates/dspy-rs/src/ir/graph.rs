@@ -277,7 +277,13 @@ pub struct AgentLoopNode {
     pub instruction: ParamId,
     pub demos: ParamId,
     pub model: ParamId,
+    /// The declared tool table — structural: it is the loop's capability
+    /// footprint and the legal alphabet of the `tool_set` gene.
     pub tools: Box<[ToolId]>,
+    /// `ParamKind::ToolSet`: which declared tools the loop carries at run
+    /// time (defaults to the full declared table). Selection is optimizable;
+    /// declaration is not.
+    pub tool_set: ParamId,
     /// `ParamKind::ContextPolicy`.
     pub context_policy: ParamId,
     pub stop: StopSpec,
@@ -550,8 +556,8 @@ impl Program {
 
     /// Promotion (RFC 0002 §5, overlay lifecycle): folds `overlay` into a new
     /// `Program` value — every overlay entry (instruction, demos, tool desc,
-    /// model ref, context policy, code) becomes the corresponding slot's
-    /// *default* — stamps [`Lineage`], and recomputes the program hash.
+    /// tool set, model ref, context policy, code) becomes the corresponding
+    /// slot's *default* — stamps [`Lineage`], and recomputes the program hash.
     ///
     /// `self` is untouched; the returned program is a first-class artifact:
     /// it validates, serializes, and runs identically to `self` + `overlay`

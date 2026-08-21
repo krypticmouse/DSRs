@@ -2,7 +2,6 @@
 //! sandboxed `run_js` tool, usable in the LM tool loop today. A canned LM
 //! emits a `run_js` call whose script chains two tool calls in a single
 //! execution — the token-economy win over N JSON tool calls.
-#![cfg(feature = "code-mode")]
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

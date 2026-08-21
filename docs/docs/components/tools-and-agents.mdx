@@ -52,7 +52,7 @@ The bodyless-fn rules match `#[predict]`: no `async`, no generics, no `self`, pl
 
 | Option | Form | Meaning |
 |---|---|---|
-| `model` | `model = "@name"` | Model reference for the loop. |
+| `model` | `model = "@name"` | Model reference for the loop. Binds only inside `#[module]` programs; setting it removes the standalone fn (calling one is a compile error). |
 | `tools` | `tools(a, b)` | The `#[tool]` functions the loop may call, in order. |
 | `stop_tools` | `stop_tools(a)` | Tools whose call ends the loop. Each must also appear in `tools(...)`. |
 | `max_turns` | `max_turns = N` | Turn bound for the lowered loop node (IR default is 8 when omitted). |
@@ -80,7 +80,7 @@ When the model calls a stop tool, the loop ends right there. The arguments of th
 
 ## Standalone or inside a module
 
-`#[agent]` generates a standalone `async fn` returning `Result<Predicted<research::SigOutput>, PredictError>`. Called directly, it runs the static-lane tool loop (`Predict` with `ToolLoopMode::Auto`). Inside a `#[module]` body, the same call lowers to a first-class `AgentLoop` node in the program graph, and the loop options (`max_turns`, `budget`, `context`) apply only to this lowered form.
+`#[agent]` generates a standalone `async fn` returning `Result<Predicted<research::SigOutput>, PredictError>`. Called directly, it executes the same 1-node `AgentLoop` program the `#[module]` lowering produces, with the loop options honored on both paths: `max_turns`/`stop_tools`/`until_parse` land in the node's `StopSpec`, `budget` in its `NodeBudget`, and `context` in its `ContextPolicy`. The one exception is `model`: model refs bind only inside a `#[module]` program, so setting `model = "…"` removes the standalone fn — calling it is a compile error rather than a silent fallback to the globally configured LM.
 
 ```rust
 use dspy_rs::module;
@@ -119,9 +119,17 @@ Because the code is inside the file, the program is fully portable: anyone who c
 
 ## Related surfaces
 
-`ReAct<S>` is the struct-lane equivalent of `#[agent]`: a thought, action, observation loop over a set of tools that extracts a typed answer, built and configured as a Rust struct rather than declared as a bodyless function. See [Modules](/docs/components/modules).
+The struct-lane way to give a model tools is to attach them to a `Predict` (`PredictBuilder::add_tool`/`with_tools`): a tooled predictor executes as a 1-node `agent` program through the interpreter, with the default stop behavior (`until_parse`, `max_turns = 8`). See [Predict](/docs/components/predict). There is no separate `ReAct` module.
 
 Code Mode is the many-tools-to-one-script alternative. Instead of advertising N tool schemas and paying one round trip per call, the model sees a single `run_js` meta-tool whose description lists your tools as a JavaScript API; it writes one script that calls them as plain functions and returns one value. See [Code Mode](/docs/components/code-mode).
+
+## Tool membership is optimizable
+
+Which tools a loop carries is a tuned value, not just structure. The agent node's `tools` list is the *declaration* — the loop's capability footprint, checked against the program ceiling at load. Which of those tools the loop actually presents to the model is the `ToolSet` parameter (`"<leaf>.tool_set"`), a slot like `instruction` or `demos`: an optimizer's candidate can drop a distracting tool or bring a declared one back, and the descriptions the model sees are themselves `ToolDesc` slots. The alphabet is closed — a candidate can never smuggle in a tool the declaration doesn't cover; that is refused at load, not at call time. Absent selection means the full declared list, so nothing changes until an optimizer says so. See [Program and nodes](/docs/components/program-and-nodes) for the slot machinery.
+
+## Executing tool calls yourself
+
+To execute tool calls yourself instead of letting the loop dispatch them (a REPL the agent drives, tools that need caller-side state), run the agent through the interpreter's caller-managed conversation surface: `Interpreter::run_conversation_caller_managed` suspends the loop on tool calls and `resume_conversation` feeds your results back, with the same spans, budgets, and stop-tool behavior as the dispatching loop. The suspended surface presents the ToolSet-selected tools per call, same as the dispatching loop. See [Runtime](/docs/components/runtime).
 
 ## Common mistakes
 
@@ -135,6 +143,6 @@ Code Mode is the many-tools-to-one-script alternative. Instead of advertising N 
 
 - [Capabilities](/docs/components/capabilities) for tool needs, program ceilings, and host grants
 - [Code Mode](/docs/components/code-mode) for presenting many tools as one script surface
-- [Modules](/docs/components/modules) for `ReAct<S>` and the other struct-lane strategies
+- [Modules](/docs/components/modules) for the struct-lane strategies
 - [The module macro](/docs/components/module-macro) for the body rules that lower agent calls
 - [The .dsrs file](/docs/components/dsrs-file) for sandboxed tool syntax in the artifact

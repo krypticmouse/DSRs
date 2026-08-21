@@ -36,6 +36,7 @@ async fn live_call_and_parse_two_turn_roundtrip() {
     };
     let chat = predict
         .build_chat(&first_input)
+        .await
         .expect("build_chat should succeed");
     let (first, mut chat) = predict
         .call_and_parse(chat)

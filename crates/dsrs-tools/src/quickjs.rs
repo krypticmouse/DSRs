@@ -13,9 +13,12 @@
 //! - bytecode reuse: sources are compiled once per unique content
 //!   (BLAKE3-keyed) and the bytecode is shared across calls.
 //!
-//! The blocking QuickJS work runs on Tokio's blocking pool; injected
-//! capabilities are async Rust and are driven to completion from the sandbox
-//! thread via `Handle::block_on`.
+//! The blocking QuickJS work runs on Tokio's blocking pool. Injected
+//! capabilities are async Rust: each call is spawned onto the host Tokio
+//! runtime (bounded by the sandbox's remaining deadline via
+//! `tokio::time::timeout`) while the sandbox thread parks on a channel for
+//! the result — no `Handle::block_on`, so both current-thread and
+//! multi-thread runtimes work.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -48,8 +51,10 @@ const MODULE_NAME: &str = "dsrs_tool";
 pub struct SandboxConfig {
     /// Max heap for one call, in bytes. Default: 32 MiB.
     pub memory_limit: usize,
-    /// Wall-clock budget for one call. Time spent inside a capability counts
-    /// against the budget but cannot be interrupted mid-call. Default: 500ms.
+    /// Wall-clock budget for one call. JS execution is interrupted by the
+    /// engine's interrupt handler; a capability call is bounded by the
+    /// *remaining* budget via `tokio::time::timeout` (the interrupt handler
+    /// cannot fire while host code runs). Default: 500ms.
     pub deadline: Duration,
     /// Max JS stack, in bytes. Default: 512 KiB.
     pub max_stack: usize,
@@ -70,13 +75,54 @@ struct ToolEntry {
     meta: RegisteredTool,
     bytecode: Arc<Vec<u8>>,
     required: Arc<Vec<String>>,
+    /// Raw BLAKE3 source hash: the bytecode-cache key, kept so
+    /// [`Executor::deregister`] can evict the tool's cache entry.
+    hash: [u8; 32],
 }
 
+/// Content-hash bytecode cache.
+///
+/// **Eviction policy (documented, deliberately simple):**
+/// - bounded at [`Self::MAX_ENTRIES`] entries; when an insert would grow past
+///   the bound the whole map is cleared first (cap-and-clear). Registered
+///   tools hold their own `Arc` to their bytecode, so eviction never breaks a
+///   registered tool — it only costs a recompile on the next cache miss.
+/// - `deregister` evicts the tool's entry unless another registered tool
+///   shares the same source hash.
 #[derive(Default)]
 struct BytecodeCache {
     by_hash: Mutex<HashMap<[u8; 32], Arc<Vec<u8>>>>,
     hits: AtomicU64,
     misses: AtomicU64,
+}
+
+impl BytecodeCache {
+    /// Upper bound on cached compilations. An optimizer generating thousands
+    /// of candidate tool bodies stays bounded instead of leaking them all.
+    const MAX_ENTRIES: usize = 128;
+
+    fn get(&self, hash: &[u8; 32]) -> Option<Arc<Vec<u8>>> {
+        self.by_hash
+            .lock()
+            .expect("cache lock poisoned")
+            .get(hash)
+            .cloned()
+    }
+
+    fn insert(&self, hash: [u8; 32], bytecode: Arc<Vec<u8>>) {
+        let mut map = self.by_hash.lock().expect("cache lock poisoned");
+        if map.len() >= Self::MAX_ENTRIES && !map.contains_key(&hash) {
+            map.clear();
+        }
+        map.insert(hash, bytecode);
+    }
+
+    fn remove(&self, hash: &[u8; 32]) {
+        self.by_hash
+            .lock()
+            .expect("cache lock poisoned")
+            .remove(hash);
+    }
 }
 
 /// Counters for the content-hash bytecode cache.
@@ -254,34 +300,22 @@ impl QuickJsExecutor {
     }
 
     /// Compile `js_source` (wrapped as an ES module) to bytecode, reusing the
-    /// content-hash cache. Returns `(bytecode, hex_hash, was_cache_hit)`.
+    /// content-hash cache. Returns `(bytecode, raw_hash)`.
     fn compile_or_cached(
         &self,
         js_source: &str,
-    ) -> Result<(Arc<Vec<u8>>, String, bool), RegisterError> {
+    ) -> Result<(Arc<Vec<u8>>, [u8; 32]), RegisterError> {
         let hash = *blake3::hash(js_source.as_bytes()).as_bytes();
-        let hex = blake3::Hash::from_bytes(hash).to_hex().to_string();
 
-        if let Some(bytecode) = self
-            .cache
-            .by_hash
-            .lock()
-            .expect("cache lock poisoned")
-            .get(&hash)
-            .cloned()
-        {
+        if let Some(bytecode) = self.cache.get(&hash) {
             self.cache.hits.fetch_add(1, Ordering::Relaxed);
-            return Ok((bytecode, hex, true));
+            return Ok((bytecode, hash));
         }
 
         let bytecode = Arc::new(compile_module(&wrap_source(js_source), self.config)?);
-        self.cache
-            .by_hash
-            .lock()
-            .expect("cache lock poisoned")
-            .insert(hash, Arc::clone(&bytecode));
+        self.cache.insert(hash, Arc::clone(&bytecode));
         self.cache.misses.fetch_add(1, Ordering::Relaxed);
-        Ok((bytecode, hex, false))
+        Ok((bytecode, hash))
     }
 }
 
@@ -353,7 +387,8 @@ impl Executor for QuickJsExecutor {
         let capabilities = self.snapshot_capabilities();
 
         // Stage 2: parse/compile (content-hash cached).
-        let (bytecode, source_hash, _hit) = self.compile_or_cached(&source.js_source)?;
+        let (bytecode, hash) = self.compile_or_cached(&source.js_source)?;
+        let source_hash = blake3::Hash::from_bytes(hash).to_hex().to_string();
 
         // Stage 3: instantiate in a sandbox, check the module evaluates to a
         // function, and run the self-test if present.
@@ -392,6 +427,7 @@ impl Executor for QuickJsExecutor {
             meta: meta.clone(),
             bytecode,
             required: Arc::new(source.required_params()),
+            hash,
         };
         let mut tools = self.tools.write().expect("tool lock poisoned");
         if tools.contains_key(&source.name) {
@@ -444,11 +480,17 @@ impl Executor for QuickJsExecutor {
     }
 
     fn deregister(&self, name: &str) -> bool {
-        self.tools
-            .write()
-            .expect("tool lock poisoned")
-            .remove(name)
-            .is_some()
+        let mut tools = self.tools.write().expect("tool lock poisoned");
+        let Some(entry) = tools.remove(name) else {
+            return false;
+        };
+        // Evict the tool's bytecode unless another registered tool shares it
+        // (identical sources share one cache entry).
+        let shared = tools.values().any(|other| other.hash == entry.hash);
+        if !shared {
+            self.cache.remove(&entry.hash);
+        }
+        true
     }
 }
 
@@ -636,7 +678,9 @@ impl Sandbox {
             let handle = handle.ok_or_else(|| {
                 internal("capabilities require a Tokio runtime handle".to_string())
             })?;
-            context.with(|ctx| install_capabilities(&ctx, capabilities, &handle))?;
+            context.with(|ctx| {
+                install_capabilities(&ctx, capabilities, &handle, deadline, &timed_out, config)
+            })?;
         }
 
         Ok(Self {
@@ -648,20 +692,64 @@ impl Sandbox {
     }
 }
 
-/// Expose each capability as a global JS function. The raw hook takes and
-/// returns JSON strings; a JS shim gives callers a plain-value API.
+/// Fixed shim factory: turns the raw JSON-string hook into a plain-value JS
+/// API (`undefined` argument becomes `null`). Deliberately a **constant** —
+/// nothing is ever interpolated into evaluated code, so a hostile capability
+/// name cannot inject into the sandbox bootstrap. `JSON.parse`/`stringify`
+/// are captured at bootstrap time so later clobbering of `globalThis.JSON`
+/// by sandboxed code cannot corrupt capability calls.
+const SHIM_FACTORY: &str = "((parse, stringify) => (hook) => (arg) => \
+     parse(hook(stringify(arg ?? null))))(JSON.parse, JSON.stringify)";
+
+/// Extra time the sandbox thread waits beyond the capability timeout for the
+/// host runtime to deliver the (possibly already-timed-out) result. Only
+/// reached when the Tokio runtime is not being driven at all.
+const CAPABILITY_DELIVERY_GRACE: Duration = Duration::from_secs(1);
+
+/// Expose each capability as a global JS function.
+///
+/// Security-critical invariants:
+/// - every name is re-validated here ([`Capability::validate_name`]), so the
+///   check cannot be bypassed by any install path (`run_script`, Code Mode,
+///   executor registration — they all create sandboxes through this function);
+/// - names are only ever used as `globals.set()` property keys; no name is
+///   spliced into evaluated JS (see [`SHIM_FACTORY`]).
+///
+/// The raw hook takes and returns JSON strings. It runs the handler by
+/// spawning it onto the host Tokio runtime, bounded by the sandbox's
+/// **remaining** deadline (`tokio::time::timeout`) — the engine interrupt
+/// handler cannot fire while host code runs, so the deadline is enforced here
+/// instead — and parks the sandbox thread on a channel for the result. This
+/// avoids `Handle::block_on`, which deadlocks blocking-pool threads of a
+/// current-thread runtime.
 fn install_capabilities(
     ctx: &Ctx<'_>,
     capabilities: &[Capability],
     handle: &Handle,
+    deadline: Instant,
+    timed_out: &Arc<AtomicBool>,
+    config: SandboxConfig,
 ) -> Result<(), ExecError> {
     let globals = ctx.globals();
+    let internal = |message: String| ExecError::Internal { message };
+
+    let factory: Function<'_> = ctx
+        .eval(SHIM_FACTORY)
+        .map_err(|e| internal(format!("failed to build capability shim factory: {e}")))?;
+
     for capability in capabilities {
+        // Unbypassable install-time validation: `run_script` and Code Mode
+        // accept caller-supplied capabilities without going through
+        // `add_capability`, so the name must be checked again here.
+        Capability::validate_name(capability.name())
+            .map_err(|e| internal(format!("refusing to install capability: {e}")))?;
+
         let cap_name = capability.name().to_string();
-        let hook_name = format!("__dsrs_cap_{cap_name}");
         let handler = capability.handler();
         let handle = handle.clone();
         let thrown_name = cap_name.clone();
+        let timed_out = Arc::clone(timed_out);
+        let deadline_ms = config.deadline.as_millis() as u64;
 
         let hook = move |ctx: Ctx<'_>, args_json: String| -> rquickjs::Result<String> {
             let throw = |message: String| {
@@ -672,25 +760,45 @@ fn install_capabilities(
             };
             let args: Value = serde_json::from_str(&args_json)
                 .map_err(|e| throw(format!("argument round-trip failed: {e}")))?;
-            let result = handle.block_on(handler(args)).map_err(throw)?;
+
+            // Bound the handler by whatever is left of the sandbox deadline.
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let (tx, rx) = std::sync::mpsc::channel();
+            let future = handler(args);
+            handle.spawn(async move {
+                let _ = tx.send(tokio::time::timeout(remaining, future).await);
+            });
+            let result = match rx.recv_timeout(remaining + CAPABILITY_DELIVERY_GRACE) {
+                Ok(Ok(result)) => result,
+                Ok(Err(_elapsed)) => {
+                    // Handler ran past the deadline: flag the sandbox so the
+                    // failure classifies as a timeout, and throw a clear
+                    // (catchable) error into JS.
+                    timed_out.store(true, Ordering::SeqCst);
+                    return Err(throw(format!(
+                        "call exceeded the sandbox's {deadline_ms}ms deadline"
+                    )));
+                }
+                Err(_) => {
+                    timed_out.store(true, Ordering::SeqCst);
+                    return Err(throw(
+                        "host runtime failed to deliver a result before the sandbox \
+                         deadline (is the Tokio runtime being driven?)"
+                            .to_string(),
+                    ));
+                }
+            };
+            let result = result.map_err(throw)?;
             serde_json::to_string(&result)
                 .map_err(|e| throw(format!("result serialization failed: {e}")))
         };
 
+        let shim: Function<'_> = factory
+            .call((Func::from(hook),))
+            .map_err(|e| internal(format!("failed to build capability shim `{cap_name}`: {e}")))?;
         globals
-            .set(hook_name.as_str(), Func::from(hook))
-            .map_err(|e| ExecError::Internal {
-                message: format!("failed to install capability `{cap_name}`: {e}"),
-            })?;
-
-        // Shim: plain JS values in/out; `undefined` argument becomes `null`.
-        let shim = format!(
-            "globalThis.{cap_name} = ((raw) => (arg) => JSON.parse(raw(JSON.stringify(arg ?? null))))(globalThis.{hook_name}); delete globalThis.{hook_name};"
-        );
-        ctx.eval::<(), _>(shim.into_bytes())
-            .map_err(|e| ExecError::Internal {
-                message: format!("failed to install capability shim `{cap_name}`: {e}"),
-            })?;
+            .set(cap_name.as_str(), shim)
+            .map_err(|e| internal(format!("failed to install capability `{cap_name}`: {e}")))?;
     }
     Ok(())
 }

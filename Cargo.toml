@@ -4,7 +4,26 @@ members = [
     "crates/*",
 ]
 
-[patch.crates-io]
-# TODO(dsrs-facet-pin): switch back to upstream main/release once #2040/#2041 are merged and released.
-facet = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }
-facet-reflect = { git = "https://github.com/darinkishore/facet", rev = "cc8613c97cd1ec03e63659db34a947989b45c8a5" }
+# Single source of truth for every dependency used by 2+ member crates.
+# Pins match what Cargo.lock currently resolves — bump here, not in members.
+[workspace.dependencies]
+# In-workspace crates
+dspy-rs = { version = "0.7.3", path = "crates/dspy-rs" }
+dsrs-tools = { version = "0.1.0", path = "crates/dsrs-tools" }
+dsrs-syntax = { version = "0.1.0", path = "crates/dsrs-syntax" }
+
+# Shared third-party crates
+anyhow = "1.0.99"
+async-trait = "0.1.83"
+futures = "0.3.31"
+reqwest = "0.13"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = { version = "1.0.143", features = ["preserve_order"] }
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+tokio = "1.46.1"
+
+# Shared git pins (features are enabled per member)
+rig-core = { git = "https://github.com/0xPlaygrounds/rig", rev = "aee3b8bf6576ce41c9ac1dd82520752a65fa0127" }
+minijinja = { git = "https://github.com/boundaryml/minijinja.git", branch = "main", default-features = false }
+

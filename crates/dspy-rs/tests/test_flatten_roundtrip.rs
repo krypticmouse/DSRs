@@ -1,4 +1,6 @@
+use dspy_rs::ir::SignatureDef;
 use dspy_rs::{Augmented, ChatAdapter, Demo, Message, Reasoning, Signature, WithReasoning};
+use serde_json::Value;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -7,6 +9,13 @@ struct QA {
 
     #[output]
     answer: String,
+}
+
+fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
+    match serde_json::to_value(value).expect("serializable") {
+        Value::Object(map) => map,
+        other => panic!("expected object, got {other:?}"),
+    }
 }
 
 #[test]
@@ -24,7 +33,12 @@ fn augmented_demo_roundtrips_through_adapter() {
         },
     );
 
-    let (user_msg, assistant_msg) = adapter.format_demo_typed::<Augmented<QA, Reasoning>>(&demo);
+    let def = SignatureDef::of::<Augmented<QA, Reasoning>>();
+    let types = SignatureDef::types_of::<Augmented<QA, Reasoning>>();
+    // `WithReasoning` flattens: the serialized demo output keys flat by leaf
+    // name (`reasoning`, `answer`) — exactly the def's canonical field names.
+    let user_msg = adapter.format_input_def(def, &json_map(&demo.input));
+    let assistant_msg = adapter.format_output_def(def, &json_map(&demo.output));
     let schema = <Augmented<QA, Reasoning> as Signature>::schema();
     let output_names: Vec<&str> = schema.output_fields().iter().map(|f| f.lm_name).collect();
 
@@ -33,9 +47,11 @@ fn augmented_demo_roundtrips_through_adapter() {
     assert!(assistant_msg.contains("answer"));
 
     let response = Message::assistant(assistant_msg);
-    let (parsed, _meta) = adapter
-        .parse_response_typed::<Augmented<QA, Reasoning>>(&response)
-        .expect("typed parse should succeed");
+    let (output_map, _meta) = adapter
+        .parse_output_def(def, types, &response)
+        .expect("def parse should succeed");
+    let parsed: WithReasoning<QAOutput> =
+        serde_json::from_value(Value::Object(output_map)).expect("typed assembly");
 
     assert_eq!(parsed.reasoning, "Add the numbers");
     assert_eq!(parsed.answer, "4");

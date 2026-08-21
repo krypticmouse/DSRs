@@ -5,7 +5,7 @@ icon: "cube"
 ---
 
 <Note>
-Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `b5da857`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
+Generated from rustdoc JSON at `dspy-rs v0.7.3` (commit `f7d67a6`). Do not edit by hand; regenerate with `python3 docs/scripts/gen_api.py` (see the script header for the rustdoc commands). Item links lead to full signatures and method docs on docs.rs.
 </Note>
 
 The intermediate representation (RFC 0002).
@@ -17,6 +17,7 @@ The intermediate representation (RFC 0002).
 | [`agent`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.agent.html) | Re-export of `builder::agent`. |
 | [`AgentLoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.AgentLoopNode.html) | Re-export of `graph::AgentLoopNode`. |
 | [`AgentStepOpts`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.AgentStepOpts.html) | Re-export of `step::AgentStepOpts`. |
+| [`ApplyError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.ApplyError.html) | Re-export of `edit::ApplyError`. |
 | [`AsNodeName`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/trait.AsNodeName.html) | Re-export of `builder::AsNodeName`. |
 | [`BakeError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.BakeError.html) | Re-export of `graph::BakeError`. |
 | [`Binding`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Binding.html) | Re-export of `graph::Binding`. |
@@ -34,12 +35,16 @@ The intermediate representation (RFC 0002).
 | [`ConstraintDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/sig/struct.ConstraintDef.html) | Re-export of `sig::ConstraintDef`. |
 | [`ContextK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ContextK.html) | Re-export of `params::ContextK`. |
 | [`ContextPolicy`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ContextPolicy.html) | Re-export of `params::ContextPolicy`. |
+| [`ConversationTurn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.ConversationTurn.html) | Re-export of `interp::ConversationTurn`. |
 | [`cot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.cot.html) | Re-export of `builder::cot`. |
 | [`current_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/fn.current_overlay.html) | Re-export of `bridge::current_overlay`. |
 | [`default_lm`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.default_lm.html) | Re-export of `module_build::default_lm`. |
 | [`DemoRow`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.DemoRow.html) | Re-export of `params::DemoRow`. |
 | [`Demos`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.Demos.html) | Re-export of `params::Demos`. |
 | [`DsrsFileError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/enum.DsrsFileError.html) | Re-export of `text::DsrsFileError`. |
+| [`Edit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.Edit.html) | Re-export of `edit::Edit`. |
+| [`EditError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.EditError.html) | Re-export of `edit::EditError`. |
+| [`EditKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.EditKind.html) | Re-export of `edit::EditKind`. |
 | [`EnumDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumDef.html) | Re-export of `crate::typesys::EnumDef`. |
 | [`EnumValueDef`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.EnumValueDef.html) | Re-export of `crate::typesys::EnumValueDef`. |
 | [`Exhausted`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Exhausted.html) | Re-export of `interp::Exhausted`. |
@@ -59,11 +64,13 @@ The intermediate representation (RFC 0002).
 | [`Interner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Interner.html) | Re-export of `graph::Interner`. |
 | [`Interpreter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Interpreter.html) | Re-export of `interp::Interpreter`. |
 | [`KindTag`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/trait.KindTag.html) | Re-export of `params::KindTag`. |
+| [`LeafOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.LeafOutcome.html) | Re-export of `interp::LeafOutcome`. |
 | [`Lineage`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Lineage.html) | Re-export of `graph::Lineage`. |
 | [`lit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.lit.html) | Re-export of `builder::lit`. |
 | [`LoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.LoadError.html) | Re-export of `interp::LoadError`. |
 | [`loop_`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.loop_.html) | Re-export of `builder::loop_`. |
 | [`LoopNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.LoopNode.html) | Re-export of `graph::LoopNode`. |
+| [`migrate_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/fn.migrate_overlay.html) | Re-export of `edit::migrate_overlay`. |
 | [`ModelDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelDef.html) | Re-export of `graph::ModelDef`. |
 | [`ModelId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ModelId.html) | Re-export of `graph::ModelId`. |
 | [`ModelRefK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ModelRefK.html) | Re-export of `params::ModelRefK`. |
@@ -83,7 +90,7 @@ The intermediate representation (RFC 0002).
 | [`ParamOwner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamOwner.html) | Re-export of `params::ParamOwner`. |
 | [`ParamSlot`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/struct.ParamSlot.html) | Re-export of `params::ParamSlot`. |
 | [`ParamValue`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamValue.html) | Re-export of `params::ParamValue`. |
-| [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/struct.ParseError.html) | Re-export of `text::ParseError`. |
+| [`ParseError`](https://docs.rs/dspy-rs/latest/dsrs_syntax/struct.ParseError.html) | Re-export of `text::ParseError`. |
 | [`Port`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/enum.Port.html) | Re-export of `builder::Port`. |
 | [`PortRef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.PortRef.html) | Re-export of `graph::PortRef`. |
 | [`PortSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/enum.PortSpec.html) | Re-export of `module_build::PortSpec`. |
@@ -100,6 +107,7 @@ The intermediate representation (RFC 0002).
 | [`route`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.route.html) | Re-export of `builder::route`. |
 | [`RouteNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.RouteNode.html) | Re-export of `graph::RouteNode`. |
 | [`RunError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.RunError.html) | Re-export of `interp::RunError`. |
+| [`RunOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RunOutput.html) | Re-export of `interp::RunOutput`. |
 | [`RuntimeEnv`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RuntimeEnv.html) | Re-export of `interp::RuntimeEnv`. |
 | [`seq`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.seq.html) | Re-export of `builder::seq`. |
 | [`SeqNode`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.SeqNode.html) | Re-export of `graph::SeqNode`. |
@@ -112,12 +120,15 @@ The intermediate representation (RFC 0002).
 | [`StepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.StepDef.html) | Re-export of `step::StepDef`. |
 | [`StepKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/enum.StepKind.html) | Re-export of `step::StepKind`. |
 | [`StopSpec`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.StopSpec.html) | Re-export of `graph::StopSpec`. |
+| [`SwapTarget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.SwapTarget.html) | Re-export of `edit::SwapTarget`. |
 | [`Sym`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.Sym.html) | Re-export of `graph::Sym`. |
 | [`ToolDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolDef.html) | Re-export of `graph::ToolDef`. |
 | [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) | Re-export of `params::ToolDesc`. |
 | [`ToolId`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/struct.ToolId.html) | Re-export of `graph::ToolId`. |
 | [`ToolKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/enum.ToolKind.html) | Re-export of `graph::ToolKind`. |
+| [`ToolSetK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolSetK.html) | Re-export of `params::ToolSetK`. |
 | [`ToolStepDef`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/step/struct.ToolStepDef.html) | Re-export of `step::ToolStepDef`. |
+| [`ToolSuspension`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.ToolSuspension.html) | Re-export of `interp::ToolSuspension`. |
 | [`TypeTable`](https://docs.rs/dspy-rs/latest/dspy_rs/typesys/schema/struct.TypeTable.html) | Re-export of `crate::typesys::TypeTable`. |
 | [`unbound_model_config`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/fn.unbound_model_config.html) | Re-export of `module_build::unbound_model_config`. |
 | [`ValidateError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/validate/enum.ValidateError.html) | Re-export of `validate::ValidateError`. |
@@ -130,6 +141,7 @@ The intermediate representation (RFC 0002).
 |---|---|
 | [`bridge`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/bridge/index.html) | The fx/ModuleState ↔ `Overlay` bridge (RFC 0002 §2.4 migration contract). |
 | [`builder`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/index.html) | The Rust builder frontend (RFC 0002 §4.3–4.4): constructs the same runtime `Program` value the text parser will. |
+| [`edit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/index.html) | The graph-edit calculus: the *structural* mutation half of the IR. |
 | [`graph`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/graph/index.html) | The IR graph core (RFC 0002 §2): entity ids, the `Interner`, the closed `Node` enum, field-level `Binding`/`PortRef` dataflow, and `Program` — arenas over value-level signatures. |
 | [`interp`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/index.html) | The IR interpreter (RFC 0002 §3): async evaluation of a loaded `Program`. |
 | [`module_build`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/module_build/index.html) | RFC 0003 stage M-3 library support: the module "linker". |
@@ -216,6 +228,26 @@ The Rust builder frontend (RFC 0002 §4.3–4.4): constructs the same runtime `P
 | [`route`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.route.html) | Enum-discriminated branching. |
 | [`seq`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/builder/fn.seq.html) | Sequential composition. |
 
+## `ir::edit`
+
+The graph-edit calculus: the *structural* mutation half of the IR.
+
+### Enums
+
+| Item | Description |
+|---|---|
+| [`ApplyError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.ApplyError.html) | A locally-checkable application failure. |
+| [`Edit`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.Edit.html) | One structural edit. Serde values: an optimizer's proposal is data, not code — it can be logged, replayed against the same parent, and diffed. |
+| [`EditError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.EditError.html) | Why `Program::edited` refused. |
+| [`EditKind`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.EditKind.html) | A lightweight, serializable descriptor of an edit kind admissible at a node — the menu `Program::legal_edits` returns, suitable for prompting an LLM proposer. |
+| [`SwapTarget`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/enum.SwapTarget.html) | Target kind of `Edit::SwapLeaf`. |
+
+### Functions
+
+| Item | Description |
+|---|---|
+| [`migrate_overlay`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/edit/fn.migrate_overlay.html) | Carries tuned values across a structural edit: for every entry in `overlay` (minted against `parent`), re-mint it against `child` when the child has a slot at the same `ParamPath`... |
+
 ## `ir::graph`
 
 The IR graph core (RFC 0002 §2): entity ids, the `Interner`, the closed `Node` enum, field-level `Binding`/`PortRef` dataflow, and `Program` — arenas over value-level signatures.
@@ -272,12 +304,16 @@ The IR interpreter (RFC 0002 §3): async evaluation of a loaded `Program`.
 | [`BudgetMeter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.BudgetMeter.html) | Check-before-call metering: calls and deadline are hard-gated pre-call; token budgets are soft (checked against accumulated usage, since usage is only known post-hoc). |
 | [`Exhausted`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Exhausted.html) | Budget reservation failure. |
 | [`Interpreter`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.Interpreter.html) | A loaded, executable program: validated graph + bound models/tools + registered sandbox code. Cheap to share; run state never lives here. |
+| [`LeafOutcome`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.LeafOutcome.html) | Parse/coercion metadata from one successful `Predict`-leaf evaluation, collected by `Interpreter::run_collecting` in execution order. |
+| [`RunOutput`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RunOutput.html) | Program output plus per-leaf metadata, returned by `Interpreter::run_collecting`. |
 | [`RuntimeEnv`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.RuntimeEnv.html) | What the host supplies at load: live models, host tool bindings, the sandbox, and the capability grants. |
+| [`ToolSuspension`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/struct.ToolSuspension.html) | A caller-managed agent turn suspended on pending tool calls (RFC 0004 §2). |
 
 ### Enums
 
 | Item | Description |
 |---|---|
+| [`ConversationTurn`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.ConversationTurn.html) | One caller-driven conversation turn, returned by `Interpreter::run_conversation_caller_managed` and `Interpreter::resume_conversation`. |
 | [`LoadError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.LoadError.html) |  |
 | [`RunError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/interp/enum.RunError.html) |  |
 
@@ -350,6 +386,7 @@ Parameters (RFC 0002 §2.4): every mutable thing is a named, addressable slot; a
 | [`ParamOwner`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamOwner.html) |  |
 | [`ParamValue`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ParamValue.html) |  |
 | [`ToolDesc`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolDesc.html) |  |
+| [`ToolSetK`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/params/enum.ToolSetK.html) |  |
 
 ### Traits
 
@@ -386,11 +423,11 @@ RFC 0003 stage M-2: step metadata.
 
 The `.dsrs` text format (RFC 0002 §4, stage IR-5).
 
-### Structs
+### Re-exports
 
 | Item | Description |
 |---|---|
-| [`ParseError`](https://docs.rs/dspy-rs/latest/dspy_rs/ir/text/struct.ParseError.html) | A parse failure with the source position and what was expected — designed to be actionable feedback for a model regenerating the program. |
+| [`ParseError`](https://docs.rs/dspy-rs/latest/dsrs_syntax/struct.ParseError.html) | A parse failure with the source position and what was expected — designed to be actionable feedback for a model regenerating the program. |
 
 ### Enums
 

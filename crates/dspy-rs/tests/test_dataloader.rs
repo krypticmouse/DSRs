@@ -1,10 +1,14 @@
+//! Exercises the CSV/Parquet/HF loaders, so the whole suite requires the
+//! (default-on) `data` feature.
+#![cfg(feature = "data")]
+
 use anyhow::{Result, anyhow};
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use bon::Builder;
 use dspy_rs::{
-    COPRO, CallMetadata, DataLoader, Eval, Example, Module, Optimizer, Predict, PredictError,
+    COPRO, CallMetadata, DataLoader, Eval, Example, Module, Predict, PredictError,
     Predicted, Signature, TypedLoadOptions, TypedMetric, UnknownFieldPolicy, average_score,
     evaluate_trainset,
 };
@@ -49,6 +53,8 @@ struct EchoModule {
     #[builder(default = Predict::<LoaderSig>::builder().instruction("seed").build())]
     predictor: Predict<LoaderSig>,
 }
+
+dspy_rs::predictors!(EchoModule { predictor });
 
 impl Module for EchoModule {
     type Input = LoaderSigInput;
@@ -512,7 +518,7 @@ async fn typed_loader_outputs_feed_evaluator_and_optimizer_paths() -> Result<()>
 
     let optimizer = COPRO::builder().breadth(2).depth(1).build();
     optimizer
-        .compile(&mut module, trainset, &metric)
+        .compile_module(&mut module, &trainset, &metric)
         .await?;
 
     Ok(())

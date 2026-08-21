@@ -1,6 +1,6 @@
 ---
 title: "Evaluation"
-description: "TypedMetric, Eval, the trainset evaluation loop, and feedback helper functions"
+description: "TypedMetric, Eval, and the trainset evaluation loop"
 icon: "gauge-high"
 ---
 
@@ -60,6 +60,16 @@ where
         prediction: &Predicted<M::Output>,
         trace: Option<&Trace>,
     ) -> Result<Eval>;
+
+    // Optional; the default returns no span scores.
+    async fn evaluate_spans(
+        &self,
+        example: &E,
+        prediction: &Predicted<M::Output>,
+        trace: &Trace,
+    ) -> Result<Vec<(SpanId, Eval)>> {
+        Ok(Vec::new())
+    }
 }
 ```
 
@@ -70,6 +80,32 @@ where
 | `trace` | The rollout's execution [`Trace`](/docs/components/traces) when the caller captured one. The evaluation loop always passes `Some`; direct callers may pass `None`. Slice it per component with `trace.for_component("retriever")` |
 
 Return `Eval::score(f64)` for a numerical score, `Eval::with_feedback(f64, text)` to also explain why. Scores are 0.0 to 1.0 by convention.
+
+## Per-span credit
+
+`evaluate` assigns one score to the whole rollout. For a multi-step module that single score over-credits: a good final answer marks every intermediate `Predict` call as good, including a step a later call had to recover from. `evaluate_spans` is the optional hook for per-span credit. The evaluation loop calls it once per traced rollout, after `evaluate`, and stamps each returned `Eval` onto its span (`Span::eval`); pairs whose id is not in the trace are ignored.
+
+```rust
+async fn evaluate_spans(
+    &self,
+    example: &QARow,
+    _prediction: &Predicted<QAOutput>,
+    trace: &Trace,
+) -> Result<Vec<(SpanId, Eval)>> {
+    // Score each draft call on its own answer; the refine step may have
+    // recovered from a bad one.
+    Ok(trace
+        .for_component("draft")
+        .filter_map(|span| {
+            let answer = span.output.as_ref()?.get("answer")?.as_str()?;
+            let score = (answer == example.answer) as u8 as f64;
+            Some((span.id, Eval::score(score)))
+        })
+        .collect())
+}
+```
+
+Demo harvesting (`BootstrapFewShot`, `MIPROv2`, `SIMBA`) prefers a span's own eval over the rollout score when gating and ranking demo candidates, so a scored-down span stays out of the demo pool even when its rollout won, and a scored-up span qualifies even when its rollout lost. Spans you leave out keep whole-rollout credit, and a metric that implements only `evaluate` behaves exactly as before. See [Optimizers](/docs/components/optimizers) for the harvesting semantics.
 
 ## Eval and Rollout
 
@@ -92,25 +128,6 @@ The public evaluation entry points return `Vec<Eval>`; the traced `Rollout` path
 | `average_score` | `fn(evals: &[Eval]) -> f64` | Arithmetic mean of scores; returns `0.0` for an empty slice |
 
 Each example runs inside a trace capture scope and the metric receives that rollout's `Trace`. Metric evaluation itself happens outside the scope, so LM-as-judge metrics do not pollute the execution trace.
-
-## Feedback helpers
-
-Helper functions in `evaluate::feedback_helpers` construct `Eval`s with structured textual feedback for common domains. All return `Eval`.
-
-| Function | Signature | Purpose |
-|---|---|---|
-| `retrieval_feedback` | `(retrieved: &[impl AsRef<str>], expected: &[impl AsRef<str>], context_docs: Option<&[impl AsRef<str>]>)` | Document retrieval. Score is F1; feedback lists correctly retrieved, missed, and incorrectly retrieved documents with precision, recall, and F1. Precision is `0.0` when `retrieved` is empty; recall is `1.0` when `expected` is empty |
-| `code_pipeline_feedback` | `(stages: &[(CodeStage, StageResult)], final_score: f64)` | Code generation pipelines. Feedback reports each stage in order and stops at the first failure; the score is the caller-supplied `final_score` |
-| `multi_objective_feedback` | `(objectives: &HashMap<String, (f64, String)>, weights: Option<&HashMap<String, f64>>)` | Multi-objective evaluation. Score is the weighted average (default weight `1.0` per objective); feedback lists each objective, sorted by name, plus the aggregate |
-| `string_similarity_feedback` | `(predicted: &str, expected: &str)` | String comparison. `1.0` for an exact trimmed match, `0.95` for a case-insensitive match, otherwise word-level F1 with missing and extra words listed |
-| `classification_feedback` | `(predicted_class: &str, expected_class: &str, confidence: Option<f64>)` | Classification. `1.0` on exact class match, `0.0` otherwise; feedback names the expected and predicted classes and the confidence when given |
-
-Supporting enums for `code_pipeline_feedback`:
-
-| Enum | Variants |
-|---|---|
-| `CodeStage` | `Parse`, `Compile`, `Execute`, `Test` |
-| `StageResult` | `Success`, `Failure { error: String }` |
 
 ## Metrics and optimizers
 

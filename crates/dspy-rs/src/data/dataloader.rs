@@ -1,16 +1,22 @@
 use anyhow::{Context, Result, anyhow};
+#[cfg(feature = "data")]
 use arrow::array::{
     Array, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
     StringArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
+#[cfg(feature = "data")]
 use csv::{ReaderBuilder, StringRecord};
+#[cfg(feature = "data")]
 use hf_hub::api::sync::Api;
+#[cfg(feature = "data")]
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use reqwest;
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
 use std::fs;
+#[cfg(feature = "data")]
 use std::io::Cursor;
+#[cfg(feature = "data")]
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
@@ -151,6 +157,10 @@ pub enum DataLoadError {
 
 /// Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources.
 ///
+/// JSON/JSONL loading is always available; the CSV, Parquet, and HuggingFace
+/// loaders require the (default-on) `data` feature, which carries the heavy
+/// arrow/parquet/hf-hub/csv dependency stack.
+///
 /// Canonical public contract:
 /// - Returns `Vec<E>` for any row struct `E: Deserialize + Facet` — rows are
 ///   *your* type, not a signature-shaped pair, so they can carry gold labels
@@ -227,6 +237,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_csv",
         level = "debug",
@@ -258,6 +269,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_csv_with",
         level = "debug",
@@ -294,6 +306,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_parquet",
         level = "debug",
@@ -317,6 +330,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_parquet_with",
         level = "debug",
@@ -348,6 +362,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_hf",
         level = "debug",
@@ -381,6 +396,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_hf_with",
         level = "debug",
@@ -419,6 +435,7 @@ impl DataLoader {
         Ok(examples)
     }
 
+    #[cfg(feature = "data")]
     #[tracing::instrument(
         name = "dsrs.data.load_hf_from_parquet",
         level = "debug",
@@ -521,6 +538,7 @@ impl DataLoader {
         Ok(rows)
     }
 
+    #[cfg(feature = "data")]
     fn load_csv_rows(
         path: &str,
         delimiter: char,
@@ -550,6 +568,7 @@ impl DataLoader {
         Self::collect_csv_rows(&mut reader, has_headers)
     }
 
+    #[cfg(feature = "data")]
     fn collect_csv_rows<R: std::io::Read>(
         reader: &mut csv::Reader<R>,
         has_headers: bool,
@@ -584,6 +603,7 @@ impl DataLoader {
         Ok(rows)
     }
 
+    #[cfg(feature = "data")]
     fn load_parquet_rows(path: &Path) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let file = fs::File::open(path).map_err(|err| DataLoadError::Parquet(err.into()))?;
         let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -622,6 +642,7 @@ impl DataLoader {
         Ok(rows)
     }
 
+    #[cfg(feature = "data")]
     fn load_rows_from_parquet_files(
         parquet_files: &[PathBuf],
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
@@ -640,6 +661,7 @@ impl DataLoader {
         Ok(all_rows)
     }
 
+    #[cfg(feature = "data")]
     fn load_hf_rows(
         dataset_name: &str,
         subset: &str,
@@ -838,6 +860,7 @@ fn row_from_json_value(
     })
 }
 
+#[cfg(feature = "data")]
 fn parse_csv_cell(cell: &str) -> serde_json::Value {
     let trimmed = cell.trim();
     if trimmed.is_empty() {
@@ -848,6 +871,7 @@ fn parse_csv_cell(cell: &str) -> serde_json::Value {
         .unwrap_or_else(|_| serde_json::Value::String(cell.to_string()))
 }
 
+#[cfg(feature = "data")]
 fn csv_record_to_row_record(
     record: &StringRecord,
     row_index: usize,
@@ -866,6 +890,7 @@ fn csv_record_to_row_record(
     RowRecord { row_index, values }
 }
 
+#[cfg(feature = "data")]
 fn parquet_value_to_json(column: &dyn Array, row_idx: usize) -> Option<serde_json::Value> {
     if let Some(values) = column.as_any().downcast_ref::<StringArray>() {
         return (!values.is_null(row_idx)).then(|| serde_json::json!(values.value(row_idx)));

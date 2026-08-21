@@ -9,10 +9,7 @@ cargo run --example 02-module-iteration-and-updation
 
 use anyhow::Result;
 use bon::Builder;
-use dspy_rs::{
-    COPRO, LM, Eval, Module, Optimizer, Predict, PredictError,
-    Predicted, Signature, TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
-};
+use dspy_rs::prelude::*;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {
@@ -29,6 +26,8 @@ struct QAModule {
     #[builder(default = Predict::<QA>::builder().instruction("Answer clearly.").build())]
     answerer: Predict<QA>,
 }
+
+dspy_rs::predictors!(QAModule { answerer });
 
 impl Module for QAModule {
     type Input = QAInput;
@@ -96,7 +95,7 @@ async fn main() -> Result<()> {
 
     let optimizer = COPRO::builder().breadth(4).depth(1).build();
     optimizer
-        .compile(&mut module, trainset.clone(), &metric)
+        .compile_module(&mut module, &trainset, &metric)
         .await?;
 
     let optimized = average_score(&evaluate_trainset(&module, &trainset, &metric).await?);

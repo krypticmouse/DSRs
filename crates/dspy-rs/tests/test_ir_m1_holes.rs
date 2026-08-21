@@ -2,7 +2,6 @@
 //! extern/host holes), the non-degenerate hole `request_hash` preimage, and
 //! interpreter-lane replay — predicts, agent loops, and holes served from a
 //! recorded trace with divergence detection on changed hole implementations.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 

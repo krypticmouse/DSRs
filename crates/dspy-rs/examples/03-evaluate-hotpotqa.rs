@@ -8,11 +8,7 @@ cargo run --example 03-evaluate-hotpotqa --features dataloaders
 */
 
 use anyhow::Result;
-use dspy_rs::{
-    DataLoader, Example, LM, Eval, Predict, Predicted, Signature,
-    TypedLoadOptions, TypedMetric, average_score, configure, evaluate_trainset_with_concurrency,
-    init_tracing,
-};
+use dspy_rs::prelude::*;
 
 #[derive(Signature, Clone, Debug)]
 struct QA {

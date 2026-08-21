@@ -1,7 +1,6 @@
 //! IR-6 (RFC 0002 §5): `Program::bake` — folding an overlay into a new
 //! program value, lineage stamping, hash recompute, and behavioral equality
 //! of base+overlay vs. baked on canned LMs.
-#![cfg(feature = "ir")]
 
 use std::sync::Arc;
 
@@ -214,10 +213,18 @@ fn bake_folds_all_slot_kinds_into_defaults() {
             .unwrap(),
     );
     let search = b.host_tool("search", "old tool desc", search_sig, &["net:search"]);
+    let calc_sig = b.sig(
+        SignatureDef::build("Calc")
+            .input("expression", T::String)
+            .output("value", T::Float)
+            .finish()
+            .unwrap(),
+    );
+    let calc = b.host_tool("calc", "Evaluate arithmetic", calc_sig, &[]);
     let researcher = ir::agent("researcher", main_sig)
         .model(m1)
         .bind("question", ir::input("question"))
-        .tools([search]);
+        .tools([search, calc]);
     let shouter = ir::hole("shouter", shout_sig, "(a) => ({shout: a.question})", &[])
         .bind("question", ir::input("question"));
     let program = b
@@ -245,6 +252,13 @@ fn bake_folds_all_slot_kinds_into_defaults() {
     let code_id = program.param_id("shouter.code").unwrap();
     let new_code = ParamValue::code(CodeLang::Js, "(a) => ({shout: a.question.toUpperCase()})");
     overlay.set(&program, code_id, new_code.clone()).unwrap();
+    let tool_set_id = program.param_id("researcher.tool_set").unwrap();
+    let restricted = ParamValue::ToolSet {
+        tools: vec![search],
+    };
+    overlay
+        .set(&program, tool_set_id, restricted.clone())
+        .unwrap();
 
     let baked = program.bake(&overlay, note()).unwrap();
 
@@ -259,6 +273,13 @@ fn bake_folds_all_slot_kinds_into_defaults() {
         }
     );
     assert_eq!(baked.params[code_id].default, new_code);
+    assert_eq!(baked.params[tool_set_id].default, restricted);
+    // The restricted selection is a first-class artifact: it prints as a
+    // `tool_set` line and the baked program reloads identically.
+    let text = baked.to_dsrs();
+    assert!(text.contains("tool_set [search]"), "{text}");
+    let reloaded = Program::from_dsrs(&text).unwrap();
+    assert_eq!(reloaded.meta.program_hash, baked.meta.program_hash);
 
     // The base program is untouched (bake is pure).
     assert_eq!(
