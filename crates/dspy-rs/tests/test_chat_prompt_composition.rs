@@ -82,7 +82,7 @@ fn system_prompt_includes_all_sections_in_order_with_boundaries() {
     );
     assert!(
         system.contains(
-            "and then ending with the marker for `[[ ## completed ## ]]`.\n\nIn adhering to this structure, your objective is:",
+            "say so in that field instead of guessing.\n\nIn adhering to this structure, your objective is:",
         ),
         "response-instruction and objective boundary missing:\n{system}"
     );
@@ -130,8 +130,7 @@ fn instruction_override_is_used_in_objective_section() {
     let system = system_prompt::<PromptPartsSig>(Some(override_instruction));
 
     assert!(system.contains("In adhering to this structure, your objective is:"));
-    assert!(system.contains("        Follow the rubric."));
-    assert!(system.contains("        Cite the context."));
+    assert!(system.contains("your objective is:\nFollow the rubric.\nCite the context."));
     assert!(!system.contains("Answer the prompt using the provided context."));
 }
 
@@ -168,7 +167,7 @@ fn user_builder_appends_requirements() {
     );
     assert!(
         user.trim_end()
-            .ends_with("and then ending with the marker for `[[ ## completed ## ]]`.")
+            .ends_with("say so in that field instead of guessing.")
     );
 }
 

@@ -571,6 +571,7 @@ impl<'p> Printer<'p> {
         let mut opts: Vec<String> = Vec::new();
         self.instruction_opt(&mut opts, n.instruction, n.sig);
         self.demos_opt(&mut opts, n.demos);
+        self.render_opt(&mut opts, n.render);
         if !opts.is_empty() {
             let _ = write!(self.out, " {{ {} }}", opts.join(" "));
         }
@@ -695,6 +696,16 @@ impl<'p> Printer<'p> {
             && text.as_str() != &*self.p.sigs[sig].instruction
         {
             opts.push(format!("instruction {}", json_str(text)));
+        }
+    }
+
+    /// Prints only a non-default mode — pre-render-slot programs keep their
+    /// canonical text (and hash) byte-for-byte.
+    fn render_opt(&mut self, opts: &mut Vec<String>, param: ParamId) {
+        if let ParamValue::Render { mode } = &self.p.params[param].default
+            && *mode != crate::ir::params::RenderMode::Markers
+        {
+            opts.push(format!("render {}", json_str(mode.as_str())));
         }
     }
 

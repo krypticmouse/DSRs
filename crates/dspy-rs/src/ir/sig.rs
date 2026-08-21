@@ -215,6 +215,15 @@ impl SignatureDef {
         match_side("output", &self.outputs, &expected.outputs)
     }
 
+    /// Whether the shape admits bare rendering ([`RenderMode::Bare`]): the
+    /// whole completion becomes the output, so there must be exactly one
+    /// non-optional `String` output field.
+    ///
+    /// [`RenderMode::Bare`]: crate::ir::params::RenderMode::Bare
+    pub fn supports_bare_render(&self) -> bool {
+        matches!(&*self.outputs, [field] if matches!(field.ty, FieldType::String))
+    }
+
     /// Prepends output fields (e.g. `reasoning: string`) — the value-lane
     /// `Augmented<S, Reasoning>`. Pure function; `self` is untouched.
     pub fn augmented_with(&self, prefix_outputs: &[FieldDef]) -> SignatureDef {

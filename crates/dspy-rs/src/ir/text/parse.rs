@@ -1170,12 +1170,26 @@ impl<'a> Parser<'a> {
                         spec = spec.instruction(&text);
                     }
                     "demos" => spec = spec.demos(self.demos_value()?),
+                    "render" => {
+                        let (mode, span) = self.expect_str("after `render`")?;
+                        let mode = crate::ir::params::RenderMode::from_str_opt(&mode)
+                            .ok_or_else(|| {
+                                ParseError::at(
+                                    span,
+                                    format!(
+                                        "unknown render mode `{mode}`: expected \
+                                         \"markers\" or \"bare\""
+                                    ),
+                                )
+                            })?;
+                        spec = spec.render(mode);
+                    }
                     other => {
                         return Err(ParseError::at(
                             key_span,
                             format!(
                                 "unknown option `{other}` in a `{keyword}` block: expected \
-                                 `instruction` or `demos`"
+                                 `instruction`, `demos`, or `render`"
                             ),
                         ));
                     }

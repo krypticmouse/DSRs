@@ -47,7 +47,7 @@ main: <MainSig> = seq { … }                      // the program body; always a
 Every step is `name = <expr>`; names are program-unique. A node may only reference nodes named **earlier**. The seq exports fields with a final `out { … }` step, and `main`'s seq must export every `out` field of `<MainSig>`.
 
 ````
-name = predict <Sig> @<model> (in1 = <port>, in2 = <port>) { instruction "…" demos [<rows>] }
+name = predict <Sig> @<model> (in1 = <port>, in2 = <port>) { instruction "…" demos [<rows>] render "bare" }
 name = cot <Sig> @<model> (…)                    // predict + prepended reasoning output
 name = agent <Sig> @<model> (…) {                // LM + tool loop; block required
   tools [<tool> …]  stop_tools [<tool> …]
@@ -82,6 +82,8 @@ name = loop (max_iters 3) {                      // loops are always bounded
 ````
 
 `@<model>` may be omitted when exactly one model is declared. Leaf nodes (`predict`/`cot`/`agent`/`hole`) always need a `name =`; containers in arm/child positions may be anonymous.
+
+`render` (predict/cot only) selects the prompt protocol: `"markers"` (default, the `[[ ## field ## ]]` contract — never printed) or `"bare"` (instruction as system prompt, raw input as user turn, whole completion = the output; only valid when the signature has exactly one non-optional `string` output). It is an optimizable slot (`<leaf>.render`) like `instruction` and `demos`.
 
 ## Ports (the right side of every binding)
 

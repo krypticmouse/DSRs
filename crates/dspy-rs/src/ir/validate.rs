@@ -102,6 +102,11 @@ pub enum ValidateError {
         expected: ParamKind,
         got: ParamKind,
     },
+    #[error(
+        "param `{path}`: bare render requires a predict leaf with exactly one \
+         non-optional string output"
+    )]
+    RenderUnsupported { path: String },
     #[error("agent loop `{at}`: stop tool is not in the node's tool list")]
     StopToolNotDeclared { at: String },
     #[error(
@@ -289,6 +294,7 @@ impl<'p> Validator<'p> {
                     param_ok(&at, n.instruction)?;
                     param_ok(&at, n.demos)?;
                     param_ok(&at, n.model)?;
+                    param_ok(&at, n.render)?;
                     binds_ok(&at, &n.binding)?;
                 }
                 Node::AgentLoop(n) => {
@@ -372,6 +378,24 @@ impl<'p> Validator<'p> {
                         if t.index() >= n_tools {
                             return Err(err(&at, format!("{t}")));
                         }
+                    }
+                }
+                crate::ir::params::ParamValue::Render {
+                    mode: crate::ir::params::RenderMode::Bare,
+                } => {
+                    let supported = match slot.owner {
+                        ParamOwner::Node(node) => match &p.nodes[node] {
+                            crate::ir::graph::Node::Predict(n) => {
+                                p.sigs[n.sig].supports_bare_render()
+                            }
+                            _ => false,
+                        },
+                        ParamOwner::Tool(_) => false,
+                    };
+                    if !supported {
+                        return Err(ValidateError::RenderUnsupported {
+                            path: slot.path.to_string(),
+                        });
                     }
                 }
                 _ => {}

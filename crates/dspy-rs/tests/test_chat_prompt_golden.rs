@@ -2,8 +2,9 @@
 //!
 //! These render through the def lane ([`SignatureDef::of`] + the `*_def`
 //! adapter methods) — the one prompt path since Predict routes through the IR
-//! interpreter. The expected strings are the historical static-lane bytes and
-//! must never change silently.
+//! interpreter. The expected strings must never change silently. Revised
+//! 2026-08: refusal-safe response instruction; objective block no longer
+//! indented (was an 8-space artifact shipped on every call).
 
 use dspy_rs::ir::SignatureDef;
 use dspy_rs::{ChatAdapter, Demo, Signature};
@@ -51,10 +52,10 @@ fn golden_system_prompt_is_stable() {
         "\n",
         "[[ ## completed ## ]]\n",
         "\n",
-        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.\n",
+        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`. If the information needed for an output field is unavailable, say so in that field instead of guessing.\n",
         "\n",
-        "In adhering to this structure, your objective is: \n",
-        "        Given the fields `question`, produce the fields `answer`.",
+        "In adhering to this structure, your objective is:\n",
+        "Given the fields `question`, produce the fields `answer`.",
     );
 
     assert_eq!(system, expected);
@@ -72,7 +73,7 @@ fn golden_user_prompt_is_stable() {
         "[[ ## question ## ]]\n",
         "What is 2+2?\n",
         "\n",
-        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.",
+        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`. If the information needed for an output field is unavailable, say so in that field instead of guessing.",
     );
 
     assert_eq!(user, expected);
@@ -115,7 +116,7 @@ fn golden_demo_messages_are_stable() {
         "[[ ## question ## ]]\n",
         "What is 2+2?\n",
         "\n",
-        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.",
+        "Respond with the corresponding output fields, starting with the field `[[ ## answer ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`. If the information needed for an output field is unavailable, say so in that field instead of guessing.",
     );
     let expected_assistant = concat!(
         "[[ ## answer ## ]]\n",

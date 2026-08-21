@@ -45,6 +45,7 @@ use crate::ir::graph::{
 };
 use crate::ir::params::{
     CodeLang, ContextPolicy, DemoRow, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue,
+    RenderMode,
 };
 use crate::ir::sig::{FieldDef, SignatureDef};
 use crate::ir::validate::ValidateError;
@@ -146,6 +147,7 @@ enum SpecKind {
         model: Option<ModelId>,
         instruction: Option<String>,
         demos: Vec<DemoRow>,
+        render: RenderMode,
         binds: Vec<(String, Port)>,
     },
     Agent {
@@ -253,6 +255,17 @@ impl NodeSpec {
         match &mut self.kind {
             SpecKind::Predict { demos, .. } | SpecKind::Agent { demos, .. } => *demos = rows,
             _ => panic!("demos() applies to predict/cot/agent specs"),
+        }
+        self
+    }
+
+    /// Sets the render mode's default (Predict only): the marker protocol
+    /// vs. bare rendering. Bare is refused by validation unless the leaf's
+    /// signature has exactly one non-optional `String` output.
+    pub fn render(mut self, mode: RenderMode) -> Self {
+        match &mut self.kind {
+            SpecKind::Predict { render, .. } => *render = mode,
+            _ => panic!("render() applies to predict/cot specs"),
         }
         self
     }
@@ -449,6 +462,7 @@ pub fn predict(name: &str, sig: SigId) -> NodeSpec {
             model: None,
             instruction: None,
             demos: Vec::new(),
+            render: RenderMode::Markers,
             binds: Vec::new(),
         },
         name: None,
@@ -835,6 +849,7 @@ impl Lowering {
                 model,
                 instruction,
                 demos,
+                render,
                 binds,
             } => {
                 let sig = if cot {
@@ -873,6 +888,13 @@ impl Lowering {
                     ParamKind::ModelRef,
                     ParamValue::ModelRef { model },
                 );
+                let render = self.leaf_param(
+                    &name,
+                    "render",
+                    node_id,
+                    ParamKind::Render,
+                    ParamValue::Render { mode: render },
+                );
                 let binding = self.lower_binds(binds)?;
                 Node::Predict(PredictNode {
                     name: name_sym,
@@ -880,6 +902,7 @@ impl Lowering {
                     instruction,
                     demos,
                     model,
+                    render,
                     binding,
                 })
             }

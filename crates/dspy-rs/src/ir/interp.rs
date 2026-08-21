@@ -30,7 +30,7 @@ use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
     PortRef, PredictNode, Program, ToolId, ToolKind,
 };
-use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
+use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue, RenderMode};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest, begin_span};
@@ -897,7 +897,11 @@ impl Interpreter {
         } else {
             if let Some(input_map) = input.as_ref() {
                 self.validate_input(&at, def, input_map)?;
-                chat.push_message(Message::user(ChatAdapter.format_input_def(def, input_map)));
+                let user = match self.leaf_render_mode(node, &cx) {
+                    RenderMode::Markers => ChatAdapter.format_input_def(def, input_map),
+                    RenderMode::Bare => ChatAdapter.format_input_bare_def(def, input_map),
+                };
+                chat.push_message(Message::user(user));
             }
             (Vec::new(), chat.messages)
         };
@@ -958,8 +962,9 @@ impl Interpreter {
         }
 
         match &p.nodes[node] {
-            Node::Predict(_) => {
-                self.predict_conversation_turn(&at, def, &lm, &cx, messages, guard)
+            Node::Predict(n) => {
+                let mode = self.p_render(&cx, n.render);
+                self.predict_conversation_turn(&at, def, &lm, &cx, messages, guard, mode)
                     .await
             }
             Node::AgentLoop(n) => {
@@ -1009,6 +1014,7 @@ impl Interpreter {
     /// A `Predict` leaf's conversation turn: one exchange over the assembled
     /// chat, parsed against the leaf signature — `eval_predict` minus the
     /// binding resolution and prompt rendering the conversation already owns.
+    #[allow(clippy::too_many_arguments)]
     async fn predict_conversation_turn(
         &self,
         at: &str,
@@ -1017,6 +1023,7 @@ impl Interpreter {
         cx: &Cx,
         messages: Vec<Message>,
         guard: Option<crate::trace::SpanGuard>,
+        mode: RenderMode,
     ) -> Result<ConversationTurn, RunError> {
         if cx.meter.try_reserve_call().is_err() {
             if let Some(guard) = guard {
@@ -1056,7 +1063,7 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &self.program.types, &response.output) {
+        match parse_output_mode(def, &self.program.types, &response.output, mode) {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
@@ -1305,7 +1312,16 @@ impl Interpreter {
             Node::Predict(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
-                render_prompt(&p.sigs[n.sig], &p.types, &instruction, &demos, input, None)
+                let mode = self.p_render(cx, n.render);
+                render_prompt(
+                    &p.sigs[n.sig],
+                    &p.types,
+                    &instruction,
+                    &demos,
+                    input,
+                    None,
+                    mode,
+                )
             }
             Node::AgentLoop(n) => {
                 let instruction = self.p_text(cx, n.instruction);
@@ -1318,6 +1334,7 @@ impl Interpreter {
                     &demos,
                     input,
                     policy.playbook.as_deref(),
+                    RenderMode::Markers,
                 )
             }
             _ => unreachable!("conversation_leaf returns only leaves"),
@@ -1599,7 +1616,9 @@ impl Interpreter {
 
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
-        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None);
+        let mode = self.p_render(cx, n.render);
+        let (prefix, mut suffix) =
+            render_prompt(def, &p.types, &instruction, &demos, &input, None, mode);
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -1712,7 +1731,7 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &p.types, &response.output) {
+        match parse_output_mode(def, &p.types, &response.output, mode) {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
                     leaves.push(LeafOutcome {
@@ -1965,6 +1984,7 @@ impl Interpreter {
             &demos,
             &input,
             policy.playbook.as_deref(),
+            RenderMode::Markers,
         );
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
@@ -2574,6 +2594,21 @@ impl Interpreter {
         }
     }
 
+    fn p_render(&self, cx: &Cx, id: ParamId) -> RenderMode {
+        match self.p_value(cx, id) {
+            ParamValue::Render { mode } => *mode,
+            other => panic!("render slot resolved to {:?}", other.kind()),
+        }
+    }
+
+    /// The leaf's effective render mode; agent loops always use markers.
+    fn leaf_render_mode(&self, node: NodeId, cx: &Cx) -> RenderMode {
+        match &self.program.nodes[node] {
+            Node::Predict(n) => self.p_render(cx, n.render),
+            _ => RenderMode::Markers,
+        }
+    }
+
     fn p_context(&self, cx: &Cx, id: ParamId) -> ContextPolicy {
         match self.p_value(cx, id) {
             ParamValue::ContextPolicy { policy } => policy.clone(),
@@ -2804,8 +2839,8 @@ async fn lm_call_toolset(
 // ---------------------------------------------------------------------------
 
 /// Renders the (prefix, suffix) message split for a leaf call: prefix =
-/// system + demo turns, suffix = the live user turn. Instruction and demos
-/// arrive overlay-resolved.
+/// system + demo turns, suffix = the live user turn. Instruction, demos, and
+/// render mode arrive overlay-resolved.
 fn render_prompt(
     def: &SignatureDef,
     types: &TypeTable,
@@ -2813,9 +2848,13 @@ fn render_prompt(
     demos: &[DemoRow],
     input: &JsonMap,
     playbook: Option<&str>,
+    mode: RenderMode,
 ) -> (Vec<Message>, Vec<Message>) {
     let adapter = ChatAdapter;
-    let mut system = adapter.build_system_def(def, types, Some(instruction));
+    let mut system = match mode {
+        RenderMode::Markers => adapter.build_system_def(def, types, Some(instruction)),
+        RenderMode::Bare => adapter.build_system_bare_def(def, Some(instruction)),
+    };
     if let Some(playbook) = playbook {
         system.push_str("\n\n");
         system.push_str(playbook);
@@ -2823,13 +2862,38 @@ fn render_prompt(
     let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
     prefix.push(Message::system(system));
     for row in demos {
-        prefix.push(Message::user(adapter.format_input_def(def, &row.input)));
-        prefix.push(Message::assistant(
-            adapter.format_output_def(def, &row.output),
-        ));
+        let (user, assistant) = match mode {
+            RenderMode::Markers => (
+                adapter.format_input_def(def, &row.input),
+                adapter.format_output_def(def, &row.output),
+            ),
+            RenderMode::Bare => (
+                adapter.format_input_bare_def(def, &row.input),
+                adapter.format_output_bare_def(def, &row.output),
+            ),
+        };
+        prefix.push(Message::user(user));
+        prefix.push(Message::assistant(assistant));
     }
-    let suffix = vec![Message::user(adapter.format_input_def(def, input))];
-    (prefix, suffix)
+    let user = match mode {
+        RenderMode::Markers => adapter.format_input_def(def, input),
+        RenderMode::Bare => adapter.format_input_bare_def(def, input),
+    };
+    (prefix, vec![Message::user(user)])
+}
+
+/// Mode-dispatched output parse — the read side of [`render_prompt`].
+#[allow(clippy::result_large_err)]
+fn parse_output_mode(
+    def: &SignatureDef,
+    types: &TypeTable,
+    response: &Message,
+    mode: RenderMode,
+) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), crate::ParseError> {
+    match mode {
+        RenderMode::Markers => ChatAdapter.parse_output_def(def, types, response),
+        RenderMode::Bare => ChatAdapter.parse_output_bare_def(def, types, response),
+    }
 }
 
 fn span_error(

@@ -141,14 +141,16 @@ fn def_views(fields: &[crate::ir::FieldDef]) -> Vec<FieldView<'_>> {
     fields.iter().map(FieldView::of_def).collect()
 }
 
-fn format_task_description_view(
+/// The effective objective text: the override, else the instruction, else a
+/// synthesized `Given the fields …, produce the fields …` fallback.
+fn resolve_objective(
     inputs: &[FieldView<'_>],
     outputs: &[FieldView<'_>],
     instruction: &str,
     instruction_override: Option<&str>,
 ) -> String {
     let instruction = instruction_override.unwrap_or(instruction);
-    let instruction = if instruction.is_empty() {
+    if instruction.is_empty() {
         let input_fields = inputs
             .iter()
             .map(|field| format!("`{}`", field.lm_name))
@@ -162,16 +164,17 @@ fn format_task_description_view(
         format!("Given the fields {input_fields}, produce the fields {output_fields}.")
     } else {
         instruction.to_string()
-    };
-
-    let mut indented = String::new();
-    for line in instruction.lines() {
-        indented.push('\n');
-        indented.push_str("        ");
-        indented.push_str(line);
     }
+}
 
-    format!("In adhering to this structure, your objective is: {indented}")
+fn format_task_description_view(
+    inputs: &[FieldView<'_>],
+    outputs: &[FieldView<'_>],
+    instruction: &str,
+    instruction_override: Option<&str>,
+) -> String {
+    let instruction = resolve_objective(inputs, outputs, instruction, instruction_override);
+    format!("In adhering to this structure, your objective is:\n{instruction}")
 }
 
 fn format_response_instructions_view(outputs: &[FieldView<'_>]) -> String {
@@ -188,6 +191,9 @@ fn format_response_instructions_view(outputs: &[FieldView<'_>]) -> String {
         message.push_str(&format!(" then `[[ ## {} ## ]]`,", field.lm_name));
     }
     message.push_str(" and then ending with the marker for `[[ ## completed ## ]]`.");
+    message.push_str(
+        " If the information needed for an output field is unavailable, say so in that field instead of guessing.",
+    );
 
     message
 }
@@ -301,6 +307,148 @@ impl ChatAdapter {
             &def.instruction,
             instruction_override,
         )
+    }
+
+    /// Bare-mode system prompt ([`RenderMode::Bare`]): the objective text
+    /// alone — no field contract, no marker protocol, no response
+    /// instructions. The whole completion is the output field, so nothing
+    /// else is needed.
+    ///
+    /// [`RenderMode::Bare`]: crate::ir::params::RenderMode::Bare
+    pub fn build_system_bare_def(
+        &self,
+        def: &SignatureDef,
+        instruction_override: Option<&str>,
+    ) -> String {
+        resolve_objective(
+            &def_views(&def.inputs),
+            &def_views(&def.outputs),
+            &def.instruction,
+            instruction_override,
+        )
+    }
+
+    /// Bare-mode user message: a single input renders as its raw value
+    /// (honoring its [`RenderSpec`]); multiple inputs render as
+    /// `name:\n<value>` blocks. No markers, no appended response
+    /// instructions.
+    pub fn format_input_bare_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
+        let present: Vec<&crate::ir::FieldDef> = def
+            .inputs
+            .iter()
+            .filter(|field| input.contains_key(&*field.name))
+            .collect();
+        if let [field] = present[..] {
+            let value = &input[&*field.name];
+            return render_input_field_def(def, field, value, input);
+        }
+        present
+            .iter()
+            .map(|field| {
+                let value = &input[&*field.name];
+                format!(
+                    "{}:\n{}",
+                    field.lm_name,
+                    render_input_field_def(def, field, value, input)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// Bare-mode assistant message for few-shot demos: the single output
+    /// field's raw value — the demo shows exactly what a bare completion
+    /// looks like.
+    pub fn format_output_bare_def(&self, def: &SignatureDef, output: &JsonMap) -> String {
+        def.outputs
+            .first()
+            .and_then(|field| output.get(&*field.name))
+            .map(format_json_value_for_prompt)
+            .unwrap_or_default()
+    }
+
+    #[allow(clippy::result_large_err)]
+    /// Bare-mode parse: the whole trimmed completion becomes the single
+    /// output field, run through the same coercion and constraint machinery
+    /// as the marker path. Legal only for single-`String`-output signatures
+    /// ([`SignatureDef::supports_bare_render`]); on a wider signature every
+    /// field past the first reports [`ParseError::MissingField`].
+    pub fn parse_output_bare_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        response: &Message,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.text_content_cow();
+        let whole = content.trim();
+
+        let mut metas = IndexMap::new();
+        let mut errors = Vec::new();
+        let mut output = JsonMap::new();
+
+        for (index, field) in def.outputs.iter().enumerate() {
+            if index > 0 {
+                errors.push(ParseError::MissingField {
+                    field: field.name.to_string(),
+                    raw_response: content.to_string(),
+                });
+                continue;
+            }
+            let coerced = match coerce(whole, &field.ty, types) {
+                Ok(value) => value,
+                Err(err) => {
+                    errors.push(ParseError::CoercionFailed {
+                        field: field.name.to_string(),
+                        expected_type: type_name(&field.ty, Some(types)),
+                        raw_text: whole.to_string(),
+                        source: JsonishError::from(err),
+                    });
+                    continue;
+                }
+            };
+            let mut checks = Vec::new();
+            for constraint in field.constraints.iter() {
+                let passed = evaluate_expression(&constraint.expr, &coerced.value);
+                match constraint.kind {
+                    ConstraintKind::Assert => {
+                        if !passed {
+                            errors.push(ParseError::AssertFailed {
+                                field: field.name.to_string(),
+                                label: constraint.label.to_string(),
+                                expression: constraint.expr.to_string(),
+                                value: coerced.value.clone(),
+                            });
+                        }
+                    }
+                    ConstraintKind::Check => {
+                        checks.push(ConstraintResult {
+                            label: constraint.label.to_string(),
+                            expression: constraint.expr.to_string(),
+                            passed,
+                        });
+                    }
+                }
+            }
+            metas.insert(
+                field.name.to_string(),
+                FieldMeta {
+                    raw_text: whole.to_string(),
+                    flags: coerced.flags,
+                    checks,
+                },
+            );
+            output.insert(field.name.to_string(), coerced.value);
+        }
+
+        if !errors.is_empty() {
+            let partial = if output.is_empty() {
+                None
+            } else {
+                Some(Value::Object(output))
+            };
+            return Err(ParseError::Multiple { errors, partial });
+        }
+        Ok((output, metas))
     }
 
     /// Formats a value-level input from an owned [`SignatureDef`] as a user

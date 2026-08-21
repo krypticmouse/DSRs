@@ -245,10 +245,15 @@ async fn attach_program_resolves_the_join_for_every_leaf_span() {
     };
     assert_eq!(
         entry("drafter"),
-        ["drafter.instruction", "drafter.demos", "drafter.model"]
-            .into_iter()
-            .map(String::from)
-            .collect()
+        [
+            "drafter.instruction",
+            "drafter.demos",
+            "drafter.model",
+            "drafter.render",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
     );
     assert_eq!(
         entry("researcher"),

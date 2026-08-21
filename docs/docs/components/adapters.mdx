@@ -15,6 +15,8 @@ LM Response → Adapter.parse() → Typed Output
 
 `ChatAdapter` handles both formatting and parsing. It has one lane: every method is parameterized by an owned [`SignatureDef`](/docs/components/program-and-nodes) — the IR's value-level signature — whether the def came from a derived `Signature` type (`SignatureDef::of::<S>()`) or from a loaded `.dsrs` program. There is no separate "static" formatting path.
 
+How a predict leaf renders is itself an optimizable parameter: the `<leaf>.render` slot (`RenderMode`). The default, `Markers`, is the `[[ ## field ## ]]` protocol described below. `Bare` skips the contract entirely — the instruction is the whole system prompt, the raw input is the user turn, and the whole completion becomes the output. Bare is only legal for signatures with exactly one non-optional `String` output (validation and `Overlay::set` both refuse it otherwise), and agent loops always use markers. Select it at build time (`Predict::builder().render_mode(RenderMode::Bare)`, or `render "bare"` in `.dsrs`), or flip it per candidate through an overlay like any other slot.
+
 ## ChatAdapter
 
 ### Prompt structure
@@ -45,10 +47,11 @@ Output field `answer` should be of type: string
 [[ ## completed ## ]]
 
 Respond with the corresponding output fields, starting with `[[ ## answer ## ]]`,
-and then ending with the marker for `[[ ## completed ## ]]`.
+and then ending with the marker for `[[ ## completed ## ]]`. If the information
+needed for an output field is unavailable, say so in that field instead of guessing.
 
 In adhering to this structure, your objective is:
-        Answer questions accurately and concisely.
+Answer questions accurately and concisely.
 ```
 
 ### Marker protocol
@@ -501,11 +504,11 @@ LocationType
 
 [[ ## completed ## ]]
 
-Respond with the corresponding output fields, starting with the field `[[ ## claim ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`.
+Respond with the corresponding output fields, starting with the field `[[ ## claim ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`. If the information needed for an output field is unavailable, say so in that field instead of guessing.
 
 In adhering to this structure, your objective is:
-        Extract the insurance claim information from the following text.
-        - If you are unsure about a field, leave it as null.
+Extract the insurance claim information from the following text.
+- If you are unsure about a field, leave it as null.
 ```
 
 **Generated user message:**

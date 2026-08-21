@@ -59,7 +59,7 @@ use crate::ir::graph::{
     RetryNode, SigId, StopSpec, ToolId, ToolKind,
 };
 use crate::ir::params::{
-    ContextPolicy, Overlay, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue,
+    ContextPolicy, Overlay, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, RenderMode,
 };
 use crate::ir::sig::{FieldDef, SignatureDef};
 use crate::ir::validate::ValidateError;
@@ -609,13 +609,24 @@ fn swap_leaf(work: &mut Program, leaf: NodeId, to: &SwapTarget) -> Result<(), Ap
         }
         (Node::AgentLoop(n), SwapTarget::Predict) => {
             // The context and tool_set slots are orphaned here and collected
-            // in `edited()`.
+            // in `edited()`. Agent loops have no render slot, so mint one
+            // (same convention as the builder: `<leaf>.render`, markers).
+            let leaf_name = work.syms.get(n.name).to_string();
+            let render = work.params.push(ParamSlot {
+                path: format!("{leaf_name}.render").into(),
+                owner: ParamOwner::Node(leaf),
+                kind: ParamKind::Render,
+                default: ParamValue::Render {
+                    mode: RenderMode::Markers,
+                },
+            });
             work.nodes[leaf] = Node::Predict(PredictNode {
                 name: n.name,
                 sig: n.sig,
                 instruction: n.instruction,
                 demos: n.demos,
                 model: n.model,
+                render,
                 binding: n.binding,
             });
             Ok(())
@@ -1033,7 +1044,7 @@ fn gc_params(work: &mut Program, node_map: &HashMap<NodeId, NodeId>) {
     let mut used: HashSet<ParamId> = HashSet::new();
     for node in work.nodes.values() {
         match node {
-            Node::Predict(n) => used.extend([n.instruction, n.demos, n.model]),
+            Node::Predict(n) => used.extend([n.instruction, n.demos, n.model, n.render]),
             Node::AgentLoop(n) => {
                 used.extend([
                     n.instruction,
@@ -1080,6 +1091,7 @@ fn gc_params(work: &mut Program, node_map: &HashMap<NodeId, NodeId>) {
                 n.instruction = map[&n.instruction];
                 n.demos = map[&n.demos];
                 n.model = map[&n.model];
+                n.render = map[&n.render];
             }
             Node::AgentLoop(n) => {
                 n.instruction = map[&n.instruction];

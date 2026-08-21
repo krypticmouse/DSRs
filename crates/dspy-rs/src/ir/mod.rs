@@ -61,8 +61,8 @@ pub use module_build::{
 };
 pub use params::{
     CodeK, CodeLang, ContextK, ContextPolicy, DemoRow, Demos, Instruction, KindTag, ModelRefK,
-    Overlay, OverlayError, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, Slot, ToolDesc,
-    ToolSetK, code_hash,
+    Overlay, OverlayError, ParamId, ParamKind, ParamOwner, ParamSlot, ParamValue, RenderK,
+    RenderMode, Slot, ToolDesc, ToolSetK, code_hash,
 };
 pub use step::{AgentStepOpts, HoleReport, StepDef, StepKind, ToolStepDef};
 pub use text::{DsrsFileError, ParseError};

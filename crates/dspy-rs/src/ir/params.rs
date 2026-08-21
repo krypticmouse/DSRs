@@ -54,6 +54,11 @@ pub enum ParamKind {
     ModelRef,
     ContextPolicy,
     Code,
+    /// How a predict leaf's prompt is rendered and its completion parsed
+    /// (adapter roadmap §5.2/§5.4): the marker protocol vs. bare text.
+    /// Format is a measured optimization dimension, so it is a slot, not a
+    /// property of the adapter.
+    Render,
 }
 
 impl ParamKind {
@@ -66,6 +71,37 @@ impl ParamKind {
             Self::ModelRef => "model_ref",
             Self::ContextPolicy => "context_policy",
             Self::Code => "code",
+            Self::Render => "render",
+        }
+    }
+}
+
+/// The rendering alphabet for a predict leaf. `Markers` is the
+/// `[[ ## field ## ]]` typed-contract protocol; `Bare` sends the instruction
+/// as the system prompt and the raw input as the user turn, and the whole
+/// completion becomes the single `String` output field — legal only for
+/// signatures with exactly one non-optional `String` output.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RenderMode {
+    #[default]
+    Markers,
+    Bare,
+}
+
+impl RenderMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Markers => "markers",
+            Self::Bare => "bare",
+        }
+    }
+
+    pub fn from_str_opt(s: &str) -> Option<Self> {
+        match s {
+            "markers" => Some(Self::Markers),
+            "bare" => Some(Self::Bare),
+            _ => None,
         }
     }
 }
@@ -101,6 +137,9 @@ pub enum ParamValue {
         /// Stable hash of `source`.
         hash: u64,
     },
+    Render {
+        mode: RenderMode,
+    },
 }
 
 impl ParamValue {
@@ -120,6 +159,7 @@ impl ParamValue {
             Self::ModelRef { .. } => ParamKind::ModelRef,
             Self::ContextPolicy { .. } => ParamKind::ContextPolicy,
             Self::Code { .. } => ParamKind::Code,
+            Self::Render { .. } => ParamKind::Render,
         }
     }
 }
@@ -190,6 +230,7 @@ pub enum ToolSetK {}
 pub enum ModelRefK {}
 pub enum ContextK {}
 pub enum CodeK {}
+pub enum RenderK {}
 
 pub trait KindTag {
     const KIND: ParamKind;
@@ -214,6 +255,9 @@ impl KindTag for ContextK {
 }
 impl KindTag for CodeK {
     const KIND: ParamKind = ParamKind::Code;
+}
+impl KindTag for RenderK {
+    const KIND: ParamKind = ParamKind::Render;
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +286,14 @@ pub enum OverlayError {
     /// [`DemoRow`]'s input/output maps.
     #[error("demo row for `{path}` has field `{field}` not present in the leaf signature")]
     DemoField { path: String, field: String },
+    /// A `Render` value asks for bare rendering on a leaf whose signature
+    /// cannot support it: bare mode maps the whole completion onto exactly
+    /// one non-optional `String` output, and only predict leaves render it.
+    #[error(
+        "bare render for `{path}` requires a predict leaf with exactly one \
+         non-optional string output"
+    )]
+    RenderUnsupported { path: String },
 }
 
 /// A candidate = dense data overlay over a fixed skeleton. Clone is a vec
@@ -304,8 +356,32 @@ impl Overlay {
                 }
             }
         }
+        // Bare rendering's contract (whole completion = the one output) only
+        // type-checks against a single-String-output predict leaf; refuse the
+        // value here so an optimizer can't mint an unparseable candidate.
+        if let ParamValue::Render {
+            mode: RenderMode::Bare,
+        } = &v
+        {
+            let supported = match slot.owner {
+                ParamOwner::Node(node) => match &p.nodes[node] {
+                    Node::Predict(n) => p.sigs[n.sig].supports_bare_render(),
+                    _ => false,
+                },
+                ParamOwner::Tool(_) => false,
+            };
+            if !supported {
+                return Err(OverlayError::RenderUnsupported {
+                    path: slot.path.to_string(),
+                });
+            }
+        }
         self.values[id] = Some(v);
         Ok(())
+    }
+
+    pub fn set_render(&mut self, s: Slot<RenderK>, mode: RenderMode) {
+        self.values[s.id] = Some(ParamValue::Render { mode });
     }
 
     pub fn set_instruction(&mut self, s: Slot<Instruction>, text: impl Into<String>) {

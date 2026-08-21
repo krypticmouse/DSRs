@@ -9,7 +9,8 @@ use tracing::{debug, trace};
 use crate::core::lm::ToolSet;
 use crate::core::{Module, PredictState, Signature};
 use crate::ir::{
-    self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
+    self, Budget, Interpreter, Overlay, Program, RenderMode, RunError, RunOutput, RuntimeEnv,
+    SignatureDef,
 };
 use crate::{
     CallMetadata, Chat, FieldSchema, GLOBAL_SETTINGS, LmError, LmUsage, ParseError, PredictError,
@@ -134,6 +135,12 @@ pub struct Predict<S: Signature> {
     /// optimizer naming pass.
     #[facet(skip, opaque)]
     trace_name: Option<String>,
+    /// The render slot's default on the built program: the marker protocol
+    /// vs. bare rendering. Settable only at build time, like tools; the slot
+    /// stays overlay-addressable either way. Ignored when tools are attached
+    /// (agent loops always use markers).
+    #[facet(skip, opaque)]
+    render_mode: RenderMode,
     /// The cached 1-node IR program this predictor executes: a `predict` leaf
     /// named [`component_name`](Predict::component_name) over
     /// [`SignatureDef::of::<S>()`]. Reset by [`set_trace_name`] (the leaf name
@@ -166,6 +173,7 @@ impl<S: Signature> Predict<S> {
             lm: None,
             toolset: tokio::sync::OnceCell::new(),
             trace_name: None,
+            render_mode: RenderMode::Markers,
             program: OnceLock::new(),
             instance_overlay: OnceLock::new(),
             engine: tokio::sync::Mutex::new(None),
@@ -364,7 +372,7 @@ impl<S: Signature> Predict<S> {
         // `sig_of` merges output-reachable class/enum defs; input-reachable
         // ones are needed too (the interpreter type-checks run inputs).
         b.add_types(&<S::Input as crate::typesys::Schema>::output_schema().types);
-        let mut ns = ir::predict(leaf, sid).model(model);
+        let mut ns = ir::predict(leaf, sid).model(model).render(self.render_mode);
         for field in def.inputs.iter() {
             ns = ns.bind(&field.name, ir::input(&field.name));
         }
@@ -645,6 +653,7 @@ pub struct PredictBuilder<S: Signature> {
     instruction_override: Option<String>,
     lm: Option<Arc<crate::core::LM>>,
     trace_name: Option<String>,
+    render_mode: RenderMode,
     _marker: PhantomData<S>,
 }
 
@@ -657,8 +666,19 @@ impl<S: Signature> PredictBuilder<S> {
             instruction_override: None,
             lm: None,
             trace_name: None,
+            render_mode: RenderMode::Markers,
             _marker: PhantomData,
         }
+    }
+
+    /// Sets the render mode's default on the built program
+    /// ([`RenderMode::Bare`] = instruction as system prompt, raw input as
+    /// user turn, whole completion as the output — the single-`String`-output
+    /// fast path). Refused at program build unless the signature has exactly
+    /// one non-optional `String` output; ignored when tools are attached.
+    pub fn render_mode(mut self, mode: RenderMode) -> Self {
+        self.render_mode = mode;
+        self
     }
 
     /// Assigns a human-readable name recorded on this predictor's trace spans.
@@ -734,6 +754,7 @@ impl<S: Signature> PredictBuilder<S> {
             lm: self.lm,
             toolset: tokio::sync::OnceCell::new(),
             trace_name: self.trace_name,
+            render_mode: self.render_mode,
             program: OnceLock::new(),
             instance_overlay: OnceLock::new(),
             engine: tokio::sync::Mutex::new(None),

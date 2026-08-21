@@ -266,6 +266,11 @@ pub struct PredictNode {
     pub demos: ParamId,
     /// `ParamKind::ModelRef`.
     pub model: ParamId,
+    /// `ParamKind::Render`: marker protocol vs. bare rendering. Optimizable
+    /// like any slot; defaults to [`RenderMode::Markers`].
+    ///
+    /// [`RenderMode::Markers`]: crate::ir::params::RenderMode::Markers
+    pub render: ParamId,
     pub binding: Box<[Binding]>,
 }
 
