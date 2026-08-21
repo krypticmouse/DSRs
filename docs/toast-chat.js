@@ -41,30 +41,25 @@
     "--bg:#131417;--fg:#ededf0;--muted:#8f8f98;--card:#1b1c21;--line:#2a2b32;--code:#22232a}" +
 
     ".fab{position:fixed;bottom:18px;right:18px;display:flex;align-items:center;gap:6px;" +
-    "cursor:pointer;background:var(--bg);color:var(--muted);border:1px solid var(--line);" +
-    "border-radius:999px;padding:6px 13px;font-size:12.5px;font-weight:500;" +
-    "box-shadow:0 1px 3px rgba(0,0,0,.07);opacity:.85;" +
-    "transition:color .15s ease,border-color .15s ease,opacity .15s ease," +
-    "transform .15s ease,box-shadow .15s ease}" +
-    ".fab:hover{opacity:1;color:var(--accent-text);border-color:var(--accent);" +
-    "transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.10)}" +
+    "cursor:pointer;background:var(--accent-soft);color:var(--accent-text);" +
+    "border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);" +
+    "border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600;" +
+    "box-shadow:0 2px 8px rgba(237,108,19,.18);" +
+    "transition:color .15s ease,background .15s ease,border-color .15s ease," +
+    "opacity .15s ease,transform .15s ease,box-shadow .15s ease}" +
+    ".fab:hover{background:var(--accent);color:#fff;border-color:var(--accent);" +
+    "transform:translateY(-1px);box-shadow:0 4px 14px rgba(237,108,19,.35)}" +
     ".wrap.open .fab{opacity:0;pointer-events:none}" +
 
-    ".veil{position:fixed;inset:0;background:rgba(12,12,16,.45);opacity:0;pointer-events:none;" +
-    "backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);transition:opacity .22s ease}" +
-    ".veil.open{opacity:1;pointer-events:auto}" +
-
-    ".panel{position:fixed;left:50%;top:50%;width:min(760px,calc(100vw - 32px));" +
-    "max-height:min(78vh,680px);display:flex;flex-direction:column;" +
-    "background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:16px;" +
-    "box-shadow:0 24px 70px rgba(0,0,0,.22),0 4px 14px rgba(0,0,0,.08);" +
-    "opacity:0;transform:translate(-50%,calc(-50% + 12px)) scale(.98);pointer-events:none;" +
-    "transition:opacity .22s ease,transform .22s cubic-bezier(.32,.72,.24,1);overflow:hidden}" +
-    ".panel.open{opacity:1;transform:translate(-50%,-50%) scale(1);pointer-events:auto}" +
-    ".wrap.dark .panel{box-shadow:0 24px 80px rgba(0,0,0,.6),0 4px 14px rgba(0,0,0,.4)}" +
-    "@media (max-width:520px){.panel{left:0;top:0;width:100vw;height:100%;max-height:none;" +
-    "transform:translate(0,10px) scale(.98);border-radius:0;border:none}" +
-    ".panel.open{transform:none}}" +
+    ".panel{position:fixed;top:0;right:0;bottom:0;width:min(460px,100vw);" +
+    "display:flex;flex-direction:column;background:var(--bg);color:var(--fg);" +
+    "border-left:1px solid var(--line);" +
+    "box-shadow:-8px 0 32px rgba(0,0,0,.10);" +
+    "transform:translateX(103%);pointer-events:none;" +
+    "transition:transform .24s cubic-bezier(.32,.72,.24,1);overflow:hidden}" +
+    ".panel.open{transform:none;pointer-events:auto}" +
+    ".wrap.dark .panel{box-shadow:-12px 0 40px rgba(0,0,0,.5)}" +
+    "@media (max-width:520px){.panel{width:100vw;border-left:none}}" +
 
     ".head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}" +
     ".mark{width:26px;height:26px;display:flex;align-items:center;justify-content:center}" +
@@ -194,7 +189,6 @@
     "</style>" +
     '<div class="wrap">' +
     '<button class="fab">✦ Ask AI</button>' +
-    '<div class="veil"></div>' +
     '<div class="panel">' +
     '<div class="head"><div class="mark"><img src="' + DSRS_LOGO + '" alt="DSRs"></div>' +
     "<b>Ask DSRs</b>" +
@@ -308,7 +302,6 @@
   function setOpen(open) {
     panel.classList.toggle("open", open);
     wrap.classList.toggle("open", open);
-    root.querySelector(".veil").classList.toggle("open", open);
     if (open) {
       input.focus();
       glintTick(); // light a chip right away instead of waiting for a tick
@@ -324,8 +317,10 @@
   document.addEventListener("keydown", function (e) {
     if (e.key === "Escape") setOpen(false);
   });
-  root.querySelector(".veil").addEventListener("click", function () {
-    setOpen(false);
+  document.addEventListener("click", function (e) {
+    if (wrap.classList.contains("open") && e.composedPath().indexOf(host) === -1) {
+      setOpen(false);
+    }
   });
 
   function esc(s) {
