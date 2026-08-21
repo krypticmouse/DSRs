@@ -77,6 +77,15 @@
     ".m.bot{align-self:stretch;max-width:100%;padding:2px 2px 6px}" +
     ".m.bot p{margin:0 0 10px}.m.bot p:last-child,.m.bot ul:last-child,.m.bot ol:last-child{margin-bottom:0}" +
     ".m.bot ul,.m.bot ol{margin:0 0 10px;padding-left:20px}.m.bot li{margin:3px 0}" +
+    ".m.bot li>ul,.m.bot li>ol{margin:3px 0 0}" +
+    ".m.bot h3{font-size:13.5px;font-weight:650;margin:12px 0 4px}" +
+    ".m.bot h4{font-size:13px;font-weight:600;margin:10px 0 4px}" +
+    ".m.bot h3:first-child,.m.bot h4:first-child{margin-top:0}" +
+    ".m.bot hr{border:none;border-top:1px solid var(--line);margin:10px 0}" +
+    ".m.bot .tblwrap{overflow-x:auto;max-width:100%;margin:8px 0}" +
+    ".m.bot table{border-collapse:collapse;font-size:12px;line-height:1.45}" +
+    ".m.bot th,.m.bot td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}" +
+    ".m.bot th{background:var(--card);font-weight:600}" +
     ".m.bot code{background:var(--code);padding:1px 5px;border-radius:5px;" +
     "font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}" +
     ".m.bot pre{background:#16181d;color:#e6e6ea;padding:11px 13px;border-radius:10px;" +
@@ -241,54 +250,157 @@
     });
   }
 
-  // minimal markdown: fenced code, inline code, bold, links, lists, paragraphs
+  // minimal markdown, parsed line by line so partial streamed input and
+  // backticks quoted mid-sentence (e.g. .dsrs js``` syntax) can't derail it:
+  // fences open only at line starts, ordered lists keep the author's
+  // numbering via <li value>, plus nested lists, tables, headings, hr,
+  // inline code / bold / italic / links
+  function inline(s) {
+    return esc(s)
+      .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
+      .replace(/(^|[\s(])\*([^*\n]+)\*(?=$|[\s).,;:!?])/g, "$1<i>$2</i>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank">$1</a>');
+  }
+
   function md(s) {
-    function kind(line) {
-      if (/^\s*[-*] /.test(line)) return "ul";
-      if (/^\s*\d+[.)] /.test(line)) return "ol";
-      return "p";
-    }
-    function blockHtml(block) {
-      var html = "";
-      var run = null; // {k, items}
-      function flush() {
-        if (!run) return;
-        if (run.k === "p") {
-          html += "<p>" + run.items.join("<br>") + "</p>";
-        } else {
-          html += "<" + run.k + ">" +
-            run.items.map(function (it) { return "<li>" + it + "</li>"; }).join("") +
-            "</" + run.k + ">";
-        }
-        run = null;
+    var html = "";
+    var para = []; // pending paragraph lines (already inlined)
+    var tbl = null; // pending table lines (raw)
+    var code = null; // pending fence body lines while inside ```
+    var lists = []; // open lists: {tag, indent, liOpen}
+
+    function flushPara() {
+      if (para.length) {
+        html += "<p>" + para.join("<br>") + "</p>";
+        para = [];
       }
-      block.split("\n").forEach(function (line) {
-        if (!line.trim()) return;
-        var k = kind(line);
-        var text = k === "p" ? line : line.replace(/^\s*(?:[-*]|\d+[.)]) /, "");
-        if (!run || run.k !== k) {
-          flush();
-          run = { k: k, items: [] };
-        }
-        run.items.push(text);
-      });
-      flush();
-      return html;
     }
-    var out = [];
-    var parts = s.split(/```(?:\w*\n)?/);
-    for (var i = 0; i < parts.length; i++) {
-      if (i % 2) {
-        out.push("<pre><code>" + hl(parts[i]) + "</code></pre>");
+    function cells(row) {
+      return row
+        .replace(/^\s*\|/, "")
+        .replace(/\|\s*$/, "")
+        .split("|")
+        .map(function (c) { return c.trim(); });
+    }
+    function flushTable() {
+      if (!tbl) return;
+      var rows = tbl;
+      tbl = null;
+      if (rows.length >= 2 && /^[\s:|-]+$/.test(rows[1]) && rows[1].indexOf("-") !== -1) {
+        html += '<div class="tblwrap"><table><tr>' +
+          cells(rows[0]).map(function (c) { return "<th>" + inline(c) + "</th>"; }).join("") +
+          "</tr>" +
+          rows.slice(2).map(function (r) {
+            return "<tr>" +
+              cells(r).map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") +
+              "</tr>";
+          }).join("") +
+          "</table></div>";
+      } else {
+        // no separator row (yet) — fall back to plain lines
+        para = para.concat(rows.map(inline));
+        flushPara();
+      }
+    }
+    function closeList() {
+      var l = lists.pop();
+      html += (l.liOpen ? "</li>" : "") + "</" + l.tag + ">";
+    }
+    function closeAllLists() {
+      while (lists.length) closeList();
+    }
+
+    var lines = s.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+
+      if (code) {
+        if (/^\s*```/.test(line)) {
+          html += "<pre><code>" + hl(code.join("\n")) + "</code></pre>";
+          code = null;
+        } else {
+          code.push(line);
+        }
         continue;
       }
-      var t = esc(parts[i])
-        .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-        .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-        .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank">$1</a>');
-      out.push(t.split(/\n{2,}/).map(blockHtml).join(""));
+      if (/^\s*```/.test(line)) {
+        flushPara();
+        flushTable();
+        closeAllLists();
+        code = [];
+        continue;
+      }
+
+      if (/^\s*\|.*\|\s*$/.test(line)) {
+        flushPara();
+        (tbl = tbl || []).push(line);
+        continue;
+      }
+      flushTable();
+
+      if (!line.trim()) {
+        flushPara(); // blank lines end paragraphs but not lists
+        continue;
+      }
+
+      var li = /^(\s*)([-*]|\d+[.)])\s+(.*)$/.exec(line);
+      if (li) {
+        flushPara();
+        var indent = li[1].replace(/\t/g, "    ").length;
+        var tag = /\d/.test(li[2]) ? "ol" : "ul";
+        var top = lists[lists.length - 1];
+        while (top && indent < top.indent - 1) {
+          closeList();
+          top = lists[lists.length - 1];
+        }
+        if (top && indent <= top.indent + 1) {
+          if (top.liOpen) {
+            html += "</li>";
+            top.liOpen = false;
+          }
+          if (top.tag !== tag) {
+            closeList();
+            top = lists[lists.length - 1];
+          }
+        }
+        top = lists[lists.length - 1];
+        if (!top || indent > top.indent + 1) {
+          html += "<" + tag + ">"; // nested lists live inside the open <li>
+          lists.push({ tag: tag, indent: indent, liOpen: false });
+          top = lists[lists.length - 1];
+        }
+        html += "<li" +
+          (tag === "ol" ? ' value="' + parseInt(li[2], 10) + '"' : "") +
+          ">" + inline(li[3]);
+        top.liOpen = true;
+        continue;
+      }
+
+      var h = /^\s*(#{1,6})\s+(.*)$/.exec(line);
+      if (h) {
+        flushPara();
+        closeAllLists();
+        var hTag = h[1].length <= 2 ? "h3" : "h4";
+        html += "<" + hTag + ">" + inline(h[2]) + "</" + hTag + ">";
+        continue;
+      }
+      if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(line)) {
+        flushPara();
+        closeAllLists();
+        html += "<hr>";
+        continue;
+      }
+
+      closeAllLists();
+      para.push(inline(line));
     }
-    return out.join("");
+
+    if (code) html += "<pre><code>" + hl(code.join("\n")) + "</code></pre>"; // fence still streaming
+    flushPara();
+    flushTable();
+    closeAllLists();
+    return html;
   }
 
   function bubble(cls, text) {
