@@ -36,19 +36,33 @@
     "cursor:pointer;background:var(--bg);color:var(--muted);border:1px solid var(--line);" +
     "border-radius:999px;padding:6px 13px;font-size:12.5px;font-weight:500;" +
     "box-shadow:0 1px 3px rgba(0,0,0,.07);opacity:.85;" +
-    "transition:color .15s ease,border-color .15s ease,opacity .15s ease}" +
-    ".fab:hover{opacity:1;color:var(--accent-text);border-color:var(--accent)}" +
+    "transition:color .15s ease,border-color .15s ease,opacity .15s ease," +
+    "transform .15s ease,box-shadow .15s ease}" +
+    ".fab:hover{opacity:1;color:var(--accent-text);border-color:var(--accent);" +
+    "transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.10)}" +
     ".wrap.open .fab{opacity:0;pointer-events:none}" +
 
-    ".panel{position:fixed;top:0;right:0;bottom:0;width:min(400px,100vw);" +
+    ".panel{position:fixed;top:12px;right:12px;bottom:12px;width:min(400px,calc(100vw - 24px));" +
     "display:flex;flex-direction:column;background:var(--bg);color:var(--fg);" +
-    "border-left:1px solid var(--line);box-shadow:-8px 0 32px rgba(0,0,0,.08);" +
-    "transform:translateX(103%);pointer-events:none;" +
+    "border:1px solid var(--line);border-radius:16px;" +
+    "box-shadow:0 12px 40px rgba(0,0,0,.13),0 2px 8px rgba(0,0,0,.06);" +
+    "transform:translateX(calc(103% + 12px));pointer-events:none;" +
     "transition:transform .24s cubic-bezier(.32,.72,.24,1);overflow:hidden}" +
     ".panel.open{transform:none;pointer-events:auto}" +
+    ".panel.resizing{transition:none;user-select:none}" +
+    ".wrap.dark .panel{box-shadow:0 12px 48px rgba(0,0,0,.55),0 2px 8px rgba(0,0,0,.35)}" +
+    ".grip{position:absolute;left:0;top:0;bottom:0;width:9px;cursor:col-resize;z-index:3}" +
+    ".grip::after{content:'';position:absolute;left:3px;top:50%;transform:translateY(-50%);" +
+    "width:3px;height:44px;border-radius:3px;background:var(--line);opacity:0;" +
+    "transition:opacity .15s ease,background .15s ease}" +
+    ".grip:hover::after,.panel.resizing .grip::after{opacity:1;background:var(--accent)}" +
+    "@media (max-width:520px){.panel{top:0;right:0;bottom:0;width:100vw!important;" +
+    "border-radius:0;border:none}.grip{display:none}}" +
 
     ".head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line)}" +
-    ".mark{width:28px;height:28px;border-radius:8px;background:var(--accent-soft);color:var(--accent);" +
+    ".mark{width:28px;height:28px;border-radius:9px;" +
+    "background:linear-gradient(135deg,var(--accent),#ff9d5c);color:#fff;" +
+    "box-shadow:0 2px 6px rgba(237,108,19,.35);" +
     "display:flex;align-items:center;justify-content:center;font-size:15px}" +
     ".head b{font-size:14px;font-weight:600}" +
     ".pill{font-size:11px;font-weight:500;color:var(--accent-text);background:var(--accent-soft);" +
@@ -58,7 +72,11 @@
     ".x:hover{background:var(--card);color:var(--fg)}" +
     ".x.new{margin-left:auto;font-size:16px}" +
 
-    ".msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px}" +
+    ".msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;" +
+    "scrollbar-width:thin;scrollbar-color:var(--line) transparent}" +
+    ".msgs::-webkit-scrollbar{width:6px}" +
+    ".msgs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}" +
+    ".msgs::-webkit-scrollbar-track{background:transparent}" +
 
     ".hello{margin:auto 0;display:flex;flex-direction:column;gap:14px;padding:8px 4px}" +
     ".hello h3{font-size:15px;font-weight:600}" +
@@ -66,8 +84,9 @@
     ".chips{display:flex;flex-direction:column;gap:8px;align-items:flex-start}" +
     ".chip{border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer;" +
     "border-radius:999px;padding:7px 14px;font-size:13px;text-align:left;" +
-    "transition:border-color .15s ease,background .15s ease}" +
-    ".chip:hover{border-color:var(--accent);color:var(--accent-text);background:var(--accent-soft)}" +
+    "transition:border-color .15s ease,background .15s ease,transform .15s ease,box-shadow .15s ease}" +
+    ".chip:hover{border-color:var(--accent);color:var(--accent-text);background:var(--accent-soft);" +
+    "transform:translateY(-1px);box-shadow:0 3px 10px rgba(0,0,0,.07)}" +
 
     ".m{max-width:88%;font-size:13.5px;line-height:1.6;overflow-wrap:break-word;" +
     "animation:rise .22s ease}" +
@@ -121,14 +140,19 @@
 
     ".foot{display:flex;gap:8px;padding:12px 14px;border-top:1px solid var(--line);background:var(--bg)}" +
     "textarea{flex:1;resize:none;border:1px solid var(--line);background:var(--card);color:var(--fg);" +
-    "border-radius:12px;padding:9px 13px;font-size:13.5px;line-height:1.4;height:40px;outline:none;" +
+    "border-radius:12px;padding:9px 13px;font-size:13.5px;line-height:1.4;height:40px;" +
+    "max-height:120px;outline:none;" +
     "transition:border-color .15s ease,box-shadow .15s ease}" +
     "textarea::placeholder{color:var(--muted)}" +
-    "textarea:focus{border-color:var(--accent)}" +
+    "textarea:focus{border-color:var(--accent);" +
+    "box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 14%,transparent)}" +
     ".send{width:40px;height:40px;flex:none;border:1px solid var(--line);background:var(--card);" +
     "color:var(--muted);border-radius:12px;cursor:pointer;display:flex;align-items:center;" +
-    "justify-content:center;transition:color .15s ease,border-color .15s ease}" +
+    "justify-content:center;align-self:flex-end;" +
+    "transition:color .15s ease,border-color .15s ease,background .15s ease}" +
     ".send:hover{color:var(--accent-text);border-color:var(--accent)}" +
+    ".send.ready:not(:disabled){background:var(--accent);border-color:var(--accent);color:#fff}" +
+    ".send.ready:not(:disabled):hover{filter:brightness(1.07)}" +
     ".send:disabled{opacity:.45;cursor:default}" +
     ".send svg{width:16px;height:16px}" +
 
@@ -137,6 +161,7 @@
     '<div class="wrap">' +
     '<button class="fab">✦ Ask AI</button>' +
     '<div class="panel">' +
+    '<div class="grip" title="Drag to resize · double-click to reset"></div>' +
     '<div class="head"><div class="mark">✦</div><b>Ask DSRs</b>' +
     '<span class="pill">toast-1</span>' +
     '<button class="x new" title="New chat">＋</button>' +
@@ -182,7 +207,7 @@
     history = [];
     msgs.innerHTML = "";
     msgs.appendChild(makeHello());
-    input.value = "";
+    resetInput();
     input.focus();
   }
   msgs.appendChild(makeHello());
@@ -203,6 +228,57 @@
     attributeFilter: ["class", "data-theme"],
   });
   theme();
+
+  // resizable panel: drag the left edge; width persists across visits
+  function store(k, v) {
+    try {
+      v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
+    } catch (e) {}
+  }
+  var grip = root.querySelector(".grip");
+  var savedW = null;
+  try {
+    savedW = +localStorage.getItem("toastChatW") || null;
+  } catch (e) {}
+  if (savedW) panel.style.width = Math.min(savedW, innerWidth - 24) + "px";
+  grip.addEventListener("pointerdown", function (e) {
+    e.preventDefault();
+    var startX = e.clientX;
+    var startW = panel.getBoundingClientRect().width;
+    panel.classList.add("resizing");
+    grip.setPointerCapture(e.pointerId);
+    function move(ev) {
+      var w = Math.max(340, Math.min(innerWidth - 24, startW + (startX - ev.clientX)));
+      panel.style.width = w + "px";
+    }
+    function up() {
+      panel.classList.remove("resizing");
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", up);
+      grip.removeEventListener("pointercancel", up);
+      store("toastChatW", String(Math.round(panel.getBoundingClientRect().width)));
+    }
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", up);
+    grip.addEventListener("pointercancel", up);
+  });
+  grip.addEventListener("dblclick", function () {
+    panel.style.width = "";
+    store("toastChatW", null);
+  });
+
+  // textarea grows with input (up to max-height); send lights up when ready
+  function syncInput() {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+    send.classList.toggle("ready", !!input.value.trim());
+  }
+  function resetInput() {
+    input.value = "";
+    input.style.height = "";
+    send.classList.remove("ready");
+  }
+  input.addEventListener("input", syncInput);
 
   function setOpen(open) {
     panel.classList.toggle("open", open);
@@ -420,7 +496,7 @@
       var h0 = msgs.querySelector(".hello");
       if (h0) h0.remove();
       bubble("user", q);
-      input.value = "";
+      resetInput();
       bubble(
         "bot",
         "**The chat backend isn't deployed yet.** Deploy `docs-chat-worker/` " +
@@ -428,7 +504,7 @@
       );
       return;
     }
-    input.value = "";
+    resetInput();
     send.disabled = true;
     var h = msgs.querySelector(".hello");
     if (h) h.remove();
