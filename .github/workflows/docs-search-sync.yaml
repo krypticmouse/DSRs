@@ -1,13 +1,11 @@
 name: Docs Search Sync
 
+# Re-ingest the repository into the Mixedbread stores on every merge to
+# main. Sync is incremental (sha256-keyed), so unchanged files are skipped.
 on:
   push:
     branches: [main]
-    paths:
-      - "docs/index.mdx"
-      - "docs/docs/**"
-      - "docs/snippets/**"
-      - "crates/**/*.rs"
+  workflow_dispatch:
 
 jobs:
   sync:
