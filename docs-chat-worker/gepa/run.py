@@ -46,6 +46,9 @@ def main():
     ap.add_argument("--budget", default=400, type=int, help="max metric calls (1 call = 1 toast-1 rollout + 1 judge call)")
     ap.add_argument("--val-frac", default=0.25, type=float)
     ap.add_argument("--workers", default=4, type=int)
+    ap.add_argument("--reflection-lm", default="openrouter/openai/gpt-5.6-sol")
+    ap.add_argument("--seed-file", default=None, type=Path,
+                    help="seed prompt file (default: extract SYSTEM from ../worker.js)")
     args = ap.parse_args()
 
     load_env()
@@ -61,11 +64,15 @@ def main():
 
     run_dir = HERE / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
     result = gepa.optimize(
-        seed_candidate={"system_prompt": seed_from_worker()},
+        seed_candidate={
+            "system_prompt": args.seed_file.read_text()
+            if args.seed_file
+            else seed_from_worker()
+        },
         trainset=trainset,
         valset=valset,
         adapter=DocsChatAdapter(max_workers=args.workers),
-        reflection_lm="openrouter/openai/gpt-5.6-sol",
+        reflection_lm=args.reflection_lm,
         reflection_minibatch_size=3,
         max_metric_calls=args.budget,
         run_dir=str(run_dir),

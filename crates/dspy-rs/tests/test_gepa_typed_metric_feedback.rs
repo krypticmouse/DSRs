@@ -269,6 +269,10 @@ async fn gepa_compile_fails_when_feedback_disappears_during_generation() {
         .num_iterations(1)
         .minibatch_size(2)
         .track_stats(true)
+        // This metric scores by answer length (unnormalized), which the
+        // default `perfect_score = 1.0` would classify as all-solved and
+        // skip the generation before the child is ever evaluated.
+        .perfect_score(f64::INFINITY)
         .build();
 
     let err = optimizer

@@ -39,6 +39,7 @@
 //! | [`COPRO`] | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
 //! | [`SIMBA`] | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 //! | [`GEPA`] | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
+//! | [`Ratchet`] | GEPA + trial ledger, paired racing, operator portfolio | **Yes** | Medium (racing kills losers early) |
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 //! | [`Structural`] | LM-guided graph edits over [`ir::Edit`](crate::ir::Edit) (program lane only) | No | Medium (examples + iterations × minibatch) |
 
@@ -48,6 +49,7 @@ pub mod engine;
 pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
+pub mod ratchet;
 pub mod simba;
 pub mod structural;
 pub mod target;
@@ -57,6 +59,7 @@ pub use copro::*;
 pub use engine::*;
 pub use gepa::*;
 pub use mipro::*;
+pub use ratchet::*;
 pub use simba::*;
 pub use structural::*;
 pub use target::{LeafInfo, OptimizeTarget, ProgramMetric};
@@ -101,6 +104,7 @@ pub enum Report {
     /// Nothing beyond the installed winner (COPRO, MIPROv2).
     None,
     Gepa(GEPAResult),
+    Ratchet(RatchetResult),
     Simba(SimbaReport),
     Bootstrap(BootstrapReport),
     /// Extension point for third-party strategies.
@@ -111,6 +115,13 @@ impl Report {
     pub fn into_gepa(self) -> Option<GEPAResult> {
         match self {
             Self::Gepa(report) => Some(report),
+            _ => None,
+        }
+    }
+
+    pub fn into_ratchet(self) -> Option<RatchetResult> {
+        match self {
+            Self::Ratchet(report) => Some(report),
             _ => None,
         }
     }

@@ -112,6 +112,7 @@ For the common case you never build these by hand — each optimizer's `compile_
 | `COPRO` | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
 | `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
 | `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
+| `Ratchet` | GEPA + trial ledger, paired racing, operator portfolio | **Yes** | Medium (racing kills losers early) |
 | `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 | `Structural` | LM-guided graph edits over `ir::Edit` (program lane only) | No | Medium (examples + iterations × minibatch) |
 
@@ -150,7 +151,7 @@ Public helper type: `PromptingTips` (the rotation of prompting best practices ap
 
 ## GEPA
 
-Genetic-Pareto instruction evolution driven by per-example feedback. Each generation samples a parent proportional to Pareto coverage, re-evaluates it on a trainset minibatch, has a reflection LM (`prompt_model`) rewrite the instruction from the feedback and the mutated component's execution trace, then scores the child on the validation columns. Without a `prompt_model`, mutation degrades to deterministic feedback concatenation. Only instruction space is searched: no demo mutation, no crossover. How-to: [GEPA](/docs/optimizers/gepa).
+Genetic-Pareto instruction evolution driven by per-example feedback. Each generation samples a parent proportional to Pareto coverage, re-evaluates it on a reflection minibatch (batch A, drawn least-used-first and biased toward examples the parent hasn't solved), has a reflection LM (`prompt_model`) rewrite the instruction from the feedback and the mutated component's execution trace — re-asking once if the proposal quotes example strings verbatim (leak guard) — then gates the child against the parent on a disjoint held-out minibatch (batch B) before scoring it on the validation columns. The final winner is chosen by a noise-aware Occam rule rather than raw argmax (see the how-to). Without a `prompt_model`, mutation degrades to deterministic feedback concatenation. Only instruction space is searched: no demo mutation, no crossover. How-to: [GEPA](/docs/optimizers/gepa).
 
 <Warning>
 GEPA errors if any `Eval` from the metric has `feedback: None`. Build metrics with `Eval::with_feedback`.
@@ -159,7 +160,11 @@ GEPA errors if any `Eval` from the metric has `feedback: None`. Build metrics wi
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `num_iterations` | `usize` | `20` | Evolutionary generations. |
-| `minibatch_size` | `usize` | `25` | Examples per parent re-evaluation within each generation. |
+| `minibatch_size` | `usize` | `25` | Examples per reflection batch (batch A). |
+| `gate_size` | `Option<usize>` | `None` | Held-out gate batch B size. `None` = `minibatch_size`; `Some(0)` disables the gate. |
+| `selection_z` | `f64` | `1.0` | Seed-protected argmax: the seed keeps the win when the argmax child is within `z·SE` (paired). `0.0` = raw argmax. |
+| `perfect_score` | `f64` | `1.0` | Score at which an example counts as solved (batch biasing + all-perfect skip). Set to your ceiling for unnormalized metrics, or `f64::INFINITY` to disable. |
+| `allow_memorization` | `bool` | `false` | Disable the leak guard (allow proposals to quote example strings verbatim). |
 | `num_trials` | `usize` | `10` | Currently unused. Reserved for multi-child evolution. |
 | `temperature` | `f32` | `1.0` | Currently unused. Reserved for mutation diversity control. |
 | `track_stats` | `bool` | `true` | Record all candidates, evolution history, and frontier history in the result. |
@@ -176,8 +181,13 @@ GEPA additionally exposes `compile_module_with_valset(module, trainset, valset, 
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `best_candidate` | `GEPACandidate` | Best average score on the Pareto frontier; installed on the module. |
-| `all_candidates` | `Vec<GEPACandidate>` | Every evaluated candidate. Empty unless `track_stats`. |
+| `best_candidate` | `GEPACandidate` | The winner under the noise-aware Occam rule; installed on the module. |
+| `best_by_mean` | `Option<GEPACandidate>` | The raw argmax-by-validation-mean candidate, when the Occam rule demoted it (`None` when they coincide). |
+| `all_candidates` | `Vec<GEPACandidate>` | Every gate-promoted candidate. Empty unless `track_stats`. |
+| `gate_rejected` | `usize` | Children rejected by the held-out gate (no validation sweep spent). |
+| `skipped_perfect` | `usize` | Generations skipped because the parent aced its reflection batch. |
+| `leak_retries` | `usize` | Reflection retries triggered by the leak guard. |
+| `leak_skipped` | `usize` | Generations abandoned because the proposal still leaked after a retry. |
 | `total_rollouts` | `usize` | Evaluation rollouts consumed. |
 | `total_lm_calls` | `usize` | LM calls consumed (rollouts plus candidate generation). |
 | `evolution_history` | `Vec<(usize, f32)>` | `(generation, best_average_score)` pairs for plotting convergence. |
@@ -186,6 +196,27 @@ GEPA additionally exposes `compile_module_with_valset(module, trainset, valset, 
 | `frontier_history` | `Vec<ParetoStatistics>` | Frontier snapshot per generation (see [Optimizer engine](/docs/components/optimizer-engine)). |
 
 `GEPACandidate` carries `id`, `instruction`, `module_name`, `example_scores: Vec<f32>`, `parent_id: Option<usize>`, and `generation`, plus `average_score()` and `mutate(new_instruction, generation)`.
+
+## Ratchet
+
+RATCHET keeps GEPA's skeleton (Pareto pool, reflective mutation, the full anti-overfit stack) and adds three mechanisms, each tied to a measured GEPA failure (`docs/ratchet-design.md`): a **trial ledger** — every proposal's operator, its one-line hypothesis, and its measured fate are fed back into every reflection, so falsified ideas are never re-proposed; **paired racing** — children are evaluated on shuffled validation blocks and killed as soon as their paired deficit to the parent exceeds `race_z` standard errors, so losers cost 4–12 rollouts instead of a full sweep; and an **operator portfolio** — Rewrite / Patch / Simplify / Merge, selected per generation by a UCB1 bandit on measured promote-rate (Merge is semantic crossover of two Pareto members shown what each wins on). Requires `prompt_model`; there is no concatenation fallback. How-to knobs mirror GEPA's plus `race_block`, `race_z`, and `ledger_window`; the report (`RatchetResult`) carries the full trial ledger and per-operator stats.
+
+<Warning>
+Like GEPA, Ratchet errors if any `Eval` from the metric lacks feedback. Build metrics with `Eval::with_feedback`.
+</Warning>
+
+### TEMPER
+
+The Ratchet engine also hosts **TEMPER** (`docs/temper-design.md`): four anti-overfit mechanisms behind builder knobs that default off, so RATCHET's measured behavior is untouched and every ablation is a builder config. The `temper(variant_pairs)` function returns the preset (set `prompt_model` on it before use):
+
+| Knob | TEMPER setting | What it changes |
+|------|----------------|-----------------|
+| `parent_selection` | `ParentSelection::Lexicase` | ε-lexicase parent draws with a `1/(1+children)` novelty tie-break, replacing Pareto-coverage sampling — a noise-minted "sole solver" can no longer monopolize selection mass |
+| `batch_weighting` | `BatchWeighting::Learnability` | minibatches weighted by per-column solve variance `p(1−p)`: reflection concentrates on examples the pool solves *sometimes* (assumes ~0–1 scores) |
+| `variant_pairs` | supplied by the harness | answer-preserving paraphrase twins of seen examples, never optimized against; they vote only in the endgame champion race, where phrasing-memorized prompts lose |
+| `length_cap` | `Some(1500)` | hard proposal-length budget with one shortening retry (the operators are told the cap inline) |
+
+`RatchetResult` gains `length_retries`, `length_skipped`, and `variant_selection_cols` accordingly.
 
 ## SIMBA
 

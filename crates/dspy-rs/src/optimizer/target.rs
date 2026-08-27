@@ -123,6 +123,11 @@ impl LeafInfo {
 pub(crate) trait Lane {
     fn num_examples(&self) -> usize;
     fn example_uid(&self, idx: usize) -> u64;
+    /// The example row at `idx` as canonical JSON (module lane: the
+    /// serialized row; program lane: the [`DemoRow`]). `None` when the row
+    /// cannot be serialized. Strategies use this read-only view for
+    /// data-dependent guards (e.g. GEPA's leak guard).
+    fn example_json(&self, idx: usize) -> Option<Value>;
     fn baseline(&self) -> u64;
     fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate>;
     fn run<'s>(
@@ -191,6 +196,10 @@ where
 
     fn example_uid(&self, idx: usize) -> u64 {
         self.uids[idx]
+    }
+
+    fn example_json(&self, idx: usize) -> Option<Value> {
+        serde_json::to_value(self.example(idx)).ok()
     }
 
     fn baseline(&self) -> u64 {
@@ -300,6 +309,10 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
 
     fn example_uid(&self, idx: usize) -> u64 {
         self.uids[idx]
+    }
+
+    fn example_json(&self, idx: usize) -> Option<Value> {
+        serde_json::to_value(&self.examples[idx]).ok()
     }
 
     fn baseline(&self) -> u64 {
@@ -608,6 +621,10 @@ impl<'a> OptimizeTarget<'a> {
 
     pub(crate) fn example_uid(&self, idx: usize) -> u64 {
         self.lane.example_uid(idx)
+    }
+    /// The example row at `idx` as canonical JSON (see [`Lane::example_json`]).
+    pub(crate) fn example_json(&self, idx: usize) -> Option<Value> {
+        self.lane.example_json(idx)
     }
 
     pub(crate) fn bind(&self, payload: &CandidatePayload) -> Result<BoundCandidate> {

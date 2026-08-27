@@ -57,3 +57,7 @@ docs-chat-worker/gepa/*.json
 docs-chat-worker/gepa/*.jsonl
 docs-chat-worker/gepa/*.log
 docs-chat-worker/gepa/*.txt
+
+*.log
+
+benchmarks/**

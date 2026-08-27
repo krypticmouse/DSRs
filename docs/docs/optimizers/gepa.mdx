@@ -131,7 +131,11 @@ println!("Best instruction: {}", result.best_candidate.instruction);
 ```rust
 GEPA::builder()
     .num_iterations(20)          // Evolutionary generations
-    .minibatch_size(25)          // Examples per parent re-evaluation
+    .minibatch_size(25)          // Examples per reflection batch (batch A)
+    .gate_size(25)               // Held-out gate batch B (default: minibatch_size; 0 disables)
+    .selection_z(1.0)            // Winner noise tolerance in SEs (0.0 = raw argmax)
+    .perfect_score(1.0)          // Score at which an example counts as solved
+    .allow_memorization(false)   // Leak guard on by default
     .track_stats(true)           // Record candidates and evolution history
     .track_best_outputs(false)   // Record best outputs per eval example
     .max_rollouts(500)           // Budget: max evaluation rollouts
@@ -141,6 +145,37 @@ GEPA::builder()
     .seed(42)                    // Reproducible sampling
     .build()
 ```
+
+### Overfitting controls
+
+Three defenses are on by default, each addressing a failure mode measured in
+real trajectories (see `docs/gepa-diagnosis-2026-08-22.md`):
+
+- **Reflect on A, gate on B.** Each generation draws two *disjoint* trainset
+  minibatches. Reflection reads batch A's feedback; the child must then beat
+  the parent on held-out batch B before earning the full validation sweep. A
+  gate that re-uses the reflection batch — the batch the child was written to
+  fix — passes almost everything (93% in our measurements) while only a third
+  of those children go on to beat their parent on validation.
+- **Noise-aware winner (seed-protected argmax).** Children compete by raw
+  validation mean, but the seed instruction keeps incumbency unless the
+  argmax child beats it by more than `selection_z` standard errors of the
+  paired per-example delta. On small validation sets this is what stops GEPA
+  from shipping a noise artifact that regresses on fresh data — while never
+  forfeiting real gains between children (protecting earlier children too
+  was measured to cost −0.045 holdout F1; see
+  `benchmarks/ratchet-hotpot/`). `selection_z(0.0)` restores raw argmax; the
+  demoted argmax candidate is reported in `result.best_by_mean`.
+- **Leak guard.** A proposed instruction that quotes short string values from
+  batch A's rows verbatim (gold answers, entity names) is re-asked once with
+  the leaked spans named; if it still leaks, the generation is skipped.
+  `allow_memorization(true)` disables this for tasks where baking dataset
+  facts into the instruction is intended.
+
+Reflection batches are drawn least-used-first (epoch-style coverage) and
+prefer examples the parent hasn't already solved (`perfect_score`); a parent
+that aces its whole batch skips the generation instead of paying for a no-op
+reflection.
 
 `num_trials` and `temperature` also exist on the builder but are currently unused (reserved for multi-child evolution and mutation diversity control). The full field table is in the [optimizers reference](/docs/components/optimizers#gepa).
 
@@ -213,14 +248,19 @@ pub struct GEPACandidate {
 1. **Initialize** the candidate pool with the unoptimized program
 2. **Iterate**:
    - Sample a candidate from the Pareto frontier (proportional to coverage)
-   - Sample a minibatch from the training set
-   - Collect execution traces with feedback
-   - Select a module component for targeted improvement
-   - LLM Reflection: Propose a new instruction using reflective meta-prompting
-   - Roll out the new candidate; if improved, evaluate on the validation columns
+   - Sample two disjoint trainset minibatches: A (reflection) and B (gate),
+     least-used first, A biased toward examples the parent hasn't solved
+   - Evaluate the parent on A, collecting execution traces with feedback
+     (skip the generation if the parent aced all of A)
+   - LLM Reflection: propose a new instruction from A's feedback, re-asking
+     once if the proposal quotes example strings verbatim (leak guard)
+   - Gate: score parent and child on held-out batch B; only a child that
+     wins on B is evaluated on the validation columns
    - Update the Pareto frontier
 3. **Continue** until budget is exhausted
-4. **Return** best candidate by average score
+4. **Return** the winner under seed-protected argmax (the argmax child by
+   validation mean, unless the seed is within `selection_z` standard errors
+   of it — then the seed keeps incumbency)
 
 ## Implementing feedback metrics
 
