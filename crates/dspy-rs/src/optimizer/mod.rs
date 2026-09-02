@@ -46,6 +46,8 @@
 pub mod bootstrap;
 pub mod copro;
 pub mod engine;
+pub mod evidence;
+pub mod forage;
 pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
@@ -57,6 +59,8 @@ pub mod target;
 pub use bootstrap::*;
 pub use copro::*;
 pub use engine::*;
+pub use evidence::*;
+pub use forage::{CheckExtractor, ForageColumn, ForageSnapshot, TeacherContext};
 pub use gepa::*;
 pub use mipro::*;
 pub use ratchet::*;

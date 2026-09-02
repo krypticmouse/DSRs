@@ -136,6 +136,19 @@ pub(crate) trait Lane {
         bound: BoundCandidate,
         candidate_hash: u64,
     ) -> LocalBoxFuture<'s, Result<(Eval, Trace)>>;
+    /// Counterfactual rollout: re-run example `idx` under `bound` with `base`
+    /// as the canned-response source (`ReplayMode::UntilDivergence`). The
+    /// caller typically edits one recorded span's output first: the unchanged
+    /// prefix replays free, the edited span serves its substituted output,
+    /// and everything downstream of the first divergence runs live. Returns
+    /// the metric's eval of the counterfactual outcome plus the number of
+    /// live LM calls spent. Module lane only.
+    fn counterfactual<'s>(
+        &'s self,
+        idx: usize,
+        bound: BoundCandidate,
+        base: Trace,
+    ) -> LocalBoxFuture<'s, Result<(Eval, usize)>>;
     fn output<'s>(
         &'s self,
         idx: usize,
@@ -241,6 +254,37 @@ where
                 rollout_traced(module, example, self.metric, meta),
             )
             .await
+        })
+    }
+
+    fn counterfactual<'s>(
+        &'s self,
+        idx: usize,
+        bound: BoundCandidate,
+        base: Trace,
+    ) -> LocalBoxFuture<'s, Result<(Eval, usize)>> {
+        Box::pin(async move {
+            let BoundCandidate::Params(params) = bound else {
+                return Err(anyhow!("module lane received a non-params candidate"));
+            };
+            let example = self.example(idx);
+            let module: &M = &*self.module;
+            // Replay outside, params + capture inside (the RFC 0001 §4e
+            // composition): the candidate must be the SAME one that recorded
+            // `base`, so unchanged stages hash identically and serve free.
+            let (rollout, report) = crate::trace::replay(
+                &base,
+                crate::trace::ReplayMode::UntilDivergence,
+                || {
+                    crate::fx::with_params_shared(
+                        params,
+                        rollout_traced(module, example, self.metric, TraceMeta::default()),
+                    )
+                },
+            )
+            .await;
+            let (eval, _trace) = rollout?;
+            Ok((eval, report.live))
         })
     }
 
@@ -368,6 +412,19 @@ impl<'a, MT: ProgramMetric> Lane for ProgramLane<'a, MT> {
                 duration_us: started.elapsed().as_micros() as u64,
             });
             Ok((eval, trace))
+        })
+    }
+
+    fn counterfactual<'s>(
+        &'s self,
+        _idx: usize,
+        _bound: BoundCandidate,
+        _base: Trace,
+    ) -> LocalBoxFuture<'s, Result<(Eval, usize)>> {
+        Box::pin(async move {
+            Err(anyhow!(
+                "counterfactual rollouts are not supported on program targets yet"
+            ))
         })
     }
 
@@ -638,6 +695,17 @@ impl<'a> OptimizeTarget<'a> {
         candidate_hash: u64,
     ) -> Result<(Eval, Trace)> {
         self.lane.run(idx, bound, candidate_hash).await
+    }
+
+    /// Counterfactual rollout of example `idx` under `bound`, replaying from
+    /// `base` (`UntilDivergence`). See [`Lane::counterfactual`].
+    pub(crate) async fn counterfactual(
+        &self,
+        idx: usize,
+        bound: BoundCandidate,
+        base: Trace,
+    ) -> Result<(Eval, usize)> {
+        self.lane.counterfactual(idx, bound, base).await
     }
 
     /// Runs the given examples under `candidate` and returns the bare output

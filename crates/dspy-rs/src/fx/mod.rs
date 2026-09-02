@@ -222,6 +222,32 @@ pub(crate) fn ambient_entry(name: &str) -> Option<ParamsEntry> {
         .flatten()
 }
 
+/// The ambient candidate's instruction for the named slot, if a
+/// [`with_params`] scope is active and carries one.
+///
+/// This is the read seam for **external-harness wrapper modules**: a module
+/// whose `forward` drives an out-of-process harness (HTTP sidecar, subprocess)
+/// holds its optimizable slots as named `Predict` fields that are never
+/// called, and instead resolves each slot's effective text itself —
+/// `fx::current_instruction(name)` for the ambient candidate, falling back to
+/// the field's own seed instruction. The optimizer's candidate-injection
+/// scope ([`with_params`] via the module lane) is what makes the ambient
+/// value appear here during rollouts.
+///
+/// Returns `None` when no scope is active, the scope has no entry for
+/// `name`, the entry carries no instruction override, or the entry
+/// explicitly clears the instruction (reset-to-default) — in every case the
+/// caller should fall back to its seed text.
+pub fn current_instruction(name: &str) -> Option<String> {
+    ambient_entry(name).and_then(|entry| {
+        if entry.clear_instruction {
+            None
+        } else {
+            entry.state.instruction_override
+        }
+    })
+}
+
 /// Runs a future with `params` as the ambient parameter set for every
 /// [`predict`] call inside it.
 ///

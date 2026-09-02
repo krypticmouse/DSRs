@@ -900,7 +900,12 @@ impl Engine {
                 rollouts: indices
                     .iter()
                     .map(|&idx| {
-                        if let Some((eval, trace)) = fresh_by_key.remove(&(candidate, idx)) {
+                        // `get` + clone, not `remove`: a request may name the
+                        // same candidate row twice (e.g. byte-identical
+                        // candidates re-derived across steps share one engine
+                        // row and can both reach a screen); duplicates are
+                        // served the same fresh eval instead of panicking.
+                        if let Some((eval, trace)) = fresh_by_key.get(&(candidate, idx)).cloned() {
                             RolloutOutcome {
                                 example: idx,
                                 eval,
@@ -938,6 +943,69 @@ impl Engine {
                 Ok(EvalOutcome::BudgetExhausted { needed })
             }
         }
+    }
+
+    /// A fresh traced rollout of one `(candidate, example)` cell, bypassing
+    /// the rollout cache — cache-served rollouts carry no [`Trace`], and a
+    /// diagnosis pass needs one. The eval is recorded into the cache and
+    /// matrix like any evaluation and charged as one rollout. Returns `None`
+    /// when the budget no longer allows it.
+    pub async fn probe_rollout(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        idx: usize,
+    ) -> Result<Option<(Eval, Trace)>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if !self.budget_allows(1) {
+            return Ok(None);
+        }
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let candidate_hash = self.candidates[candidate].0;
+        let (eval, trace) = target.run(idx, bound, candidate_hash).await?;
+        self.spend.metric_calls += 1;
+        self.spend.lm_calls += 1;
+        self.spend.lm_spans += trace.spans.len();
+        for span in &trace.spans {
+            self.spend.tokens = self.spend.tokens + span.usage;
+        }
+        self.cache.insert(
+            target.baseline(),
+            candidate_hash,
+            target.example_uid(idx),
+            self.config.cache_salt,
+            eval.clone(),
+        );
+        self.matrix.record(candidate, idx, eval.score);
+        Ok(Some((eval, trace)))
+    }
+
+    /// Scores a counterfactual replay of one example: `base` is a recorded
+    /// trace, typically with one span's output edited — the unchanged prefix
+    /// serves free, the edited span serves its substituted output, and the
+    /// suffix runs live. The eval is of a HYPOTHETICAL rollout: it is charged
+    /// to the budget (one rollout) but never recorded into the cache or the
+    /// score matrix. Returns `None` when the budget no longer allows it.
+    pub async fn counterfactual_rollout(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        idx: usize,
+        base: Trace,
+    ) -> Result<Option<Eval>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if !self.budget_allows(1) {
+            return Ok(None);
+        }
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let (eval, _live) = target.counterfactual(idx, bound, base).await?;
+        self.spend.metric_calls += 1;
+        self.spend.lm_calls += 1;
+        Ok(Some(eval))
     }
 
     /// Minibatch gating (the GEPA acceptance pattern): evaluates the candidate

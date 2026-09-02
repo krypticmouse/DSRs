@@ -62,6 +62,13 @@ pub struct GEPACandidate {
     pub example_scores: Vec<f32>,
     pub parent_id: Option<usize>,
     pub generation: usize,
+    /// The candidate's FULL instruction assignment, one entry per optimizable
+    /// leaf. `module_name`/`instruction` name the slot this candidate's
+    /// mutation touched; multi-leaf programs are searched jointly — children
+    /// inherit the parent's whole assignment and rewrite one slot. Empty on
+    /// data serialized before 2026-08 (single-leaf era).
+    #[serde(default)]
+    pub slots: std::collections::BTreeMap<String, String>,
 }
 
 impl GEPACandidate {
@@ -73,14 +80,49 @@ impl GEPACandidate {
     }
 
     pub fn mutate(&self, new_instruction: String, generation: usize) -> Self {
+        self.mutate_slot(self.module_name.clone(), new_instruction, generation)
+    }
+
+    /// Child with `slot`'s instruction rewritten; every other slot inherits
+    /// the parent's assignment (joint multi-leaf search).
+    pub fn mutate_slot(
+        &self,
+        slot: String,
+        new_instruction: String,
+        generation: usize,
+    ) -> Self {
+        let mut slots = self.slots.clone();
+        slots.insert(slot.clone(), new_instruction.clone());
         Self {
             id: 0,
             instruction: new_instruction,
-            module_name: self.module_name.clone(),
+            module_name: slot,
             example_scores: Vec::new(),
             parent_id: Some(self.id),
             generation,
+            slots,
         }
+    }
+
+    /// The instruction currently assigned to `slot` (falls back to this
+    /// candidate's own mutation for pre-slots data).
+    pub fn slot_text(&self, slot: &str) -> &str {
+        self.slots
+            .get(slot)
+            .map(String::as_str)
+            .unwrap_or(&self.instruction)
+    }
+
+    /// The engine-level candidate carrying the full assignment.
+    pub(crate) fn engine_candidate(&self) -> Candidate {
+        if self.slots.is_empty() {
+            return Candidate::with_instruction(&self.module_name, &self.instruction);
+        }
+        let mut candidate = Candidate::new();
+        for (name, text) in &self.slots {
+            candidate.set_instruction(name, text);
+        }
+        candidate
     }
 }
 
@@ -201,8 +243,15 @@ pub struct GEPAResult {
 ///   considered solved; used to bias reflection batches toward unsolved
 ///   examples and to skip reflection on all-perfect batches.
 /// - **`allow_memorization`** (default: false) — disable the leak guard.
-/// - **`num_trials`** (default: 10) — **currently unused.** Reserved for multi-child
-///   evolution (one child per generation right now). Setting this has no effect.
+/// - **`parents_per_step`** / **`proposals_per_parent`** (defaults: 1) — the
+///   P and N of P×N parallel proposals (gepa-ai blog, 2026-07-30): sample P
+///   parents per step, reflect N mutations per parent on disjoint
+///   mini-batches, run the reflection calls concurrently, and commit the
+///   whole batch before the search re-steers with validation results. `1×1`
+///   (the default) is the validated sequential behavior.
+/// - **`num_trials`** (default: 10) — **currently unused.** Multi-child
+///   evolution shipped as `parents_per_step`/`proposals_per_parent` instead;
+///   setting this has no effect.
 /// - **`temperature`** (default: 1.0) — **currently unused.** Reserved for mutation
 ///   diversity control. Setting this has no effect.
 /// - **`max_rollouts`** / **`max_lm_calls`** — hard budget caps. Optimization stops
@@ -246,8 +295,9 @@ pub struct GEPA {
     #[builder(default = 25)]
     pub minibatch_size: usize,
 
-    /// **Currently unused.** Reserved for multi-child evolution (one child per
-    /// generation right now). Setting this has no effect.
+    /// **Currently unused.** Multi-child evolution shipped as
+    /// `parents_per_step`/`proposals_per_parent` instead; setting this has
+    /// no effect.
     #[builder(default = 10)]
     pub num_trials: usize,
 
@@ -295,6 +345,18 @@ pub struct GEPA {
     /// (gold answers, entities) into the instruction verbatim.
     #[builder(default = false)]
     pub allow_memorization: bool,
+    /// Parents sampled per step — the "P" of P×N parallel proposals (see
+    /// [`Ratchet::parents_per_step`](crate::optimizer::ratchet::Ratchet::parents_per_step)).
+    /// Only the mainline (RATCHET-engine) path reads it; `1` (the default)
+    /// preserves the validated sequential behavior.
+    #[builder(default = 1)]
+    pub parents_per_step: usize,
+    /// Reflective mutations per parent per step — the "N" of P×N (see
+    /// [`Ratchet::proposals_per_parent`](crate::optimizer::ratchet::Ratchet::proposals_per_parent)).
+    /// Only the mainline (RATCHET-engine) path reads it; `1` (the default)
+    /// preserves the validated sequential behavior.
+    #[builder(default = 1)]
+    pub proposals_per_parent: usize,
 }
 
 /// GEPA's evolving state: report-facing candidates joined to engine rows.
@@ -878,6 +940,8 @@ impl GEPA {
             ratchet.eval_concurrency = self.eval_concurrency;
             ratchet.seed = self.seed;
             ratchet.track_stats = self.track_stats;
+            ratchet.parents_per_step = self.parents_per_step;
+            ratchet.proposals_per_parent = self.proposals_per_parent;
             ratchet
         };
 
@@ -896,10 +960,7 @@ impl GEPA {
 
         // RATCHET installed the winner already; optionally capture its val
         // outputs under the same budget rule as the legacy path.
-        let winner = Candidate::with_instruction(
-            &result.best_candidate.module_name,
-            &result.best_candidate.instruction,
-        );
+        let winner = result.best_candidate.engine_candidate();
         let best_outputs_valset = if self.track_best_outputs {
             if !engine.budget_allows(val_cols.len()) {
                 tracing::debug!(
@@ -975,6 +1036,10 @@ impl GEPA {
                     example_scores: Vec::new(),
                     parent_id: None,
                     generation: 0,
+                    slots: std::collections::BTreeMap::from([(
+                        leaf.name.clone(),
+                        leaf.instruction.clone(),
+                    )]),
                 },
                 row,
                 &eval,
@@ -1327,6 +1392,13 @@ mod tests {
             PredictorInfo::instruction(&module.predictor),
             "seed-instruction"
         );
+    }
+
+    #[test]
+    fn parallel_proposal_knobs_default_to_sequential() {
+        let gepa = GEPA::builder().build();
+        assert_eq!(gepa.parents_per_step, 1);
+        assert_eq!(gepa.proposals_per_parent, 1);
     }
 
     #[test]
