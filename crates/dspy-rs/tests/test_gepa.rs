@@ -9,6 +9,7 @@ fn test_candidate_creation() {
         example_scores: vec![0.8, 0.9, 0.7],
         parent_id: None,
         generation: 0,
+        slots: Default::default(),
     };
 
     assert_eq!(candidate.average_score(), 0.8);
@@ -23,6 +24,7 @@ fn test_candidate_mutation() {
         example_scores: vec![0.8],
         parent_id: None,
         generation: 0,
+        slots: Default::default(),
     };
 
     let child = parent.mutate("Improved".to_string(), 1);

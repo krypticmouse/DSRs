@@ -81,6 +81,55 @@ impl CompletionProvider for TestCompletionModel {
     }
 }
 
+/// A function-of-request test client: each completion calls the supplied
+/// closure on the request. Where [`TestCompletionModel`] replays a fixed
+/// queue, this one can make the response *depend on the request content* —
+/// e.g. simulate a student whose behavior is a deterministic function of the
+/// instruction an optimizer injected, which is what end-to-end optimizer
+/// simulations need.
+#[derive(Clone)]
+pub struct ScriptedCompletionModel {
+    script: Arc<
+        dyn Fn(&CompletionRequest) -> Result<AssistantContent, CompletionError> + Send + Sync,
+    >,
+    calls: Arc<Mutex<usize>>,
+}
+
+impl ScriptedCompletionModel {
+    pub fn new(
+        script: impl Fn(&CompletionRequest) -> Result<AssistantContent, CompletionError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            script: Arc::new(script),
+            calls: Arc::new(Mutex::new(0)),
+        }
+    }
+
+    /// Completions served so far.
+    pub fn calls(&self) -> usize {
+        *self.calls.lock().unwrap()
+    }
+}
+
+impl CompletionProvider for ScriptedCompletionModel {
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        *self.calls.lock().unwrap() += 1;
+        let response = (self.script)(&request)?;
+        Ok(CompletionResponse {
+            choice: OneOrMany::one(response),
+            usage: Usage::new(),
+            raw_response: (),
+            message_id: None,
+        })
+    }
+}
+
 #[enum_dispatch(CompletionProvider)]
 #[derive(Clone)]
 pub enum LMClient {
@@ -97,6 +146,7 @@ pub enum LMClient {
     Together(together::completion::CompletionModel),
     Deepseek(deepseek::CompletionModel<reqwest::Client>),
     Test(TestCompletionModel),
+    Scripted(ScriptedCompletionModel),
 }
 
 // Implement the trait for each concrete provider type using the CompletionModel trait from rig

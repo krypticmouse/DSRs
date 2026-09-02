@@ -3,7 +3,7 @@
 //! One binary, two modes:
 //!
 //! - `BCPLUS_MODE=optimize` (default): optimize the search agent's
-//!   instruction with `BCPLUS_OPT=temper|ratchet|hybrid|gepa` and write the
+//!   instruction with `BCPLUS_OPT=temper|ratchet|hybrid|gepa|grpo` and write the
 //!   winner (`hybrid` = RATCHET search + TEMPER's variant-champion endgame).
 //! - `BCPLUS_MODE=serve`: JSONL rollout server on stdin/stdout — the Python
 //!   reference arm (`benchmarks/bcplus/run_python_gepa.py`) and every eval
@@ -24,7 +24,10 @@
 //! BCPLUS_SEED, BCPLUS_SEED_PROMPT, BCPLUS_STUDENT, BCPLUS_JUDGE,
 //! BCPLUS_ITERS, BCPLUS_MINIBATCH, BCPLUS_BUDGET, BCPLUS_CHAMPION,
 //! BCPLUS_MAX_TURNS, BCPLUS_VAL_FILE, BCPLUS_OUT_PREFIX, BCPLUS_SEARCH,
-//! BCPLUS_CONCURRENCY.
+//! BCPLUS_CONCURRENCY, BCPLUS_STUDENT_TEMP (default 0.2; applies to optimize
+//! and serve alike, so eval matches the optimized sampling distribution).
+//! GRPO arm: BCPLUS_STEPS (6), BCPLUS_BATCH (4), BCPLUS_GROUP (4),
+//! BCPLUS_MAX_RULES (8).
 //!
 //! Run from the repo root (search server must be up):
 //!     set -a; source .env; set +a
@@ -36,8 +39,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow, bail};
 use dspy_rs::{
-    AgentLoopSpec, Eval, GEPA, LM, Module, Predict, PredictError, Predicted, Ratchet, Signature,
-    TypedMetric, configure, init_tracing, temper,
+    AgentLoopSpec, Eval, GEPA, GRPO, LM, Module, Predict, PredictError, Predicted, PredictorInfo,
+    Predictors, Ratchet, Signature, TypedMetric, configure, init_tracing, temper,
 };
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -48,7 +51,10 @@ fn env_str(name: &str, default: &str) -> String {
 }
 
 fn env_usize(name: &str, default: usize) -> usize {
-    std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 const DEFAULT_SEED_PROMPT: &str =
@@ -103,7 +109,11 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
-async fn get_json(client: &reqwest::Client, url: &str, params: &[(&str, &str)]) -> Result<serde_json::Value, ToolFailure> {
+async fn get_json(
+    client: &reqwest::Client,
+    url: &str,
+    params: &[(&str, &str)],
+) -> Result<serde_json::Value, ToolFailure> {
     let query: Vec<String> = params
         .iter()
         .map(|(k, v)| format!("{k}={}", percent_encode(v)))
@@ -161,7 +171,12 @@ impl Tool for SearchTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let url = format!("{}/search", self.base);
-        let value = get_json(&self.client, &url, &[("q", args.query.as_str()), ("k", "5")]).await?;
+        let value = get_json(
+            &self.client,
+            &url,
+            &[("q", args.query.as_str()), ("k", "5")],
+        )
+        .await?;
         let results = value["results"].as_array().cloned().unwrap_or_default();
         if results.is_empty() {
             return Ok("no results".to_string());
@@ -298,7 +313,10 @@ impl Module for Agent {
     type Input = BrowseQAInput;
     type Output = BrowseQAOutput;
 
-    async fn forward(&self, input: BrowseQAInput) -> Result<Predicted<BrowseQAOutput>, PredictError> {
+    async fn forward(
+        &self,
+        input: BrowseQAInput,
+    ) -> Result<Predicted<BrowseQAOutput>, PredictError> {
         let mut last = None;
         for attempt in 0..3u32 {
             if attempt > 0 {
@@ -310,9 +328,13 @@ impl Module for Agent {
                 // BrowseComp judge extracts answers from free text, so grade
                 // it instead of scoring 0. (Some students emit bare-string
                 // stop-tool args or skip the field markers.)
-                Err(PredictError::Parse { raw_response, .. }) if !raw_response.trim().is_empty() => {
+                Err(PredictError::Parse { raw_response, .. })
+                    if !raw_response.trim().is_empty() =>
+                {
                     return Ok(Predicted::new(
-                        BrowseQAOutput { answer: raw_response.trim().to_string() },
+                        BrowseQAOutput {
+                            answer: raw_response.trim().to_string(),
+                        },
                         dspy_rs::CallMetadata::default(),
                     ));
                 }
@@ -321,7 +343,9 @@ impl Module for Agent {
         }
         eprintln!("rollout failed after retries, scoring 0: {:?}", last);
         Ok(Predicted::new(
-            BrowseQAOutput { answer: String::new() },
+            BrowseQAOutput {
+                answer: String::new(),
+            },
             dspy_rs::CallMetadata::default(),
         ))
     }
@@ -343,18 +367,22 @@ impl AgentFactory {
             .add_tool(self.search.clone())
             .add_tool(self.open_doc.clone());
         let builder = if stop_tool {
-            builder.add_tool(SubmitAnswerTool).with_agent_spec(AgentLoopSpec {
-                max_turns: Some(self.max_turns),
-                stop_tools: vec!["final_answer".to_string()],
-                ..Default::default()
-            })
+            builder
+                .add_tool(SubmitAnswerTool)
+                .with_agent_spec(AgentLoopSpec {
+                    max_turns: Some(self.max_turns),
+                    stop_tools: vec!["final_answer".to_string()],
+                    ..Default::default()
+                })
         } else {
             builder.with_agent_spec(AgentLoopSpec {
                 max_turns: Some(self.max_turns),
                 ..Default::default()
             })
         };
-        Agent { answerer: builder.instruction(instruction.to_string()).build() }
+        Agent {
+            answerer: builder.instruction(instruction.to_string()).build(),
+        }
     }
 }
 
@@ -435,7 +463,10 @@ impl BrowseMetric {
             {
                 Ok(v) => (
                     v.correct,
-                    format!("Judge extracted {:?}: {}", v.extracted_final_answer, v.reasoning),
+                    format!(
+                        "Judge extracted {:?}: {}",
+                        v.extracted_final_answer, v.reasoning
+                    ),
                 ),
                 Err(e) => {
                     eprintln!("judge call failed, scoring incorrect: {e:?}");
@@ -467,7 +498,13 @@ impl BrowseMetric {
                 example.answer
             )
         };
-        Graded { score, correct, feedback, tool_calls, found_gold }
+        Graded {
+            score,
+            correct,
+            feedback,
+            tool_calls,
+            found_gold,
+        }
     }
 }
 
@@ -507,14 +544,21 @@ struct ServeResponse {
     gold_total: usize,
 }
 
-async fn serve(dir: &str, factory: Arc<AgentFactory>, metric: Arc<BrowseMetric>, seed_prompt: String) -> Result<()> {
+async fn serve(
+    dir: &str,
+    factory: Arc<AgentFactory>,
+    metric: Arc<BrowseMetric>,
+    seed_prompt: String,
+) -> Result<()> {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     // Every data/*.jsonl except the corpus is addressable as a split, so
     // eval scripts can target paraphrase-variant files without code changes.
     let mut splits: HashMap<String, Vec<BcRow>> = HashMap::new();
     for entry in std::fs::read_dir(format!("{dir}/data"))? {
         let path = entry?.path();
-        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else { continue };
+        let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
         if path.extension().and_then(|e| e.to_str()) != Some("jsonl") || name == "corpus" {
             continue;
         }
@@ -522,7 +566,10 @@ async fn serve(dir: &str, factory: Arc<AgentFactory>, metric: Arc<BrowseMetric>,
     }
     eprintln!(
         "serve: splits loaded: {:?}",
-        splits.iter().map(|(k, v)| (k.clone(), v.len())).collect::<Vec<_>>()
+        splits
+            .iter()
+            .map(|(k, v)| (k.clone(), v.len()))
+            .collect::<Vec<_>>()
     );
 
     let concurrency = env_usize("BCPLUS_CONCURRENCY", 8);
@@ -561,7 +608,9 @@ async fn serve(dir: &str, factory: Arc<AgentFactory>, metric: Arc<BrowseMetric>,
             let instruction = request.instruction.as_deref().unwrap_or(&seed_prompt);
             let agent = factory.build(instruction);
             let prediction = agent
-                .forward(BrowseQAInput { question: row.question.clone() })
+                .forward(BrowseQAInput {
+                    question: row.question.clone(),
+                })
                 .await
                 .expect("forward returns an empty fallback, never Err");
             let graded = metric.grade(row, &prediction).await;
@@ -645,7 +694,85 @@ async fn optimize(
     let out = format!("{dir}/{prefix}_s{seed}.txt");
     let out_argmax = format!("{dir}/{prefix}_argmax_s{seed}.txt");
 
-    if opt_name == "gepa" {
+    if opt_name == "grpo" {
+        let steps = env_usize("BCPLUS_STEPS", 6);
+        let batch = env_usize("BCPLUS_BATCH", 4);
+        let group = env_usize("BCPLUS_GROUP", 4);
+        let max_rules = env_usize("BCPLUS_MAX_RULES", 8);
+        println!(
+            "grpo seed {seed}, steps {steps}, batch {batch}, group {group}, max_rules {max_rules}, budget {budget}"
+        );
+        let optimizer = GRPO::builder()
+            .steps(steps)
+            .batch_size(batch)
+            .group_size(group)
+            .max_rules(max_rules)
+            .prompt_model(reflection_lm)
+            .seed(seed)
+            .eval_concurrency(concurrency)
+            .max_metric_calls(budget)
+            .build();
+        let report = optimizer
+            .compile_module_with_valset(&mut agent, &trainset, Some(&val), metric)
+            .await?;
+        for step in &report.steps {
+            let spreads: Vec<String> = step.spreads.iter().map(|s| format!("{s:.2}")).collect();
+            println!(
+                "step {}: spreads [{}], {} informative / {} flat ({} vs reference), insights {} (leaked {}), val {:.3} -> {}, {}, rules {}",
+                step.step,
+                spreads.join(" "),
+                step.informative_groups,
+                step.flat_groups,
+                step.reference_contrasts,
+                step.insights,
+                step.leaked,
+                step.parent_score,
+                step.child_score
+                    .map_or("-".to_string(), |s| format!("{s:.3}")),
+                if step.accepted {
+                    "accepted"
+                } else {
+                    "rejected"
+                },
+                step.rules_after
+            );
+        }
+        println!(
+            "rollouts: {} lm_calls: {} accepted: {} rejected: {} val {:.3} -> {:.3}",
+            report.spend.metric_calls,
+            report.spend.lm_calls,
+            report.accepted,
+            report.rejected,
+            report.baseline_score,
+            report.final_score
+        );
+        println!(
+            "
+learned rules:"
+        );
+        for (leaf, rules) in &report.rules {
+            for rule in rules {
+                println!("  [{leaf}] - {rule}");
+            }
+        }
+        // The winner is the installed instruction (seed + rules).
+        let instruction = agent
+            .predictors()
+            .into_iter()
+            .next()
+            .map(|(_, info)| PredictorInfo::instruction(info))
+            .ok_or_else(|| anyhow!("agent has no predictors"))?;
+        println!(
+            "
+chosen (val avg {:.3}):
+---
+{}
+---",
+            report.final_score, instruction
+        );
+        std::fs::write(&out, &instruction)?;
+        std::fs::write(&out_argmax, &instruction)?;
+    } else if opt_name == "gepa" {
         let iters = env_usize("BCPLUS_ITERS", 40);
         let minibatch = env_usize("BCPLUS_MINIBATCH", 4);
         println!("gepa seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}");
@@ -687,7 +814,9 @@ async fn optimize(
         let iters = env_usize("BCPLUS_ITERS", 60);
         let minibatch = env_usize("BCPLUS_MINIBATCH", 5);
         let champion = env_usize("BCPLUS_CHAMPION", 30);
-        println!("{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}");
+        println!(
+            "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
+        );
         let optimizer = match opt_name.as_str() {
             "temper" => {
                 let mut optimizer = temper(variant_pairs);
@@ -701,7 +830,7 @@ async fn optimize(
                 .prompt_model(reflection_lm)
                 .build(),
             "ratchet" => Ratchet::builder().prompt_model(reflection_lm).build(),
-            other => bail!("unknown BCPLUS_OPT {other:?} (temper|ratchet|hybrid|gepa)"),
+            other => bail!("unknown BCPLUS_OPT {other:?} (temper|ratchet|hybrid|gepa|grpo)"),
         };
         let optimizer = {
             let mut optimizer = optimizer;
@@ -795,19 +924,23 @@ async fn main() -> Result<()> {
     // the Mixedbread OpenAI-compatible endpoint (e.g. mxbai:toast-1), which
     // supports client-side function calling.
     let student_spec = env_str("BCPLUS_STUDENT", "openai/gpt-oss-120b");
+    let student_temp: f32 = std::env::var("BCPLUS_STUDENT_TEMP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0.2);
     let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url(env_str("BCPLUS_MXBAI_URL", "https://api.mixedbread.com/v1"))
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)
             .model(model.to_string())
-            .temperature(0.2)
+            .temperature(student_temp)
             .max_tokens(1024)
             .build()
             .await?
     } else {
         LM::builder()
             .model(format!("openrouter:{student_spec}"))
-            .temperature(0.2)
+            .temperature(student_temp)
             .max_tokens(1024)
             .build()
             .await?
@@ -824,8 +957,14 @@ async fn main() -> Result<()> {
 
     let factory = AgentFactory {
         student_lm,
-        search: SearchTool { base: search_base.clone(), client: client.clone() },
-        open_doc: OpenDocTool { base: search_base.clone(), client },
+        search: SearchTool {
+            base: search_base.clone(),
+            client: client.clone(),
+        },
+        open_doc: OpenDocTool {
+            base: search_base.clone(),
+            client,
+        },
         max_turns: env_usize("BCPLUS_MAX_TURNS", 12) as u32,
     };
     let metric = BrowseMetric {

@@ -940,6 +940,130 @@ impl Engine {
         }
     }
 
+    /// A fresh traced rollout of one `(candidate, example)` cell, bypassing
+    /// the rollout cache — cache-served rollouts carry no [`Trace`], and a
+    /// diagnosis pass needs one. The eval is recorded into the cache and
+    /// matrix like any evaluation and charged as one rollout. Returns `None`
+    /// when the budget no longer allows it.
+    pub async fn probe_rollout(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        idx: usize,
+    ) -> Result<Option<(Eval, Trace)>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if !self.budget_allows(1) {
+            return Ok(None);
+        }
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let candidate_hash = self.candidates[candidate].0;
+        let (eval, trace) = target.run(idx, bound, candidate_hash).await?;
+        self.spend.metric_calls += 1;
+        self.spend.lm_calls += 1;
+        self.spend.lm_spans += trace.spans.len();
+        for span in &trace.spans {
+            self.spend.tokens = self.spend.tokens + span.usage;
+        }
+        self.cache.insert(
+            target.baseline(),
+            candidate_hash,
+            target.example_uid(idx),
+            self.config.cache_salt,
+            eval.clone(),
+        );
+        self.matrix.record(candidate, idx, eval.score);
+        Ok(Some((eval, trace)))
+    }
+
+    /// Fresh traced rollouts of one candidate on each of `indices`, `samples`
+    /// times per example, bypassing the rollout cache — the within-input
+    /// sample *group* a GRPO-style strategy contrasts
+    /// ([`GRPO`](crate::optimizer::GRPO)). Every draw runs live through the
+    /// shared bounded-concurrency fan-out and is charged as one rollout;
+    /// nothing is recorded into the cache or the score matrix (a draw is not
+    /// the cell's canonical eval). Groups come back in `indices` order, each
+    /// in arrival order. Returns `None` when the budget doesn't allow
+    /// `indices.len() × samples` rollouts. `indices` must be distinct.
+    pub async fn sample_rollouts(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        indices: &[usize],
+        samples: usize,
+    ) -> Result<Option<Vec<Vec<(Eval, Trace)>>>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        let num_examples = target.num_examples();
+        let mut position: HashMap<usize, usize> = HashMap::with_capacity(indices.len());
+        for (pos, &idx) in indices.iter().enumerate() {
+            if idx >= num_examples {
+                return Err(anyhow!(
+                    "example index {idx} out of range ({num_examples} examples)"
+                ));
+            }
+            if position.insert(idx, pos).is_some() {
+                return Err(anyhow!(
+                    "example index {idx} requested twice in one sample batch"
+                ));
+            }
+        }
+        let pending: Vec<(usize, usize)> = indices
+            .iter()
+            .flat_map(|&idx| std::iter::repeat_n((candidate, idx), samples))
+            .collect();
+        if !self.budget_allows(pending.len()) {
+            return Ok(None);
+        }
+
+        let mut bound = HashMap::new();
+        bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
+        let (fresh, batch_peak) = self.run_rollouts(target, &pending, &bound).await?;
+        self.peak_candidates_in_flight = self.peak_candidates_in_flight.max(batch_peak);
+
+        self.spend.metric_calls += fresh.len();
+        self.spend.lm_calls += fresh.len();
+        let mut groups: Vec<Vec<(Eval, Trace)>> = (0..indices.len())
+            .map(|_| Vec::with_capacity(samples))
+            .collect();
+        for (_, idx, eval, trace) in fresh {
+            self.spend.lm_spans += trace.spans.len();
+            for span in &trace.spans {
+                self.spend.tokens = self.spend.tokens + span.usage;
+            }
+            groups[position[&idx]].push((eval, trace));
+        }
+        Ok(Some(groups))
+    }
+
+    /// Scores a counterfactual replay of one example: `base` is a recorded
+    /// trace, typically with one span's output edited — the unchanged prefix
+    /// serves free, the edited span serves its substituted output, and the
+    /// suffix runs live. The eval is of a HYPOTHETICAL rollout: it is charged
+    /// to the budget (one rollout) but never recorded into the cache or the
+    /// score matrix. Returns `None` when the budget no longer allows it.
+    pub async fn counterfactual_rollout(
+        &mut self,
+        target: &OptimizeTarget<'_>,
+        candidate: usize,
+        idx: usize,
+        base: Trace,
+    ) -> Result<Option<Eval>> {
+        if candidate >= self.candidates.len() {
+            return Err(anyhow!("candidate index {candidate} is not registered"));
+        }
+        if !self.budget_allows(1) {
+            return Ok(None);
+        }
+        let bound = target.bind(&self.candidates[candidate].1)?;
+        let (eval, _live) = target.counterfactual(idx, bound, base).await?;
+        self.spend.metric_calls += 1;
+        self.spend.lm_calls += 1;
+        Ok(Some(eval))
+    }
+
     /// Minibatch gating (the GEPA acceptance pattern): evaluates the candidate
     /// on `minibatch`; only if the minibatch mean strictly beats `threshold`
     /// does it promote to a full-set evaluation.

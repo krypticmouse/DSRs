@@ -295,3 +295,28 @@ fn params_round_trip_through_module_state() {
         Some("tuned instruction")
     );
 }
+
+#[tokio::test]
+async fn current_instruction_reads_the_ambient_candidate() {
+    // Outside any scope: nothing to read.
+    assert_eq!(fx::current_instruction("harness_slot"), None);
+
+    let mut params = fx::Params::new();
+    params.set_instruction("harness_slot", "candidate text");
+    let (inside, other) = fx::with_params(params, async {
+        (
+            fx::current_instruction("harness_slot"),
+            fx::current_instruction("unknown_slot"),
+        )
+    })
+    .await;
+    assert_eq!(inside.as_deref(), Some("candidate text"));
+    assert_eq!(other, None);
+
+    // An explicit clear means "reset to seed" — the reader falls back.
+    let mut params = fx::Params::new();
+    params.clear_instruction("harness_slot");
+    let cleared =
+        fx::with_params(params, async { fx::current_instruction("harness_slot") }).await;
+    assert_eq!(cleared, None);
+}

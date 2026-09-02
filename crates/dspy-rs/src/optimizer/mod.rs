@@ -38,15 +38,19 @@
 //! | [`BootstrapFewShot`] | One-shot demo harvesting from a teacher pass | No | Low (2 × trainset) |
 //! | [`COPRO`] | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
 //! | [`SIMBA`] | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
+//! | [`GRPO`] | Within-input sample groups → group-relative contrast → rules (no weights) | No | Low (steps × batch × group) |
 //! | [`GEPA`] | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
 //! | [`Ratchet`] | GEPA + trial ledger, paired racing, operator portfolio | **Yes** | Medium (racing kills losers early) |
 //! | [`MIPROv2`] | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 //! | [`Structural`] | LM-guided graph edits over [`ir::Edit`](crate::ir::Edit) (program lane only) | No | Medium (examples + iterations × minibatch) |
 
 pub mod bootstrap;
+pub mod certify;
 pub mod copro;
 pub mod engine;
+pub mod evidence;
 pub mod gepa;
+pub mod grpo;
 pub(crate) mod harvest;
 pub mod mipro;
 pub mod ratchet;
@@ -55,9 +59,12 @@ pub mod structural;
 pub mod target;
 
 pub use bootstrap::*;
+pub use certify::*;
 pub use copro::*;
 pub use engine::*;
+pub use evidence::*;
 pub use gepa::*;
+pub use grpo::*;
 pub use mipro::*;
 pub use ratchet::*;
 pub use simba::*;
@@ -106,6 +113,7 @@ pub enum Report {
     Gepa(GEPAResult),
     Ratchet(RatchetResult),
     Simba(SimbaReport),
+    Grpo(GrpoReport),
     Bootstrap(BootstrapReport),
     /// Extension point for third-party strategies.
     Custom(serde_json::Value),
@@ -129,6 +137,13 @@ impl Report {
     pub fn into_simba(self) -> Option<SimbaReport> {
         match self {
             Self::Simba(report) => Some(report),
+            _ => None,
+        }
+    }
+
+    pub fn into_grpo(self) -> Option<GrpoReport> {
+        match self {
+            Self::Grpo(report) => Some(report),
             _ => None,
         }
     }
