@@ -900,7 +900,12 @@ impl Engine {
                 rollouts: indices
                     .iter()
                     .map(|&idx| {
-                        if let Some((eval, trace)) = fresh_by_key.remove(&(candidate, idx)) {
+                        // `get` + clone, not `remove`: a request may name the
+                        // same candidate row twice (e.g. byte-identical
+                        // candidates re-derived across steps share one engine
+                        // row and can both reach a screen); duplicates are
+                        // served the same fresh eval instead of panicking.
+                        if let Some((eval, trace)) = fresh_by_key.get(&(candidate, idx)).cloned() {
                             RolloutOutcome {
                                 example: idx,
                                 eval,

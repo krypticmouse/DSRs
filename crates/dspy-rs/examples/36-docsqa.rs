@@ -25,6 +25,8 @@
 //! DOCSQA_SEED, DOCSQA_BUDGET (600), DOCSQA_ITERS, DOCSQA_MINIBATCH,
 //! DOCSQA_CHAMPION, DOCSQA_CONCURRENCY (6), DOCSQA_TRAIN_FILE, DOCSQA_VAL_FILE,
 //! DOCSQA_OUT_PREFIX, DOCSQA_TEACHER, DOCSQA_PARENTS, DOCSQA_PROPOSALS.
+//! v6.4 (compound/harvest): DOCSQA_PRUNE=1 turns on post-certification Occam
+//! pruning by lineage credit, DOCSQA_PRUNE_BUDGET=<n> its probe budget (120).
 //!
 //! Run from the repo root: set -a; source .env; set +a
 //!     DOCSQA_OPT=ratchet cargo run --release --example 36-docsqa
@@ -35,7 +37,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use dspy_rs::{
     CallMetadata, Eval, GEPA, LM, Module, Predict, PredictError, Predicted, Predictors, Ratchet,
-    Role, Signature, TypedMetric, compound, configure, init_tracing,
+    Role, Signature, TypedMetric, compound, configure, harvest, init_tracing,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -582,7 +584,7 @@ async fn optimize(
             .map(|c| c.instruction.clone())
             .unwrap_or_else(|| result.best_candidate.instruction.clone());
         write_winner(&out_argmax, &argmax)?;
-    } else if opt_name == "compound" {
+    } else if opt_name == "compound" || opt_name == "harvest" {
         // RATCHET v4 COMPOUND (docs/ratchet-v4-design.md): e-process racing
         // + sequential paired ship certification vs the seed on reserved
         // never-touched train columns. train120 carve: champion 24 +
@@ -614,10 +616,11 @@ async fn optimize(
             train_ext.extend(extra);
         }
         let optimizer = {
-            let mut optimizer = compound();
+            let mut optimizer = if opt_name == "harvest" { harvest() } else { compound() };
             optimizer.prompt_model = Some(reflection_lm);
             optimizer.num_iterations = iters;
-            optimizer.minibatch_size = minibatch;
+            // The preset's minibatch (harvest: 5) stands unless DOCSQA_MINIBATCH is set.
+            optimizer.minibatch_size = env_usize("DOCSQA_MINIBATCH", optimizer.minibatch_size);
             optimizer.champion_fresh = champion;
             optimizer.certify_reserve = certify_reserve;
             optimizer.certify_budget = certify_budget;
@@ -639,15 +642,191 @@ async fn optimize(
             // the verification.
             if env_str("DOCSQA_ACCEPT", "race") == "gate" {
                 optimizer.accept_mode = dspy_rs::AcceptMode::Gate;
-                optimizer.scout_size = env_usize("DOCSQA_SCOUT", 12);
+                optimizer.scout_size = env_usize("DOCSQA_SCOUT", optimizer.scout_size);
                 println!("accept mode: GATE (scout {})", optimizer.scout_size);
             }
             optimizer.champion_k = env_usize("DOCSQA_CHAMPION_K", 2);
-            if env_str("DOCSQA_ACCRETIVE_OPS", "0") == "1" {
-                optimizer.accretive_ops = true;
-                println!("operators: ACCRETIVE (rewrite + merge only)");
+            // E5a band mixture (escrow, ratchet-v5-escrow-design.md):
+            // "horizon" calibrates fixed Kelly bets to this attempt's
+            // actual certify column count at the Bonferroni-worst level
+            // (alpha/2, two challengers) — conservative sizing costs
+            // growth only, never validity. "" (default) = v4 wallet.
+            let certify_cols_total = certify_reserve + certify_idx.len();
+            match env_str("DOCSQA_CERTIFY_BAND", "").as_str() {
+                "default" => {
+                    optimizer.certify_band = Some(dspy_rs::BandBets::default());
+                    println!("certify band: DEFAULT (.02/.035/.06 @ sd .2)");
+                }
+                "horizon" => {
+                    let band = dspy_rs::BandBets::for_horizon(
+                        certify_cols_total.max(1),
+                        optimizer.certify_alpha / 2.0,
+                        0.2,
+                    );
+                    println!(
+                        "certify band: HORIZON {} cols -> effects {:?}",
+                        certify_cols_total, band.effects
+                    );
+                    optimizer.certify_band = Some(band);
+                }
+                _ => {}
             }
             optimizer.certify_cols = certify_idx;
+            // v6 HARVEST knobs (optional; the `harvest()` preset sets the
+            // defaults, and none of these change `compound` unless set).
+            match env_str("DOCSQA_SCREEN", "").as_str() {
+                "a" => optimizer.screen_rule = dspy_rs::ScreenRule::OnTargetA,
+                "b" => optimizer.screen_rule = dspy_rs::ScreenRule::HeldOutB,
+                _ => {}
+            }
+            if let Ok(v) = std::env::var("DOCSQA_REWRITE_ONLY") {
+                optimizer.rewrite_only = v == "1";
+            }
+            if let Ok(v) = std::env::var("DOCSQA_POLICY") {
+                optimizer.policy_channel = v == "1";
+            }
+            if let Ok(v) = std::env::var("DOCSQA_POLICY_SHARE") {
+                optimizer.policy_share = v.parse().unwrap_or(optimizer.policy_share);
+            }
+            if let Ok(v) = std::env::var("DOCSQA_LEDGER_GATE_KILLS") {
+                optimizer.ledger_gate_kills = v == "1";
+            }
+            if let Ok(v) = std::env::var("DOCSQA_PARENT_GREED") {
+                optimizer.parent_greed = v.parse().unwrap_or(optimizer.parent_greed);
+            }
+            if let Ok(v) = std::env::var("DOCSQA_GATE_SIZE") {
+                optimizer.gate_size = v.parse().ok();
+            }
+            // v6.4 Occam pruning: DOCSQA_PRUNE=1 bundle-removes the certified
+            // champion's zero-evidence clauses (lineage-diff credit, zero
+            // extra rollouts to compute) on the selection columns and
+            // re-certifies the pruned prompt vs the seed with the
+            // certification budget the first pass left. Probe budget
+            // (default 120 = 3 × champion_fresh) via DOCSQA_PRUNE_BUDGET.
+            if env_str("DOCSQA_PRUNE", "0") == "1" {
+                optimizer.prune_after_certify = true;
+                optimizer.prune_budget = env_usize("DOCSQA_PRUNE_BUDGET", optimizer.prune_budget);
+                println!("occam prune after certify ON (probe budget {})", optimizer.prune_budget);
+            }
+            println!(
+                "screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) ledger_gate_kills {} \
+                 greed {} gate_size {:?} minibatch {} P×N {}×{}",
+                optimizer.screen_rule,
+                optimizer.accept_mode,
+                optimizer.scout_size,
+                optimizer.rewrite_only,
+                optimizer.policy_channel,
+                optimizer.policy_share,
+                optimizer.ledger_gate_kills,
+                optimizer.parent_greed,
+                optimizer.gate_size,
+                optimizer.minibatch_size,
+                optimizer.parents_per_step,
+                optimizer.proposals_per_parent
+            );
+            // FORAGE (v5): DOCSQA_TEACHER_CONTEXT=digest|tools gives the
+            // Rewrite teacher the whole-ledger contrastive digest (and, for
+            // tools, read-only drill-down tools). The check extractor
+            // parses this rig's judge feedback ("Missing or wrong:"
+            // bullets) into the discrete key points a rollout failed —
+            // the harvest frontier, rendered as OPEN checks.
+            match env_str("DOCSQA_TEACHER_CONTEXT", "minibatch").as_str() {
+                "digest" => {
+                    optimizer.teacher_context = dspy_rs::TeacherContext::Digest;
+                    println!("teacher context: FORAGE DIGEST");
+                }
+                "tools" => {
+                    optimizer.teacher_context = dspy_rs::TeacherContext::Tools;
+                    println!("teacher context: FORAGE TOOLS");
+                }
+                _ => {}
+            }
+            // FORAGE v5.1: DOCSQA_ANCHOR=1 freezes the seed base — every
+            // proposal must reproduce it verbatim and only append facts
+            // (style contamination was the first live arm's regression
+            // channel; Simplify goes ineligible under anchoring).
+            if env_str("DOCSQA_ANCHOR", "0") == "1" {
+                optimizer.anchored_accretion = true;
+                println!("anchored accretion ON (base frozen, facts-only edits)");
+            }
+            // FORAGE v5.2: DOCSQA_ANCHOR_RULES=1 re-opens the behavior-rule
+            // channel (directed at judge-aligned verification/refusal
+            // rules) inside the anchored appended section.
+            if env_str("DOCSQA_ANCHOR_RULES", "0") == "1" {
+                optimizer.anchor_allow_rules = true;
+                println!("anchored RULES channel ON (verification/refusal class)");
+            }
+            // ASSAY (v5.3) Stage 1: DOCSQA_REAUDIT_FRAC re-invests that
+            // fraction of each step's spend in re-auditing pool members on
+            // never-yet-drawn val columns; ranking and champion screening
+            // switch to cumulative paired-vs-seed evidence.
+            let reaudit_frac: f64 = env_str("DOCSQA_REAUDIT_FRAC", "0")
+                .parse()
+                .unwrap_or(0.0);
+            if reaudit_frac > 0.0 {
+                optimizer.reaudit_budget_frac = reaudit_frac;
+                optimizer.reaudit_block = env_usize("DOCSQA_REAUDIT_BLOCK", 8);
+                println!(
+                    "ASSAY stage-1 re-audit ON (frac {}, block {})",
+                    optimizer.reaudit_budget_frac, optimizer.reaudit_block
+                );
+            }
+            // ASSAY (v5.3) Stage 2: DOCSQA_PIN_ASSAY=1 turns on the endgame
+            // per-pin ablation probes + stopped e-BH composition; the
+            // frozen certification still takes the ship decision.
+            if env_str("DOCSQA_PIN_ASSAY", "0") == "1" {
+                optimizer.pin_assay = true;
+                optimizer.pin_probe_cols = env_usize("DOCSQA_PIN_PROBE_COLS", 20);
+                optimizer.pin_probe_budget = env_usize("DOCSQA_PIN_PROBE_BUDGET", 400);
+                optimizer.pin_fdr_alpha = env_str("DOCSQA_PIN_FDR", "0.1")
+                    .parse()
+                    .unwrap_or(0.1);
+                optimizer.pin_probe_repeats = env_usize("DOCSQA_PIN_REPEATS", 1);
+                println!(
+                    "ASSAY stage-2 pin assay ON (cols {}, repeats {}, budget {}, FDR {})",
+                    optimizer.pin_probe_cols,
+                    optimizer.pin_probe_repeats,
+                    optimizer.pin_probe_budget,
+                    optimizer.pin_fdr_alpha
+                );
+                // E3 subset screen (escrow design): replaces the per-pin
+                // probes with joint subset-lasso credit assignment.
+                optimizer.pin_screen_draws = env_usize("DOCSQA_PIN_SCREEN_DRAWS", 0);
+                optimizer.pin_screen_cols = env_usize("DOCSQA_PIN_SCREEN_COLS", 20);
+                optimizer.pin_screen_min_keep = env_usize("DOCSQA_PIN_SCREEN_MIN_KEEP", 0);
+                if optimizer.pin_screen_draws > 0 {
+                    println!(
+                        "E3 SUBSET SCREEN ON (draws {}, slice {}, min_keep {}, budget {})",
+                        optimizer.pin_screen_draws,
+                        optimizer.pin_screen_cols,
+                        optimizer.pin_screen_min_keep,
+                        optimizer.pin_probe_budget
+                    );
+                }
+            }
+            if !matches!(optimizer.teacher_context, dspy_rs::TeacherContext::Minibatch) {
+                optimizer.forage_chars = env_usize("DOCSQA_FORAGE_CHARS", 15_000);
+                optimizer.forage_open_cap = env_usize("DOCSQA_FORAGE_OPEN", 80);
+                optimizer.forage_contrast_cap = env_usize("DOCSQA_FORAGE_CONTRAST", 12);
+                optimizer.check_extractor = Some(std::sync::Arc::new(|feedback: &str| {
+                    let mut checks = Vec::new();
+                    let mut in_missing = false;
+                    for line in feedback.lines() {
+                        if line.starts_with("Missing or wrong:") {
+                            in_missing = true;
+                            continue;
+                        }
+                        if in_missing {
+                            if let Some(item) = line.strip_prefix("  - ") {
+                                checks.push(item.trim().to_string());
+                            } else {
+                                in_missing = false;
+                            }
+                        }
+                    }
+                    checks
+                }));
+            }
             optimizer
         };
         let result = optimizer
@@ -660,7 +839,7 @@ async fn optimize(
             result.all_candidates.len()
         );
         println!(
-            "gate_rejected: {} race_killed: {} faded: {} skipped: {} leak: {}/{} length: {}/{}",
+            "gate_rejected: {} race_killed: {} faded: {} skipped: {} leak: {}/{} length: {}/{} anchor: {}/{}",
             result.gate_rejected,
             result.race_killed,
             result.faded,
@@ -668,9 +847,25 @@ async fn optimize(
             result.leak_retries,
             result.leak_skipped,
             result.length_retries,
-            result.length_skipped
+            result.length_skipped,
+            result.anchor_retries,
+            result.anchor_skipped
         );
         println!("operator stats: {:?}", result.operator_stats);
+        if result.audit_rollouts > 0 || result.pins_tested > 0 {
+            println!(
+                "ASSAY: audit {} evicted / {} rollouts; pins {}/{} kept ({} probe rollouts)",
+                result.audit_evicted,
+                result.audit_rollouts,
+                result.pins_kept,
+                result.pins_tested,
+                result.pin_probe_rollouts
+            );
+            for (pin, cols, mean, e_gain) in &result.pin_assay_report {
+                let excerpt: String = pin.chars().take(110).collect();
+                println!("  pin [{cols} cols, mean {mean:+.4}, e {e_gain:.2}] {excerpt}");
+            }
+        }
         println!(
             "CERTIFICATION: {:?} after {} cols, mean paired delta {:+.4}, e-value {:.2}",
             result.certified,
@@ -678,6 +873,20 @@ async fn optimize(
             result.certify_mean_delta,
             result.certify_e_value
         );
+        if result.prune_rollouts > 0 || result.prune_removed > 0 {
+            println!(
+                "OCCAM PRUNE: {} -> {} chars, {} clauses removed, {} rollouts, re-certified {:?}",
+                result.prune_chars_before,
+                result.prune_chars_after,
+                result.prune_removed,
+                result.prune_rollouts,
+                result.prune_certified
+            );
+        }
+        let credit = result.clause_credit_report();
+        if !credit.is_empty() {
+            println!("\n== lineage credit ==\n{credit}");
+        }
         println!("\n== trial ledger ==");
         for trial in &result.trials {
             println!(
@@ -703,7 +912,7 @@ async fn optimize(
             .unwrap_or_else(|| result.best_candidate.instruction.clone());
         write_winner(&out_argmax, &argmax)?;
     } else {
-        bail!("unknown DOCSQA_OPT {opt_name:?} (ratchet|gepa|compound)");
+        bail!("unknown DOCSQA_OPT {opt_name:?} (ratchet|gepa|compound|harvest)");
     }
     println!("\nwinner written to {out}");
     Ok(())

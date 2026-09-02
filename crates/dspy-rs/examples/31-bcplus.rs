@@ -3,7 +3,7 @@
 //! One binary, two modes:
 //!
 //! - `BCPLUS_MODE=optimize` (default): optimize the search agent's
-//!   instruction with `BCPLUS_OPT=temper|ratchet|hybrid|gepa|grpo` and write the
+//!   instruction with `BCPLUS_OPT=temper|ratchet|hybrid|gepa|grpo|harvest` and write the
 //!   winner (`hybrid` = RATCHET search + TEMPER's variant-champion endgame).
 //! - `BCPLUS_MODE=serve`: JSONL rollout server on stdin/stdout — the Python
 //!   reference arm (`benchmarks/bcplus/run_python_gepa.py`) and every eval
@@ -28,6 +28,9 @@
 //! and serve alike, so eval matches the optimized sampling distribution).
 //! GRPO arm: BCPLUS_STEPS (6), BCPLUS_BATCH (4), BCPLUS_GROUP (4),
 //! BCPLUS_MAX_RULES (8).
+//! HARVEST ablation knobs (unset = preset): BCPLUS_SCREEN (a|b), BCPLUS_REWRITE_ONLY,
+//! BCPLUS_POLICY, BCPLUS_POLICY_SHARE, BCPLUS_LEDGER_GATE_KILLS, BCPLUS_PARENT_GREED,
+//! BCPLUS_GATE_SIZE, BCPLUS_SCOUT, BCPLUS_PARENTS, BCPLUS_PROPOSALS, BCPLUS_CHAMPION_K.
 //!
 //! Run from the repo root (search server must be up):
 //!     set -a; source .env; set +a
@@ -40,7 +43,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use dspy_rs::{
     AgentLoopSpec, Eval, GEPA, GRPO, LM, Module, Predict, PredictError, Predicted, PredictorInfo,
-    Predictors, Ratchet, Signature, TypedMetric, configure, init_tracing, temper,
+    Predictors, Ratchet, Signature, TypedMetric, configure, harvest, init_tracing, temper,
 };
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -830,17 +833,88 @@ chosen (val avg {:.3}):
                 .prompt_model(reflection_lm)
                 .build(),
             "ratchet" => Ratchet::builder().prompt_model(reflection_lm).build(),
-            other => bail!("unknown BCPLUS_OPT {other:?} (temper|ratchet|hybrid|gepa|grpo)"),
+            // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): the
+            // big-win regression check — on-target screen, full-val
+            // ranking, Rewrite+Policy operators, certification vs the seed
+            // on reserved never-touched train columns (no harness split on
+            // this rig). The leak guard stays ON (benchmark semantics).
+            "harvest" => {
+                let mut optimizer = harvest();
+                optimizer.prompt_model = Some(reflection_lm);
+                optimizer.certify_reserve = env_usize("BCPLUS_CERTIFY_RESERVE", 45);
+                optimizer.certify_budget = env_usize("BCPLUS_CERTIFY_BUDGET", 150);
+                // One-factor ablation knobs (mirror of 36-docsqa.rs): each
+                // overrides the `harvest()` preset only when set; unset keeps
+                // the preset value.
+                match env_str("BCPLUS_SCREEN", "").as_str() {
+                    "a" => optimizer.screen_rule = dspy_rs::ScreenRule::OnTargetA,
+                    "b" => optimizer.screen_rule = dspy_rs::ScreenRule::HeldOutB,
+                    _ => {}
+                }
+                if let Ok(v) = std::env::var("BCPLUS_REWRITE_ONLY") {
+                    optimizer.rewrite_only = v == "1";
+                }
+                if let Ok(v) = std::env::var("BCPLUS_POLICY") {
+                    optimizer.policy_channel = v == "1";
+                }
+                if let Ok(v) = std::env::var("BCPLUS_POLICY_SHARE") {
+                    optimizer.policy_share = v.parse().unwrap_or(optimizer.policy_share);
+                }
+                if let Ok(v) = std::env::var("BCPLUS_LEDGER_GATE_KILLS") {
+                    optimizer.ledger_gate_kills = v == "1";
+                }
+                if let Ok(v) = std::env::var("BCPLUS_PARENT_GREED") {
+                    optimizer.parent_greed = v.parse().unwrap_or(optimizer.parent_greed);
+                }
+                if let Ok(v) = std::env::var("BCPLUS_GATE_SIZE") {
+                    optimizer.gate_size = v.parse().ok();
+                }
+                optimizer.scout_size = env_usize("BCPLUS_SCOUT", optimizer.scout_size);
+                optimizer.parents_per_step = env_usize("BCPLUS_PARENTS", optimizer.parents_per_step);
+                optimizer.proposals_per_parent =
+                    env_usize("BCPLUS_PROPOSALS", optimizer.proposals_per_parent);
+                optimizer.champion_k = env_usize("BCPLUS_CHAMPION_K", optimizer.champion_k);
+                optimizer
+            }
+            other => bail!("unknown BCPLUS_OPT {other:?} (temper|ratchet|hybrid|gepa|grpo|harvest)"),
         };
         let optimizer = {
             let mut optimizer = optimizer;
             optimizer.num_iterations = iters;
-            optimizer.minibatch_size = minibatch;
+            optimizer.minibatch_size = if opt_name == "harvest" {
+                env_usize("BCPLUS_MINIBATCH", optimizer.minibatch_size)
+            } else {
+                minibatch
+            };
             optimizer.champion_fresh = champion;
             optimizer.max_rollouts = Some(budget);
             optimizer.seed = Some(seed);
             optimizer.eval_concurrency = concurrency;
             optimizer.track_stats = true;
+            if opt_name == "harvest" {
+                println!(
+                    "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
+                     ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
+                     certify reserve {} / budget {} alpha {} iters {} minibatch {} P×N {}×{}",
+                    optimizer.screen_rule,
+                    optimizer.accept_mode,
+                    optimizer.scout_size,
+                    optimizer.rewrite_only,
+                    optimizer.policy_channel,
+                    optimizer.policy_share,
+                    optimizer.ledger_gate_kills,
+                    optimizer.parent_greed,
+                    optimizer.gate_size,
+                    optimizer.champion_k,
+                    optimizer.certify_reserve,
+                    optimizer.certify_budget,
+                    optimizer.certify_alpha,
+                    optimizer.num_iterations,
+                    optimizer.minibatch_size,
+                    optimizer.parents_per_step,
+                    optimizer.proposals_per_parent
+                );
+            }
             optimizer
         };
         let result = optimizer
@@ -851,6 +925,10 @@ chosen (val avg {:.3}):
             result.total_rollouts,
             result.total_lm_calls,
             result.all_candidates.len()
+        );
+        println!(
+            "certification: {:?} cols {} mean {:+.4} e {:.2}",
+            result.certified, result.certify_cols_used, result.certify_mean_delta, result.certify_e_value
         );
         println!(
             "gate_rejected: {} race_killed: {} skipped: {} leak: {}/{} length: {}/{}",

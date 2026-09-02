@@ -57,6 +57,9 @@
 //! HOVER_VAL_FILE, HOVER_OUT_PREFIX, HOVER_CONCURRENCY (8), HOVER_SEARCH
 //! (http://127.0.0.1:8125), HOVER_TOPK (5), HOVER_MAX_TOKENS,
 //! HOVER_MXBAI_URL.
+//! HARVEST ablation knobs (unset = preset): HOVER_SCREEN (a|b), HOVER_REWRITE_ONLY,
+//! HOVER_POLICY, HOVER_POLICY_SHARE, HOVER_LEDGER_GATE_KILLS, HOVER_PARENT_GREED,
+//! HOVER_GATE_SIZE, HOVER_SCOUT, HOVER_PARENTS, HOVER_PROPOSALS, HOVER_CHAMPION_K.
 //!
 //! Run from the repo root (search server must be up):
 //!     set -a; source .env; set +a
@@ -69,7 +72,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use dspy_rs::{
     Eval, GEPA, LM, Module, Predict, PredictError, Predicted, Predictors, Ratchet, Signature,
-    SlotCredit, TypedMetric, compound, configure, init_tracing, temper,
+    SlotCredit, TypedMetric, compound, harvest, configure, init_tracing, temper,
 };
 use serde::{Deserialize, Serialize};
 
@@ -893,9 +896,9 @@ async fn optimize(
     } else {
         // COMPOUND keeps its preset cycle shape (iters 150 / minibatch 3 /
         // P×N 2×2) unless overridden; the v2-era arms keep theirs.
-        let is_compound = opt_name == "compound";
+        let is_compound = opt_name == "compound" || opt_name == "harvest";
         let iters = env_usize("HOVER_ITERS", if is_compound { 150 } else { 60 });
-        let minibatch = env_usize("HOVER_MINIBATCH", if is_compound { 3 } else { 5 });
+        let minibatch = env_usize("HOVER_MINIBATCH", if opt_name == "compound" { 3 } else { 5 });
         let champion = env_usize("HOVER_CHAMPION", 30);
         println!(
             "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
@@ -924,6 +927,47 @@ async fn optimize(
                 optimizer.certify_budget = env_usize("HOVER_CERTIFY_BUDGET", 150);
                 optimizer
             }
+            // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): on-target
+            // screen, full-val ranking, Rewrite + Policy operators, sequential
+            // paired certification vs the seed on reserved train columns.
+            "harvest" => {
+                let mut optimizer = harvest();
+                optimizer.prompt_model = Some(reflection_lm);
+                optimizer.certify_reserve = env_usize("HOVER_CERTIFY_RESERVE", 45);
+                optimizer.certify_budget = env_usize("HOVER_CERTIFY_BUDGET", 150);
+                // One-factor ablation knobs (mirror of 36-docsqa.rs): each
+                // overrides the `harvest()` preset only when set; unset keeps
+                // the preset value.
+                match env_str("HOVER_SCREEN", "").as_str() {
+                    "a" => optimizer.screen_rule = dspy_rs::ScreenRule::OnTargetA,
+                    "b" => optimizer.screen_rule = dspy_rs::ScreenRule::HeldOutB,
+                    _ => {}
+                }
+                if let Ok(v) = std::env::var("HOVER_REWRITE_ONLY") {
+                    optimizer.rewrite_only = v == "1";
+                }
+                if let Ok(v) = std::env::var("HOVER_POLICY") {
+                    optimizer.policy_channel = v == "1";
+                }
+                if let Ok(v) = std::env::var("HOVER_POLICY_SHARE") {
+                    optimizer.policy_share = v.parse().unwrap_or(optimizer.policy_share);
+                }
+                if let Ok(v) = std::env::var("HOVER_LEDGER_GATE_KILLS") {
+                    optimizer.ledger_gate_kills = v == "1";
+                }
+                if let Ok(v) = std::env::var("HOVER_PARENT_GREED") {
+                    optimizer.parent_greed = v.parse().unwrap_or(optimizer.parent_greed);
+                }
+                if let Ok(v) = std::env::var("HOVER_GATE_SIZE") {
+                    optimizer.gate_size = v.parse().ok();
+                }
+                optimizer.scout_size = env_usize("HOVER_SCOUT", optimizer.scout_size);
+                optimizer.parents_per_step = env_usize("HOVER_PARENTS", optimizer.parents_per_step);
+                optimizer.proposals_per_parent =
+                    env_usize("HOVER_PROPOSALS", optimizer.proposals_per_parent);
+                optimizer.champion_k = env_usize("HOVER_CHAMPION_K", optimizer.champion_k);
+                optimizer
+            }
             other => bail!("unknown HOVER_OPT {other:?} (temper|ratchet|hybrid|compound|gepa)"),
         };
         let optimizer = {
@@ -946,6 +990,30 @@ async fn optimize(
                 println!(
                     "stage-repair credit assignment ON ({repair_probes} probes/gen, {} attempts)",
                     optimizer.repair_attempts
+                );
+            }
+            if opt_name == "harvest" {
+                println!(
+                    "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
+                     ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
+                     certify reserve {} / budget {} alpha {} iters {} minibatch {} P×N {}×{}",
+                    optimizer.screen_rule,
+                    optimizer.accept_mode,
+                    optimizer.scout_size,
+                    optimizer.rewrite_only,
+                    optimizer.policy_channel,
+                    optimizer.policy_share,
+                    optimizer.ledger_gate_kills,
+                    optimizer.parent_greed,
+                    optimizer.gate_size,
+                    optimizer.champion_k,
+                    optimizer.certify_reserve,
+                    optimizer.certify_budget,
+                    optimizer.certify_alpha,
+                    optimizer.num_iterations,
+                    optimizer.minibatch_size,
+                    optimizer.parents_per_step,
+                    optimizer.proposals_per_parent
                 );
             }
             optimizer
@@ -972,6 +1040,10 @@ async fn optimize(
         println!(
             "operator stats: {:?}  fresh cols: {}  variant cols: {}",
             result.operator_stats, result.fresh_selection_cols, result.variant_selection_cols
+        );
+        println!(
+            "certification: {:?} cols {} mean {:+.4} e {:.2}",
+            result.certified, result.certify_cols_used, result.certify_mean_delta, result.certify_e_value
         );
         if result.certify_cols_used > 0 || result.certified.is_some() {
             println!(

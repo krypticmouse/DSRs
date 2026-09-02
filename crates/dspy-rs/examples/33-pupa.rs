@@ -42,6 +42,9 @@
 //! PUPA_ITERS, PUPA_MINIBATCH, PUPA_BUDGET, PUPA_CHAMPION, PUPA_VAL_FILE,
 //! PUPA_OUT_PREFIX, PUPA_CONCURRENCY, PUPA_STOP_TOOL, PUPA_MAX_TURNS,
 //! PUPA_MXBAI_URL.
+//! HARVEST ablation knobs (unset = preset): PUPA_SCREEN (a|b), PUPA_REWRITE_ONLY,
+//! PUPA_POLICY, PUPA_POLICY_SHARE, PUPA_LEDGER_GATE_KILLS, PUPA_PARENT_GREED,
+//! PUPA_GATE_SIZE, PUPA_SCOUT, PUPA_PARENTS, PUPA_PROPOSALS, PUPA_CHAMPION_K.
 //!
 //! Run from the repo root:
 //!     set -a; source .env; set +a
@@ -53,7 +56,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use dspy_rs::{
     AgentLoopSpec, Chat, Eval, GEPA, LM, Message, Module, Predict, PredictError, Predicted,
-    Ratchet, Schema, Signature, SlotCredit, TypedMetric, compound, configure, init_tracing,
+    Ratchet, Schema, Signature, SlotCredit, TypedMetric, compound, harvest, configure, init_tracing,
     temper,
 };
 use rig::completion::ToolDefinition;
@@ -799,9 +802,9 @@ async fn optimize(
     } else {
         // COMPOUND keeps its preset cycle shape (iters 150 / minibatch 3 /
         // P×N 2×2) unless overridden; the v2-era arms keep theirs.
-        let is_compound = opt_name == "compound";
+        let is_compound = opt_name == "compound" || opt_name == "harvest";
         let iters = env_usize("PUPA_ITERS", if is_compound { 150 } else { 60 });
-        let minibatch = env_usize("PUPA_MINIBATCH", if is_compound { 3 } else { 5 });
+        let minibatch = env_usize("PUPA_MINIBATCH", if opt_name == "compound" { 3 } else { 5 });
         let champion = env_usize("PUPA_CHAMPION", 30);
         println!(
             "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
@@ -847,6 +850,47 @@ async fn optimize(
                 .ablate_champion(true)
                 .prompt_model(reflection_lm)
                 .build(),
+            // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): on-target
+            // screen, full-val ranking, Rewrite + Policy operators, sequential
+            // paired certification vs the seed on reserved train columns.
+            "harvest" => {
+                let mut optimizer = harvest();
+                optimizer.prompt_model = Some(reflection_lm);
+                optimizer.certify_reserve = env_usize("PUPA_CERTIFY_RESERVE", 45);
+                optimizer.certify_budget = env_usize("PUPA_CERTIFY_BUDGET", 150);
+                // One-factor ablation knobs (mirror of 36-docsqa.rs): each
+                // overrides the `harvest()` preset only when set; unset keeps
+                // the preset value.
+                match env_str("PUPA_SCREEN", "").as_str() {
+                    "a" => optimizer.screen_rule = dspy_rs::ScreenRule::OnTargetA,
+                    "b" => optimizer.screen_rule = dspy_rs::ScreenRule::HeldOutB,
+                    _ => {}
+                }
+                if let Ok(v) = std::env::var("PUPA_REWRITE_ONLY") {
+                    optimizer.rewrite_only = v == "1";
+                }
+                if let Ok(v) = std::env::var("PUPA_POLICY") {
+                    optimizer.policy_channel = v == "1";
+                }
+                if let Ok(v) = std::env::var("PUPA_POLICY_SHARE") {
+                    optimizer.policy_share = v.parse().unwrap_or(optimizer.policy_share);
+                }
+                if let Ok(v) = std::env::var("PUPA_LEDGER_GATE_KILLS") {
+                    optimizer.ledger_gate_kills = v == "1";
+                }
+                if let Ok(v) = std::env::var("PUPA_PARENT_GREED") {
+                    optimizer.parent_greed = v.parse().unwrap_or(optimizer.parent_greed);
+                }
+                if let Ok(v) = std::env::var("PUPA_GATE_SIZE") {
+                    optimizer.gate_size = v.parse().ok();
+                }
+                optimizer.scout_size = env_usize("PUPA_SCOUT", optimizer.scout_size);
+                optimizer.parents_per_step = env_usize("PUPA_PARENTS", optimizer.parents_per_step);
+                optimizer.proposals_per_parent =
+                    env_usize("PUPA_PROPOSALS", optimizer.proposals_per_parent);
+                optimizer.champion_k = env_usize("PUPA_CHAMPION_K", optimizer.champion_k);
+                optimizer
+            }
             other => bail!(
                 "unknown PUPA_OPT {other:?} (temper|ratchet|hybrid|compound|temper_postcap|hybrid_ablate|gepa)"
             ),
@@ -876,6 +920,30 @@ async fn optimize(
                     optimizer.repair_attempts
                 );
             }
+            if opt_name == "harvest" {
+                println!(
+                    "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
+                     ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
+                     certify reserve {} / budget {} alpha {} iters {} minibatch {} P×N {}×{}",
+                    optimizer.screen_rule,
+                    optimizer.accept_mode,
+                    optimizer.scout_size,
+                    optimizer.rewrite_only,
+                    optimizer.policy_channel,
+                    optimizer.policy_share,
+                    optimizer.ledger_gate_kills,
+                    optimizer.parent_greed,
+                    optimizer.gate_size,
+                    optimizer.champion_k,
+                    optimizer.certify_reserve,
+                    optimizer.certify_budget,
+                    optimizer.certify_alpha,
+                    optimizer.num_iterations,
+                    optimizer.minibatch_size,
+                    optimizer.parents_per_step,
+                    optimizer.proposals_per_parent
+                );
+            }
             optimizer
         };
         let result = optimizer
@@ -900,6 +968,10 @@ async fn optimize(
         println!(
             "operator stats: {:?}  fresh cols: {}  variant cols: {}",
             result.operator_stats, result.fresh_selection_cols, result.variant_selection_cols
+        );
+        println!(
+            "certification: {:?} cols {} mean {:+.4} e {:.2}",
+            result.certified, result.certify_cols_used, result.certify_mean_delta, result.certify_e_value
         );
         if result.certify_cols_used > 0 || result.certified.is_some() {
             println!(
