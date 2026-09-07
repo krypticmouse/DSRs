@@ -62,5 +62,7 @@ default = ["data"]
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
 
 [dev-dependencies]
+# `test-util`: paused-clock tests for the LM request deadline.
+tokio = { workspace = true, features = ["full", "test-util"] }
 rstest = "0.25.0"
 temp-env = { version = "0.3.6", features = ["async_closure"] }

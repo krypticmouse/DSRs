@@ -9,9 +9,9 @@ use std::time::Duration;
 
 use anyhow::Result;
 use dspy_rs::{
-    Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM,
-    LMClient, Module, ModuleState, OptimizeTarget, Predict, PredictError, Predicted, Signature,
-    TestCompletionModel, TypedMetric,
+    Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome,
+    HangingCompletionModel, LM, LMClient, Module, ModuleState, OptimizeTarget, Predict,
+    PredictError, Predicted, Signature, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -173,6 +173,31 @@ async fn lm_module(client: TestCompletionModel) -> LmModule {
     }
 }
 
+/// An [`LmModule`] whose LM never gets a response: every rollout parks inside
+/// the provider call — the 2026-09-03 stall shape — with a `timeout_secs`
+/// request deadline and no retries.
+async fn hanging_module(client: HangingCompletionModel, timeout_secs: u64) -> LmModule {
+    let lm = temp_env::async_with_vars(
+        [("OPENAI_API_KEY", Some("test"))],
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .max_retries(0)
+            .request_timeout_secs(timeout_secs)
+            .build(),
+    )
+    .await
+    .unwrap()
+    .with_client(LMClient::Hanging(client))
+    .await
+    .unwrap();
+    LmModule {
+        predictor: Predict::<EngSig>::builder()
+            .named("predictor")
+            .lm(lm)
+            .build(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Metrics
 // ---------------------------------------------------------------------------
@@ -282,6 +307,70 @@ async fn fan_out_runs_examples_concurrently_with_correct_results() {
         assert!(engine.matrix().score(candidate, idx).is_some());
     }
     assert!((engine.matrix().mean(candidate).unwrap() - eval.mean()).abs() < 1e-9);
+}
+
+/// A rollout that fails (here: the LM errors out at once) surfaces as the
+/// batch's `Err` promptly — the fan-out never waits on the remaining cells,
+/// and a failed batch charges nothing.
+#[tokio::test]
+async fn failing_rollout_fails_the_batch_instead_of_hanging() {
+    // Empty response queue: every completion errors, non-retryably.
+    let mut module = lm_module(TestCompletionModel::default()).await;
+    let metric = IndexMetric;
+    let examples = trainset(4);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: 2,
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        engine.evaluate(&target, candidate, None),
+    )
+    .await
+    .expect("a failing rollout must not stall the batch");
+    assert!(result.is_err(), "the rollout error propagates as the batch error");
+    assert_eq!(engine.spend().metric_calls, 0, "a failed batch charges nothing");
+}
+
+/// Regression for the 2026-09-03 HARVEST stall: an LM request that never
+/// resolved (no socket, no error, nothing to wake it) parked one rollout —
+/// and with it the whole `buffer_unordered` batch — forever. The per-request
+/// deadline (`LMConfig::request_timeout_secs`) now cancels the wedged attempt
+/// so the batch fails (or retries) in bounded time.
+#[tokio::test(start_paused = true)]
+async fn hung_lm_rollout_is_bounded_by_the_request_deadline() {
+    let hanging = HangingCompletionModel::default();
+    let mut module = hanging_module(hanging.clone(), 1).await;
+    let metric = IndexMetric;
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &metric);
+    let mut engine = Engine::new(EngineConfig {
+        concurrency: 3,
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+
+    let started = tokio::time::Instant::now();
+    // Paused clock: the 1 s deadline elapses virtually. The outer guard only
+    // trips if the engine parks with no timer at all — the original bug.
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        engine.evaluate(&target, candidate, None),
+    )
+    .await
+    .expect("a hung request must be cancelled by its deadline, not stall the batch");
+    // The deadline's own wording is pinned by the LM unit test
+    // (`hung_completion_is_cancelled_at_the_deadline_and_retried`); at this
+    // level the interpreter re-wraps it as a generic `LLM call failed`.
+    result.expect_err("cancelled rollouts fail the batch");
+    assert!(hanging.calls() >= 1, "the provider was actually called");
+    assert!(
+        started.elapsed() >= Duration::from_secs(1),
+        "the deadline, not something else, ended the wait"
+    );
 }
 
 #[tokio::test]

@@ -59,7 +59,8 @@
 //! HOVER_MXBAI_URL.
 //! HARVEST ablation knobs (unset = preset): HOVER_SCREEN (a|b), HOVER_REWRITE_ONLY,
 //! HOVER_POLICY, HOVER_POLICY_SHARE, HOVER_LEDGER_GATE_KILLS, HOVER_PARENT_GREED,
-//! HOVER_GATE_SIZE, HOVER_SCOUT, HOVER_PARENTS, HOVER_PROPOSALS, HOVER_CHAMPION_K.
+//! HOVER_GATE_SIZE, HOVER_SCOUT, HOVER_PARENTS, HOVER_PROPOSALS, HOVER_CHAMPION_K,
+//! HOVER_LENGTH_PRIOR (chars; soft teacher budget, hard guard × HOVER_LENGTH_SLACK 1.25).
 //!
 //! Run from the repo root (search server must be up):
 //!     set -a; source .env; set +a
@@ -87,7 +88,8 @@ fn env_usize(name: &str, default: usize) -> usize {
 /// The four module names, in pipeline order — candidate slot keys, serve
 /// override keys, and winner-JSON keys. Must match `predictors!` below and
 /// MODULES in benchmarks/hover/common.py.
-const MODULE_NAMES: [&str; 4] = ["hop1_query", "summarize1", "hop2_query", "summarize2"];
+const MODULE_NAMES: [&str; 5] = ["hop1_query", "summarize1", "hop2_query", "summarize2", "verify_claim"];
+const SEED_VERIFY_CLAIM: &str = "Verify the claim using the retrieved sentences. Return SUPPORTED or NOT_SUPPORTED and a JSON array of [document title, zero-based sentence index] pairs, ranked by relevance. Select at most two sentences per document and rank the documents by importance.";
 
 /// Seed instructions (DSPy auto-generated style, the GEPA paper's HoVer
 /// seeds). MUST stay byte-identical to SEED_INSTRUCTIONS in
@@ -109,6 +111,8 @@ struct HoverRow {
     claim: String,
     gold_titles: Vec<String>,
     num_hops: u32,
+    label: String,
+    supporting_facts: Vec<(String, usize)>,
 }
 
 fn load_rows(path: &str) -> Result<Vec<HoverRow>> {
@@ -200,10 +204,24 @@ struct Summarize2 {
 // BM25 search client (the local search server; deterministic, no API cost)
 // ---------------------------------------------------------------------------
 
+#[derive(Signature, Clone, Debug)]
+struct VerifyClaim {
+    #[input]
+    claim: String,
+    #[input]
+    passages: String,
+    #[output]
+    label: String,
+    /// JSON array of [title, zero-based sentence index] pairs, ranked.
+    #[output]
+    supporting_facts: String,
+}
+
 #[derive(Deserialize, Clone)]
 struct SearchHit {
     title: String,
     snippet: String,
+    sentences: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -284,6 +302,8 @@ struct HoverOutput {
     hop_titles: String,
     summary_1: String,
     summary_2: String,
+    label: String,
+    supporting_facts: String,
 }
 
 /// Pipeline input (rows project into it by field name).
@@ -298,11 +318,12 @@ struct HoverPipeline {
     summarize1: Predict<Summarize1>,
     hop2_query: Predict<Hop2Query>,
     summarize2: Predict<Summarize2>,
+    verify_claim: Predict<VerifyClaim>,
     search: Arc<SearchClient>,
 }
 
 // All four leaves are optimizable surfaces — the optimizer sees 4 slots.
-dspy_rs::predictors!(HoverPipeline { hop1_query, summarize1, hop2_query, summarize2 });
+dspy_rs::predictors!(HoverPipeline { hop1_query, summarize1, hop2_query, summarize2, verify_claim });
 
 /// open-instruct's remove_thinking_section: reasoning students wrap the real
 /// output in think/answer tags; downstream stages must see what follows them.
@@ -438,8 +459,20 @@ impl Module for HoverPipeline {
                 }
             }
         }
+        let mut documents = Vec::new();
+        let mut seen = Vec::new();
+        for hit in hits1.iter().chain(hits2.iter()).chain(hits3.iter()) {
+            if seen.contains(&hit.title) { continue; }
+            seen.push(hit.title.clone());
+            documents.push(format!("DOCUMENT: {}\n{}", hit.title, hit.sentences.iter().enumerate()
+                .map(|(i, sentence)| format!("[{i}] {sentence}")).collect::<Vec<_>>().join("\n")));
+        }
+        let verdict = self.verify_claim.call(VerifyClaimInput { claim: claim.clone(), passages: documents.join("\n\n") }).await;
+        let (label, supporting_facts) = verdict.map(|v| (v.label.trim().to_string(), v.supporting_facts.clone()))
+            .unwrap_or_else(|_| (String::new(), "[]".to_string()));
         Ok(Predicted::new(
             HoverOutput {
+                label, supporting_facts,
                 retrieved_titles,
                 queries: vec![claim, q2, q3],
                 hop_titles: serde_json::to_string(&per_hop).unwrap_or_else(|_| "[]".into()),
@@ -458,6 +491,7 @@ struct Instructions {
     summarize1: String,
     hop2_query: String,
     summarize2: String,
+    verify_claim: String,
 }
 
 impl Default for Instructions {
@@ -467,6 +501,7 @@ impl Default for Instructions {
             summarize1: SEED_SUMMARIZE1.to_string(),
             hop2_query: SEED_HOP2_QUERY.to_string(),
             summarize2: SEED_SUMMARIZE2.to_string(),
+            verify_claim: SEED_VERIFY_CLAIM.to_string(),
         }
     }
 }
@@ -483,6 +518,7 @@ impl Instructions {
                 "summarize1" => instructions.summarize1 = text.clone(),
                 "hop2_query" => instructions.hop2_query = text.clone(),
                 "summarize2" => instructions.summarize2 = text.clone(),
+                "verify_claim" => instructions.verify_claim = text.clone(),
                 other => eprintln!("unknown module in instructions map: {other:?}"),
             }
         }
@@ -518,6 +554,8 @@ impl PipelineFactory {
                 .lm(self.student_lm.clone())
                 .instruction(instructions.summarize2.clone())
                 .build(),
+            verify_claim: Predict::<VerifyClaim>::builder().named("verify_claim")
+                .lm(self.student_lm.clone()).instruction(instructions.verify_claim.clone()).build(),
             search: self.search.clone(),
         }
     }
@@ -539,6 +577,24 @@ struct Graded {
     per_hop_gold_hits: Vec<usize>,
 }
 
+fn hover_success(example: &HoverRow, label: &str, facts: &[(String, usize)], retrieved: &[String]) -> bool {
+    if label != example.label || example.supporting_facts.is_empty() { return false; }
+    let mut ranked_docs = Vec::new();
+    let mut counts = std::collections::HashMap::new();
+    let mut accepted = Vec::new();
+    for fact in facts {
+        if !ranked_docs.contains(&fact.0) { ranked_docs.push(fact.0.clone()); }
+        let rank = ranked_docs.iter().position(|title| title == &fact.0).unwrap();
+        let count = counts.entry(fact.0.clone()).or_insert(0usize);
+        *count += 1;
+        if rank < example.num_hops as usize + 1 && *count <= 2 && retrieved.contains(&fact.0) {
+            accepted.push(fact);
+        }
+    }
+    example.gold_titles.iter().all(|title| example.supporting_facts.iter()
+        .any(|fact| &fact.0 == title && accepted.contains(&fact)))
+}
+
 fn grade(example: &HoverRow, output: &HoverOutput) -> Graded {
     let n_gold = example.gold_titles.len();
     let found_titles: Vec<String> = example
@@ -554,8 +610,9 @@ fn grade(example: &HoverRow, output: &HoverOutput) -> Graded {
         .cloned()
         .collect();
     let n_found = found_titles.len();
-    let score = if n_gold == 0 { 0.0 } else { n_found as f64 / n_gold as f64 };
-    let correct = n_gold > 0 && n_found == n_gold;
+    let facts: Vec<(String, usize)> = serde_json::from_str(&output.supporting_facts).unwrap_or_default();
+    let correct = hover_success(example, &output.label, &facts, &output.retrieved_titles);
+    let score = if correct { 1.0 } else { 0.0 };
 
     let per_hop: Vec<Vec<String>> =
         serde_json::from_str(&output.hop_titles).unwrap_or_default();
@@ -565,10 +622,10 @@ fn grade(example: &HoverRow, output: &HoverOutput) -> Graded {
         .collect();
 
     let mut feedback = if correct {
-        format!("Correct. All {n_gold} gold supporting documents were retrieved.\n")
+        format!("Correct label and sentence evidence from every supporting document (HoVer score 1).\n")
     } else {
         format!(
-            "Retrieved {n_found}/{n_gold} gold supporting documents.\nMISSED gold documents \
+            "HoVer score 0: label or ranked sentence evidence failed. Retrieved {n_found}/{n_gold} gold documents.\nMISSED gold documents \
              (the queries must surface these): {}\n",
             missed_titles.join("; ")
         )
@@ -651,6 +708,10 @@ struct ServeTrace {
 
 #[derive(Serialize)]
 struct ServeResponse {
+    metric_protocol: &'static str,
+    hover_score: bool,
+    label: String,
+    supporting_facts: String,
     id: u64,
     score: f64,
     correct: bool,
@@ -728,6 +789,8 @@ async fn serve(dir: &str, factory: Arc<PipelineFactory>) -> Result<()> {
                 })
                 .collect();
             let response = ServeResponse {
+                metric_protocol: "dataset-native-v1",
+                hover_score: graded.correct, label: prediction.label.clone(), supporting_facts: prediction.supporting_facts.clone(),
                 id: request.id,
                 score: graded.score,
                 correct: graded.correct,
@@ -775,6 +838,7 @@ fn winner_map(
         ("summarize1".to_string(), seeds.summarize1),
         ("hop2_query".to_string(), seeds.hop2_query),
         ("summarize2".to_string(), seeds.summarize2),
+        ("verify_claim".to_string(), seeds.verify_claim),
     ]);
     if let Some(module) = module {
         for (name, info) in module.predictors() {
@@ -862,6 +926,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut pipeline, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("HOVER_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} candidates: {} gate_rejected: {} leak: {}/{}",
             result.total_rollouts,
@@ -896,10 +963,10 @@ async fn optimize(
     } else {
         // COMPOUND keeps its preset cycle shape (iters 150 / minibatch 3 /
         // P×N 2×2) unless overridden; the v2-era arms keep theirs.
-        let is_compound = opt_name == "compound" || opt_name == "harvest";
+        let is_compound = opt_name == "compound" || matches!(opt_name.as_str(), "harvest" | "harvest_search");
         let iters = env_usize("HOVER_ITERS", if is_compound { 150 } else { 60 });
         let minibatch = env_usize("HOVER_MINIBATCH", if opt_name == "compound" { 3 } else { 5 });
-        let champion = env_usize("HOVER_CHAMPION", 30);
+        let champion = env_usize("HOVER_CHAMPION", if opt_name == "harvest_search" { 0 } else { 30 });
         println!(
             "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
         );
@@ -930,8 +997,10 @@ async fn optimize(
             // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): on-target
             // screen, full-val ranking, Rewrite + Policy operators, sequential
             // paired certification vs the seed on reserved train columns.
-            "harvest" => {
-                let mut optimizer = harvest();
+            "harvest" | "harvest_search" => {
+                let mut optimizer = if opt_name == "harvest_search" {
+                    dspy_rs::harvest_search()
+                } else { harvest() };
                 optimizer.prompt_model = Some(reflection_lm);
                 optimizer.certify_reserve = env_usize("HOVER_CERTIFY_RESERVE", 45);
                 optimizer.certify_budget = env_usize("HOVER_CERTIFY_BUDGET", 150);
@@ -960,6 +1029,24 @@ async fn optimize(
                 }
                 if let Ok(v) = std::env::var("HOVER_GATE_SIZE") {
                     optimizer.gate_size = v.parse().ok();
+                }
+                // v6.5 length prior (soft, teacher-facing; unset = off):
+                // HOVER_LENGTH_PRIOR=N chars, hard guard N × HOVER_LENGTH_SLACK
+                // (default 1.25) through the length_cap path.
+                if let Ok(v) = std::env::var("HOVER_LENGTH_PRIOR") {
+                    optimizer.length_prior = v.parse().ok().filter(|n: &usize| *n > 0);
+                }
+                if let Ok(v) = std::env::var("HOVER_LENGTH_SLACK") {
+                    optimizer.length_prior_slack =
+                        v.parse().unwrap_or(optimizer.length_prior_slack);
+                }
+                if optimizer.length_prior.is_some() {
+                    println!(
+                        "length prior {:?} chars (slack {}, hard cap {:?})",
+                        optimizer.length_prior,
+                        optimizer.length_prior_slack,
+                        optimizer.effective_length_cap()
+                    );
                 }
                 optimizer.scout_size = env_usize("HOVER_SCOUT", optimizer.scout_size);
                 optimizer.parents_per_step = env_usize("HOVER_PARENTS", optimizer.parents_per_step);
@@ -992,7 +1079,7 @@ async fn optimize(
                     optimizer.repair_attempts
                 );
             }
-            if opt_name == "harvest" {
+            if matches!(opt_name.as_str(), "harvest" | "harvest_search") {
                 println!(
                     "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
                      ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
@@ -1021,6 +1108,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut pipeline, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("HOVER_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -1130,7 +1220,18 @@ async fn main() -> Result<()> {
     // 1024 tokens is generous.
     let student_spec = env_str("HOVER_STUDENT", "openai/gpt-oss-120b");
     let max_tokens = env_usize("HOVER_MAX_TOKENS", 1024) as u32;
-    let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
+    let student_lm = if let Ok(base_url) = std::env::var("HOVER_STUDENT_BASE_URL") {
+        LM::builder()
+            .base_url(base_url)
+            .api_key("local-benchmark-gateway".to_string())
+            .model(student_spec.trim_start_matches("openrouter:").to_string())
+            .temperature(0.2)
+            .max_tokens(max_tokens)
+            .max_retries(0)
+            .request_timeout_secs(130)
+            .build()
+            .await?
+    } else if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url(env_str("HOVER_MXBAI_URL", "https://api.mixedbread.com/v1"))
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)
@@ -1169,5 +1270,26 @@ async fn main() -> Result<()> {
         "serve" => serve(&dir, Arc::new(factory)).await,
         "optimize" => optimize(&dir, &factory, &metric, reflection_lm).await,
         other => bail!("unknown HOVER_MODE {other:?} (optimize|serve)"),
+    }
+}
+
+
+#[cfg(test)]
+mod native_metric_tests {
+    use super::*;
+    fn example() -> HoverRow {
+        HoverRow { id: "test".into(), claim: "claim".into(), num_hops: 2,
+            gold_titles: vec!["A".into(), "B".into()], label: "SUPPORTED".into(),
+            supporting_facts: vec![("A".into(), 0), ("B".into(), 1)] }
+    }
+    #[test]
+    fn hover_requires_label_and_ranked_sentences() {
+        let e=example();let retrieved=vec!["A".into(),"B".into(),"C".into(),"D".into()];
+        assert!(hover_success(&e,"SUPPORTED", &[("A".into(),0),("B".into(),1)], &retrieved));
+        assert!(!hover_success(&e,"NOT_SUPPORTED", &e.supporting_facts, &retrieved));
+        assert!(!hover_success(&e,"SUPPORTED", &[("A".into(),1),("B".into(),1)], &retrieved));
+        assert!(!hover_success(&e,"SUPPORTED", &[("A".into(),2),("A".into(),3),("A".into(),0),("B".into(),1)], &retrieved));
+        assert!(!hover_success(&e,"SUPPORTED", &[("C".into(),0),("D".into(),0),("A".into(),0),("B".into(),1)], &retrieved));
+        assert!(!hover_success(&e,"SUPPORTED", &e.supporting_facts, &["A".into()]));
     }
 }

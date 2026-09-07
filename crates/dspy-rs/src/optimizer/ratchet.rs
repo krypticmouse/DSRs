@@ -41,6 +41,10 @@
 //!   champion race, where phrasing-memorized prompts lose.
 //! - `length_cap`: a hard proposal-length budget with one shortening retry —
 //!   bloat correlates with overfit in both our data and production reports.
+//! - `length_prior` (v6.5): a SOFT, teacher-facing length budget — a LENGTH
+//!   BUDGET block in every Rewrite/Policy reflection input, a loose hard
+//!   guard at `prior × length_prior_slack` through the `length_cap` path,
+//!   and within-noise ranking ties broken toward the shorter candidate.
 //!
 //! # P×N parallel proposals
 //!
@@ -103,7 +107,7 @@ use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
 use crate::optimizer::engine::{
     BatchEvalOutcome, CandidateEval, Engine, EngineConfig, EvalOutcome,
-    RolloutOutcome, SCORE_EPS, ScoreMatrix,
+    ParetoView, RolloutOutcome, SCORE_EPS, ScoreMatrix,
 };
 use crate::optimizer::evidence::{BandBets, PairedEvidence};
 use crate::optimizer::forage::{
@@ -581,9 +585,10 @@ pub enum ScreenRule {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeakPolicy {
-    /// Default: any verbatim example string triggers a retry, then abandons
-    /// the trial. Right for benchmarks, where train answers in the prompt
-    /// are contamination.
+    /// Default: quoting a guarded example string triggers a retry, then
+    /// abandons the trial. This enforces an instruction-only data-use
+    /// policy. Retaining permitted training examples is a modeling choice,
+    /// not itself contamination of a disjoint evaluation set.
     Forbid,
     /// COMPOUND (v4), for corpus-fact tasks where the "leak" *is* the win
     /// (DocsQA-class): strings that a counterfactually verified repair
@@ -750,6 +755,14 @@ pub struct RatchetResult {
     /// Proposals abandoned because they still exceeded the cap after a retry.
     #[serde(default)]
     pub length_skipped: usize,
+    /// The soft length prior the run steered the teacher with
+    /// (`length_prior`), if any (v6.5).
+    #[serde(default)]
+    pub length_prior: Option<usize>,
+    /// The hard cap proposals were actually held to: `length_cap`, or under
+    /// a prior the smaller of that and `prior × length_prior_slack`.
+    #[serde(default)]
+    pub length_cap_in_force: Option<usize>,
     /// Reflection retries triggered by the anchored-accretion guard.
     #[serde(default)]
     pub anchor_retries: usize,
@@ -1017,6 +1030,13 @@ pub struct Ratchet {
     #[builder(default = 12)]
     pub scout_size: usize,
 
+    /// Reduce P×N near the rollout limit while retaining whole reflection
+    /// batches and complete shared validation coverage. Supported only for
+    /// on-target, gate-accept search without repair probes or rewrite fan-out.
+    /// Other configurations retain the original conservative step precheck.
+    #[builder(default = false)]
+    pub adaptive_step_size: bool,
+
     /// Kill level for [`RaceRule::Eprocess`]: a child dies when its harm
     /// e-value reaches `1/race_alpha`. A racing kill is a budget heuristic,
     /// not a published claim, so a loose level is appropriate.
@@ -1080,8 +1100,9 @@ pub struct Ratchet {
 
     /// Fresh-data champion selection: reserve budget to race the top two
     /// candidates (by validation mean) on up to this many *never-touched*
-    /// trainset columns at the end — champion selection on unseen data has
-    /// no winner's curse. `0` disables. Under `certify_ship` this stays the
+    /// trainset columns at the end. This separates screening from search,
+    /// but the screen's noisy argmax still has selection bias. `0` disables.
+    /// Under `certify_ship` this stays the
     /// challenger-picking screen; the ship decision moves to certification.
     #[builder(default = 40)]
     pub champion_fresh: usize,
@@ -1109,14 +1130,17 @@ pub struct Ratchet {
     /// ship the seed (reporting the open evidence) when columns or budget
     /// run out unproven. Replaces the endgame's 1-SE seed protection, whose
     /// fixed 20–40-column power refused a real +.04 bundle on DocsQA.
+    /// The claim concerns the population represented by the certification
+    /// columns under the evidence process assumptions. Reserving training
+    /// rows does not certify performance on an out-of-distribution target.
     #[builder(default = false)]
     pub certify_ship: bool,
 
     /// Certification columns reserved out of the trainset (never seen by
     /// any batch, race, or champion screen). The e-process stops early on
-    /// big effects, so reserve for the smallest bundle worth shipping —
-    /// ~150 columns certifies a +.04-class bundle under typical judge
-    /// noise. Only read when `certify_ship` is set.
+    /// big effects. Size this reserve using power at the smallest gain worth
+    /// shipping and the observed paired variance; 150 columns can have low
+    /// power for small gains. Only read when `certify_ship` is set.
     #[builder(default = 150)]
     pub certify_reserve: usize,
 
@@ -1197,6 +1221,12 @@ pub struct Ratchet {
     /// Disable the leak guard.
     #[builder(default = false)]
     pub allow_memorization: bool,
+
+    /// Permit training examples in proposals without declaring the task a
+    /// corpus-fact task or encouraging fact accumulation. The final evaluation
+    /// must remain disjoint. Unlike `allow_memorization`, this is task-neutral.
+    #[builder(default = false)]
+    pub allow_training_examples: bool,
 
     /// FORAGE (v5): how the Rewrite teacher sees the run's accumulated
     /// evidence. [`TeacherContext::Minibatch`] (default) preserves measured
@@ -1409,6 +1439,30 @@ pub struct Ratchet {
     #[builder(default = false)]
     pub cap_after_promotion: bool,
 
+    /// Soft length PRIOR (v6.5, teacher-facing): the target instruction
+    /// size in chars. When set, every Rewrite and Policy reflection input
+    /// ends with a LENGTH BUDGET block (current size, budget, hard limit,
+    /// and how to fold rules instead of dropping them), the shortening
+    /// retry names the target, the hard `length_cap` path becomes a loose
+    /// guard at `length_prior × length_prior_slack` (an explicit
+    /// `length_cap` still wins when smaller), and the pool rankings on the
+    /// shared slice break within-`selection_z` ties toward the shorter
+    /// candidate. Live motivation (DocsQA, 2026-09-02): HARVEST winners
+    /// grew to 8–13k chars while a 3.8k hand-written prompt carried the
+    /// whole gain, and every score-0 rollout was a context-length overflow
+    /// — size became a correctness cost. TEMPER's 1,500-char HARD cap was
+    /// falsified because its size killed the best lineage's rewrites
+    /// (showdown handoff §1); the prior steers the teacher instead of
+    /// rejecting its proposals. `None` (default) changes nothing: the
+    /// teacher sees byte-identical inputs and every ranking is unchanged.
+    pub length_prior: Option<usize>,
+
+    /// Loose hard guard above the prior: under a `length_prior` the
+    /// effective `length_cap` is `prior × slack` (rounded). Only read when
+    /// `length_prior` is set.
+    #[builder(default = 1.25)]
+    pub length_prior_slack: f64,
+
     /// Use lexicase parent selection only once the search has a promoted
     /// child (Pareto coverage before). Lexicase guards a *late-run* pathology
     /// (sole-solver collapse); always-on it dilutes early exploitation.
@@ -1521,9 +1575,9 @@ pub fn compound() -> Ratchet {
         .parent_greed(0.5)
         .promote_only_gains(true)
         .certify_ship(true)
-        // A +.04-class bundle under judge noise needs the full reserve:
-        // ~150 paired columns ≈ 300–400 rollouts. Big effects stop early
-        // and refund the difference.
+        // Up to 200 fresh pairs; actual power depends on effect, variance,
+        // available columns and the challenger alpha split. Big effects
+        // stop early and refund the difference.
         .certify_budget(400)
         // e ≥ 10, anytime-valid — still a far stronger ship guarantee than
         // an unreplicated argmax; the strict 0.05 default suits big-win
@@ -1551,8 +1605,8 @@ pub fn compound() -> Ratchet {
 ///   Pareto coverage: the L2 selection-theory review (2026-09-01) measured
 ///   greedy full-slice arms accumulating 1.5–2× more transferable content
 ///   than pure coverage sampling across seven friction regimes, and the
-///   argmax is trustworthy once every member is ranked on the same 45
-///   columns (the F4 D6 objection was to greed on a 16-column scout);
+///   shared ranking avoids comparing candidates on unequal columns, but
+///   adaptive selection can still overfit that shared validation slice;
 /// - sequential paired ship certification vs the seed on reserved or
 ///   harness-supplied columns (`certify_ship`, alpha 0.1) — the honesty.
 ///
@@ -1584,6 +1638,26 @@ pub fn harvest() -> Ratchet {
         .ledger_falsify_margin(0.02)
         .build();
     optimizer.gate_size = Some(0);
+    optimizer
+}
+
+/// Experimental HARVEST preset for validation-selected prompt search.
+///
+/// Returns the validation winner, with no independent certification claim.
+/// All training rows and the rollout budget remain available to search, and
+/// smaller complete proposal batches can use the budget tail. Training-text
+/// inclusion is permitted, as in reference GEPA; evaluation examples must
+/// remain outside the optimizer's train and validation sets.
+pub fn harvest_search() -> Ratchet {
+    let mut optimizer = harvest();
+    optimizer.certify_ship = false;
+    optimizer.certify_reserve = 0;
+    optimizer.certify_budget = 0;
+    optimizer.champion_fresh = 0;
+    optimizer.selection_z = 0.0;
+    optimizer.adaptive_step_size = true;
+    optimizer.rewrite_fanout = 1;
+    optimizer.allow_training_examples = true;
     optimizer
 }
 
@@ -2062,6 +2136,27 @@ impl ClauseLedger {
     }
 }
 
+/// Pick distinct, non-seed hypotheses BEFORE allocating the family alpha.
+/// Candidate IDs describe lineage; engine rows describe the actual full
+/// slot assignment. A composed seed or duplicate rewrite is not a second
+/// hypothesis. The validation argmax remains eligible when the fresh
+/// screen selects the seed.
+fn certification_challengers(
+    engine: &mut Engine,
+    seed_row: usize,
+    champion: &GEPACandidate,
+    val_argmax: &GEPACandidate,
+) -> Vec<(GEPACandidate, usize)> {
+    let mut challengers = Vec::new();
+    for candidate in [champion, val_argmax] {
+        let row = engine.register(candidate.engine_candidate());
+        if row != seed_row && !challengers.iter().any(|(_, seen)| *seen == row) {
+            challengers.push((candidate.clone(), row));
+        }
+    }
+    challengers
+}
+
 /// Certification wallet warm-started from a candidate's search-time
 /// paired-vs-seed validation deltas (`prior_row`'s pool row): the val
 /// estimate is selection-biased, but a bet prior only shapes λ — a
@@ -2248,12 +2343,40 @@ fn leak_addendum(leaks: &[&str]) -> String {
     )
 }
 
-fn length_addendum(len: usize, cap: usize) -> String {
-    format!(
+fn length_addendum(len: usize, cap: usize, target: Option<usize>) -> String {
+    let base = format!(
         "\n\nIMPORTANT: your previous proposal was {len} characters; the hard limit \
          is {cap}. Rewrite it to fit: keep the rules with measured value, cut \
          speculative clauses and redundant phrasing."
-    )
+    );
+    match target {
+        None => base,
+        Some(target) => format!(
+            "{base} Aim for the LENGTH BUDGET of {target} characters: fold rules \
+             (state each requirement once in the rule + response template + final \
+             checklist form) rather than dropping any rule the feedback shows is \
+             needed."
+        ),
+    }
+}
+
+/// The length guard one operator call runs under: the hard cap (`None` =
+/// unlimited) and, under a `length_prior`, the target the shortening retry
+/// is told to aim for.
+#[derive(Clone, Copy, Debug, Default)]
+struct LengthGuard {
+    cap: Option<usize>,
+    target: Option<usize>,
+}
+
+/// Total chars a candidate deploys: every slot of a joint candidate, or the
+/// single instruction.
+fn candidate_chars(candidate: &GEPACandidate) -> usize {
+    if candidate.slots.is_empty() {
+        candidate.instruction.len()
+    } else {
+        candidate.slots.values().map(String::len).sum()
+    }
 }
 
 /// Runs one operator call with the leak and length guards: propose, check for
@@ -2284,7 +2407,8 @@ macro_rules! guarded_propose {
                         break;
                     }
                     let leaks = find_leaks(&instruction, $forbidden);
-                    let cap: Option<usize> = $cap;
+                    let guard: LengthGuard = $cap;
+                    let cap: Option<usize> = guard.cap;
                     let overlong = cap.is_some_and(|cap| instruction.len() > cap);
                     // Anchored accretion: the proposal must open with the
                     // frozen base verbatim (leading whitespace tolerated) —
@@ -2317,6 +2441,7 @@ macro_rules! guarded_propose {
                             extra.push_str(&length_addendum(
                                 instruction.len(),
                                 cap.expect("overlong implies a cap"),
+                                guard.target,
                             ));
                         }
                         if unanchored {
@@ -2359,6 +2484,96 @@ macro_rules! guarded_propose {
 }
 
 impl Ratchet {
+    /// The hard length cap actually in force: `length_cap`, or under a
+    /// `length_prior` the loose guard `prior × length_prior_slack`
+    /// (rounded) — the smaller of the two when both are set. `None` when
+    /// neither knob is set.
+    pub fn effective_length_cap(&self) -> Option<usize> {
+        let prior_cap = self
+            .length_prior
+            .map(|prior| ((prior as f64) * self.length_prior_slack).round().max(1.0) as usize);
+        match (self.length_cap, prior_cap) {
+            (Some(cap), Some(guard)) => Some(cap.min(guard)),
+            (Some(cap), None) => Some(cap),
+            (None, guard) => guard,
+        }
+    }
+
+    /// The teacher-facing LENGTH BUDGET block appended to every Rewrite and
+    /// Policy reflection input under a `length_prior`; empty (so the input
+    /// is byte-identical) when the prior is unset.
+    fn length_prior_block(&self, current_len: usize) -> String {
+        let Some(budget) = self.length_prior else {
+            return String::new();
+        };
+        let hard = self.effective_length_cap().unwrap_or(budget);
+        format!(
+            "\n\nLENGTH BUDGET: the instruction is currently {current_len} chars; the \
+             budget is {budget} chars (hard limit {hard} chars; over-limit proposals \
+             are rejected). Stay within budget by folding: merge redundant rules, \
+             state each requirement once in the rule + response template + final \
+             checklist form, drop per-topic reminders the template already \
+             enforces, and never drop a rule the feedback shows is needed. \
+             Shorter is preferred when two versions would score the same."
+        )
+    }
+
+    /// v6.5 Occam tie-break under a `length_prior`: among `entries`
+    /// (candidate, engine row) returns the index of the shortest one whose
+    /// paired scores on `cols` cannot be separated from the argmax at
+    /// `best_idx` (within `selection_z`·SE, the [`within_noise`] rule).
+    /// Without a prior, or with `selection_z` 0, `best_idx` stands.
+    fn occam_shorter_idx(
+        &self,
+        matrix: &ScoreMatrix,
+        entries: &[(&GEPACandidate, usize)],
+        best_idx: usize,
+        cols: &[usize],
+    ) -> usize {
+        if self.length_prior.is_none() || self.selection_z <= 0.0 || entries.is_empty() {
+            return best_idx;
+        }
+        let best_scores = row_scores(matrix, entries[best_idx].1, cols);
+        let mut pick = best_idx;
+        for (idx, (candidate, row)) in entries.iter().enumerate() {
+            if idx == best_idx || candidate_chars(candidate) >= candidate_chars(entries[pick].0) {
+                continue;
+            }
+            if within_noise(&best_scores, &row_scores(matrix, *row, cols), self.selection_z) {
+                pick = idx;
+            }
+        }
+        if pick != best_idx {
+            tracing::debug!(
+                argmax_chars = candidate_chars(entries[best_idx].0),
+                picked_chars = candidate_chars(entries[pick].0),
+                "length prior: within-noise tie broken toward the shorter candidate"
+            );
+        }
+        pick
+    }
+
+    /// The pool's frontier argmax by shared-slice mean, with the v6.5
+    /// Occam tie-break applied under a `length_prior` (identical to
+    /// `Lineage::best_by_average` otherwise).
+    fn occam_best_by_average<'a>(
+        &self,
+        pool: &'a Lineage,
+        pareto: &'a ParetoView,
+        matrix: &ScoreMatrix,
+        cols: &[usize],
+    ) -> Option<&'a GEPACandidate> {
+        let best = pool.best_by_average(pareto)?;
+        if self.length_prior.is_none() || self.selection_z <= 0.0 {
+            return Some(best);
+        }
+        let entries: Vec<(&'a GEPACandidate, usize)> = pool.frontier_entries(pareto).collect();
+        let best_idx = entries
+            .iter()
+            .position(|(candidate, _)| candidate.id == best.id)?;
+        Some(entries[self.occam_shorter_idx(matrix, &entries, best_idx, cols)].0)
+    }
+
     fn common(&self) -> OptimizerCommon {
         OptimizerCommon {
             eval_concurrency: self.eval_concurrency,
@@ -2395,6 +2610,32 @@ impl Ratchet {
             0
         };
         p * (n * self.minibatch_size + (self.step_fanout() + 1) * gate_size) + val_len + repair
+    }
+
+    fn supports_adaptive_step(&self) -> bool {
+        self.adaptive_step_size
+            && matches!(self.screen_rule, ScreenRule::OnTargetA)
+            && matches!(self.accept_mode, AcceptMode::Gate)
+            && !matches!(self.slot_credit, SlotCredit::Repair)
+            && self.rewrite_fanout <= 1
+    }
+
+    /// Each proposal pays parent + child on its reflection batch, then the
+    /// child on the whole scout slice. Every pool parent already has complete
+    /// scout coverage. Cache hits and screen rejections only reduce this cost.
+    fn affordable_step(&self, available: usize, scout_len: usize) -> Option<(usize, usize, usize)> {
+        let per_proposal = self.minibatch_size.saturating_mul(2).saturating_add(scout_len).max(1);
+        let mut best = None;
+        for p in 1..=self.parents_per_step.max(1) {
+            for n in 1..=self.proposals_per_parent.max(1) {
+                let count = p.saturating_mul(n);
+                let cost = count.saturating_mul(per_proposal);
+                if cost <= available && best.is_none_or(|(bp, bn, _)| (count, p) > (bp * bn, bp)) {
+                    best = Some((p, n, cost));
+                }
+            }
+        }
+        best
     }
 
     /// Sequential paired certification of one challenger row against the
@@ -3105,6 +3346,10 @@ impl Optimizer for Ratchet {
             }
         }
 
+        // The hard length cap in force for the whole run: `length_cap`, or
+        // under a `length_prior` the loose guard `prior × slack` (the
+        // smaller wins when both are set).
+        let hard_length_cap = self.effective_length_cap();
         let gate_size = self.gate_size.unwrap_or(self.minibatch_size);
         let mut usage: HashMap<usize, usize> = HashMap::new();
         let mut trials: Vec<TrialRecord> = Vec::new();
@@ -3155,8 +3400,8 @@ impl Optimizer for Ratchet {
             // promotion), the ablation reserve, and Simplify/Merge
             // eligibility further down.
             let has_promotion = pool.entries.len() > leaves.len();
-            let p_count = self.parents_per_step.max(1);
-            let n_count = self.proposals_per_parent.max(1);
+            let mut p_count = self.parents_per_step.max(1);
+            let mut n_count = self.proposals_per_parent.max(1);
 
             // Under Gate accept, a step's post-gate cost is the scout fan-out
             // instead of one full-val race.
@@ -3166,7 +3411,7 @@ impl Optimizer for Ratchet {
                     (self.step_fanout() * p_count + 1) * scout_cols.len()
                 }
             };
-            let worst_step = self.step_worst_case(gate_size, step_val_need);
+            let mut worst_step = self.step_worst_case(gate_size, step_val_need);
             // Reserving finale budget from generation 0 measurably starves
             // the search (v2.0 run shipped the seed at 402/600 rollouts);
             // there is nothing to ablate until a child is promoted, so the
@@ -3209,6 +3454,20 @@ impl Optimizer for Ratchet {
             } else {
                 0
             };
+            if self.supports_adaptive_step() {
+                let reserved = 2 * selection_cols.len() + ablate_reserve + certify_hold;
+                let available = self.max_rollouts.unwrap_or(usize::MAX)
+                    .saturating_sub(engine.spend().metric_calls)
+                    .saturating_sub(reserved);
+                let Some((p, n, cost)) = self.affordable_step(available, scout_cols.len()) else {
+                    break;
+                };
+                p_count = p;
+                n_count = n;
+                worst_step = cost;
+                tracing::debug!(generation, parents = p, proposals = n, available,
+                    "adaptive complete proposal batch");
+            }
             if !engine.budget_allows(
                 2 * selection_cols.len() + worst_step + ablate_reserve + certify_hold,
             ) {
@@ -3341,10 +3600,13 @@ impl Optimizer for Ratchet {
                 }
             }
 
-            let effective_cap = if self.cap_after_promotion && !has_promotion {
-                None
-            } else {
-                self.length_cap
+            let effective_cap = LengthGuard {
+                cap: if self.cap_after_promotion && !has_promotion {
+                    None
+                } else {
+                    hard_length_cap
+                },
+                target: self.length_prior,
             };
             let use_lexicase = matches!(self.parent_selection, ParentSelection::Lexicase)
                 && (!self.lexicase_after_promotion || has_promotion);
@@ -3422,7 +3684,12 @@ impl Optimizer for Ratchet {
                                 .total_cmp(&audit_mean(&audit_evidence, b))
                         })
                 } else {
-                    pool.best_by_average(&pareto_snapshot)
+                    self.occam_best_by_average(
+                        &pool,
+                        &pareto_snapshot,
+                        engine.matrix(),
+                        &val_cols,
+                    )
                 };
                 let sampled_parent = if let Some(parent) = greedy_pick {
                     Some(parent)
@@ -3685,7 +3952,7 @@ impl Optimizer for Ratchet {
                 let mutate_leaf = &leaves[leaf_idx];
                 let parent_text = sampled_parent.slot_text(&mutate_leaf.name).to_string();
                 let mut task_description = mutate_leaf.schema_for_reflection();
-                if let Some(cap) = effective_cap {
+                if let Some(cap) = effective_cap.cap {
                     task_description.push_str(&format!(
                         "\n\nHARD LIMIT: the improved instruction must be at most {cap} \
                          characters. Proposals over the limit are rejected."
@@ -3697,7 +3964,17 @@ impl Optimizer for Ratchet {
                 // countermanded or the teacher refuses the winning move —
                 // the mem2 live arm harvested style-only bundles for
                 // exactly this reason.
-                if self.allow_memorization && self.policy_channel {
+                if self.allow_training_examples && !self.allow_memorization {
+                    task_description.push_str(
+                        "\n\nTRAINING DATA POLICY: the examples and feedback supplied here \
+                         are permitted training data. You may include an example or a \
+                         concrete detail when it helps the task. Choose edits that will \
+                         work on new inputs; including training content is optional. \
+                         The task requirements, including any privacy requirements, \
+                         still apply. This permission overrides generic prohibitions \
+                         on copying training content in the proposal instructions.",
+                    );
+                } else if self.allow_memorization && self.policy_channel {
                     task_description.push_str(
                         "\n\nTASK-CONFIG: this is a corpus-fact task. Ignore any rule \
                          against copying example-specific content: concrete facts, \
@@ -3865,7 +4142,7 @@ impl Optimizer for Ratchet {
                         Self::choose_op(&eligible, &op_stats, &mut rng)
                     };
 
-                    let mut forbidden = if self.allow_memorization {
+                    let mut forbidden = if self.allow_memorization || self.allow_training_examples {
                         Vec::new()
                     } else {
                         GEPA::leak_strings(target, chunk_cols)
@@ -3873,7 +4150,7 @@ impl Optimizer for Ratchet {
                     // FORAGE: digest evidence spans columns beyond this
                     // chunk — extend the guard so the digest can't become
                     // an unguarded leak channel.
-                    if !self.allow_memorization && !forage_digest.columns.is_empty() {
+                    if !self.allow_memorization && !self.allow_training_examples && !forage_digest.columns.is_empty() {
                         for text in GEPA::leak_strings(target, &forage_digest.columns) {
                             if !forbidden.contains(&text) {
                                 forbidden.push(text);
@@ -3943,12 +4220,19 @@ impl Optimizer for Ratchet {
                         }
                         feedback
                     };
+                    // v6.5 length prior: the LENGTH BUDGET block closes both
+                    // reflective operators' feedback (empty when the prior
+                    // is unset — the teacher's input is byte-identical).
+                    let length_block = self.length_prior_block(parent_text.len());
                     let input = match op {
                         RatchetOp::Rewrite => PlannedInput::Rewrite {
-                            feedback: rewrite_feedback(),
+                            feedback: format!("{}{length_block}", rewrite_feedback()),
                         },
                         RatchetOp::Policy => PlannedInput::Policy {
-                            feedback: format!("{}{cited_examples}", rewrite_feedback()),
+                            feedback: format!(
+                                "{}{cited_examples}{length_block}",
+                                rewrite_feedback()
+                            ),
                         },
                         RatchetOp::Patch => {
                             let best = chunk_eval
@@ -4743,7 +5027,7 @@ impl Optimizer for Ratchet {
                 .cloned()
                 .context("no candidates available in the pool")?
         } else {
-            pool.best_by_average(&pareto)
+            self.occam_best_by_average(&pool, &pareto, engine.matrix(), &val_cols)
                 .cloned()
                 .context("no candidates available on Pareto frontier")?
         };
@@ -4752,11 +5036,12 @@ impl Optimizer for Ratchet {
         // Fresh-data champion selection: race the top two candidates (by
         // validation mean) on never-touched trainset columns — plus, under
         // TEMPER, the variant-tempering columns (paraphrase twins of seen
-        // examples, equally unseen by the search). Selecting on unseen data
-        // carries no winner's curse — a structural advantage of the engine's
-        // usage-tracked score matrix that the reference implementation
-        // cannot replicate — and a prompt that memorized seen phrasings
-        // loses on the variant columns.
+        // examples, equally unseen by the search). This reduces training
+        // overfit, but selecting the maximum of several fresh noisy means
+        // still has a winner's curse. Independent certification below tests
+        // improvement over the seed; it does not prove optimality among
+        // finalists. A prompt that memorized seen phrasings can lose on the
+        // variant columns.
         let mut fresh_selection_cols = 0usize;
         let mut variant_selection_cols = 0usize;
         if !selection_cols.is_empty() {
@@ -4809,6 +5094,16 @@ impl Optimizer for Ratchet {
                         })
                         .map(|(idx, _)| idx)
                         .unwrap_or(0);
+                    // v6.5 length prior: among the racers the paired
+                    // selection columns cannot separate from the argmax,
+                    // the shortest wins (no-op without a prior).
+                    let best_idx = {
+                        let entries: Vec<(&GEPACandidate, usize)> = ranked[..k]
+                            .iter()
+                            .map(|(candidate, row)| (candidate, *row))
+                            .collect();
+                        self.occam_shorter_idx(engine.matrix(), &entries, best_idx, &selection_cols)
+                    };
                     best_by_mean_candidate = ranked[best_idx].0.clone();
                 }
             }
@@ -5465,7 +5760,7 @@ impl Optimizer for Ratchet {
         // ran at — the Occam re-certification below inherits both.
         let mut certify_spent = 0usize;
         let mut certify_alpha_each = self.certify_alpha;
-        if certifying && best_candidate.generation > 0 {
+        if certifying {
             let (seed_candidate, seed_row) = pool
                 .entries
                 .iter()
@@ -5478,18 +5773,13 @@ impl Optimizer for Ratchet {
             // argmax slot after the champion screen drew noise. Testing
             // n challengers each at `certify_alpha / n` keeps the family
             // ship guarantee at `certify_alpha`.
-            let mut challengers: Vec<GEPACandidate> = vec![best_candidate.clone()];
-            if val_argmax_candidate.id != best_candidate.id {
-                challengers.push(val_argmax_candidate.clone());
-            }
-            let alpha_each = self.certify_alpha / challengers.len() as f64;
+            let challengers = certification_challengers(
+                engine, seed_row, &best_candidate, &val_argmax_candidate,
+            );
+            let alpha_each = self.certify_alpha / challengers.len().max(1) as f64;
             let spend_before = engine.spend().metric_calls;
             let mut shipped: Option<GEPACandidate> = None;
-            'challengers: for challenger in &challengers {
-                let champion_row = engine.register(challenger.engine_candidate());
-                if champion_row == seed_row {
-                    continue;
-                }
+            'challengers: for (challenger, champion_row) in &challengers {
                 // Warm-start the bets from the search-time val delta
                 // (challenger's pool row vs seed, paired). The val estimate
                 // is selection-biased, but a bet prior only shapes λ — a
@@ -5514,7 +5804,7 @@ impl Optimizer for Ratchet {
                     .certify_against_seed(
                         engine,
                         target,
-                        champion_row,
+                        *champion_row,
                         seed_row,
                         &certify_cols,
                         spend_before,
@@ -5810,6 +6100,8 @@ impl Optimizer for Ratchet {
             leak_skipped,
             length_retries,
             length_skipped,
+            length_prior: self.length_prior,
+            length_cap_in_force: hard_length_cap,
             anchor_retries,
             anchor_skipped,
             fresh_selection_cols,
@@ -5852,6 +6144,81 @@ impl Optimizer for Ratchet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_preset_has_no_certificate_or_reserved_selection_data() {
+        let search = harvest_search();
+        assert!(!search.certify_ship);
+        assert_eq!(search.certify_budget, 0);
+        assert_eq!(search.certify_reserve, 0);
+        assert_eq!(search.champion_fresh, 0);
+        assert_eq!(search.selection_z, 0.0);
+        assert!(!search.allow_memorization);
+        assert!(search.allow_training_examples);
+        assert!(search.supports_adaptive_step());
+        assert!(harvest().certify_ship);
+        assert!(!harvest().adaptive_step_size);
+    }
+
+    #[test]
+    fn adaptive_batches_keep_full_evaluation_and_respect_tail_budget() {
+        let search = harvest_search();
+        assert_eq!(search.affordable_step(160, 30), Some((2, 2, 160)));
+        assert_eq!(search.affordable_step(159, 30), Some((2, 1, 80)));
+        assert_eq!(search.affordable_step(79, 30), Some((1, 1, 40)));
+        assert_eq!(search.affordable_step(39, 30), None);
+        assert_eq!(search.affordable_step(0, 30), None);
+        // Changing the number of validation examples changes the whole cost;
+        // the scheduler must not silently truncate evaluation to fit.
+        assert_eq!(search.affordable_step(40, 31), None);
+        let mut unsupported = search;
+        unsupported.slot_credit = SlotCredit::Repair;
+        assert!(!unsupported.supports_adaptive_step());
+        unsupported.slot_credit = SlotCredit::RoundRobin;
+        unsupported.screen_rule = ScreenRule::HeldOutB;
+        assert!(!unsupported.supports_adaptive_step());
+    }
+
+    #[test]
+    fn certification_excludes_seed_and_duplicate_hypotheses_before_alpha_split() {
+        let seed = GEPACandidate {
+            id: 0, instruction: "seed".into(), module_name: "answer".into(),
+            example_scores: Vec::new(), parent_id: None, generation: 0,
+            slots: Default::default(),
+        };
+        let mut engine = Engine::new(Default::default());
+        let seed_row = engine.register(seed.engine_candidate());
+        let mut child = seed.mutate("improved".into(), 1);
+        child.id = 1;
+
+        // A seed-winning screen must not strand the validation challenger.
+        let contenders = certification_challengers(&mut engine, seed_row, &seed, &child);
+        assert_eq!(contenders.len(), 1);
+        assert_eq!(contenders[0].0.id, child.id);
+
+        // A composed candidate may have a new lineage ID but be the seed.
+        let mut composed_seed = seed.mutate("seed".into(), 2);
+        composed_seed.id = 2;
+        assert_eq!(certification_challengers(
+            &mut engine, seed_row, &child, &composed_seed,
+        ).len(), 1);
+
+        // Duplicate content gets one wallet even with distinct IDs.
+        let mut duplicate = child.clone();
+        duplicate.id = 3;
+        assert_eq!(certification_challengers(
+            &mut engine, seed_row, &child, &duplicate,
+        ).len(), 1);
+        assert!(certification_challengers(
+            &mut engine, seed_row, &seed, &composed_seed,
+        ).is_empty());
+
+        // Identity must include ALL slots, not just the rewritten text.
+        duplicate.slots.insert("plan".into(), "a different plan".into());
+        assert_eq!(certification_challengers(
+            &mut engine, seed_row, &child, &duplicate,
+        ).len(), 2);
+    }
 
     fn record(
         generation: usize,
@@ -6300,6 +6667,87 @@ mod tests {
     }
 
     #[test]
+    fn length_prior_off_leaves_the_teacher_inputs_byte_identical() {
+        for optimizer in [Ratchet::builder().build(), compound(), harvest(), temper(vec![])] {
+            assert_eq!(optimizer.length_prior, None);
+            assert_eq!(optimizer.length_prior_slack, 1.25);
+            // The hard cap in force is exactly the explicit `length_cap`.
+            assert_eq!(optimizer.effective_length_cap(), optimizer.length_cap);
+            // The reflection feedback both operators see is unchanged.
+            let feedback = "Parent average score: 0.500\nexample 3 (score 0.20): ...";
+            let rendered = format!("{feedback}{}", optimizer.length_prior_block(4_200));
+            assert_eq!(rendered, feedback);
+            assert!(!rendered.contains("LENGTH BUDGET"));
+        }
+        // The shortening retry keeps its measured wording without a target.
+        assert_eq!(
+            length_addendum(1_800, 1_500, None),
+            "\n\nIMPORTANT: your previous proposal was 1800 characters; the hard limit \
+             is 1500. Rewrite it to fit: keep the rules with measured value, cut \
+             speculative clauses and redundant phrasing."
+        );
+    }
+
+    #[test]
+    fn length_prior_sets_the_loose_guard_and_briefs_the_teacher() {
+        let mut optimizer = harvest();
+        optimizer.length_prior = Some(4_000);
+        assert_eq!(optimizer.effective_length_cap(), Some(5_000));
+        optimizer.length_prior_slack = 1.5;
+        assert_eq!(optimizer.effective_length_cap(), Some(6_000));
+        // An explicit cap wins when tighter, yields when looser.
+        optimizer.length_cap = Some(3_000);
+        assert_eq!(optimizer.effective_length_cap(), Some(3_000));
+        optimizer.length_cap = Some(9_000);
+        assert_eq!(optimizer.effective_length_cap(), Some(6_000));
+        optimizer.length_cap = None;
+        optimizer.length_prior_slack = 1.25;
+        let block = optimizer.length_prior_block(4_200);
+        assert!(block.starts_with(
+            "\n\nLENGTH BUDGET: the instruction is currently 4200 chars; the budget is \
+             4000 chars (hard limit 5000 chars; over-limit proposals are rejected)."
+        ));
+        assert!(block.contains("never drop a rule the feedback shows is needed"));
+        assert!(block.ends_with("Shorter is preferred when two versions would score the same."));
+        // The shortening retry names the target on top of its usual text.
+        let retry = length_addendum(5_300, 5_000, Some(4_000));
+        assert!(retry.starts_with(&length_addendum(5_300, 5_000, None)));
+        assert!(retry.contains("LENGTH BUDGET of 4000 characters"));
+    }
+
+    #[test]
+    fn occam_tie_break_prefers_the_shorter_candidate_only_under_a_prior() {
+        let candidate = |id: usize, chars: usize| GEPACandidate {
+            id,
+            instruction: "x".repeat(chars),
+            module_name: "m".into(),
+            example_scores: Vec::new(),
+            parent_id: None,
+            generation: id,
+            slots: Default::default(),
+        };
+        let long = candidate(0, 400);
+        let short = candidate(1, 100);
+        let worse = candidate(2, 50);
+        let mut matrix = ScoreMatrix::new(6);
+        for col in 0..6 {
+            // long vs short: a ±.04 see-saw, mean gap .01 — inside 1 SE.
+            matrix.record(0, col, if col % 2 == 0 { 0.55 } else { 0.50 });
+            matrix.record(1, col, if col % 2 == 0 { 0.50 } else { 0.53 });
+            // worse: clearly below on every column — never picked.
+            matrix.record(2, col, 0.20);
+        }
+        let cols: Vec<usize> = (0..6).collect();
+        let entries = vec![(&long, 0usize), (&short, 1usize), (&worse, 2usize)];
+        let mut optimizer = harvest();
+        assert_eq!(optimizer.occam_shorter_idx(&matrix, &entries, 0, &cols), 0);
+        optimizer.length_prior = Some(200);
+        assert_eq!(optimizer.occam_shorter_idx(&matrix, &entries, 0, &cols), 1);
+        optimizer.selection_z = 0.0;
+        assert_eq!(optimizer.occam_shorter_idx(&matrix, &entries, 0, &cols), 0);
+    }
+
+    #[test]
     fn occam_prune_knobs_stay_off_in_every_preset() {
         for optimizer in [Ratchet::builder().build(), compound(), harvest(), temper(vec![])] {
             assert!(!optimizer.prune_after_certify);
@@ -6423,6 +6871,8 @@ mod tests {
             leak_skipped: 0,
             length_retries: 0,
             length_skipped: 0,
+            length_prior: None,
+            length_cap_in_force: None,
             anchor_retries: 0,
             anchor_skipped: 0,
             fresh_selection_cols: 0,

@@ -30,7 +30,8 @@
 //! BCPLUS_MAX_RULES (8).
 //! HARVEST ablation knobs (unset = preset): BCPLUS_SCREEN (a|b), BCPLUS_REWRITE_ONLY,
 //! BCPLUS_POLICY, BCPLUS_POLICY_SHARE, BCPLUS_LEDGER_GATE_KILLS, BCPLUS_PARENT_GREED,
-//! BCPLUS_GATE_SIZE, BCPLUS_SCOUT, BCPLUS_PARENTS, BCPLUS_PROPOSALS, BCPLUS_CHAMPION_K.
+//! BCPLUS_GATE_SIZE, BCPLUS_SCOUT, BCPLUS_PARENTS, BCPLUS_PROPOSALS, BCPLUS_CHAMPION_K,
+//! BCPLUS_LENGTH_PRIOR (chars; soft teacher budget, hard guard × BCPLUS_LENGTH_SLACK 1.25).
 //!
 //! Run from the repo root (search server must be up):
 //!     set -a; source .env; set +a
@@ -429,6 +430,7 @@ struct BrowseMetric {
 
 /// Everything one rollout produced, for serve-mode responses.
 struct Graded {
+    metric_error: bool,
     score: f64,
     correct: bool,
     feedback: String,
@@ -455,39 +457,39 @@ impl BrowseMetric {
         let (correct, verdict_text) = if answer.is_empty() {
             (false, "No final answer was produced.".to_string())
         } else {
-            match self
-                .judge
-                .call(JudgeVerdictInput {
-                    question: example.question.clone(),
-                    gold_answer: example.answer.clone(),
-                    response: answer.clone(),
-                })
-                .await
-            {
-                Ok(v) => (
-                    v.correct,
-                    format!(
-                        "Judge extracted {:?}: {}",
-                        v.extracted_final_answer, v.reasoning
-                    ),
-                ),
-                Err(e) => {
-                    eprintln!("judge call failed, scoring incorrect: {e:?}");
-                    (false, format!("Judge unavailable ({e}); scored incorrect."))
-                }
+            let endpoint = env_str("BCPLUS_NATIVE_JUDGE", "http://127.0.0.1:8165/bcplus");
+            let response = reqwest::Client::new().post(endpoint).json(&serde_json::json!({
+                "question": example.question, "correct_answer": example.answer,
+                "response": answer, "status": "completed", "run_tag": env_str("NATIVE_RUN_TAG", "standalone")
+            })).send().await;
+            match response {
+                Ok(response) => match response.error_for_status() {
+                    Ok(response) => match response.json::<serde_json::Value>().await {
+                        Ok(value) if value["metric_protocol"] == "dataset-native-v1" && value["correct"].is_boolean() =>
+                            (value["correct"].as_bool().unwrap(), value["feedback"].as_str().unwrap_or("").to_string()),
+                        _ => (false, "metric error: invalid native judge response".to_string()),
+                    },
+                    Err(error) => (false, format!("metric error: native judge: {error}")),
+                },
+                Err(error) => (false, format!("metric error: native judge: {error}")),
             }
         };
 
-        let score = if correct { 1.0 } else { 0.3 * recall };
-        let evidence = format!(
-            "Evidence: found {found_gold}/{gold_total} gold documents across {tool_calls} tool calls."
-        );
+        let score = if correct { 1.0 } else { 0.0 };
+        let evidence = if tool_calls == 0 {
+            "No tool calls were recorded; trajectory metadata may be unavailable."
+                .to_string()
+        } else {
+            format!(
+                "Evidence: found {found_gold}/{gold_total} gold documents across {tool_calls} tool calls."
+            )
+        };
         let feedback = if correct {
             format!("Correct. {verdict_text} {evidence}")
         } else {
-            // Fallback-parsed rollouts carry no trajectory metadata; don't
-            // fabricate a diagnosis from an empty record.
-            let hint = if tool_calls == 0 && !answer.is_empty() {
+            // Parse and exhausted-budget fallbacks carry no trajectory
+            // metadata. Zero recorded tools cannot establish a search failure.
+            let hint = if tool_calls == 0 {
                 ""
             } else if found_gold == 0 {
                 " The search never surfaced the evidence documents — the failure is search \
@@ -502,12 +504,52 @@ impl BrowseMetric {
             )
         };
         Graded {
+            metric_error: verdict_text.starts_with("metric error:"),
             score,
             correct,
             feedback,
             tool_calls,
             found_gold,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn empty_fallback_does_not_invent_retrieval_failure() {
+        let lm = LM::builder()
+            .base_url("http://127.0.0.1:1/v1".to_string())
+            .api_key("offline-test".to_string())
+            .model("offline-test".to_string())
+            .max_retries(0)
+            .request_timeout_secs(1)
+            .build()
+            .await
+            .expect("offline judge configuration");
+        let metric = BrowseMetric {
+            judge: Predict::<JudgeVerdict>::builder().lm(lm).build(),
+        };
+        let example = BcRow {
+            query_id: "synthetic-budget-exhaustion".to_string(),
+            question: "Which item?".to_string(),
+            answer: "expected".to_string(),
+            gold_docids: vec!["support".to_string()],
+        };
+        let fallback = Predicted::new(
+            BrowseQAOutput { answer: String::new() },
+            dspy_rs::CallMetadata::default(),
+        );
+        let graded = metric.grade(&example, &fallback).await;
+        assert_eq!(graded.score, 0.0);
+        assert!(!graded.correct);
+        assert!(graded.feedback.contains("No final answer was produced"));
+        assert!(graded.feedback.contains("trajectory metadata may be unavailable"));
+        assert!(!graded.feedback.contains("Evidence: found 0/"));
+        assert!(!graded.feedback.contains("failure is search strategy"));
+        assert!(!graded.feedback.contains("failure is reading/verification"));
     }
 }
 
@@ -537,6 +579,8 @@ struct ServeRequest {
 
 #[derive(Serialize)]
 struct ServeResponse {
+    metric_error: bool,
+    metric_protocol: &'static str,
     id: u64,
     score: f64,
     correct: bool,
@@ -618,6 +662,8 @@ async fn serve(
                 .expect("forward returns an empty fallback, never Err");
             let graded = metric.grade(row, &prediction).await;
             let response = ServeResponse {
+                metric_error: graded.metric_error,
+                metric_protocol: "dataset-native-v1",
                 id: request.id,
                 score: graded.score,
                 correct: graded.correct,
@@ -791,6 +837,9 @@ chosen (val avg {:.3}):
         let result = optimizer
             .compile_module_with_valset(&mut agent, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("BCPLUS_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} candidates: {} gate_rejected: {} leak: {}/{}",
             result.total_rollouts,
@@ -816,7 +865,7 @@ chosen (val avg {:.3}):
     } else {
         let iters = env_usize("BCPLUS_ITERS", 60);
         let minibatch = env_usize("BCPLUS_MINIBATCH", 5);
-        let champion = env_usize("BCPLUS_CHAMPION", 30);
+        let champion = env_usize("BCPLUS_CHAMPION", if opt_name == "harvest_search" { 0 } else { 30 });
         println!(
             "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
         );
@@ -838,8 +887,10 @@ chosen (val avg {:.3}):
             // ranking, Rewrite+Policy operators, certification vs the seed
             // on reserved never-touched train columns (no harness split on
             // this rig). The leak guard stays ON (benchmark semantics).
-            "harvest" => {
-                let mut optimizer = harvest();
+            "harvest" | "harvest_search" => {
+                let mut optimizer = if opt_name == "harvest_search" {
+                    dspy_rs::harvest_search()
+                } else { harvest() };
                 optimizer.prompt_model = Some(reflection_lm);
                 optimizer.certify_reserve = env_usize("BCPLUS_CERTIFY_RESERVE", 45);
                 optimizer.certify_budget = env_usize("BCPLUS_CERTIFY_BUDGET", 150);
@@ -869,6 +920,24 @@ chosen (val avg {:.3}):
                 if let Ok(v) = std::env::var("BCPLUS_GATE_SIZE") {
                     optimizer.gate_size = v.parse().ok();
                 }
+                // v6.5 length prior (soft, teacher-facing; unset = off):
+                // BCPLUS_LENGTH_PRIOR=N chars, hard guard N × BCPLUS_LENGTH_SLACK
+                // (default 1.25) through the length_cap path.
+                if let Ok(v) = std::env::var("BCPLUS_LENGTH_PRIOR") {
+                    optimizer.length_prior = v.parse().ok().filter(|n: &usize| *n > 0);
+                }
+                if let Ok(v) = std::env::var("BCPLUS_LENGTH_SLACK") {
+                    optimizer.length_prior_slack =
+                        v.parse().unwrap_or(optimizer.length_prior_slack);
+                }
+                if optimizer.length_prior.is_some() {
+                    println!(
+                        "length prior {:?} chars (slack {}, hard cap {:?})",
+                        optimizer.length_prior,
+                        optimizer.length_prior_slack,
+                        optimizer.effective_length_cap()
+                    );
+                }
                 optimizer.scout_size = env_usize("BCPLUS_SCOUT", optimizer.scout_size);
                 optimizer.parents_per_step = env_usize("BCPLUS_PARENTS", optimizer.parents_per_step);
                 optimizer.proposals_per_parent =
@@ -881,7 +950,7 @@ chosen (val avg {:.3}):
         let optimizer = {
             let mut optimizer = optimizer;
             optimizer.num_iterations = iters;
-            optimizer.minibatch_size = if opt_name == "harvest" {
+            optimizer.minibatch_size = if matches!(opt_name.as_str(), "harvest" | "harvest_search") {
                 env_usize("BCPLUS_MINIBATCH", optimizer.minibatch_size)
             } else {
                 minibatch
@@ -891,7 +960,7 @@ chosen (val avg {:.3}):
             optimizer.seed = Some(seed);
             optimizer.eval_concurrency = concurrency;
             optimizer.track_stats = true;
-            if opt_name == "harvest" {
+            if matches!(opt_name.as_str(), "harvest" | "harvest_search") {
                 println!(
                     "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
                      ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
@@ -920,6 +989,9 @@ chosen (val avg {:.3}):
         let result = optimizer
             .compile_module_with_valset(&mut agent, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("BCPLUS_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -1006,20 +1078,32 @@ async fn main() -> Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.2);
-    let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
+    let max_tokens = env_usize("BCPLUS_MAX_TOKENS", 1024) as u32;
+    let student_lm = if let Ok(base_url) = std::env::var("BCPLUS_STUDENT_BASE_URL") {
+        LM::builder()
+            .base_url(base_url)
+            .api_key("local-benchmark-gateway".to_string())
+            .model(student_spec.trim_start_matches("openrouter:").to_string())
+            .temperature(student_temp)
+            .max_tokens(max_tokens)
+            .max_retries(0)
+            .request_timeout_secs(130)
+            .build()
+            .await?
+    } else if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url(env_str("BCPLUS_MXBAI_URL", "https://api.mixedbread.com/v1"))
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)
             .model(model.to_string())
             .temperature(student_temp)
-            .max_tokens(1024)
+            .max_tokens(max_tokens)
             .build()
             .await?
     } else {
         LM::builder()
             .model(format!("openrouter:{student_spec}"))
             .temperature(student_temp)
-            .max_tokens(1024)
+            .max_tokens(max_tokens)
             .build()
             .await?
     };

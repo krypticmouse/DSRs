@@ -506,13 +506,35 @@ pub(crate) fn collect_short_strings(value: &serde_json::Value, out: &mut Vec<Str
     }
 }
 
-/// The forbidden strings that appear verbatim (case-insensitive) in
-/// `instruction`.
+/// The forbidden strings quoted in `instruction` (case-insensitive).
+/// Alphanumeric ends must land on word boundaries: a task keyword such as
+/// "nation" must not forbid a general instruction containing "explanation".
 pub(crate) fn find_leaks<'s>(instruction: &str, forbidden: &'s [String]) -> Vec<&'s str> {
     let haystack = instruction.to_lowercase();
     forbidden
         .iter()
-        .filter(|needle| haystack.contains(needle.as_str()))
+        .filter(|needle| {
+            let starts_word = needle.chars().next().is_some_and(char::is_alphanumeric);
+            let ends_word = needle
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric);
+            !needle.is_empty()
+                && haystack
+                    .match_indices(needle.as_str())
+                    .any(|(start, matched)| {
+                        let end = start + matched.len();
+                        let left_is_word = haystack[..start]
+                            .chars()
+                            .next_back()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                        let right_is_word = haystack[end..]
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+                        (!starts_word || !left_is_word) && (!ends_word || !right_is_word)
+                    })
+        })
         .map(String::as_str)
         .collect()
 }
@@ -1459,6 +1481,48 @@ mod tests {
         assert_eq!(leaks, vec!["leo varadkar"]);
         let clean = "Answer precisely and return only the exact span.";
         assert!(find_leaks(clean, &strings).is_empty());
+    }
+
+    #[test]
+    fn leak_guard_does_not_confuse_keywords_with_word_fragments() {
+        let forbidden = vec!["nation".into(), "demand".into()];
+        assert!(find_leaks("Give an explanation for this demanding task.", &forbidden).is_empty());
+        assert_eq!(
+            find_leaks("Include the words NATION and demand.", &forbidden),
+            vec!["nation", "demand"]
+        );
+        // A fragment earlier in the text must not hide a later actual quote.
+        assert_eq!(
+            find_leaks("An explanation about the nation.", &forbidden),
+            vec!["nation"]
+        );
+    }
+
+    #[test]
+    fn leak_guard_preserves_names_phrases_and_punctuation() {
+        let forbidden = vec![
+            "leo varadkar".into(),
+            "short fact".into(),
+            "[[secret]]".into(),
+        ];
+        assert_eq!(
+            find_leaks(
+                "Use ‘Leo Varadkar’, SHORT FACT, and [[secret]].",
+                &forbidden
+            ),
+            vec!["leo varadkar", "short fact", "[[secret]]"]
+        );
+    }
+
+    #[test]
+    fn leak_guard_word_boundaries_handle_unicode_and_identifiers() {
+        let forbidden = vec!["nation".into(), "café".into()];
+        assert!(find_leaks("énation nationé nation_id id_nation cafés", &forbidden).is_empty());
+        assert_eq!(
+            find_leaks("A nation’s café.", &forbidden),
+            vec!["nation", "café"]
+        );
+        assert!(find_leaks("Anything", &[String::new()]).is_empty());
     }
 
     #[test]

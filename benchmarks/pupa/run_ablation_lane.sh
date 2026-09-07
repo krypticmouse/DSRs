@@ -17,8 +17,6 @@ cd "$MAIN"
 
 [ -x "$BIN" ] || { log "no frozen binary at $BIN; lane not started"; exit 1; }
 
-log "queued: waiting for the bcplus oss120 cell (run_harvest_cell_120b.sh) to finish"
-while pgrep -f "run_harvest_cell_120b.sh" >/dev/null; do sleep 300; done
 # and for any other openrouter student arm (pupa/hover/bcplus binaries, pip-gepa)
 wait_openrouter_idle() {
   while pgrep -f 'examples/31-bcplus|examples/33-pupa|examples/34-hover|33-pupa-campaign|run_python_gepa.py' >/dev/null; do sleep 120; done
@@ -42,7 +40,7 @@ COMMON="PUPA_STUDENT=openai/gpt-oss-20b PUPA_TEACHER=openrouter:openai/gpt-5.6-t
 run_arm() {  # tag seed [KEY=VAL ...]
   local TAG=$1 SEED=$2; shift 2
   local RUNLOG="$D/${TAG}_run_s${SEED}.log"
-  wait_openrouter_idle
+  if [ -s "$D/${TAG}_winner_s${SEED}.txt" ]; then log "$TAG (seed $SEED): winner exists, skipping"; return; fi
   preflight || { log "$TAG: openrouter down after 30 min; lane aborted"; exit 1; }
   log "$TAG (seed $SEED): start [${*:-preset}]"
   env $COMMON PUPA_SEED=$SEED PUPA_OUT_PREFIX="${TAG}_winner" "$@" "$BIN" > "$RUNLOG" 2>&1
@@ -73,5 +71,5 @@ for f in oss20_harvest_winner_s0.txt oss20_harvest_winner_s1.txt oss20_abl_nopol
          oss20_ratchet_winner_s0.txt oss20_mergedgepa_winner_s0.txt python_winner_oss20_s0.txt python_winner_oss20_s1.txt; do
   [ -s "$D/$f" ] || MISSING="$MISSING $f"
 done
-log "LANE DONE — READY FOR VERDICT (sealed holdout100 x2, ONE look; file alpha ledger row first). Missing:${MISSING:- none}"
-log "verdict cmd: cd $D && PUPA_STUDENT=openai/gpt-oss-20b PYTHONUNBUFFERED=1 .venv/bin/python eval_holdout.py --split holdout100 --reps 2 --out eval_oss20_ablation_holdout100.jsonl seed=SEED harvest=oss20_harvest_winner_s0.txt harvest_s1=oss20_harvest_winner_s1.txt nopolicy=oss20_abl_nopolicy_winner_s0.txt screenb=oss20_abl_screenb_winner_s0.txt scout16=oss20_abl_scout16_winner_s0.txt allops=oss20_abl_allops_winner_s0.txt ratchet=oss20_ratchet_winner_s0.txt mergedgepa=oss20_mergedgepa_winner_s0.txt pygepa=python_winner_oss20_s0.txt pygepa_s1=python_winner_oss20_s1.txt > oss20_ablation_verdict.log 2>&1"
+log "LANE DONE — READY FOR VERDICT (sealed holdout100 x3 with seed2 floor, ONE look; file alpha ledger row first). Missing:${MISSING:- none}"
+log "verdict cmd: cd $D && PUPA_STUDENT=openai/gpt-oss-20b PYTHONUNBUFFERED=1 .venv/bin/python eval_holdout.py --split holdout100 --reps 3 --out eval_oss20_ablation_holdout100.jsonl seed=SEED seed2=SEED harvest=oss20_harvest_winner_s0.txt harvest_s1=oss20_harvest_winner_s1.txt nopolicy=oss20_abl_nopolicy_winner_s0.txt screenb=oss20_abl_screenb_winner_s0.txt scout16=oss20_abl_scout16_winner_s0.txt allops=oss20_abl_allops_winner_s0.txt ratchet=oss20_ratchet_winner_s0.txt mergedgepa=oss20_mergedgepa_winner_s0.txt pygepa=python_winner_oss20_s0.txt pygepa_s1=python_winner_oss20_s1.txt > oss20_ablation_verdict.log 2>&1"

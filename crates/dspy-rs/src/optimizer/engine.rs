@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval};
 use crate::optimizer::target::OptimizeTarget;
@@ -1112,6 +1113,15 @@ impl Engine {
         bound: &HashMap<usize, BoundCandidate>,
     ) -> Result<(Vec<(usize, usize, Eval, Trace)>, usize)> {
         let gauge = Gauge::default();
+        let concurrency = self.config.concurrency.max(1);
+        // Batch boundaries are the engine's only heartbeat at DEBUG: a stall
+        // watchdog pairs "started" with the `lm completion received` events
+        // that follow it (see `LMConfig::request_timeout_secs`).
+        debug!(
+            pending = pending.len(),
+            concurrency,
+            "rollout batch started"
+        );
 
         let fresh: Vec<(usize, usize, Eval, Trace)> =
             stream::iter(pending.iter().map(|&(candidate, idx)| {
@@ -1124,9 +1134,14 @@ impl Engine {
                     Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
                 }
             }))
-            .buffer_unordered(self.config.concurrency.max(1))
+            .buffer_unordered(concurrency)
             .try_collect()
             .await?;
+        debug!(
+            fresh = fresh.len(),
+            peak_candidates = gauge.peak(),
+            "rollout batch finished"
+        );
 
         Ok((fresh, gauge.peak()))
     }

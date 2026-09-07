@@ -496,6 +496,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut agent, &train, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("DOCSQA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} candidates: {} gate_rejected: {} leak: {}/{}",
             result.total_rollouts,
@@ -544,6 +547,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut agent, &train, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("DOCSQA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -584,7 +590,7 @@ async fn optimize(
             .map(|c| c.instruction.clone())
             .unwrap_or_else(|| result.best_candidate.instruction.clone());
         write_winner(&out_argmax, &argmax)?;
-    } else if opt_name == "compound" || opt_name == "harvest" {
+    } else if matches!(opt_name.as_str(), "compound" | "harvest" | "harvest_search") {
         // RATCHET v4 COMPOUND (docs/ratchet-v4-design.md): e-process racing
         // + sequential paired ship certification vs the seed on reserved
         // never-touched train columns. train120 carve: champion 24 +
@@ -593,7 +599,7 @@ async fn optimize(
         // rig's judge noise (the prereg carries the arithmetic).
         let iters = env_usize("DOCSQA_ITERS", 150);
         let minibatch = env_usize("DOCSQA_MINIBATCH", 3);
-        let champion = env_usize("DOCSQA_CHAMPION", 24);
+        let champion = env_usize("DOCSQA_CHAMPION", if opt_name == "harvest_search" { 0 } else { 24 });
         let certify_reserve = env_usize("DOCSQA_CERTIFY_RESERVE", 60);
         let certify_budget = env_usize("DOCSQA_CERTIFY_BUDGET", 150);
         let parents = env_usize("DOCSQA_PARENTS", 2);
@@ -616,7 +622,7 @@ async fn optimize(
             train_ext.extend(extra);
         }
         let optimizer = {
-            let mut optimizer = if opt_name == "harvest" { harvest() } else { compound() };
+            let mut optimizer = if opt_name == "harvest_search" { dspy_rs::harvest_search() } else if opt_name == "harvest" { harvest() } else { compound() };
             optimizer.prompt_model = Some(reflection_lm);
             optimizer.num_iterations = iters;
             // The preset's minibatch (harvest: 5) stands unless DOCSQA_MINIBATCH is set.
@@ -697,6 +703,18 @@ async fn optimize(
             if let Ok(v) = std::env::var("DOCSQA_GATE_SIZE") {
                 optimizer.gate_size = v.parse().ok();
             }
+            // v6.5 length prior (soft, teacher-facing): DOCSQA_LENGTH_PRIOR=N
+            // puts a LENGTH BUDGET block into every Rewrite/Policy
+            // reflection input, sets the loose hard guard at N × slack
+            // (DOCSQA_LENGTH_SLACK, default 1.25) through the length_cap
+            // path, and breaks within-noise ranking ties toward the
+            // shorter candidate. Unset = off (byte-identical teacher input).
+            if let Ok(v) = std::env::var("DOCSQA_LENGTH_PRIOR") {
+                optimizer.length_prior = v.parse().ok().filter(|n: &usize| *n > 0);
+            }
+            if let Ok(v) = std::env::var("DOCSQA_LENGTH_SLACK") {
+                optimizer.length_prior_slack = v.parse().unwrap_or(optimizer.length_prior_slack);
+            }
             // v6.4 Occam pruning: DOCSQA_PRUNE=1 bundle-removes the certified
             // champion's zero-evidence clauses (lineage-diff credit, zero
             // extra rollouts to compute) on the selection columns and
@@ -710,7 +728,7 @@ async fn optimize(
             }
             println!(
                 "screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) ledger_gate_kills {} \
-                 greed {} gate_size {:?} minibatch {} P×N {}×{}",
+                 greed {} gate_size {:?} minibatch {} P×N {}×{} length_prior {:?} (slack {}, hard cap {:?})",
                 optimizer.screen_rule,
                 optimizer.accept_mode,
                 optimizer.scout_size,
@@ -722,7 +740,10 @@ async fn optimize(
                 optimizer.gate_size,
                 optimizer.minibatch_size,
                 optimizer.parents_per_step,
-                optimizer.proposals_per_parent
+                optimizer.proposals_per_parent,
+                optimizer.length_prior,
+                optimizer.length_prior_slack,
+                optimizer.effective_length_cap()
             );
             // FORAGE (v5): DOCSQA_TEACHER_CONTEXT=digest|tools gives the
             // Rewrite teacher the whole-ledger contrastive digest (and, for
@@ -832,6 +853,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut agent, &train_ext, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("DOCSQA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -941,7 +965,7 @@ async fn main() -> Result<()> {
     let reflection_lm = LM::builder()
         .model(env_str("DOCSQA_TEACHER", "openrouter:openai/gpt-5.6-terra"))
         .temperature(1.0)
-        .max_tokens(8000)
+        .max_tokens(env_usize("DOCSQA_TEACHER_MAX_TOKENS", 8000) as u32)
         .build()
         .await?;
     configure(judge_lm);

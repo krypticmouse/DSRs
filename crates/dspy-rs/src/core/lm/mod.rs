@@ -144,8 +144,34 @@ pub struct LMConfig {
     /// `base * 2^n` plus up to 50% random jitter.
     #[builder(default = 250)]
     pub retry_base_delay_ms: u64,
+    /// Deadline for one provider round trip (request sent to full response
+    /// body received), in seconds. An attempt that exceeds it is cancelled
+    /// and counted as a transient failure: it retries per `max_retries`,
+    /// then fails the call. The provider HTTP client sets no timeout of its
+    /// own, and without this bound one wedged request future parks forever
+    /// and with it every bounded-concurrency batch waiting on it. `0`
+    /// disables the deadline.
+    #[builder(default = DEFAULT_REQUEST_TIMEOUT_SECS)]
+    #[serde(
+        default = "default_request_timeout_secs",
+        skip_serializing_if = "is_default_request_timeout"
+    )]
+    pub request_timeout_secs: u64,
     #[builder(default = false)]
     pub cache: bool,
+}
+
+/// Default [`LMConfig::request_timeout_secs`]: ten minutes — generous for
+/// long reasoning completions, short enough that a wedged request surfaces
+/// as a retry instead of an indefinite stall.
+pub const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 600;
+
+fn default_request_timeout_secs() -> u64 {
+    DEFAULT_REQUEST_TIMEOUT_SECS
+}
+
+fn is_default_request_timeout(secs: &u64) -> bool {
+    *secs == DEFAULT_REQUEST_TIMEOUT_SECS
 }
 
 impl Default for LMConfig {
@@ -408,7 +434,55 @@ fn is_retryable_completion_error(err: &CompletionError) -> bool {
     }
 }
 
+/// One failed provider attempt inside the retry loop: the provider's own
+/// error, or the [`LMConfig::request_timeout_secs`] deadline elapsing first.
+#[derive(Debug)]
+enum AttemptError {
+    Provider(CompletionError),
+    Timeout(Duration),
+}
+
+impl AttemptError {
+    fn is_retryable(&self) -> bool {
+        match self {
+            AttemptError::Provider(err) => is_retryable_completion_error(err),
+            // A wedged request is exactly the transient failure the deadline
+            // exists to surface; the retry issues a fresh request.
+            AttemptError::Timeout(_) => true,
+        }
+    }
+}
+
+impl std::fmt::Display for AttemptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AttemptError::Provider(err) => write!(f, "{err}"),
+            AttemptError::Timeout(limit) => write!(
+                f,
+                "lm request exceeded the {}s deadline (request_timeout_secs) and was cancelled",
+                limit.as_secs()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for AttemptError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            AttemptError::Provider(err) => Some(err),
+            AttemptError::Timeout(_) => None,
+        }
+    }
+}
+
 impl LM {
+    /// The per-attempt deadline from [`LMConfig::request_timeout_secs`];
+    /// `None` when disabled (`0`).
+    fn request_deadline(&self) -> Option<Duration> {
+        (self.config.request_timeout_secs > 0)
+            .then(|| Duration::from_secs(self.config.request_timeout_secs))
+    }
+
     /// Builds the response-cache key: a streaming hash over the full message
     /// history plus every generation parameter that changes the completion.
     /// Demos and instructions live inside the messages, so they are covered
@@ -465,7 +539,22 @@ impl LM {
             temperature: Some(self.config.temperature as f64),
             max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
-            additional_params: None,
+            // The pinned Rig chat serializers discard CoreCompletionRequest's
+            // max_tokens field. Carry the cap through their flattened params
+            // as well. Native OpenAI uses its current parameter name; custom
+            // compatible endpoints and OpenRouter use the portable spelling.
+            additional_params: match self.client.as_deref() {
+                Some(LMClient::OpenRouter(_)) => {
+                    Some(serde_json::json!({"max_tokens": self.config.max_tokens}))
+                }
+                Some(LMClient::OpenAI(_)) if self.config.base_url.is_some() => {
+                    Some(serde_json::json!({"max_tokens": self.config.max_tokens}))
+                }
+                Some(LMClient::OpenAI(_)) => {
+                    Some(serde_json::json!({"max_completion_tokens": self.config.max_tokens}))
+                }
+                _ => None,
+            },
             output_schema: None,
         }
     }
@@ -483,11 +572,26 @@ impl LM {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
 
+        let deadline = self.request_deadline();
         let mut attempt = 0u32;
         loop {
-            match client.completion(build_request()).await {
+            // The deadline cancels the attempt outright (dropping the request
+            // future); the retry below then sends a fresh request.
+            let outcome = match deadline {
+                Some(limit) => {
+                    match tokio::time::timeout(limit, client.completion(build_request())).await {
+                        Ok(result) => result.map_err(AttemptError::Provider),
+                        Err(_elapsed) => Err(AttemptError::Timeout(limit)),
+                    }
+                }
+                None => client
+                    .completion(build_request())
+                    .await
+                    .map_err(AttemptError::Provider),
+            };
+            match outcome {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err) if attempt < self.config.max_retries && err.is_retryable() => {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -1201,11 +1305,61 @@ mod tests {
                 max_tool_iterations: 4,
                 max_retries: 0,
                 retry_base_delay_ms: 1,
+                request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
                 cache: false,
             },
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
         }
+    }
+
+    #[test]
+    fn request_deadline_is_disabled_by_zero() {
+        let mut lm = test_lm_with_model(TestCompletionModel::default());
+        assert_eq!(
+            lm.request_deadline(),
+            Some(Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS))
+        );
+        lm.config.request_timeout_secs = 0;
+        assert_eq!(lm.request_deadline(), None);
+    }
+
+    #[test]
+    fn default_request_timeout_is_not_serialized_and_deserializes_when_absent() {
+        let json = serde_json::to_value(LMConfig::default()).unwrap();
+        assert!(json.get("request_timeout_secs").is_none());
+        let restored: LMConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(restored.request_timeout_secs, DEFAULT_REQUEST_TIMEOUT_SECS);
+
+        let custom = LMConfig {
+            request_timeout_secs: 30,
+            ..LMConfig::default()
+        };
+        let json = serde_json::to_value(&custom).unwrap();
+        assert_eq!(json["request_timeout_secs"], 30);
+    }
+
+    /// Regression for the 2026-09-03 optimizer stall: a provider request that
+    /// never resolves (no socket, no error, nothing to wake it) must be
+    /// cancelled at the deadline, retried per `max_retries`, and then fail
+    /// the call — never park the caller forever.
+    #[tokio::test(start_paused = true)]
+    async fn hung_completion_is_cancelled_at_the_deadline_and_retried() {
+        let hanging = HangingCompletionModel::default();
+        let mut lm = test_lm_with_model(TestCompletionModel::default());
+        lm.client = Some(Arc::new(LMClient::Hanging(hanging.clone())));
+        lm.config.max_retries = 2;
+
+        let started = tokio::time::Instant::now();
+        let err = lm
+            .call(Chat::new(vec![Message::user("hi")]), vec![])
+            .await
+            .expect_err("a hung request must fail, not stall");
+
+        assert_eq!(hanging.calls(), 3, "initial attempt + max_retries fresh attempts");
+        assert!(format!("{err:?}").contains("deadline"), "{err:?}");
+        // Paused clock: the three 600 s deadlines elapsed virtually, in order.
+        assert!(started.elapsed() >= Duration::from_secs(3 * DEFAULT_REQUEST_TIMEOUT_SECS));
     }
 
     #[tokio::test]

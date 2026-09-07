@@ -904,6 +904,12 @@ fn model_opts(config: &LMConfig) -> Vec<String> {
             config.retry_base_delay_ms
         ));
     }
+    if config.request_timeout_secs != default.request_timeout_secs {
+        opts.push(format!(
+            "request_timeout_secs {}",
+            config.request_timeout_secs
+        ));
+    }
     if config.cache != default.cache {
         opts.push(format!("cache {}", config.cache));
     }

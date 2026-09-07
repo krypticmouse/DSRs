@@ -52,10 +52,16 @@ Usage
   * rows come from any of benchmarks/{docsqa,pupa,hover,bcplus}/eval_holdout.py
     (fields arm, idx, pass|rep, score, [correct], [transport], [split], ...);
   * --metric auto picks `correct` (strict accuracy) when rows carry the
-    bcplus/hover gold fields, otherwise `score`;
+    bcplus/hover gold fields or ifbench's n_constraints, otherwise `score`;
   * every non-seed arm is compared with the seed; --vs compares two arms
     directly. CUPED covariate = the reference arm's per-question mean (seed,
     or ARM_B for --vs) unless --covariate names another arm;
+  * an arm named `seed2` (a second copy of the seed prompt, interleaved in
+    the same session) is the identical-prompt floor: its delta vs seed is
+    printed FIRST, and every other arm's line ends with `clears-floor`
+    (|delta_arm| > |delta_floor|) or `within-floor` — a delta that does not
+    clear the floor is indistinguishable from session noise (2026-09-02:
+    two byte-identical bcplus prompts scored .383 vs .475 at 60x2);
   * --ledger prints wealth and the next alpha_j; add --record to append the
     named arm's one-sided permutation p as a Tier-3 look.
   Library use: from verdict_stats import compare_paired, print_verdict_table.
@@ -437,16 +443,18 @@ def load_rows(path):
 
 def is_transport(row):
     """docsqa tags ``transport: true`` (legacy rows: feedback 'ERROR ...');
-    bcplus drops transport rows before writing; pupa/hover have no tag."""
+    bcplus/pupa/hover drop transport rows before writing (rows tagged
+    ``failed: true`` are NOT transport: the rollout ran and legitimately
+    scored 0 — budget exhausted, empty answer — and they stay in)."""
     return bool(row.get("transport")) or str(row.get("feedback", "")).startswith("ERROR")
 
 
 def detect_metric(rows):
-    """'correct' for bcplus/hover (strict accuracy is their primary; `score`
-    there is partial credit / frac_found), else 'score' (docsqa judge score,
-    pupa composite)."""
+    """'correct' for bcplus/hover/ifbench (strict accuracy is their primary;
+    `score` there is partial credit / frac_found / frac_pass), else 'score'
+    (docsqa judge score, pupa composite)."""
     for r in rows[:50]:
-        if "found_gold" in r or "n_gold" in r:
+        if "found_gold" in r or "n_gold" in r or "n_constraints" in r:
             return "correct"
     return "score"
 
@@ -492,11 +500,16 @@ def paired_scores(means, ref_arm, arm):
 # --------------------------------------------------------------------------
 
 
+FLOOR_ARM = "seed2"  # second copy of the seed prompt = identical-prompt floor
+
+
 def print_verdict_table(path, seed_arm="seed", split_filter=None, metric="auto", vs=None,
                         covariate_arm=None, n_boot=10_000, n_perm=20_000, seed=0,
                         out=sys.stdout):
     """Print bootstrap + permutation + CUPED for every non-seed arm vs seed
-    (and for --vs pairs). Returns {label: result_dict}."""
+    (and for --vs pairs). When an arm named `seed2` is present its delta vs
+    seed is printed first as the identical-prompt floor and every other arm
+    is flagged clears-floor / within-floor. Returns {label: result_dict}."""
     rows = load_rows(path)
     means, info = per_question_means(rows, metric=metric, split_filter=split_filter)
     arms = list(means)
@@ -510,7 +523,7 @@ def print_verdict_table(path, seed_arm="seed", split_filter=None, metric="auto",
           f"  mean={sum(means[arm].values()) / max(1, len(means[arm])):.4f}")
     results = {}
 
-    def run(ref, arm):
+    def run(ref, arm, tag=None, floor=None):
         # Covariate = the reference arm's own per-question mean (seed for the
         # primary endpoint; ARM_B for --vs) unless --covariate names another arm.
         # Tier-0 replay on docsqa: the seed score is useless as a covariate for
@@ -534,13 +547,28 @@ def print_verdict_table(path, seed_arm="seed", split_filter=None, metric="auto",
                                    n_boot=n_boot, n_perm=n_perm, seed=seed, label=label)
         res["covariate"] = cov_arm if cov is not None else ref
         results[label] = res
+        if tag:
+            line += f"  <- {tag}"
+        if floor is not None:
+            # Identical-prompt floor: |delta| must exceed |seed2 - seed| to be
+            # read as a prompt effect rather than session noise.
+            res["floor_delta"] = floor["delta"]
+            res["clears_floor"] = abs(res["delta"]) > abs(floor["delta"])
+            line += "  clears-floor" if res["clears_floor"] else "  within-floor"
         p("  " + line)
+        return res
 
     if seed_arm in means:
         p(f"\n  -- every arm vs {seed_arm} (covariate = {covariate_arm or seed_arm} per-question mean) --")
+        floor = None
+        if FLOOR_ARM in means and FLOOR_ARM != seed_arm:
+            floor = run(seed_arm, FLOOR_ARM, tag="identical-prompt floor")
+            if floor is not None:
+                p(f"  (floor |Δ|={abs(floor['delta']):.4f}: an arm clears-floor when |Δ_arm| > |Δ_floor|,"
+                  f" else within-floor = not distinguishable from same-prompt session noise)")
         for arm in arms:
-            if arm != seed_arm:
-                run(seed_arm, arm)
+            if arm != seed_arm and not (arm == FLOOR_ARM and floor is not None):
+                run(seed_arm, arm, floor=floor)
     else:
         p(f"\n  (no arm named {seed_arm!r}; arms = {arms})")
     if vs:

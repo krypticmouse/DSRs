@@ -44,7 +44,8 @@
 //! PUPA_MXBAI_URL.
 //! HARVEST ablation knobs (unset = preset): PUPA_SCREEN (a|b), PUPA_REWRITE_ONLY,
 //! PUPA_POLICY, PUPA_POLICY_SHARE, PUPA_LEDGER_GATE_KILLS, PUPA_PARENT_GREED,
-//! PUPA_GATE_SIZE, PUPA_SCOUT, PUPA_PARENTS, PUPA_PROPOSALS, PUPA_CHAMPION_K.
+//! PUPA_GATE_SIZE, PUPA_SCOUT, PUPA_PARENTS, PUPA_PROPOSALS, PUPA_CHAMPION_K,
+//! PUPA_LENGTH_PRIOR (chars; soft teacher budget, hard guard × PUPA_LENGTH_SLACK 1.25).
 //!
 //! Run from the repo root:
 //!     set -a; source .env; set +a
@@ -451,6 +452,7 @@ struct PupaMetric {
 
 /// Everything one rollout produced, for serve-mode responses.
 struct Graded {
+    metric_error: bool,
     score: f64,
     correct: bool,
     quality: f64,
@@ -468,10 +470,11 @@ impl PupaMetric {
         // PAPILLON parity: an empty delegate request scores 0 outright.
         if delegate_request.is_empty() {
             return Graded {
+                metric_error: false,
                 score: 0.0,
                 correct: false,
-                quality: 0.0,
-                leakage: 0.0,
+                quality: -1.0,
+                leakage: -1.0,
                 leaked: Vec::new(),
                 feedback: "No delegate request was produced; scored 0. The assistant must \
                            always produce a rewritten request for the external model."
@@ -479,99 +482,30 @@ impl PupaMetric {
             };
         }
 
-        // Quality: PAPILLON's two-direction comparison — j1 = (final ≥
-        // target), j2 = (target ≥ final); agreement (tie) counts as 1, else
-        // j1 decides. Judge failure scores 0 (pessimistic, as in 31-bcplus).
-        let quality = if final_response.is_empty() {
-            0.0
-        } else {
-            let forward = self
-                .quality_judge
-                .call(JudgeQualityInput {
-                    user_query: example.user_query.clone(),
-                    response_a: final_response.clone(),
-                    response_b: example.target_response.clone(),
-                })
-                .await;
-            let backward = self
-                .quality_judge
-                .call(JudgeQualityInput {
-                    user_query: example.user_query.clone(),
-                    response_a: example.target_response.clone(),
-                    response_b: final_response.clone(),
-                })
-                .await;
-            match (forward, backward) {
-                (Ok(f), Ok(b)) => {
-                    let j1 = f.at_least_as_good;
-                    let j2 = b.at_least_as_good;
-                    if j1 == j2 || j1 { 1.0 } else { 0.0 }
-                }
-                (f, b) => {
-                    eprintln!(
-                        "quality judge failed, scoring 0: {:?} / {:?}",
-                        f.err(),
-                        b.err()
-                    );
-                    0.0
-                }
-            }
+        let endpoint = env_str("PUPA_NATIVE_JUDGE", "http://127.0.0.1:8165/pupa");
+        let result = reqwest::Client::new().post(endpoint).json(&serde_json::json!({
+            "user_query": example.user_query, "target_response": example.target_response,
+            "final_response": final_response, "delegate_request": delegate_request,
+            "pii_units": example.pii_units, "run_tag": env_str("NATIVE_RUN_TAG", "standalone")
+        })).send().await;
+        let value = match result {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => response.json::<serde_json::Value>().await.ok(),
+                Err(_) => None,
+            },
+            Err(_) => None,
         };
-
-        // Leakage: each annotated private unit judged against the delegate
-        // request. Judge failure counts the unit as leaked (pessimistic).
-        let mut leaked = Vec::new();
-        for unit in &example.pii_units {
-            match self
-                .leakage_judge
-                .call(JudgeLeakageInput {
-                    information_piece: unit.clone(),
-                    prompt: delegate_request.clone(),
-                })
-                .await
-            {
-                Ok(v) if v.present => leaked.push(unit.clone()),
-                Ok(_) => {}
-                Err(e) => {
-                    eprintln!("leakage judge failed for {unit:?}, counting as leaked: {e:?}");
-                    leaked.push(unit.clone());
-                }
-            }
-        }
-        let leakage = leaked.len() as f64 / total as f64;
-        let score = 0.5 * quality + 0.5 * (1.0 - leakage);
-        let correct = score >= 0.5;
-
-        let quality_part = if final_response.is_empty() {
-            "Quality 0/1: no final response was produced.".to_string()
-        } else if quality >= 1.0 {
-            "Quality 1/1: the final response was judged at least as good as the reference \
-             response."
-                .to_string()
-        } else {
-            "Quality 0/1: the final response was judged worse than the reference response. \
-             The delegate request may have dropped information the external model needed — \
-             keep the task fully specified (facts, constraints, desired format) while hiding \
-             identities."
-                .to_string()
+        let Some(value) = value.filter(|v| v["metric_protocol"] == "dataset-native-v1") else {
+            return Graded { metric_error: true, score: 0.0, correct: false, quality: -1.0, leakage: -1.0,
+                leaked: vec![], feedback: "metric error: native PUPA judge unavailable".to_string() };
         };
-        let leak_part = if leaked.is_empty() {
-            format!("Leakage 0/{total}: no private units appeared in the delegate request.")
-        } else {
-            format!(
-                "Leakage {}/{}: these private units leaked into the delegate request: {:?}. \
-                 Remove or abstract each of them (placeholders, generic roles, broader \
-                 categories) — the external model must never see them.",
-                leaked.len(),
-                total,
-                leaked
-            )
-        };
-        let feedback = format!(
-            "{quality_part} {leak_part} Composite score {score:.2} = 0.5*quality + \
-             0.5*(1 - leakage)."
-        );
-        Graded { score, correct, quality, leakage, leaked, feedback }
+        let quality = value["quality"].as_f64().unwrap_or(-1.0);
+        let leakage = value["leakage"].as_f64().unwrap_or(-1.0);
+        let score = if quality == 1.0 { 1.0 } else { 0.0 };
+        let correct = quality == 1.0;
+        let leaked = Vec::new();
+        let feedback = value["feedback"].as_str().unwrap_or("").to_string();
+        Graded { metric_error: false, score, correct, quality, leakage, leaked, feedback }
     }
 }
 
@@ -601,6 +535,10 @@ struct ServeRequest {
 
 #[derive(Serialize)]
 struct ServeResponse {
+    metric_error: bool,
+    metric_protocol: &'static str,
+    quality_eligible: bool,
+    leakage_eligible: bool,
     id: u64,
     score: f64,
     correct: bool,
@@ -677,6 +615,9 @@ async fn serve(
                 .expect("forward returns an empty fallback, never Err");
             let graded = metric.grade(row, &prediction).await;
             let response = ServeResponse {
+                metric_error: graded.metric_error,
+                metric_protocol: "dataset-native-v1",
+                quality_eligible: graded.quality >= 0.0, leakage_eligible: graded.leakage >= 0.0,
                 id: request.id,
                 score: graded.score,
                 correct: graded.correct,
@@ -777,6 +718,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut pipeline, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("PUPA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} candidates: {} gate_rejected: {} leak: {}/{}",
             result.total_rollouts,
@@ -802,10 +746,10 @@ async fn optimize(
     } else {
         // COMPOUND keeps its preset cycle shape (iters 150 / minibatch 3 /
         // P×N 2×2) unless overridden; the v2-era arms keep theirs.
-        let is_compound = opt_name == "compound" || opt_name == "harvest";
+        let is_compound = opt_name == "compound" || matches!(opt_name.as_str(), "harvest" | "harvest_search");
         let iters = env_usize("PUPA_ITERS", if is_compound { 150 } else { 60 });
         let minibatch = env_usize("PUPA_MINIBATCH", if opt_name == "compound" { 3 } else { 5 });
-        let champion = env_usize("PUPA_CHAMPION", 30);
+        let champion = env_usize("PUPA_CHAMPION", if opt_name == "harvest_search" { 0 } else { 30 });
         println!(
             "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
         );
@@ -853,8 +797,10 @@ async fn optimize(
             // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): on-target
             // screen, full-val ranking, Rewrite + Policy operators, sequential
             // paired certification vs the seed on reserved train columns.
-            "harvest" => {
-                let mut optimizer = harvest();
+            "harvest" | "harvest_search" => {
+                let mut optimizer = if opt_name == "harvest_search" {
+                    dspy_rs::harvest_search()
+                } else { harvest() };
                 optimizer.prompt_model = Some(reflection_lm);
                 optimizer.certify_reserve = env_usize("PUPA_CERTIFY_RESERVE", 45);
                 optimizer.certify_budget = env_usize("PUPA_CERTIFY_BUDGET", 150);
@@ -883,6 +829,24 @@ async fn optimize(
                 }
                 if let Ok(v) = std::env::var("PUPA_GATE_SIZE") {
                     optimizer.gate_size = v.parse().ok();
+                }
+                // v6.5 length prior (soft, teacher-facing; unset = off):
+                // PUPA_LENGTH_PRIOR=N chars, hard guard N × PUPA_LENGTH_SLACK
+                // (default 1.25) through the length_cap path.
+                if let Ok(v) = std::env::var("PUPA_LENGTH_PRIOR") {
+                    optimizer.length_prior = v.parse().ok().filter(|n: &usize| *n > 0);
+                }
+                if let Ok(v) = std::env::var("PUPA_LENGTH_SLACK") {
+                    optimizer.length_prior_slack =
+                        v.parse().unwrap_or(optimizer.length_prior_slack);
+                }
+                if optimizer.length_prior.is_some() {
+                    println!(
+                        "length prior {:?} chars (slack {}, hard cap {:?})",
+                        optimizer.length_prior,
+                        optimizer.length_prior_slack,
+                        optimizer.effective_length_cap()
+                    );
                 }
                 optimizer.scout_size = env_usize("PUPA_SCOUT", optimizer.scout_size);
                 optimizer.parents_per_step = env_usize("PUPA_PARENTS", optimizer.parents_per_step);
@@ -920,7 +884,7 @@ async fn optimize(
                     optimizer.repair_attempts
                 );
             }
-            if opt_name == "harvest" {
+            if matches!(opt_name.as_str(), "harvest" | "harvest_search") {
                 println!(
                     "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
                      ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
@@ -949,6 +913,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut pipeline, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("PUPA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -1031,28 +998,40 @@ async fn main() -> Result<()> {
     // "mxbai:<model>" routes to the Mixedbread OpenAI-compatible endpoint
     // (e.g. mxbai:toast-1), which supports client-side function calling.
     let student_spec = env_str("PUPA_STUDENT", "openai/gpt-oss-120b");
-    let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
+    let max_tokens = env_usize("PUPA_MAX_TOKENS", 2000) as u32;
+    let student_lm = if let Ok(base_url) = std::env::var("PUPA_STUDENT_BASE_URL") {
+        LM::builder()
+            .base_url(base_url)
+            .api_key("local-benchmark-gateway".to_string())
+            .model(student_spec.trim_start_matches("openrouter:").to_string())
+            .temperature(0.2)
+            .max_tokens(max_tokens)
+            .max_retries(0)
+            .request_timeout_secs(130)
+            .build()
+            .await?
+    } else if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url(env_str("PUPA_MXBAI_URL", "https://api.mixedbread.com/v1"))
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)
             .model(model.to_string())
             .temperature(0.2)
-            .max_tokens(2000)
+            .max_tokens(max_tokens)
             .build()
             .await?
     } else {
         LM::builder()
             .model(format!("openrouter:{student_spec}"))
             .temperature(0.2)
-            .max_tokens(2000)
+            .max_tokens(max_tokens)
             .build()
             .await?
     };
     // Untrusted = the powerful remote model the delegate request is sent to.
     let untrusted_lm = LM::builder()
-        .model(env_str("PUPA_UNTRUSTED", "openrouter:openai/gpt-5.6-luna"))
-        .temperature(0.2)
-        .max_tokens(2000)
+        .model(env_str("PUPA_UNTRUSTED", "openrouter:openai/gpt-4o-mini"))
+        .temperature(0.0)
+        .max_tokens(4000)
         .build()
         .await?;
     let judge_lm = LM::builder()

@@ -511,6 +511,10 @@ impl<'a> Parser<'a> {
                         config.retry_base_delay_ms =
                             self.expect_int("after `retry_base_delay_ms`")?.0
                     }
+                    "request_timeout_secs" => {
+                        config.request_timeout_secs =
+                            self.expect_int("after `request_timeout_secs`")?.0
+                    }
                     "cache" => config.cache = self.expect_bool("after `cache`")?,
                     other => {
                         return Err(ParseError::at(
@@ -518,7 +522,8 @@ impl<'a> Parser<'a> {
                             format!(
                                 "unknown model option `{other}`: expected `base_url`, \
                                  `temperature`, `max_tokens`, `max_tool_iterations`, \
-                                 `max_retries`, `retry_base_delay_ms`, or `cache`"
+                                 `max_retries`, `retry_base_delay_ms`, \
+                                 `request_timeout_secs`, or `cache`"
                             ),
                         ));
                     }

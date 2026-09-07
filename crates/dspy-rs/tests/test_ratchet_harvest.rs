@@ -31,6 +31,8 @@
 //! (CRN limit) so the attribution is exact.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use dspy_rs::optimizer::ratchet::{AcceptMode, Ratchet, RatchetResult, TrialOutcome, compound, harvest};
@@ -290,70 +292,140 @@ fn field_section(haystack: &str, name: &str) -> String {
 /// missing citation, and the policy is not pinned yet, it proposes the
 /// policy with probability `P_RULE`%. Otherwise it pins the first fact the
 /// feedback names as missing: TRUE 60% / JUNK 25% / WRONG 15% by hash.
-fn teacher_client() -> ScriptedCompletionModel {
-    ScriptedCompletionModel::new(|request| {
-        let haystack = format!("{:?} {:?}", request.preamble, request.chat_history);
-        let mut current_text = String::new();
-        for field in INSTRUCTION_FIELDS {
-            current_text.push_str(&field_section(&haystack, field));
-        }
-        let mut facts = facts_in(&current_text);
-        let mut wrongs = wrongs_in(&current_text);
-        let mut junks: Vec<String> = current_text
-            .split_whitespace()
-            .filter(|tok| tok.starts_with('J') && tok[1..].chars().all(|c| c.is_ascii_digit()))
-            .map(|tok| tok.to_string())
-            .collect();
-        junks.sort();
-        junks.dedup();
-        let mut has_rule = current_text.contains(RULE);
-        let hash = fnv(&haystack);
-        let policy_visible = haystack.contains("PROPOSAL SCOPE");
-        let missing_cite = haystack.contains("Missing citation");
-        // The dedicated Policy operator (its signature text carries "ANSWER
-        // POLICY") looks for the recurring pattern on purpose: it proposes
-        // the policy half the time the feedback names the missing citation,
-        // and never pins facts.
-        let policy_op = haystack.contains("ANSWER POLICY");
-        let summary = if policy_op {
-            if missing_cite && !has_rule && hash % 100 < 50 {
-                has_rule = true;
-                "policy: end every answer with a Sources footer".to_string()
-            } else {
-                "policy: nothing recurring beyond what is pinned".to_string()
-            }
-        } else if policy_visible && missing_cite && !has_rule && hash % 100 < P_RULE {
+/// The DocsQa teacher's move on one reflection input: the token pile it
+/// will emit (facts, wrongs, junk pins, the policy last) and its one-line
+/// summary. Shared by the plain teacher and the bloating (v6.5) one.
+fn docsqa_teacher_move(haystack: &str) -> (Vec<String>, String) {
+    let mut current_text = String::new();
+    for field in INSTRUCTION_FIELDS {
+        current_text.push_str(&field_section(haystack, field));
+    }
+    let mut facts = facts_in(&current_text);
+    let mut wrongs = wrongs_in(&current_text);
+    let mut junks: Vec<String> = current_text
+        .split_whitespace()
+        .filter(|tok| tok.starts_with('J') && tok[1..].chars().all(|c| c.is_ascii_digit()))
+        .map(|tok| tok.to_string())
+        .collect();
+    junks.sort();
+    junks.dedup();
+    let mut has_rule = current_text.contains(RULE);
+    let hash = fnv(haystack);
+    let policy_visible = haystack.contains("PROPOSAL SCOPE");
+    let missing_cite = haystack.contains("Missing citation");
+    // The dedicated Policy operator (its signature text carries "ANSWER
+    // POLICY") looks for the recurring pattern on purpose: it proposes
+    // the policy half the time the feedback names the missing citation,
+    // and never pins facts.
+    let policy_op = haystack.contains("ANSWER POLICY");
+    let summary = if policy_op {
+        if missing_cite && !has_rule && hash % 100 < 50 {
             has_rule = true;
             "policy: end every answer with a Sources footer".to_string()
         } else {
-            let missing: Vec<usize> = (0..FACTS)
-                .filter(|&k| haystack.contains(&format!("MISSING::{}", fact_token(k))))
-                .filter(|k| !facts.contains(k))
-                .collect();
-            match missing.first() {
-                Some(&k) => {
-                    let roll = (hash / 100) % 100;
-                    if roll < 60 {
-                        facts.insert(k);
-                        format!("pin {}", fact_token(k))
-                    } else if roll < 85 {
-                        junks.push(format!("J{}", hash % 1000));
-                        format!("junk pin for {}", fact_token(k))
+            "policy: nothing recurring beyond what is pinned".to_string()
+        }
+    } else if policy_visible && missing_cite && !has_rule && hash % 100 < P_RULE {
+        has_rule = true;
+        "policy: end every answer with a Sources footer".to_string()
+    } else {
+        let missing: Vec<usize> = (0..FACTS)
+            .filter(|&k| haystack.contains(&format!("MISSING::{}", fact_token(k))))
+            .filter(|k| !facts.contains(k))
+            .collect();
+        match missing.first() {
+            Some(&k) => {
+                let roll = (hash / 100) % 100;
+                if roll < 60 {
+                    facts.insert(k);
+                    format!("pin {}", fact_token(k))
+                } else if roll < 85 {
+                    junks.push(format!("J{}", hash % 1000));
+                    format!("junk pin for {}", fact_token(k))
+                } else {
+                    wrongs.insert(k);
+                    format!("wrong pin {}", wrong_token(k))
+                }
+            }
+            None => "nothing new".to_string(),
+        }
+    };
+    let mut tokens: Vec<String> = facts.iter().map(|&k| fact_token(k)).collect();
+    tokens.extend(wrongs.iter().map(|&k| wrong_token(k)));
+    tokens.extend(junks);
+    if has_rule {
+        tokens.push(RULE.to_string());
+    }
+    (tokens, summary)
+}
+
+fn teacher_client() -> ScriptedCompletionModel {
+    ScriptedCompletionModel::new(|request| {
+        let haystack = format!("{:?} {:?}", request.preamble, request.chat_history);
+        let (tokens, summary) = docsqa_teacher_move(&haystack);
+        let instruction = format!("{SEED_TEXT} {}", tokens.join(" ")).trim_end().to_string();
+        Ok(field_response(&[
+            ("improved_instruction", &instruction),
+            ("edit_summary", &summary),
+        ]))
+    })
+}
+
+/// A scoreless per-topic reminder — the kind of line the live HARVEST
+/// winners fill up with (8–13k chars on DocsQA while a 3.8k prompt carried
+/// the whole gain). The student ignores it; only the size grows.
+const REMINDER: &str =
+    "Reminder: before answering, re-read the retrieved passage on this topic and \
+     double-check every name, number, and identifier it contains.";
+
+/// The v6.5 bloating teacher: the DocsQa teacher's move plus ONE new
+/// reminder line per proposal (every inherited reminder kept) — unless the
+/// reflection input carries a LENGTH BUDGET block, in which case it folds:
+/// no reminders at all, and if the token pile itself would still exceed
+/// the budget it was given, junk pins go first and then the newest facts.
+/// `saw_budget` records whether the block ever reached it.
+fn budget_teacher_client(saw_budget: Arc<AtomicBool>) -> ScriptedCompletionModel {
+    ScriptedCompletionModel::new(move |request| {
+        let haystack = format!("{:?} {:?}", request.preamble, request.chat_history);
+        let (tokens, summary) = docsqa_teacher_move(&haystack);
+        let reminders = haystack.matches("Reminder: before answering").count();
+        let budget: Option<usize> = haystack.find("LENGTH BUDGET:").and_then(|at| {
+            let rest = &haystack[at..];
+            let start = rest.find("the budget is ")? + "the budget is ".len();
+            rest[start..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        });
+        if budget.is_some() {
+            saw_budget.store(true, Ordering::SeqCst);
+        }
+        let render = |tokens: &[String], reminders: usize| -> String {
+            let mut text = format!("{SEED_TEXT} {}", tokens.join(" ")).trim_end().to_string();
+            for _ in 0..reminders {
+                text.push('\n');
+                text.push_str(REMINDER);
+            }
+            text
+        };
+        let instruction = match budget {
+            None => render(&tokens, reminders + 1),
+            Some(budget) => {
+                let mut kept = tokens.clone();
+                while render(&kept, 0).len() > budget {
+                    if let Some(pos) = kept.iter().position(|tok| tok.starts_with('J')) {
+                        kept.remove(pos);
+                    } else if let Some(pos) = kept.iter().rposition(|tok| tok.starts_with('F')) {
+                        kept.remove(pos);
                     } else {
-                        wrongs.insert(k);
-                        format!("wrong pin {}", wrong_token(k))
+                        break;
                     }
                 }
-                None => "nothing new".to_string(),
+                render(&kept, 0)
             }
         };
-        let mut tokens: Vec<String> = facts.iter().map(|&k| fact_token(k)).collect();
-        tokens.extend(wrongs.iter().map(|&k| wrong_token(k)));
-        tokens.extend(junks);
-        if has_rule {
-            tokens.push(RULE.to_string());
-        }
-        let instruction = format!("{SEED_TEXT} {}", tokens.join(" ")).trim_end().to_string();
         Ok(field_response(&[
             ("improved_instruction", &instruction),
             ("edit_summary", &summary),
@@ -774,5 +846,132 @@ async fn lineage_credit_separates_policy_from_junk_and_occam_pruning_ships_short
     }
     assert!(shorter >= 1, "pruning removed nothing on either seed");
     assert!(removed_total >= 1);
+    Ok(())
+}
+
+/// The v6.5 length prior's budget for the bloating-teacher world: the seed
+/// (27 chars) plus the whole 40-fact pile and the policy fit (~200 chars);
+/// two reminder lines alone do not.
+const LENGTH_BUDGET: usize = 240;
+
+/// v6.5 length prior (soft, teacher-facing). With the bloating teacher and
+/// the prior OFF the shipped HARVEST winner outgrows the budget and the
+/// teacher never sees a budget (byte-identical inputs); with the prior ON
+/// the LENGTH BUDGET block reaches the teacher through both operators, it
+/// folds, and the shipped winner fits the budget, still certifies vs the
+/// seed, and still carries the policy. Both configurations replay
+/// identically on the same seed.
+#[tokio::test]
+async fn length_prior_keeps_the_certified_winner_within_budget() -> Result<()> {
+    async fn run(seed: u64, prior: bool) -> Result<(ArmReport, bool)> {
+        let saw_budget = Arc::new(AtomicBool::new(false));
+        let mut optimizer = harvest();
+        if prior {
+            optimizer.length_prior = Some(LENGTH_BUDGET);
+        }
+        let arm = run_arm_with(
+            if prior { "prior" } else { "bloat" },
+            optimizer,
+            seed,
+            BUDGET,
+            World::DocsQa,
+            budget_teacher_client(saw_budget.clone()),
+        )
+        .await?;
+        Ok((arm, saw_budget.load(Ordering::SeqCst)))
+    }
+    for seed in 0..2u64 {
+        let (bloat, bloat_saw) = run(seed, false).await?;
+        let (prior, prior_saw) = run(seed, true).await?;
+        bloat.print();
+        prior.print();
+        println!(
+            "seed {seed}: winner chars bloat {} vs prior {} (budget {LENGTH_BUDGET}, hard cap \
+             {:?}); reminder lines {} vs {}; length retries/skips bloat {}/{} prior {}/{}",
+            bloat.winner().len(),
+            prior.winner().len(),
+            prior.result.length_cap_in_force,
+            bloat.winner().matches("Reminder:").count(),
+            prior.winner().matches("Reminder:").count(),
+            bloat.result.length_retries,
+            bloat.result.length_skipped,
+            prior.result.length_retries,
+            prior.result.length_skipped,
+        );
+
+        // (a) prior off: the teacher never sees a budget, nothing is
+        // capped, and the shipped winner outgrows the budget.
+        assert!(!bloat_saw, "seed {seed}: a LENGTH BUDGET reached the teacher with the prior off");
+        assert_eq!(bloat.result.length_prior, None);
+        assert_eq!(bloat.result.length_cap_in_force, None);
+        assert_eq!(bloat.result.length_retries + bloat.result.length_skipped, 0);
+        assert!(
+            bloat.winner().len() > LENGTH_BUDGET,
+            "seed {seed}: the un-steered winner stayed within budget ({} chars): {}",
+            bloat.winner().len(),
+            bloat.winner()
+        );
+
+        // (b) prior on: briefed, within budget, certified, policy kept.
+        assert!(prior_saw, "seed {seed}: the LENGTH BUDGET block never reached the teacher");
+        assert_eq!(prior.result.length_prior, Some(LENGTH_BUDGET));
+        assert_eq!(prior.result.length_cap_in_force, Some(300));
+        assert!(
+            prior.winner().len() <= LENGTH_BUDGET,
+            "seed {seed}: the steered winner is over budget ({} chars): {}",
+            prior.winner().len(),
+            prior.winner()
+        );
+        assert!(!prior.winner().contains("Reminder:"), "seed {seed}: a reminder survived the fold");
+        assert_eq!(
+            prior.result.certified,
+            Some(true),
+            "seed {seed}: the steered winner did not certify (mean {:+.4}, e {:.2} over {} cols)",
+            prior.result.certify_mean_delta,
+            prior.result.certify_e_value,
+            prior.result.certify_cols_used
+        );
+        assert!(prior.has_rule(), "seed {seed}: the steered winner lost the policy: {}", prior.winner());
+        assert!(prior.result.total_rollouts <= BUDGET);
+
+        // (c) both configurations are deterministic per seed.
+        let (bloat_again, _) = run(seed, false).await?;
+        let (prior_again, _) = run(seed, true).await?;
+        assert_eq!(bloat.winner(), bloat_again.winner(), "seed {seed}: prior-off replay differs");
+        assert_eq!(bloat.result.total_rollouts, bloat_again.result.total_rollouts);
+        assert_eq!(prior.winner(), prior_again.winner(), "seed {seed}: prior-on replay differs");
+        assert_eq!(prior.result.total_rollouts, prior_again.result.total_rollouts);
+    }
+    Ok(())
+}
+
+
+#[tokio::test]
+async fn search_mode_uses_small_budgets_without_partial_validation_or_certification() -> Result<()> {
+    for budget in [105, 205, 600] {
+        let mut optimizer = dspy_rs::harvest_search();
+        optimizer.prompt_model = Some(make_lm(teacher_client()).await);
+        optimizer.max_rollouts = Some(budget);
+        optimizer.seed = Some(2);
+        optimizer.eval_concurrency = 8;
+        let mut module = QaModule {
+            predictor: Predict::<QaSig>::builder()
+                .instruction(SEED_TEXT)
+                .lm(make_lm(student_client()).await)
+                .build(),
+        };
+        let train = dataset(0..TRAIN);
+        let val = dataset(TRAIN..TRAIN + VAL);
+        let result = optimizer.compile_module_with_valset(
+            &mut module, &train, Some(&val), &DocsMetric { world: World::DocsQa },
+        ).await?;
+        assert!(result.total_rollouts <= budget, "{} > {budget}", result.total_rollouts);
+        assert!(result.total_rollouts > VAL, "tail budget never reached search");
+        assert_eq!(result.best_candidate.example_scores.len(), VAL);
+        assert_eq!(result.certified, None);
+        assert_eq!(result.certify_cols_used, 0);
+        assert_eq!(result.fresh_selection_cols, 0);
+        assert!(result.best_by_mean.is_none());
+    }
     Ok(())
 }

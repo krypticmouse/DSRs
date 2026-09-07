@@ -386,16 +386,13 @@ impl TypedMetric<DocsRow, QwenDocsAgent> for DensityMetric {
 
         let n = example.key_points.len().max(1) as f64;
         let coverage = j.covered.iter().filter(|c| **c).count() as f64 / n;
-        let cite = if example.citations.is_empty() {
-            1.0
-        } else {
-            (j.citations_present.len() as f64 / example.citations.len() as f64).min(1.0)
-        };
         let fluff_chars: usize = j.fluff.iter().map(|s| s.len()).sum();
         let noise = (fluff_chars as f64 / answer.len().max(1) as f64).min(1.0);
-        let wrong_penalty = (0.15 * j.wrong_claims.len() as f64).min(0.30);
-        let score =
-            (0.70 * coverage + 0.10 * cite + 0.20 * (1.0 - noise) - wrong_penalty).clamp(0.0, 1.0);
+        // Custom DSRs DocsQA strict success, version 1: every required
+        // answer point and citation, with no contradictory claims.
+        let passed = custom_task_pass(example.key_points.len(), &j.covered,
+            &example.citations, &j.citations_present, &j.wrong_claims);
+        let score = if passed { 1.0 } else { 0.0 };
 
         let mut fb = format!(
             "Score {score:.2} (coverage {:.0}%, noise {:.0}% of answer).\nSearch queries used: {}",
@@ -442,6 +439,8 @@ struct ServeRequest {
 
 #[derive(Serialize)]
 struct ServeResponse {
+    metric_protocol: &'static str,
+    custom_task_pass: bool,
     id: u64,
     score: f64,
     feedback: String,
@@ -553,7 +552,7 @@ async fn serve(dir: &str, factory: Arc<Factory>, metric: Arc<DensityMetric>) -> 
                 }
                 Err(e) => (0.0, format!("ROLLOUT ERROR (scored 0): {e}"), String::new(), vec![]),
             };
-            let response = ServeResponse { id: request.id, score, feedback, answer, queries };
+            let response = ServeResponse { metric_protocol: "dsrs-docsqa-strict-v1", custom_task_pass: score == 1.0, id: request.id, score, feedback, answer, queries };
             let mut line = serde_json::to_string(&response).expect("serializable");
             line.push('\n');
             let mut out = stdout.lock().await;
@@ -663,15 +662,18 @@ async fn optimize(
             .map(|c| winner_map(None, seeds, &c.slots, &c.module_name, &c.instruction))
             .unwrap_or_else(|| winner.clone());
         write_winner(&out_argmax, &argmax)?;
-    } else if opt_name == "ratchet" {
-        let iters = env_usize("DOCSQA_ITERS", 40);
-        let minibatch = env_usize("DOCSQA_MINIBATCH", 3);
-        let champion = env_usize("DOCSQA_CHAMPION", 20);
+    } else if matches!(opt_name.as_str(), "ratchet" | "harvest" | "harvest_search") {
+        let search = opt_name == "harvest_search";
+        let shipping = opt_name == "harvest";
+        let iters = env_usize("DOCSQA_ITERS", if search || shipping { 150 } else { 40 });
+        let minibatch = env_usize("DOCSQA_MINIBATCH", if search || shipping { 5 } else { 3 });
+        let champion = env_usize("DOCSQA_CHAMPION", if search { 0 } else if shipping { 24 } else { 20 });
         println!(
-            "ratchet seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
+            "{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}"
         );
         let optimizer = {
-            let mut optimizer = Ratchet::builder().prompt_model(reflection_lm).build();
+            let mut optimizer = if search { dspy_rs::harvest_search() } else if shipping { dspy_rs::harvest() } else { Ratchet::builder().build() };
+            optimizer.prompt_model = Some(reflection_lm);
             optimizer.num_iterations = iters;
             optimizer.minibatch_size = minibatch;
             optimizer.champion_fresh = champion;
@@ -679,6 +681,13 @@ async fn optimize(
             optimizer.seed = Some(seed);
             optimizer.eval_concurrency = concurrency;
             optimizer.track_stats = true;
+            if shipping {
+                // Match the existing DocsQA shipping profile. These rows
+                // are reserved from this run's training pool before search.
+                optimizer.certify_reserve = env_usize("DOCSQA_CERTIFY_RESERVE", 60);
+                optimizer.certify_budget = env_usize("DOCSQA_CERTIFY_BUDGET", 150);
+                optimizer.champion_k = env_usize("DOCSQA_CHAMPION_K", 2);
+            }
             // Mode 2: counterfactual stage-repair credit assignment.
             let repair_probes = env_usize("DOCSQA_REPAIR", 0);
             if repair_probes > 0 {
@@ -695,6 +704,9 @@ async fn optimize(
         let result = optimizer
             .compile_module_with_valset(&mut agent, &train, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("DOCSQA_REPORT") {
+            std::fs::write(path, serde_json::to_string_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -749,7 +761,7 @@ async fn optimize(
             .unwrap_or_else(|| winner.clone());
         write_winner(&out_argmax, &argmax)?;
     } else {
-        bail!("unknown DOCSQA_OPT {opt_name:?} (ratchet|gepa)");
+        bail!("unknown DOCSQA_OPT {opt_name:?} (ratchet|harvest|harvest_search|gepa)");
     }
     println!("\nwinner written to {out}");
     Ok(())
@@ -770,7 +782,18 @@ async fn main() -> Result<()> {
     // (e.g. mxbai:toast-1 — the two-stage toast repair arm); anything else
     // goes through the model string as-is (openrouter:...).
     let student_spec = env_str("DOCSQA_STUDENT", "openrouter:qwen/qwen3.6-35b-a3b");
-    let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
+    let student_lm = if let Ok(base_url) = std::env::var("DOCSQA_STUDENT_BASE_URL") {
+        LM::builder()
+            .base_url(base_url)
+            .api_key("local-benchmark-gateway".to_string())
+            .model(student_spec.trim_start_matches("openrouter:").to_string())
+            .temperature(student_temp)
+            .max_tokens(env_usize("DOCSQA_MAX_TOKENS", 2048) as u32)
+            .max_retries(0)
+            .request_timeout_secs(130)
+            .build()
+            .await?
+    } else if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url("https://api.mixedbread.com/v1".to_string())
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)
@@ -799,7 +822,7 @@ async fn main() -> Result<()> {
     let reflection_lm = LM::builder()
         .model(env_str("DOCSQA_TEACHER", "openrouter:openai/gpt-5.6-terra"))
         .temperature(1.0)
-        .max_tokens(8000)
+        .max_tokens(env_usize("DOCSQA_TEACHER_MAX_TOKENS", 8000) as u32)
         .build()
         .await?;
     configure(judge_lm);
@@ -825,5 +848,25 @@ async fn main() -> Result<()> {
         "serve" => serve(&dir, Arc::new(factory), Arc::new(metric)).await,
         "optimize" => optimize(&dir, &factory, &seeds, &metric, reflection_lm).await,
         other => bail!("unknown DOCSQA_MODE {other:?} (optimize|serve)"),
+    }
+}
+
+
+fn custom_task_pass(points: usize, covered: &[bool], required: &[String], cited: &[String], wrong: &[String]) -> bool {
+    points > 0 && covered.len() == points && covered.iter().all(|value| *value)
+        && required.iter().all(|citation| cited.contains(citation)) && wrong.is_empty()
+}
+
+#[cfg(test)]
+mod native_metric_tests {
+    use super::*;
+    #[test]
+    fn all_points_and_distinct_required_citations_are_required() {
+        let required=vec!["a".to_string(),"b".to_string()];
+        assert!(custom_task_pass(2,&[true,true],&required,&required,&[]));
+        assert!(!custom_task_pass(2,&[true,false],&required,&required,&[]));
+        assert!(!custom_task_pass(2,&[true,true,true],&required,&required,&[]));
+        assert!(!custom_task_pass(2,&[true,true],&required,&["a".into(),"a".into()],&[]));
+        assert!(!custom_task_pass(2,&[true,true],&required,&required,&["incorrect claim".into()]));
     }
 }

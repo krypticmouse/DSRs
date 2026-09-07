@@ -130,6 +130,32 @@ impl CompletionProvider for ScriptedCompletionModel {
     }
 }
 
+/// A test client whose completions never resolve: every call parks forever —
+/// no response, no error, nothing to wake it — the shape of a wedged HTTP
+/// request. Counts the attempts so deadline/retry tests can assert how many
+/// fresh requests were issued.
+#[derive(Clone, Default)]
+pub struct HangingCompletionModel {
+    calls: Arc<Mutex<usize>>,
+}
+
+impl HangingCompletionModel {
+    /// Completions started so far (none ever finish).
+    pub fn calls(&self) -> usize {
+        *self.calls.lock().unwrap()
+    }
+}
+
+impl CompletionProvider for HangingCompletionModel {
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        *self.calls.lock().unwrap() += 1;
+        std::future::pending().await
+    }
+}
+
 #[enum_dispatch(CompletionProvider)]
 #[derive(Clone)]
 pub enum LMClient {
@@ -147,6 +173,7 @@ pub enum LMClient {
     Deepseek(deepseek::CompletionModel<reqwest::Client>),
     Test(TestCompletionModel),
     Scripted(ScriptedCompletionModel),
+    Hanging(HangingCompletionModel),
 }
 
 // Implement the trait for each concrete provider type using the CompletionModel trait from rig

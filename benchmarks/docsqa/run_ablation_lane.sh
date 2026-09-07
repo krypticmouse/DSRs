@@ -70,7 +70,11 @@ run_arm() {  # tag seed [KEY=VAL ...]
 }
 
 log "LANE START (binary $(shasum -a 256 "$BIN" | cut -c1-12)…)"
-run_arm harvest_full2 1                                          # A0-s1: second search seed, preset
+if [ -s "$D/harvest_full2_s1.json" ]; then
+  log "A0-s1 (harvest_full2 seed 1) already in hand (certified 2026-09-02 16:15); skipping"
+else
+  run_arm harvest_full2 1                                        # A0-s1: second search seed, preset
+fi
 run_arm abl_nopolicy  0 DOCSQA_POLICY=0 DOCSQA_POLICY_SHARE=0    # A1: no Policy operator / channel
 run_arm abl_screenb   0 DOCSQA_SCREEN=b DOCSQA_GATE_SIZE=5       # A2: held-out batch-B screen
 run_arm abl_scout16   0 DOCSQA_ACCEPT=gate DOCSQA_SCOUT=16       # A3: 16-column scout, not full slice

@@ -4,8 +4,10 @@
 //! One binary, two modes:
 //!
 //! - `IFB_MODE=optimize` (default): optimize the responder's instruction with
-//!   `IFB_OPT=temper|ratchet|hybrid|gepa` and write the winner (`hybrid` =
-//!   RATCHET search + TEMPER's variant-champion endgame).
+//!   `IFB_OPT=temper|ratchet|hybrid|harvest|gepa` and write the winner
+//!   (`hybrid` = RATCHET search + TEMPER's variant-champion endgame;
+//!   `harvest` = RATCHET v6, docs/ratchet-v6-harvest-design.md, with
+//!   sequential paired certification vs the seed on reserved train columns).
 //! - `IFB_MODE=serve`: JSONL rollout server on stdin/stdout — the Python
 //!   reference arm (`benchmarks/ifbench/run_python_gepa.py`) and every eval
 //!   script drive rollouts through this, so all arms share byte-identical
@@ -29,7 +31,13 @@
 //! Env: IFB_DIR (benchmarks/ifbench), IFB_MODE, IFB_OPT, IFB_SEED,
 //! IFB_SEED_PROMPT, IFB_STUDENT, IFB_TEACHER, IFB_ITERS, IFB_MINIBATCH,
 //! IFB_BUDGET, IFB_CHAMPION, IFB_VAL_FILE, IFB_OUT_PREFIX, IFB_CONCURRENCY,
-//! IFB_CHECKER, IFB_STOP_TOOL, IFB_MAX_TURNS, IFB_MAX_TOKENS.
+//! IFB_CHECKER, IFB_STOP_TOOL, IFB_MAX_TURNS, IFB_MAX_TOKENS,
+//! IFB_CERTIFY_RESERVE (45), IFB_CERTIFY_BUDGET (150).
+//! HARVEST ablation knobs (unset = preset; mirror of 33-pupa.rs): IFB_SCREEN (a|b),
+//! IFB_REWRITE_ONLY, IFB_POLICY, IFB_POLICY_SHARE, IFB_LEDGER_GATE_KILLS,
+//! IFB_PARENT_GREED, IFB_GATE_SIZE, IFB_SCOUT, IFB_PARENTS, IFB_PROPOSALS,
+//! IFB_CHAMPION_K, IFB_LENGTH_PRIOR (chars; soft teacher budget, hard guard ×
+//! IFB_LENGTH_SLACK 1.25).
 //!
 //! Run from the repo root (checker server must be up):
 //!     set -a; source .env; set +a
@@ -42,7 +50,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow, bail};
 use dspy_rs::{
     AgentLoopSpec, Eval, GEPA, LM, Module, Predict, PredictError, Predicted, Ratchet, Signature,
-    TypedMetric, configure, init_tracing, temper,
+    TypedMetric, configure, harvest, init_tracing, temper,
 };
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
@@ -214,7 +222,7 @@ impl AgentFactory {
 #[derive(Deserialize)]
 struct CheckResult {
     per_constraint: Vec<bool>,
-    frac_pass: f64,
+    follow_all_instructions_loose: bool,
     failed: Vec<String>,
     failed_descriptions: Vec<String>,
 }
@@ -263,7 +271,7 @@ impl CheckerMetric {
                 Ok(resp) => match resp.json::<CheckResult>().await {
                     Ok(result) => {
                         let n_passed = result.per_constraint.iter().filter(|b| **b).count();
-                        let correct = n_passed == n_constraints && n_constraints > 0;
+                        let correct = result.follow_all_instructions_loose;
                         let feedback = if correct {
                             format!("Correct. All {n_constraints} constraints satisfied.")
                         } else {
@@ -280,7 +288,7 @@ impl CheckerMetric {
                             )
                         };
                         return Graded {
-                            score: result.frac_pass,
+                            score: if correct { 1.0 } else { 0.0 },
                             correct,
                             feedback,
                             n_constraints,
@@ -331,6 +339,8 @@ struct ServeRequest {
 
 #[derive(Serialize)]
 struct ServeResponse {
+    metric_protocol: &'static str,
+    follow_all_instructions_loose: bool,
     id: u64,
     score: f64,
     correct: bool,
@@ -399,6 +409,8 @@ async fn serve(dir: &str, factory: Arc<AgentFactory>, metric: Arc<CheckerMetric>
                 .expect("forward returns an empty fallback, never Err");
             let graded = metric.grade(row, &prediction).await;
             let response = ServeResponse {
+                metric_protocol: "dataset-native-v1",
+                follow_all_instructions_loose: graded.correct,
                 id: request.id,
                 score: graded.score,
                 correct: graded.correct,
@@ -509,9 +521,12 @@ async fn optimize(
             .unwrap_or(&result.best_candidate.instruction);
         std::fs::write(&out_argmax, argmax)?;
     } else {
-        let iters = env_usize("IFB_ITERS", 60);
+        // HARVEST keeps its preset cycle shape (iters 150 / minibatch 5 /
+        // P×N 2×2) unless overridden; the v2-era arms keep theirs.
+        let is_harvest = matches!(opt_name.as_str(), "harvest" | "harvest_search");
+        let iters = env_usize("IFB_ITERS", if is_harvest { 150 } else { 60 });
         let minibatch = env_usize("IFB_MINIBATCH", 5);
-        let champion = env_usize("IFB_CHAMPION", 30);
+        let champion = env_usize("IFB_CHAMPION", if opt_name == "harvest_search" { 0 } else { 30 });
         println!("{opt_name} seed {seed}, iters {iters}, minibatch {minibatch}, budget {budget}, champion {champion}");
         let optimizer = match opt_name.as_str() {
             "temper" => {
@@ -526,7 +541,70 @@ async fn optimize(
                 .prompt_model(reflection_lm)
                 .build(),
             "ratchet" => Ratchet::builder().prompt_model(reflection_lm).build(),
-            other => bail!("unknown IFB_OPT {other:?} (temper|ratchet|hybrid|gepa)"),
+            // HARVEST (RATCHET v6, docs/ratchet-v6-harvest-design.md): on-target
+            // screen, full-val ranking, Rewrite + Policy operators, sequential
+            // paired certification vs the seed on reserved train columns.
+            // train150 carve: champion 30 + certify 45 leaves 75 batch columns
+            // (the reserve is carved inside the optimizer; no driver-side split).
+            "harvest" | "harvest_search" => {
+                let mut optimizer = if opt_name == "harvest_search" {
+                    dspy_rs::harvest_search()
+                } else { harvest() };
+                optimizer.prompt_model = Some(reflection_lm);
+                optimizer.certify_reserve = env_usize("IFB_CERTIFY_RESERVE", 45);
+                optimizer.certify_budget = env_usize("IFB_CERTIFY_BUDGET", 150);
+                // One-factor ablation knobs (mirror of 33-pupa.rs): each
+                // overrides the `harvest()` preset only when set; unset keeps
+                // the preset value.
+                match env_str("IFB_SCREEN", "").as_str() {
+                    "a" => optimizer.screen_rule = dspy_rs::ScreenRule::OnTargetA,
+                    "b" => optimizer.screen_rule = dspy_rs::ScreenRule::HeldOutB,
+                    _ => {}
+                }
+                if let Ok(v) = std::env::var("IFB_REWRITE_ONLY") {
+                    optimizer.rewrite_only = v == "1";
+                }
+                if let Ok(v) = std::env::var("IFB_POLICY") {
+                    optimizer.policy_channel = v == "1";
+                }
+                if let Ok(v) = std::env::var("IFB_POLICY_SHARE") {
+                    optimizer.policy_share = v.parse().unwrap_or(optimizer.policy_share);
+                }
+                if let Ok(v) = std::env::var("IFB_LEDGER_GATE_KILLS") {
+                    optimizer.ledger_gate_kills = v == "1";
+                }
+                if let Ok(v) = std::env::var("IFB_PARENT_GREED") {
+                    optimizer.parent_greed = v.parse().unwrap_or(optimizer.parent_greed);
+                }
+                if let Ok(v) = std::env::var("IFB_GATE_SIZE") {
+                    optimizer.gate_size = v.parse().ok();
+                }
+                // v6.5 length prior (soft, teacher-facing; unset = off):
+                // IFB_LENGTH_PRIOR=N chars, hard guard N × IFB_LENGTH_SLACK
+                // (default 1.25) through the length_cap path.
+                if let Ok(v) = std::env::var("IFB_LENGTH_PRIOR") {
+                    optimizer.length_prior = v.parse().ok().filter(|n: &usize| *n > 0);
+                }
+                if let Ok(v) = std::env::var("IFB_LENGTH_SLACK") {
+                    optimizer.length_prior_slack =
+                        v.parse().unwrap_or(optimizer.length_prior_slack);
+                }
+                if optimizer.length_prior.is_some() {
+                    println!(
+                        "length prior {:?} chars (slack {}, hard cap {:?})",
+                        optimizer.length_prior,
+                        optimizer.length_prior_slack,
+                        optimizer.effective_length_cap()
+                    );
+                }
+                optimizer.scout_size = env_usize("IFB_SCOUT", optimizer.scout_size);
+                optimizer.parents_per_step = env_usize("IFB_PARENTS", optimizer.parents_per_step);
+                optimizer.proposals_per_parent =
+                    env_usize("IFB_PROPOSALS", optimizer.proposals_per_parent);
+                optimizer.champion_k = env_usize("IFB_CHAMPION_K", optimizer.champion_k);
+                optimizer
+            }
+            other => bail!("unknown IFB_OPT {other:?} (temper|ratchet|hybrid|harvest|gepa)"),
         };
         let optimizer = {
             let mut optimizer = optimizer;
@@ -537,11 +615,38 @@ async fn optimize(
             optimizer.seed = Some(seed);
             optimizer.eval_concurrency = concurrency;
             optimizer.track_stats = true;
+            if matches!(opt_name.as_str(), "harvest" | "harvest_search") {
+                println!(
+                    "harvest: screen {:?} accept {:?} scout {} rewrite_only {} policy {} (share {}) \
+                     ledger_gate_kills {} greed {} gate_size {:?} champion_k {} \
+                     certify reserve {} / budget {} alpha {} iters {} minibatch {} P×N {}×{}",
+                    optimizer.screen_rule,
+                    optimizer.accept_mode,
+                    optimizer.scout_size,
+                    optimizer.rewrite_only,
+                    optimizer.policy_channel,
+                    optimizer.policy_share,
+                    optimizer.ledger_gate_kills,
+                    optimizer.parent_greed,
+                    optimizer.gate_size,
+                    optimizer.champion_k,
+                    optimizer.certify_reserve,
+                    optimizer.certify_budget,
+                    optimizer.certify_alpha,
+                    optimizer.num_iterations,
+                    optimizer.minibatch_size,
+                    optimizer.parents_per_step,
+                    optimizer.proposals_per_parent
+                );
+            }
             optimizer
         };
         let result = optimizer
             .compile_module_with_valset(&mut agent, &trainset, Some(&val), metric)
             .await?;
+        if let Ok(path) = std::env::var("IFB_REPORT") {
+            std::fs::write(path, serde_json::to_vec_pretty(&result)?)?;
+        }
         println!(
             "rollouts: {} lm_calls: {} promoted: {}",
             result.total_rollouts,
@@ -562,6 +667,19 @@ async fn optimize(
             "operator stats: {:?}  fresh cols: {}  variant cols: {}",
             result.operator_stats, result.fresh_selection_cols, result.variant_selection_cols
         );
+        println!(
+            "certification: {:?} cols {} mean {:+.4} e {:.2}",
+            result.certified, result.certify_cols_used, result.certify_mean_delta, result.certify_e_value
+        );
+        if result.certify_cols_used > 0 || result.certified.is_some() {
+            println!(
+                "CERTIFICATION: {:?} after {} cols, mean paired delta {:+.4}, e-value {:.2}",
+                result.certified,
+                result.certify_cols_used,
+                result.certify_mean_delta,
+                result.certify_e_value
+            );
+        }
         println!("\n== trial ledger ==");
         for trial in &result.trials {
             println!(
@@ -619,7 +737,17 @@ async fn main() -> Result<()> {
     // in the train pool reach hundreds of words.
     let student_spec = env_str("IFB_STUDENT", "openai/gpt-oss-120b");
     let max_tokens = env_usize("IFB_MAX_TOKENS", 2048) as u32;
-    let student_lm = if let Some(model) = student_spec.strip_prefix("mxbai:") {
+    let student_lm = if let Ok(base_url) = std::env::var("IFB_STUDENT_BASE_URL") {
+        LM::builder()
+            .base_url(base_url)
+            .api_key("local-benchmark-gateway".to_string())
+            .model(student_spec.clone())
+            .temperature(0.2)
+            .max_tokens(max_tokens)
+            .max_retries(0)
+            .request_timeout_secs(130)
+            .build().await?
+    } else if let Some(model) = student_spec.strip_prefix("mxbai:") {
         LM::builder()
             .base_url(env_str("IFB_MXBAI_URL", "https://api.mixedbread.com/v1"))
             .api_key(std::env::var("MXBAI_API_KEY").context("MXBAI_API_KEY not set")?)

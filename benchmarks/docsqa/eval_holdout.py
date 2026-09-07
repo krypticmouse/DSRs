@@ -4,7 +4,12 @@
       [<label>=<winner.json> ...]
 
 Every arm runs every question in every pass, through one serve process
-(byte-identical student+judge). Winner JSONs are {"answerer": text}.
+(byte-identical student+judge). Winner JSONs are {"answerer": text}. Any
+label may take the value `seed` (or `SEED`): `seed=seed seed2=seed` runs the
+seed twice, interleaved like every other arm, and the verdict_stats block
+then prints `seed2 − seed` first as the identical-prompt floor and flags
+every other arm clears-floor / within-floor (2026-09-02: two byte-identical
+bcplus prompts scored .383 vs .475 at devholdout 60×2).
 Summary: per-arm mean judge score + paired bootstrap 95% CI vs the seed arm
 on per-question means pooled across passes; also mean answer length proxy.
 
@@ -35,7 +40,7 @@ def main():
     arms = {}
     for spec in sys.argv[4:]:
         label, _, path = spec.partition("=")
-        if path in ("", "seed"):
+        if path in ("", "seed", "SEED"):
             arms[label] = None
         else:
             # Winner JSONs carry every slot ({"answerer": ...} for 36-docsqa,
@@ -172,7 +177,9 @@ def main():
         print(line)
 
     # Optional Tier-3 block (L3 §7 item 4): sign-flip permutation + pre-registered
-    # CUPED on the seed score, printed AFTER the legacy verdict above. Reads the
+    # CUPED on the seed score, printed AFTER the legacy verdict above. With a
+    # seed2 arm the module prints `seed2 − seed` first as the identical-prompt
+    # floor and flags every other arm clears-floor / within-floor. Reads the
     # rows just written; a missing/broken module never breaks the eval.
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
