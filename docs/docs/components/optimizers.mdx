@@ -1,6 +1,6 @@
 ---
 title: "Optimizers"
-description: "The Optimizer trait, every optimizer configuration, and every report type: COPRO, MIPROv2, GEPA, SIMBA, and BootstrapFewShot"
+description: "The Optimizer trait, every optimizer configuration, and every report type: COPRO, MIPROv2, GEPA, SIMBA, GRPO, and BootstrapFewShot"
 icon: "sliders"
 ---
 
@@ -21,7 +21,7 @@ optimizer
 
 The module must declare its optimizable leaves via [`Predictors`](/docs/components/modules#predictor-discovery-predictors) (one `predictors!` line). All six optimizers are thin strategies over the shared evaluation engine. Candidates are **data, never mutation**: each candidate is a name-keyed `Candidate` injected *ambiently* per rollout (`fx::with_params`) — nothing touches the module during evaluation, so different candidates evaluate concurrently — and the winner is installed exactly once at the end (`OptimizeTarget::install`). The engine types (`Engine`, `Candidate`, `Budget`, `Spend`, `ParetoView`) are documented in [Optimizer engine](/docs/components/optimizer-engine).
 
-Five strategies tune parameter values through overlays; the sixth, [`Structural`](#structural), proposes graph edits over the [edit calculus](/docs/components/edit-calculus) and runs on the program lane only.
+Six strategies tune parameter values through overlays; the seventh, [`Structural`](#structural), proposes graph edits over the [edit calculus](/docs/components/edit-calculus) and runs on the program lane only.
 
 <svg viewBox="0 0 760 420" role="img" aria-label="Three translucent tracing-paper overlays fanned above the base map, each changing one grid-referenced dial; the base program is never marked" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
   <rect x="90" y="210" width="580" height="180" rx="8" fill="currentColor" fillOpacity="0.05" stroke="currentColor" strokeOpacity="0.55" strokeWidth="2" />
@@ -66,7 +66,7 @@ Five strategies tune parameter values through overlays; the sixth, [`Structural`
   <text x="380" y="412" fontFamily="ui-sans-serif, system-ui, sans-serif" fontSize="11" fill="currentColor" fillOpacity="0.7" textAnchor="middle">candidates are overlays; the base program is never mutated</text>
 </svg>
 
-Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), and [Structural](/docs/optimizers/structural).
+Step-by-step how-to pages: [COPRO](/docs/optimizers/copro), [MIPROv2](/docs/optimizers/miprov2), [GEPA](/docs/optimizers/gepa), [GRPO](/docs/optimizers/grpo), and [Structural](/docs/optimizers/structural).
 
 ## The Optimizer trait
 
@@ -92,7 +92,7 @@ The trait is **object-safe** by design: optimizers compose (`Box<dyn Optimizer>`
 
 For the common case you never build these by hand — each optimizer's `compile_module(&mut module, &trainset, &metric)` inherent method constructs a module target and a default engine, runs `compile`, and installs the winner. `compile` returns an error when the target has no optimizable leaves, when a metric evaluation fails, or when an LM call fails during candidate evaluation.
 
-`compile` returns the `Report` enum (`Report::None`, `Report::Gepa(GEPAResult)`, `Report::Simba(SimbaReport)`, `Report::Bootstrap(BootstrapReport)`, and `Report::Custom(serde_json::Value)` as the third-party extension point), with `into_gepa()`/`into_simba()`/`into_bootstrap()` accessors. The typed `compile_module` sugar unwraps it:
+`compile` returns the `Report` enum (`Report::None`, `Report::Gepa(GEPAResult)`, `Report::Simba(SimbaReport)`, `Report::Grpo(GrpoReport)`, `Report::Bootstrap(BootstrapReport)`, and `Report::Custom(serde_json::Value)` as the third-party extension point), with `into_gepa()`/`into_simba()`/`into_grpo()`/`into_bootstrap()` accessors. The typed `compile_module` sugar unwraps it:
 
 | Optimizer | `compile_module` returns |
 |-----------|--------------------------|
@@ -100,6 +100,7 @@ For the common case you never build these by hand — each optimizer's `compile_
 | `MIPROv2` | `()` |
 | `GEPA` | `GEPAResult` |
 | `SIMBA` | `SimbaReport` |
+| `GRPO` | `GrpoReport` |
 | `BootstrapFewShot` | `BootstrapReport` |
 
 `Structural` is the exception to this table and to the trait: it edits program structure, so its input is an interpreter-loaded program rather than a lane-erased target, and its entry point is [`compile_program`](#structural) instead of `compile_module`/`compile`.
@@ -111,8 +112,9 @@ For the common case you never build these by hand — each optimizer's `compile_
 | `BootstrapFewShot` | One-shot demo harvesting from a teacher pass | No | Low (2 × trainset) |
 | `COPRO` | Breadth-first instruction search | No | Low (breadth × depth × trainset) |
 | `SIMBA` | Minibatch introspective ascent (demos + rules) | No | Low (steps × minibatch) |
+| `GRPO` | Within-input sample groups, group-relative contrast, rule list (LM frozen) | No | Low (steps × batch × group) |
 | `GEPA` | Genetic-Pareto evolution with feedback | **Yes** | Medium-high (iterations × eval) |
-| `Ratchet` | GEPA + trial ledger, paired racing, operator portfolio | **Yes** | Medium (racing kills losers early) |
+| `Ratchet` | GEPA + trial ledger, paired racing, operator portfolio (also powers `GEPA` itself) | **Yes** | Medium (racing kills losers early) |
 | `MIPROv2` | Trace-guided candidate generation | No | Medium (candidates × trials × trainset) |
 | `Structural` | LM-guided graph edits over `ir::Edit` (program lane only) | No | Medium (examples + iterations × minibatch) |
 
@@ -165,7 +167,9 @@ GEPA errors if any `Eval` from the metric has `feedback: None`. Build metrics wi
 | `selection_z` | `f64` | `1.0` | Seed-protected argmax: the seed keeps the win when the argmax child is within `z·SE` (paired). `0.0` = raw argmax. |
 | `perfect_score` | `f64` | `1.0` | Score at which an example counts as solved (batch biasing + all-perfect skip). Set to your ceiling for unnormalized metrics, or `f64::INFINITY` to disable. |
 | `allow_memorization` | `bool` | `false` | Disable the leak guard (allow proposals to quote example strings verbatim). |
-| `num_trials` | `usize` | `10` | Currently unused. Reserved for multi-child evolution. |
+| `parents_per_step` | `usize` | `1` | The "P" of P×N parallel proposals: parents sampled per step, each with its own reflection/gate batches. `1` = the validated sequential behavior. |
+| `proposals_per_parent` | `usize` | `1` | The "N" of P×N: reflective mutations per parent, each on its own disjoint mini-batch, proposed concurrently; every gate survivor races. Values above 1 supersede `rewrite_fanout`. |
+| `num_trials` | `usize` | `10` | Currently unused. Multi-child evolution shipped as `parents_per_step`/`proposals_per_parent` instead. |
 | `temperature` | `f32` | `1.0` | Currently unused. Reserved for mutation diversity control. |
 | `track_stats` | `bool` | `true` | Record all candidates, evolution history, and frontier history in the result. |
 | `track_best_outputs` | `bool` | `false` | Re-run the best instruction on the eval set and record outputs. |
@@ -199,7 +203,15 @@ GEPA additionally exposes `compile_module_with_valset(module, trainset, valset, 
 
 ## Ratchet
 
+Since 2026-08, `GEPA` itself delegates to this engine whenever it has a
+`prompt_model` and a nonzero iteration count — `Ratchet` remains the direct,
+fully-knobbed interface.
+
 RATCHET keeps GEPA's skeleton (Pareto pool, reflective mutation, the full anti-overfit stack) and adds three mechanisms, each tied to a measured GEPA failure (`docs/ratchet-design.md`): a **trial ledger** — every proposal's operator, its one-line hypothesis, and its measured fate are fed back into every reflection, so falsified ideas are never re-proposed; **paired racing** — children are evaluated on shuffled validation blocks and killed as soon as their paired deficit to the parent exceeds `race_z` standard errors, so losers cost 4–12 rollouts instead of a full sweep; and an **operator portfolio** — Rewrite / Patch / Simplify / Merge, selected per generation by a UCB1 bandit on measured promote-rate (Merge is semantic crossover of two Pareto members shown what each wins on). Requires `prompt_model`; there is no concatenation fallback. How-to knobs mirror GEPA's plus `race_block`, `race_z`, and `ledger_window`; the report (`RatchetResult`) carries the full trial ledger and per-operator stats.
+
+Multi-module programs can turn on **counterfactual stage-repair credit assignment** (`slot_credit: SlotCredit::Repair`, default `RoundRobin`): before proposing, the teacher debugs up to `repair_probes` failed rollouts — it blames one module and writes the output that module should have produced; the engine replays the recorded trace with the repaired output substituted (upstream stages serve free, downstream runs live) and the metric says whether the rollout actually recovers. Verified recovery picks the mutated slot instead of round-robin, and the proven (actual → repaired) pairs are fed to Rewrite as evidence. Each probe costs ~2 rollouts plus a teacher call; `RatchetResult` reports `repair_probes_run`, `repair_recovered`, and `repair_slot_stats`. Motivated by the HoVer autopsy, where round-robin piled every promotion on one slot while the failures lived elsewhere.
+
+The proposal loop can also be batched: `parents_per_step` (P) and `proposals_per_parent` (N) implement P×N parallel proposals (gepa-ai blog, 2026-07-30). Each step samples P parents, plans N mutations per parent on disjoint reflection mini-batches, runs every reflection call concurrently, screens each parent's children on its held-out gate batch in one batched fan-out, and races all survivors together — each still paired against its own lineage for the kill check. Committing proposals in batches also reduces how often the search re-steers against the validation set, which the blog measures as a smaller generalization gap. The defaults (`1×1`) reproduce the sequential behavior exactly, including the per-seed rng stream; the gate, racing, ledger, Merge operator, and champion selection are unchanged at any P×N.
 
 <Warning>
 Like GEPA, Ratchet errors if any `Eval` from the metric lacks feedback. Build metrics with `Eval::with_feedback`.
@@ -217,6 +229,40 @@ The Ratchet engine also hosts **TEMPER** (`docs/temper-design.md`): four anti-ov
 | `length_cap` | `Some(1500)` | hard proposal-length budget with one shortening retry (the operators are told the cap inline) |
 
 `RatchetResult` gains `length_retries`, `length_skipped`, and `variant_selection_cols` accordingly.
+
+### COMPOUND
+
+v4 (`docs/ratchet-v4-design.md`) answers the measured **win-size law**: v2 RATCHET pays its verification fee per accepted idea, so it wins tasks with few large improvements and structurally refuses piles of tiny true ones — each +.005 is invisible in a fixed-size race, and the endgame's 1-SE seed protection refused a real +.04 bundle on DocsQA. COMPOUND changes the certification unit from the idea to the bundle, using anytime-valid e-processes (`PairedEvidence`: a betting test supermartingale over paired deltas — evidence accumulates across any number of looks, and `P(e ever ≥ 1/α) ≤ α` holds at any stopping time). Four knob-gated mechanisms, defaults off:
+
+| Knob | COMPOUND setting | What it changes |
+|------|------------------|-----------------|
+| `race_rule` | `RaceRule::Eprocess` (+ `race_alpha`, default 0.1) | the mid-race kill becomes an anytime-valid harm test instead of repeated 1-SE peeks — the peeks falsely kill ~25–30% of true tiny winners across 4–5 looks *and* log them as falsified; disasters still die in a few columns |
+| `certify_ship` | `true` (+ `certify_reserve` 150, `certify_budget`, `certify_block`, `certify_alpha`) | the endgame becomes a sequential paired certification of champion vs seed on reserved never-touched columns, stopped the moment the e-process crosses the bar either way — the fee self-scales ~1/Δ² (a big fix certifies in a block or two, a harvested pile as one bundle) and is paid once per ship; unproven still ships the seed, with the evidence state reported |
+| `parent_greed` | `0.5` | with this probability a step's parent is the val-mean argmax — the head of the compounding chain — instead of a coverage draw; in an additive tiny-win regime pure coverage sampling forks the pile across the frontier |
+| `ledger_falsify_margin` | `0.02` | a gate/race kill enters the falsified ledger only when its deficit is decisive, so noise-kills stop poisoning the teacher against ideas that were never really falsified |
+
+`compound()` returns the preset (long cheap cycles — iters 150 / minibatch 3 / P×N 2×2, the measured long-cycle configuration — plus everything above); set `prompt_model` and `max_rollouts` on it. `RatchetResult` gains `certified: Option<bool>`, `certify_cols_used`, `certify_mean_delta`, and `certify_e_value`.
+
+On corpus-fact tasks, additionally enable **verified fact-pinning** — leak semantics are task-config: with `leak_policy: LeakPolicy::AllowWithProvenance` and `slot_credit: SlotCredit::Repair`, a counterfactual repair that provably fixes a failed rollout *licenses* that example's leak-class strings through the guard, and every licensed string the shipped winner carries is reported as a dated `PinRecord` (text, source example, generation, verified recovery delta, unix timestamp) — the harvesting power GEPA gets from blind fact-stuffing, with receipts and a staleness clock instead of silent rot. `LeakPolicy::Forbid` (the default) keeps benchmark semantics: the same proposal is retried and abandoned.
+
+<Note>
+The deterministic simulation in `tests/test_ratchet_compound.rs` reproduces the DocsQA regime (50 facts worth ~+.01 each under ±.25 judge noise, every proposal a true improvement): at equal budget, v2 defaults ship 5 facts with 9 false kills; `compound()` ships 14, certified at e = 13.7 after only 40 of its 150 reserved columns.
+</Note>
+
+### Standalone certification
+
+The ship gate also detaches from RATCHET entirely: `optimizer::certify` runs the identical sequential paired race against **any** candidate — one produced by GEPA, by an external optimizer, or written by hand — on rows its generator never optimized against. A generator proposes; the certification decides what ships. Two lanes:
+
+```rust
+use dspy_rs::{certify_candidate, CertifyConfig, BetPrior};
+
+let verdict = certify_candidate(&target, &mut engine, &candidate, &incumbent, &CertifyConfig::default()).await?;
+if verdict.ship_candidate() { /* gain certified at alpha; otherwise ship the incumbent */ }
+```
+
+`certify_candidate` drives paired rollouts through the shared engine over an `OptimizeTarget` whose example set *is* the certification split — give the engine a fresh rollout cache, since the protocol requires fresh draws. `certify_paired(num_rows, &config, paired_delta, on_block)` is the rig-agnostic lane for students that aren't modules (external HTTP agents, serve-mode harnesses): the closure runs one fresh candidate rollout and one fresh incumbent rollout on a row and returns the paired delta; `on_block` receives the running evidence state for progress logging.
+
+The protocol is fixed by `CertifyConfig`: column order shuffled once (seeded) before any scores exist; the attempt stops the moment gain **or** harm certifies at `alpha` (default 0.1); the `CertifyVerdict` always reports `(certified, cols, mean_delta, e_gain, e_harm)` — a refusal's open evidence state is part of the record. `BetPrior` warm-starts the bets from predictable past data such as the generator's own validation delta (worth ~20–40 columns on a small effect; a wrong prior costs growth, never validity). Two costs to respect: the fee is data-hungry in proportion to the effect — columns ≈ 2·ln(1/α)·(σ/Δ)², so reserve ≥150 generator-untouched rows at dataset-construction time for +.05-class effects — and the guarantee is per attempt, so a refused certification re-run at a looser alpha carries no guarantee at all.
 
 ## SIMBA
 
@@ -266,6 +312,40 @@ The `SimbaReport` summarizes the run:
 | `accepted` | `usize` | Steps promoted by the gate. |
 | `rejected` | `usize` | Steps rejected by the gate. |
 | `spend` | `Spend` | Engine spend for the whole run, reflection calls included. |
+
+## GRPO
+
+Group-relative rule learning with a frozen LM. Each step samples `batch_size` training examples, draws `group_size` independent rollouts of the current program for each (cache bypassed, so the module's LM must sample at a temperature above zero), contrasts groups whose reward spread reaches `min_spread` within themselves and flat unsolved groups against the reference output (`reference_fallback`), has the teacher (`prompt_model`) distill one rule per informative group from the samples' group-relative advantages (rules that quote the example verbatim are dropped by a leak guard), consolidates the leaf's rule list (capped at `max_rules`), and gates the child (seed instruction plus rules) on the scoring columns. Without a `prompt_model`, the rule is the worst sample's metric feedback. How-to: [GRPO](/docs/optimizers/grpo).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `steps` | `usize` | `6` | Optimization steps. |
+| `batch_size` | `usize` | `4` | Training examples (one group each) per step. |
+| `group_size` | `usize` | `4` | Independent samples per example. Must be at least 2; `compile` errors otherwise. |
+| `min_spread` | `f64` | `0.05` | Minimum reward spread (max − min) for a group to be contrasted. |
+| `max_rules` | `usize` | `12` | Rule-list cap per leaf. |
+| `reference_fallback` | `bool` | `true` | Contrast flat groups against the example's reference output (cold start) instead of skipping them. |
+| `reference_ceiling` | `f64` | `0.8` | Flat groups whose mean is at or above this are solved, never reference-contrasted. |
+| `gate` | `bool` | `true` | Gate the child on the scoring columns; `false` accepts every step. |
+| `min_gain` | `f64` | `0.0` | Improvement over the incumbent the gate requires. |
+| `incumbent_redraw` | `bool` | `true` | Re-draw the incumbent on the scoring columns each gated step and gate against its running mean. |
+| `prompt_model` | `Option<LM>` | `None` | The teacher that distills and consolidates rules. |
+| `max_metric_calls` / `max_lm_calls` | `Option<usize>` | `None` | Engine budget caps. |
+| `eval_concurrency` | `usize` | `16` | Rollouts in flight during sampling and evaluation. |
+| `seed` | `Option<u64>` | `None` | Fixes batch sampling. |
+
+`compile_module_with_valset(module, trainset, valset, metric)` samples groups from the trainset and gates on the valset; `compile_module` uses the trainset for both. Both return `GrpoReport`.
+
+### GrpoReport
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `baseline_score` | `f64` | Mean score of the unmodified module on the scoring columns. |
+| `final_score` | `f64` | Mean score of the installed program on the scoring columns. |
+| `rules` | `BTreeMap<String, Vec<String>>` | Learned rules per leaf; the installed instruction is the seed plus this list. |
+| `steps` | `Vec<GrpoStep>` | Per-step: `batch`, `spreads`, `informative_groups`, `flat_groups`, `reference_contrasts`, `insights`, `leaked`, `parent_score`, `child_score`, `accepted`, `rules_after`. |
+| `accepted` / `rejected` | `usize` | Gate outcomes. |
+| `spend` | `Spend` | Engine spend, teacher calls included. |
 
 ## BootstrapFewShot
 

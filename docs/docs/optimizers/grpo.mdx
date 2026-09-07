@@ -1,0 +1,119 @@
+---
+title: 'GRPO'
+description: 'Group-relative rule learning with a frozen LM: config, usage, and when to use it'
+icon: 'layer-group'
+---
+
+import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
+
+GRPO borrows one idea from the RL algorithm of the same name and drops the rest: sample a **group** of rollouts per input and measure every sample against the mean of its own group. No weights move. The "policy update" is an edit to a bounded rule list appended to the leaf's instruction, and that rule list is the whole artifact the run produces.
+
+## How it works
+
+Each step:
+
+1. **Sample**: pick `batch_size` training examples and draw `group_size` independent rollouts of the current program for each one. The rollout cache is bypassed, so every draw is live.
+2. **Filter**: a group whose reward spread (max − min) is below `min_spread` carries no within-group information. It is skipped, unless the cold-start fallback applies (below).
+3. **Contrast**: for each informative group, one teacher call reads the samples best-first with their advantages (reward minus the group mean), the metric's feedback, and their outputs, plus the example row, and distills one rule or `NONE`. A rule that quotes four or more consecutive words of the example row is a memorized answer, not a behaviour; the leak guard drops it and counts it in the step's `leaked`.
+4. **Consolidate**: the step's new rules are merged into the leaf's list by a second teacher call: keep, generalize, drop, capped at `max_rules`.
+5. **Gate**: the child (seed instruction plus rules) is scored on the scoring columns and accepted only if it does not fall below the incumbent. The incumbent is re-drawn on the same columns each step and compared through its running mean, because at temperature a single cached draw is a biased bar: a lucky one would reject every child.
+
+The winner is installed once, when `compile` returns.
+
+**Cold start.** A generic prompt's samples are often all equally far from the reference: every draft of an email is "assistant voice", the judge scores them all the same, and every group is flat. With `reference_fallback` (default on), a flat group whose mean is below `reference_ceiling` (default 0.8) is contrasted against the example's reference output instead of skipped: the teacher names the most important thing the reference does that no sample does. Once the rules create variance between samples, the within-group contrast takes over. Turn the fallback off for the pure group signal; flat groups at or above the ceiling are treated as solved either way.
+
+**Why the group matters.** A reflective optimizer that sees one rollout per input cannot tell "the prompt is weak" from "this input is hard". Sampling several rollouts of the same prompt on the same input separates the two: on a hard input every sample scores low, the spread is near zero, and the group is dropped. Only behaviours that *vary* between samples of the same input can explain a reward gap, so the teacher is pointed at exactly the controllable part. Advantages are mean-subtracted only; dividing by the group's standard deviation, as the original GRPO does, would amplify noise in near-tied groups.
+
+## Configuration
+
+```rust
+let grpo = GRPO::builder()
+    .steps(6)                 // optimization steps
+    .batch_size(4)            // examples (groups) per step
+    .group_size(4)            // samples per example, must be >= 2
+    .min_spread(0.05)         // skip groups with less reward spread than this
+    .max_rules(12)            // rule-list cap per leaf
+    .reference_fallback(true) // contrast flat, unsolved groups against the reference
+    .prompt_model(teacher_lm) // the teacher; strongly recommended
+    .seed(7)
+    .build();
+
+let report = grpo
+    .compile_module_with_valset(&mut module, &train, Some(&val), &metric)
+    .await?;
+for rule in &report.rules["writer"] {
+    println!("- {rule}");
+}
+```
+
+Other fields: `reference_ceiling` (default `0.8`; flat groups at or above it are solved, not contrasted), `incumbent_redraw` (default `true`; one extra scoring pass per step), `gate` (default `true`; `false` accepts every step, the ungated accretion of the original recipe), `min_gain` (default `0.0`; the improvement the gate requires), `max_metric_calls` / `max_lm_calls` (engine budget caps), `eval_concurrency` (default 16). The full field table is in the [optimizers reference](/docs/components/optimizers#grpo).
+
+`compile_module(&mut module, &trainset, &metric)` uses the trainset as both the sampling pool and the scoring columns. With a valset, groups are sampled from the trainset and the gate scores on the valset.
+
+## The temperature requirement
+
+Groups need variance. The module's LM must sample at a temperature above zero during optimization, or every group is flat and the run learns nothing. Deploy at the same temperature you optimized at: the rules were learned against that sampling distribution.
+
+Without a `prompt_model`, the contrast step degrades to the worst sample's metric feedback and consolidation to append-and-dedupe. That works only when the feedback already names the fix.
+
+## Usage example: copying a writing style
+
+Example `38-style-copy.rs` learns to write replies in one person's voice from an export of `(incoming message, their real reply)` pairs. The metric compares each draft to the real reply with an LLM judge scoring voice only, blended with deterministic stylometry (casing, greetings, exclamation, contractions, sentence length). The rules the teacher writes are a readable style guide, validated against held-out messages.
+
+```rust
+#[derive(Example, Clone, Debug, Serialize, Deserialize)]
+struct StyleRow {
+    context: String, // the message being replied to
+    reply: String,   // what the person actually wrote
+}
+
+let report = GRPO::builder()
+    .steps(6)
+    .batch_size(4)
+    .group_size(4)
+    .prompt_model(teacher_lm)
+    .build()
+    .compile_module_with_valset(&mut writer, &train, Some(&val), &metric)
+    .await?;
+```
+
+Run it with `STYLE_DATA=your-export.jsonl cargo run --example 38-style-copy`. The `STYLE_ARM` variable switches between `grpo`, `fewshot` (k real replies as demos, the baseline to beat for voice), and `grpo+fewshot`.
+
+## When to use GRPO
+
+**Best for:**
+- Tasks with many small, additive wins: voice and style copying, tone, format compliance
+- Automatic rewards: a judge against a reference, a checker, a heuristic
+- Fixes that are rule-shaped ("never open with a greeting") rather than whole-instruction rewrites
+
+**Avoid when:**
+- The module runs at temperature 0 (every group is flat)
+- Each input is either always solved or never solved by the current prompt (no within-group spread)
+- The fix needs a rewrite of the whole instruction rather than additive rules (use GEPA)
+
+## Comparison with other optimizers
+
+<OptimizerComparison />
+
+## GrpoReport
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `baseline_score` | `f64` | Mean score of the unmodified module on the scoring columns. |
+| `final_score` | `f64` | Mean score of the installed program on the scoring columns. |
+| `rules` | `BTreeMap<String, Vec<String>>` | The learned rules per leaf. The installed instruction is the seed plus this list. |
+| `steps` | `Vec<GrpoStep>` | Per-step outcomes: batch, per-group spreads, informative and flat groups, reference contrasts, insights, leaked, parent and child scores, accepted, rules after. |
+| `accepted` / `rejected` | `usize` | Steps whose child was promoted or rejected by the gate. |
+| `spend` | `Spend` | Engine spend for the run, teacher calls included. |
+
+## Implementation notes
+
+GRPO is a thin strategy over the shared engine. Groups come from `Engine::sample_rollouts`, which runs `indices × samples` live rollouts through the same bounded-concurrency fan-out as everything else, charges them as rollouts, and records nothing into the rollout cache or the score matrix: a draw is not the cell's canonical eval. The gate uses the ordinary cached `evaluate`, so a child whose rules did not change is served for free. See the [optimizer engine reference](/docs/components/optimizer-engine).
+
+Cost per step: `batch_size × group_size` rollouts, at most `batch_size` contrast calls, at most one consolidation call per touched leaf, and one scoring pass for the child.
+
+## Examples
+
+<Card title="Style copy" icon="code" href="https://github.com/krypticmouse/DSRs/tree/main/crates/dspy-rs/examples">
+  See examples/38-style-copy.rs and the bundled persona export in examples/data/style-persona.jsonl
+</Card>

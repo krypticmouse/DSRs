@@ -55,7 +55,7 @@ caps { net:search fs:read }
 
 ### `model`
 
-Declares a model that nodes reference as `@name`. The options block is optional; all keys inside it are optional: `base_url "..."`, `temperature N`, `max_tokens N`, `max_tool_iterations N`, `max_retries N`, `retry_base_delay_ms N`, `cache true|false`.
+Declares a model that nodes reference as `@name`. The options block is optional; all keys inside it are optional: `base_url "..."`, `temperature N`, `max_tokens N`, `max_tool_iterations N`, `max_retries N`, `retry_base_delay_ms N`, `request_timeout_secs N`, `cache true|false`.
 
 ```
 model fast = "openai:gpt-4o-mini"

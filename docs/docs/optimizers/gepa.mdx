@@ -12,6 +12,17 @@ import OptimizerComparison from '/snippets/optimizer-comparison.mdx';
 Reference: "GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning" (Agrawal et al., 2025, [arxiv:2507.19457](https://arxiv.org/abs/2507.19457))
 </Info>
 
+<Note>
+DSRs' `GEPA` runs on the RATCHET engine: the reference algorithm's search
+plus a held-out accept gate, paired racing, an operator portfolio with a
+trial ledger, an inline leak guard, fresh-data champion selection, and a
+seed-protected winner. Same knobs, same `GEPAResult`. In a 9-cell
+multi-model benchmark this configuration matched the reference `gepa`
+package on mean score with zero training-answer leaks (reference: up to 19
+per winner) and 3–50× smaller winning prompts. Zero-iteration or
+no-`prompt_model` runs keep the original single-loop semantics.
+</Note>
+
 ## Overview
 
 GEPA adaptively evolves the textual components of your module (its instructions). In addition to the scalar score, your metric returns text feedback explaining why the score is what it is. That feedback gives GEPA visibility into the failure, and a reflection LM uses it to propose a better instruction. Because each rollout carries an explanation rather than just a number, GEPA can find high-performing prompts in comparatively few rollouts.
@@ -177,7 +188,7 @@ prefer examples the parent hasn't already solved (`perfect_score`); a parent
 that aces its whole batch skips the generation instead of paying for a no-op
 reflection.
 
-`num_trials` and `temperature` also exist on the builder but are currently unused (reserved for multi-child evolution and mutation diversity control). The full field table is in the [optimizers reference](/docs/components/optimizers#gepa).
+`parents_per_step` (P) and `proposals_per_parent` (N) batch the search's proposal loop — P×N parallel proposals (gepa-ai blog, 2026-07-30): each step samples P parents, reflects N mutations per parent on disjoint mini-batches with all reflection calls running concurrently, and commits the whole batch before the search re-steers with validation results. The defaults (`1×1`) are the validated sequential behavior. `num_trials` and `temperature` also exist on the builder but are currently unused (multi-child evolution shipped as the P×N knobs instead). The full field table is in the [optimizers reference](/docs/components/optimizers#gepa).
 
 Pass validation data at compile time:
 

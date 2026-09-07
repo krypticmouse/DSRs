@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
   - `max_tool_iterations` - Upper bound on tool-loop round trips (default: 10)
   - `max_retries` - Additional attempts after a transient failure (default: 2)
   - `retry_base_delay_ms` - Base delay for exponential retry backoff (default: 250)
+  - `request_timeout_secs` - Deadline per provider round trip; a request that exceeds it is cancelled and retried as a transient failure (default: 600, `0` disables)
   - `cache` - Enable response caching (default: false)
 
 The live `LM` adds:
@@ -171,6 +172,7 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `max_tool_iterations` | `u32`  | `10`                 | Upper bound on tool-loop round trips per call                                  |
 | `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
 | `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
+| `request_timeout_secs` | `u64` | `600`                | Deadline per provider round trip (request sent to full body received). The provider HTTP client has no timeout of its own; a request past the deadline is cancelled, counted as transient (retried per `max_retries`), then fails the call. `0` disables |
 | `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
 
 ### Example with custom settings
