@@ -75,7 +75,7 @@ Prints (or rewrites) the canonical form of an artifact. The canonical form is `P
 
 ## `dsrs serve <program> [flags]`
 
-Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr.
+Serves a `.dsrs` program over HTTP. Startup is fail-fast, before the port binds: parse, apply the optional overlay (named form, verified against the program's hash and slot kinds), then `Interpreter::load` with the grants from `--allow`. Models are constructed from the artifact configs with secrets from provider environment variables; a QuickJS sandbox is added when none was supplied. Once bound, the address is printed on stderr. Set `DSRS_AUTH_TOKEN` to a token of at least 32 printable ASCII bytes. On loopback, the server generates and prints a token if the variable is unset. Binding to a non-loopback address requires `DSRS_AUTH_TOKEN`.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -97,7 +97,7 @@ Host tools cannot be served: a program declaring a host tool needs an embedding 
 | `GET /program` | The canonical `.dsrs` text, as `text/plain; charset=utf-8`. |
 | `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
 
-Error responses are always `{"error": ...}` with the interpreter's own message: a non-object request body and input-surface rejections are 400, everything else (LM failures, parse failures, budget, routing) is 500.
+Send `Authorization: Bearer <token>` to `/run`, `/schema`, and `/program`; `/healthz` is public. The server admits at most four concurrent runs and 30 runs per minute per process. Each run has a 60-second deadline, eight model calls, and a soft 16,384-token usage budget (usage is known only after each provider response). Authentication failures return 401, admission and budget failures return 429, and timeouts return 504. Other errors use `{"error": ...}` with the interpreter's message.
 
 ## From code to endpoint
 
@@ -140,6 +140,7 @@ A file that does not parse does not format; fix `check` errors first.
 
 ```bash
 dsrs serve qa.dsrs --port 8080
+# Read the generated bearer token from stderr, or set DSRS_AUTH_TOKEN first.
 ```
 
 Model API keys come from the usual provider environment variables (for example `OPENAI_API_KEY`). The flag table above lists `--host`, `--port`, `--overlay`, and `--allow`.
@@ -148,6 +149,7 @@ Model API keys come from the usual provider environment variables (for example `
 
 ```bash
 curl -s localhost:8080/run \
+  -H 'Authorization: Bearer <token printed by dsrs serve>' \
   -H 'content-type: application/json' \
   -d '{"question": "What is DSRs?"}'
 # {"output": {"answer": "...", "upper": "..."}}

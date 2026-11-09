@@ -35,8 +35,8 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
-    /// Serve a .dsrs program over HTTP (POST /run, GET /schema, GET /program,
-    /// GET /healthz).
+    /// Serve a .dsrs program over HTTP. Set DSRS_AUTH_TOKEN for a stable
+    /// bearer token; a random token is printed for loopback use.
     Serve {
         /// Path to the .dsrs artifact.
         program: PathBuf,
@@ -99,6 +99,7 @@ fn main() -> ExitCode {
                 overlay,
                 allow,
                 allowed_model_base_urls: allow_model_base_urls,
+                auth_token: std::env::var("DSRS_AUTH_TOKEN").ok(),
             };
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(runtime) => runtime,

@@ -26,19 +26,26 @@
 //! code). `load` surfaces that refusal with a hint rather than a bare
 //! "unbound" error.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use dspy_rs::ir::{Budget, Interpreter, LoadError, Overlay, ParamValue, Program, RunError};
 use dspy_rs::trace::{JsonMap, capture};
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
+
+const MAX_RUNS_PER_MINUTE: usize = 30;
+const MAX_CONCURRENT_RUNS: usize = 4;
+const RUN_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What `dsrs serve` needs to know before binding a port.
 #[derive(Debug, Clone, Default)]
@@ -53,6 +60,8 @@ pub struct ServeConfig {
     pub allow: Vec<String>,
     /// Exact artifact model URLs the operator permits at load.
     pub allowed_model_base_urls: Vec<String>,
+    /// Optional operator token; a random token is generated when absent.
+    pub auth_token: Option<String>,
 }
 
 /// A loaded serving app: shared interpreter + precomputed responses.
@@ -62,11 +71,68 @@ pub struct App {
     canonical: String,
     schema: Value,
     health: Value,
+    auth_token: String,
+    run_slots: Semaphore,
+    recent_runs: Mutex<VecDeque<Instant>>,
 }
 
 impl App {
     pub fn program(&self) -> &Arc<Program> {
         self.interp.program()
+    }
+
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
+    }
+
+    fn allow_run(&self) -> bool {
+        let now = Instant::now();
+        let mut recent = self.recent_runs.lock().expect("run limiter poisoned");
+        while recent
+            .front()
+            .is_some_and(|at| now.duration_since(*at) >= Duration::from_secs(60))
+        {
+            recent.pop_front();
+        }
+        if recent.len() >= MAX_RUNS_PER_MINUTE {
+            return false;
+        }
+        recent.push_back(now);
+        true
+    }
+}
+
+fn new_auth_token() -> anyhow::Result<String> {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| anyhow::anyhow!("auth token generation failed: {err}"))?;
+    let mut token = String::with_capacity(64);
+    for byte in bytes {
+        use std::fmt::Write;
+        write!(&mut token, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    Ok(token)
+}
+
+fn authorized(headers: &HeaderMap, app: &App) -> bool {
+    let expected = format!("Bearer {}", app.auth_token);
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        == Some(expected.as_str())
+}
+
+fn unauthorized() -> (StatusCode, axum::Json<Value>) {
+    (
+        StatusCode::UNAUTHORIZED,
+        axum::Json(json!({"error": "bearer token required"})),
+    )
+}
+
+fn run_budget() -> Budget {
+    Budget {
+        max_lm_calls: Some(8),
+        max_tokens: Some(16_384),
+        deadline: Some(Instant::now() + RUN_TIMEOUT),
     }
 }
 
@@ -85,6 +151,13 @@ impl std::fmt::Debug for App {
 /// canned models. Grants from `config.allow` and a QuickJS sandbox (when none
 /// was supplied) are added here.
 pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow::Result<Arc<App>> {
+    let auth_token = match &config.auth_token {
+        Some(token) if token.len() >= 32 && token.bytes().all(|byte| byte.is_ascii_graphic()) => {
+            token.clone()
+        }
+        Some(_) => anyhow::bail!("auth token must contain at least 32 printable ASCII bytes"),
+        None => new_auth_token()?,
+    };
     let program = Program::load_dsrs(&config.program)?;
 
     let overlay = match &config.overlay {
@@ -151,6 +224,9 @@ pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow:
         canonical,
         schema,
         health,
+        auth_token,
+        run_slots: Semaphore::new(MAX_CONCURRENT_RUNS),
+        recent_runs: Mutex::new(VecDeque::new()),
     }))
 }
 
@@ -168,6 +244,13 @@ pub fn router(app: Arc<App>) -> Router {
 /// Loads and serves until the process ends. Prints the bound address on
 /// stderr (port 0 binds an ephemeral port).
 pub async fn serve(config: &ServeConfig, host: &str, port: u16) -> anyhow::Result<()> {
+    if config.auth_token.is_none()
+        && !host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+    {
+        anyhow::bail!("DSRS_AUTH_TOKEN is required when binding beyond loopback");
+    }
     let app = load(config, dspy_rs::ir::RuntimeEnv::new()).await?;
     let listener = tokio::net::TcpListener::bind((host, port))
         .await
@@ -178,6 +261,10 @@ pub async fn serve(config: &ServeConfig, host: &str, port: u16) -> anyhow::Resul
         app.program().meta.name,
         app.program().meta.program_hash
     );
+    if config.auth_token.is_none() {
+        eprintln!("dsrs: generated bearer token: {}", app.auth_token());
+    }
+    eprintln!("dsrs: send Authorization: Bearer <token> to /run, /schema, and /program");
     axum::serve(listener, router(app)).await?;
     Ok(())
 }
@@ -190,22 +277,39 @@ async fn healthz_handler(State(app): State<Arc<App>>) -> axum::Json<Value> {
     axum::Json(app.health.clone())
 }
 
-async fn schema_handler(State(app): State<Arc<App>>) -> axum::Json<Value> {
-    axum::Json(app.schema.clone())
+async fn schema_handler(State(app): State<Arc<App>>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&headers, &app) {
+        return unauthorized().into_response();
+    }
+    axum::Json(app.schema.clone()).into_response()
 }
 
-async fn program_handler(State(app): State<Arc<App>>) -> impl IntoResponse {
+async fn program_handler(State(app): State<Arc<App>>, headers: HeaderMap) -> impl IntoResponse {
+    if !authorized(&headers, &app) {
+        return unauthorized().into_response();
+    }
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         app.canonical.clone(),
     )
+        .into_response()
 }
 
 async fn run_handler(
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
     Query(query): Query<HashMap<String, String>>,
     body: axum::Json<Value>,
 ) -> (StatusCode, axum::Json<Value>) {
+    if !authorized(&headers, &app) {
+        return unauthorized();
+    }
+    let Ok(_permit) = app.run_slots.try_acquire() else {
+        return (StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({"error": "too many concurrent runs"})));
+    };
+    if !app.allow_run() {
+        return (StatusCode::TOO_MANY_REQUESTS, axum::Json(json!({"error": "run rate limit reached"})));
+    }
     let Some(input) = body.0.as_object().cloned() else {
         return (
             StatusCode::BAD_REQUEST,
@@ -216,24 +320,27 @@ async fn run_handler(
         query.get("trace").map(String::as_str),
         Some("1") | Some("true")
     );
-    if want_trace {
-        run_traced(&app, input).await
-    } else {
-        match app
-            .interp
-            .run(input, app.overlay.clone(), Budget::unlimited())
-            .await
-        {
-            Ok(output) => (StatusCode::OK, axum::Json(json!({"output": output}))),
-            Err(err) => run_error(&err),
+    let budget = run_budget();
+    match tokio::time::timeout(RUN_TIMEOUT, async {
+        if want_trace {
+            run_traced(&app, input, budget).await
+        } else {
+            match app.interp.run(input, app.overlay.clone(), budget).await {
+                Ok(output) => (StatusCode::OK, axum::Json(json!({"output": output}))),
+                Err(err) => run_error(&err),
+            }
         }
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => (StatusCode::GATEWAY_TIMEOUT, axum::Json(json!({"error": "run timed out"}))),
     }
 }
 
-async fn run_traced(app: &Arc<App>, input: JsonMap) -> (StatusCode, axum::Json<Value>) {
+async fn run_traced(app: &Arc<App>, input: JsonMap, budget: Budget) -> (StatusCode, axum::Json<Value>) {
     let (result, mut trace) = capture(|| {
-        app.interp
-            .run(input, app.overlay.clone(), Budget::unlimited())
+        app.interp.run(input, app.overlay.clone(), budget)
     })
     .await;
     match result {
@@ -260,6 +367,7 @@ async fn run_traced(app: &Arc<App>, input: JsonMap) -> (StatusCode, axum::Json<V
 fn run_error(err: &RunError) -> (StatusCode, axum::Json<Value>) {
     let status = match err {
         RunError::Input { .. } => StatusCode::BAD_REQUEST,
+        RunError::Budget { .. } => StatusCode::TOO_MANY_REQUESTS,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, axum::Json(json!({"error": err.to_string()})))
