@@ -179,7 +179,7 @@ async fn captured_run() -> (Arc<Program>, Trace) {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
         .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
         .grant("net:search");
     let interp = Interpreter::load(three_leaf_program(), env).await.unwrap();

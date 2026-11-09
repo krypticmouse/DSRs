@@ -300,9 +300,11 @@ impl<S: Signature> Predict<S> {
         let mut tool_names = Vec::with_capacity(definitions.len());
         let mut seen = std::collections::HashSet::new();
         for definition in definitions {
-            // Duplicate names keep the first tool, mirroring `ToolSet::build`.
             if !seen.insert(definition.name.as_str()) {
-                continue;
+                return Err(internal_error(format!(
+                    "tool `{}` is attached more than once",
+                    definition.name
+                )));
             }
             let (tool_sig, tool_types) =
                 tool_signature_from_definition(&definition.name, &definition.parameters);
@@ -517,7 +519,7 @@ impl<S: Signature> Predict<S> {
     fn runtime_env(&self, lm: &Arc<crate::core::LM>) -> RuntimeEnv {
         let mut env = RuntimeEnv::new().bind_model("default", Arc::clone(lm));
         for tool in &self.tools {
-            env = env.bind_host_tool(&tool.name(), Arc::clone(tool));
+            env = env.bind_host_tool(&tool.name(), Arc::clone(tool), &[]);
         }
         env
     }

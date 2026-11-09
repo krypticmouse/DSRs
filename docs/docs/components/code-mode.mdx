@@ -69,7 +69,9 @@ A source only becomes callable after passing every stage of `Executor::register`
 |---|---|---|
 | `validate` | `(&self, &ToolSource) -> Result<(), RegisterError>` | Synchronous structural validation only; no sandbox. |
 | `register` | `async (&self, ToolSource) -> Result<RegisteredTool, RegisterError>` | The full four-stage lifecycle. |
+| `register_scoped` | `async (&self, ToolSource, &[String]) -> Result<RegisteredTool, RegisterError>` | Registers with only the current node's declared capabilities; unsupported executors fail closed. |
 | `execute` | `async (&self, ToolInvocation) -> Result<Value, ExecError>` | Runs a registered tool with JSON args. |
+| `execute_scoped` | `async (&self, ToolInvocation, &[String]) -> Result<Value, ExecError>` | Runs with only the current node's declared capabilities. |
 | `tool` | `(&self, &str) -> Option<RegisteredTool>` | Metadata for one registered tool. |
 | `tools` | `(&self) -> Vec<RegisteredTool>` | Metadata for every registered tool. |
 | `deregister` | `(&self, &str) -> bool` | Removes a tool; `true` if it was registered. |
@@ -84,7 +86,7 @@ The Tier-1 executor. Cheap to share: wrap it in an `Arc` and clone across tasks.
 | `with_config(config)` | Explicit `SandboxConfig`. |
 | `builder()` | Returns a `QuickJsExecutorBuilder`. |
 | `config()` | The active `SandboxConfig`. |
-| `add_capability(cap)` | Injects a host capability; its name becomes a global JS function in every sandbox created afterward. A duplicate name is refused with `RegisterError::InvalidCapability`. |
+| `add_capability(cap)` | Registers a host capability. Direct executor calls expose it; scoped calls expose it only when the node declares its required capability. A duplicate JS name is refused with `RegisterError::InvalidCapability`. |
 | `capability_names()` | Injected capability names, in registration order. |
 | `cache_stats()` | Bytecode-cache counters, as `CacheStats`. |
 | `rig_tool(name)` | On `Arc<Self>`: wraps a registered tool as `Arc<dyn rig::tool::ToolDyn>`; `None` if not registered. |
@@ -111,6 +113,8 @@ Resource limits applied to every sandbox instance. `Copy`, so it is passed by va
 | `deadline` | `Duration` | 500 ms | Wall-clock budget for one call. JS execution is interrupted by the engine's interrupt handler; a capability call is host code the interrupt handler cannot reach, so the executor bounds it with the *remaining* budget via `tokio::time::timeout` — a handler that runs past it is dropped and the call surfaces in JS as a deadline timeout. |
 | `max_stack` | `usize` | 512 KiB | Max JS stack, in bytes. |
 
+Results crossing the QuickJS bridge are limited to 1 MiB of serialized JSON, 10,000 values, and 64 nesting levels. The call deadline includes result conversion and capability result serialization.
+
 ### `CacheStats`
 
 Sources compile once per unique content (BLAKE3-keyed) and the bytecode is shared across calls and tool names. `CacheStats` carries `entries: usize`, `hits: u64`, `misses: u64`. The cache is bounded at 128 entries with a deliberately simple cap-and-clear eviction (an optimizer generating thousands of candidate tool bodies stays bounded instead of leaking them all); registered tools hold their own reference to their bytecode, so eviction only costs a recompile on the next miss. `deregister` evicts the tool's entry unless another registered tool shares the same source hash.
@@ -136,6 +140,7 @@ A `Capability` is an async Rust function injected into the sandbox as a global J
 | Constructor | Signature | What it does |
 |---|---|---|
 | `Capability::new` | `(name, description, f)` where `f: Fn(Value) -> Future<Output = Result<Value, String>>` | Capability from an async closure. |
+| `requiring` | `(self, cap)` | Sets the program capability that authorizes this JS function. For example, a JS function `order_lookup` can require `orders:read`. Without this call, the required capability equals the JS name. |
 | `Capability::from_tool` | `async (Arc<dyn ToolDyn>) -> Self` | Wraps an existing DSRs tool. Name and description come from the tool's definition, fetched once at wrap time; the name is mangled per `js_identifier`. |
 | `Capability::from_toolset` | `async (&[Arc<dyn ToolDyn>]) -> Result<Vec<Self>, RegisterError>` | `from_tool` for a whole set; errors if two tool names mangle to the same JS identifier. |
 | `Capability::wrap_tool` | `(js_name, description, tool_name, tool) -> Self` | Lower-level `from_tool`: caller supplies the JS name and description. `tool_name` is the original name, used in error messages. |
@@ -194,6 +199,7 @@ Raised while executing an already-registered tool or a `run_js` script.
 | `NotFound` | `not_found` | `name` | No tool with this name is registered. |
 | `Timeout` | `timeout` | `name`, `deadline_ms` | The call ran past its wall-clock deadline and was killed by the interrupt handler. |
 | `MemoryExceeded` | `memory_exceeded` | `name`, `limit_bytes` | The call exceeded the sandbox memory limit and was killed. |
+| `OutputLimit` | `output_limit` | `name`, `limit_bytes`, `limit_values`, `limit_depth` | The result exceeded the host bridge limit. |
 | `Js` | `js` | `name`, `message` | The JavaScript threw an uncaught exception (including syntax errors in `run_script`). |
 | `InvalidArgs` | `invalid_args` | `name`, `reason` | Arguments were rejected before the sandbox was entered (not an object, or missing required keys). |
 | `Capability` | `capability` | `name`, `capability`, `message` | An injected host capability returned an error and the script let it propagate. |

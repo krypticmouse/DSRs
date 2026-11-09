@@ -331,6 +331,23 @@ async fn tool_loop_events_are_ordered_within_one_span() {
     assert_eq!(parsed.spans[0].events.len(), 3);
 }
 
+#[tokio::test]
+async fn predict_rejects_same_named_tool_implementations() {
+    let predict = Predict::<CapQA>::builder()
+        .add_tool(EchoTool)
+        .add_tool(EchoTool)
+        .lm(make_test_lm(vec![]).await)
+        .build();
+    let err = predict
+        .call(CapQAInput {
+            question: "q".to_string(),
+        })
+        .await
+        .unwrap_err();
+    let detail = format!("{err:?}");
+    assert!(detail.contains("attached more than once"), "{detail}");
+}
+
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
 async fn parse_failure_leaves_error_span_with_raw_output() {

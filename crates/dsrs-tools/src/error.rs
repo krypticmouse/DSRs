@@ -24,6 +24,17 @@ pub enum ExecError {
     #[error("tool `{name}` exceeded its memory limit of {limit_bytes} bytes")]
     MemoryExceeded { name: String, limit_bytes: usize },
 
+    /// The serialized result or JSON value tree crossed the host bridge limit.
+    #[error(
+        "tool `{name}` result exceeds the sandbox output limit ({limit_bytes} bytes, {limit_values} values, or {limit_depth} levels)"
+    )]
+    OutputLimit {
+        name: String,
+        limit_bytes: usize,
+        limit_values: usize,
+        limit_depth: usize,
+    },
+
     /// The tool's JavaScript threw an uncaught exception.
     #[error("tool `{name}` threw: {message}")]
     Js { name: String, message: String },

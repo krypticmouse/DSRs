@@ -44,7 +44,7 @@ dsrs serve frontdesk.dsrs --allow kb:read
 program caps exceed host grants: missing ["orders:read"]
 ```
 
-The program's caps must be a subset of the host's grants or loading refuses, up front and by name, before a token is spent. In an embedding binary the same grants come from `RuntimeEnv::grant(cap)`, and the same subset check runs inside `Interpreter::load`.
+The program's caps must be a subset of the host's grants or loading refuses, up front and by name, before a token is spent. In an embedding binary the same grants come from `RuntimeEnv::grant(cap)`, and the same subset check runs inside `Interpreter::load`. A shared QuickJS executor projects only the current node's declared capabilities into registration and execution. A JS function can have a different name from its namespaced permission: `Capability::new("order_lookup", "...", handler).requiring("orders:read")`.
 
 <svg viewBox="0 0 760 400" role="img" aria-label="The border crossing: the program's declared manifest meets the host's grant list at a checkpoint; inset, the sandbox room contains only granted capabilities, with no door to pick" style={{width: '100%', maxWidth: '700px', display: 'block', margin: '2rem auto'}}>
   <g transform="rotate(-2 140 130)">

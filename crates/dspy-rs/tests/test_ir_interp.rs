@@ -614,7 +614,7 @@ async fn agent_loop_is_one_span_with_tool_events() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
         .grant("net:search");
     let interp = Interpreter::load(agent_program(), env).await.unwrap();
 
@@ -737,8 +737,8 @@ async fn tool_set_overlay_selects_the_tool_surface() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
-        .bind_host_tool("calc", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
+        .bind_host_tool("calc", Arc::new(SearchTool), &[])
         .grant("net:search");
     let interp = Interpreter::load(two_tool_agent_program(), env)
         .await
@@ -845,6 +845,72 @@ async fn hole_executes_in_the_sandbox() {
         SpanEvent::ToolRun { error: None, .. }
     ));
     assert_eq!(span.output.as_ref().unwrap()["shout"], "HELLO");
+}
+
+#[tokio::test]
+async fn sandbox_capabilities_are_scoped_to_each_hole() {
+    let mut b = ProgramBuilder::new("scoped_holes");
+    b.cap("secrets:read");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("allowed", T::String)
+            .output("denied", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let hole_sig = b.sig(
+        SignatureDef::build("Hole")
+            .input("question", T::String)
+            .output("shout", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let allowed = ir::hole(
+        "allowed_hole",
+        hole_sig,
+        "(a) => ({shout: secret(null)})",
+        &["secrets:read"],
+    )
+    .bind("question", ir::input("question"));
+    let denied = ir::hole(
+        "denied_hole",
+        hole_sig,
+        "(() => { if (typeof secret !== 'undefined') throw new Error('leak'); return (a) => ({shout: typeof secret}); })()",
+        &[],
+    )
+    .bind("question", ir::input("question"));
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([allowed, denied])
+                .out("allowed", ir::out("allowed_hole", "shout"))
+                .out("denied", ir::out("denied_hole", "shout")),
+        )
+        .unwrap();
+
+    let sandbox = Arc::new(dsrs_tools::QuickJsExecutor::new());
+    sandbox
+        .add_capability(
+            dsrs_tools::Capability::new("secret", "host secret", |_| async {
+                Ok(json!("visible"))
+            })
+            .requiring("secrets:read"),
+        )
+        .unwrap();
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .with_sandbox(sandbox)
+        .grant("secrets:read");
+    let interp = Interpreter::load(program, env).await.unwrap();
+    let output = interp
+        .run(obj(&[("question", json!("q"))]), None, Budget::unlimited())
+        .await
+        .unwrap();
+    assert_eq!(output["allowed"], "visible");
+    assert_eq!(output["denied"], "undefined");
 }
 
 #[tokio::test]
@@ -1038,7 +1104,7 @@ async fn caps_exceeding_grants_refuse_the_load() {
     let (lm, _client) = canned_lm(vec![]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool));
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"]);
     // agent_program declares net:search; the env grants nothing.
     let err = Interpreter::load(agent_program(), env).await.unwrap_err();
     assert!(matches!(
@@ -1053,6 +1119,26 @@ async fn unbound_host_tool_refuses_the_load() {
     let env = RuntimeEnv::new().bind_model("m", lm).grant("net:search");
     let err = Interpreter::load(agent_program(), env).await.unwrap_err();
     assert!(matches!(err, LoadError::HostToolUnbound { ref name } if name == "search"));
+}
+
+#[tokio::test]
+async fn artifact_cannot_underdeclare_a_bound_host_tool() {
+    let mut program = agent_program();
+    program.caps = Default::default();
+    for (_, tool) in program.tools.iter_mut() {
+        tool.caps = Default::default();
+    }
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
+        .grant("net:search");
+    let err = Interpreter::load(program, env).await.unwrap_err();
+    assert!(matches!(
+        err,
+        LoadError::HostBindingCapsUnderdeclared { ref name, ref missing }
+            if name == "search" && missing == &["net:search".to_string()]
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,7 +1313,7 @@ async fn worked_example_runs_end_to_end() {
     let env = RuntimeEnv::new()
         .bind_model("deep", deep_lm)
         .bind_model("fast", fast_lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
         .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
         .grant("net:search");
     let interp = Interpreter::load(program, env).await.unwrap();

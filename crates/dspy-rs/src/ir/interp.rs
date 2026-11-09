@@ -289,6 +289,8 @@ pub enum LoadError {
     Model { name: String, message: String },
     #[error("host tool `{name}` is not bound in the runtime environment")]
     HostToolUnbound { name: String },
+    #[error("host binding `{name}` requires capabilities absent from the artifact: {missing:?}")]
+    HostBindingCapsUnderdeclared { name: String, missing: Vec<String> },
     #[error("host (extern) hole `{name}` is not bound in the runtime environment")]
     HostHoleUnbound { name: String },
     #[error("program contains sandboxed code but the environment has no sandbox executor")]
@@ -383,12 +385,12 @@ pub struct RuntimeEnv {
     /// Pre-bound live models by declared model name (`"fast"`). Models not
     /// bound here are constructed from their `ModelDef.config` at load.
     pub models: HashMap<String, Arc<LM>>,
-    /// Host tool bindings by tool name, consulted once at load.
-    pub host_tools: HashMap<String, Arc<dyn rig::tool::ToolDyn>>,
+    /// Host tool bindings and host-owned capability requirements.
+    host_tools: HashMap<String, (Arc<dyn rig::tool::ToolDyn>, CapSet)>,
     /// Host (extern) hole bindings by leaf name, consulted once at load
     /// (RFC 0003 §4.1). The fn receives the hole's resolved input map and
     /// returns a JSON value coerced against the hole's output signature.
-    pub host_holes: HashMap<String, HostHoleFn>,
+    host_holes: HashMap<String, (HostHoleFn, CapSet)>,
     /// The sandbox executing holes and sandboxed tools (QuickJS in v1).
     /// Required iff the program carries sandboxed code.
     pub sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
@@ -418,19 +420,33 @@ impl RuntimeEnv {
         self
     }
 
-    pub fn bind_host_tool(mut self, name: &str, tool: Arc<dyn rig::tool::ToolDyn>) -> Self {
-        self.host_tools.insert(name.to_string(), tool);
+    /// Bind a native tool with requirements owned by the host, independent of
+    /// any capability claim in a loaded artifact. Pass `&[]` only for tools
+    /// that genuinely need no capability.
+    pub fn bind_host_tool(
+        mut self,
+        name: &str,
+        tool: Arc<dyn rig::tool::ToolDyn>,
+        required_caps: &[&str],
+    ) -> Self {
+        self.host_tools
+            .insert(name.to_string(), (tool, required_caps.iter().copied().collect()));
         self
     }
 
     /// Binds a native implementation for an extern hole by leaf name.
-    pub fn bind_host_hole<F, Fut>(mut self, name: &str, f: F) -> Self
+    pub fn bind_host_hole<F, Fut>(mut self, name: &str, required_caps: &[&str], f: F) -> Self
     where
         F: Fn(JsonMap) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, String>> + Send + 'static,
     {
-        self.host_holes
-            .insert(name.to_string(), Arc::new(move |input| Box::pin(f(input))));
+        self.host_holes.insert(
+            name.to_string(),
+            (
+                Arc::new(move |input| Box::pin(f(input))),
+                required_caps.iter().copied().collect(),
+            ),
+        );
         self
     }
 
@@ -526,20 +542,25 @@ impl Interpreter {
         }
 
         let mut tool_exec: SecondaryMap<ToolId, Option<ToolExec>> = SecondaryMap::new();
-        let mut sandboxed: Vec<(String, ParamId, crate::ir::graph::SigId)> = Vec::new();
+        let mut sandboxed: Vec<(String, ParamId, crate::ir::graph::SigId, CapSet)> = Vec::new();
         for (id, tool) in program.tools.iter() {
             let name = program.syms.get(tool.name).to_string();
             match tool.kind {
                 ToolKind::Host => {
-                    let bound = env
+                    let (bound, required) = env
                         .host_tools
                         .get(&name)
-                        .cloned()
                         .ok_or(LoadError::HostToolUnbound { name: name.clone() })?;
-                    tool_exec[id] = Some(ToolExec::Host(bound));
+                    if !required.is_subset(&tool.caps) {
+                        return Err(LoadError::HostBindingCapsUnderdeclared {
+                            name,
+                            missing: required.missing_from(&tool.caps),
+                        });
+                    }
+                    tool_exec[id] = Some(ToolExec::Host(Arc::clone(bound)));
                 }
                 ToolKind::Sandboxed { code } => {
-                    sandboxed.push((name, code, tool.sig));
+                    sandboxed.push((name, code, tool.sig, tool.caps.clone()));
                     tool_exec[id] = Some(ToolExec::Sandboxed);
                 }
             }
@@ -549,14 +570,21 @@ impl Interpreter {
             if let Node::Hole(hole) = node {
                 let name = program.syms.get(hole.name).to_string();
                 match hole.imp {
-                    HoleImpl::Sandboxed { code } => sandboxed.push((name, code, hole.sig)),
+                    HoleImpl::Sandboxed { code } => {
+                        sandboxed.push((name, code, hole.sig, hole.caps.clone()))
+                    }
                     HoleImpl::Host { .. } => {
-                        let bound = env
+                        let (bound, required) = env
                             .host_holes
                             .get(&name)
-                            .cloned()
                             .ok_or(LoadError::HostHoleUnbound { name: name.clone() })?;
-                        host_holes.insert(name, bound);
+                        if !required.is_subset(&hole.caps) {
+                            return Err(LoadError::HostBindingCapsUnderdeclared {
+                                name,
+                                missing: required.missing_from(&hole.caps),
+                            });
+                        }
+                        host_holes.insert(name, Arc::clone(bound));
                     }
                 }
             }
@@ -595,7 +623,7 @@ impl Interpreter {
         let mut registered = HashMap::new();
         if !sandboxed.is_empty() {
             let executor = sandbox.as_ref().ok_or(LoadError::SandboxMissing)?;
-            for (base, code, sig) in sandboxed {
+            for (base, code, sig, caps) in sandboxed {
                 let ParamValue::Code { source, hash, .. } = &program.params[code].default else {
                     unreachable!("validated: code slots hold Code values");
                 };
@@ -606,6 +634,7 @@ impl Interpreter {
                     *hash,
                     &program.sigs[sig],
                     &program.types,
+                    &caps,
                 )
                 .await
                 .map_err(|source| LoadError::Register {
@@ -1838,7 +1867,9 @@ impl Interpreter {
         }
 
         let started = Instant::now();
-        let result = self.execute_hole_impl(&at, &imp, &input, def).await;
+        let result = self
+            .execute_hole_impl(&at, &imp, &input, def, &n.caps)
+            .await;
         let duration_us = started.elapsed().as_micros() as u64;
 
         match result {
@@ -1903,6 +1934,7 @@ impl Interpreter {
         imp: &ResolvedHoleImpl,
         input: &JsonMap,
         def: &SignatureDef,
+        caps: &CapSet,
     ) -> Result<(String, Value), RunError> {
         match imp {
             ResolvedHoleImpl::Sandboxed { source, hash } => {
@@ -1914,13 +1946,13 @@ impl Interpreter {
                     message: "hole evaluated without a sandbox (load should have refused)".into(),
                 })?;
                 let name = self
-                    .ensure_registered(at, sandbox.as_ref(), source, *hash, def)
+                    .ensure_registered(at, sandbox.as_ref(), source, *hash, def, caps)
                     .await?;
                 let value = sandbox
-                    .execute(dsrs_tools::ToolInvocation::new(
-                        name.clone(),
-                        Value::Object(input.clone()),
-                    ))
+                    .execute_scoped(
+                        dsrs_tools::ToolInvocation::new(name.clone(), Value::Object(input.clone())),
+                        &caps.iter().map(str::to_string).collect::<Vec<_>>(),
+                    )
                     .await
                     .map_err(|source| RunError::Hole {
                         at: at.into(),
@@ -2355,14 +2387,15 @@ impl Interpreter {
                 source,
                 *hash,
                 &self.program.sigs[tool.sig],
+                &tool.caps,
             )
             .await
             .map_err(|err| err.to_string())?;
         sandbox
-            .execute(dsrs_tools::ToolInvocation::new(
-                registered_name,
-                call.function.arguments.clone(),
-            ))
+            .execute_scoped(
+                dsrs_tools::ToolInvocation::new(registered_name, call.function.arguments.clone()),
+                &tool.caps.iter().map(str::to_string).collect::<Vec<_>>(),
+            )
             .await
             .map(|value| value.to_string())
             .map_err(|err| err.to_llm_json())
@@ -2488,9 +2521,12 @@ impl Interpreter {
                             source,
                             *hash,
                             &p.sigs[p.tools[tool_id].sig],
+                            &p.tools[tool_id].caps,
                         )
                         .await?;
                     let tool_name = definition.name.clone();
+                    let caps: Vec<String> =
+                        p.tools[tool_id].caps.iter().map(str::to_string).collect();
                     dsrs_tools::Capability::new(
                         js_name.clone(),
                         definition.description.clone(),
@@ -2498,9 +2534,13 @@ impl Interpreter {
                             let sandbox = Arc::clone(&sandbox);
                             let registered = registered.clone();
                             let tool_name = tool_name.clone();
+                            let caps = caps.clone();
                             async move {
                                 sandbox
-                                    .execute(dsrs_tools::ToolInvocation::new(registered, args))
+                                    .execute_scoped(
+                                        dsrs_tools::ToolInvocation::new(registered, args),
+                                        &caps,
+                                    )
                                     .await
                                     .map_err(|err| format!("tool `{tool_name}` failed: {err}"))
                             }
@@ -2607,6 +2647,7 @@ impl Interpreter {
         source: &str,
         hash: u64,
         sig: &SignatureDef,
+        caps: &CapSet,
     ) -> Result<String, RunError> {
         {
             let registered = self.registered.lock().await;
@@ -2614,7 +2655,7 @@ impl Interpreter {
                 return Ok(name.clone());
             }
         }
-        let name = register_code(sandbox, at, source, hash, sig, &self.program.types)
+        let name = register_code(sandbox, at, source, hash, sig, &self.program.types, caps)
             .await
             .map_err(|err| RunError::Hole {
                 at: at.into(),
@@ -3062,6 +3103,7 @@ async fn register_code(
     hash: u64,
     sig: &SignatureDef,
     types: &TypeTable,
+    caps: &CapSet,
 ) -> Result<String, dsrs_tools::RegisterError> {
     let sanitized: String = base
         .chars()
@@ -3086,7 +3128,8 @@ async fn register_code(
         params,
         source,
     );
-    sandbox.register(tool_source).await?;
+    let allowed: Vec<String> = caps.iter().map(str::to_string).collect();
+    sandbox.register_scoped(tool_source, &allowed).await?;
     Ok(name)
 }
 

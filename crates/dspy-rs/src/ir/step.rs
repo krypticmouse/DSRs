@@ -55,6 +55,8 @@ pub struct AgentStepOpts {
 /// One `#[tool]` declaration: metadata plus the host implementation.
 pub struct ToolStepDef {
     pub name: &'static str,
+    /// Stable Rust implementation identity, including its module path.
+    pub implementation: &'static str,
     /// Doc comment — the `ToolDesc` gene's default text.
     pub desc: &'static str,
     pub caps: &'static [&'static str],

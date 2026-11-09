@@ -94,6 +94,56 @@ async fn agentic(question: String) -> Result<AOut, dspy_rs::ir::RunError> {
     })
 }
 
+mod ordinary {
+    use super::*;
+
+    #[tool]
+    pub fn lookup(query: String) -> String {
+        query
+    }
+}
+
+mod privileged {
+    use super::*;
+
+    #[tool(caps("demo:shout"))]
+    pub fn lookup(query: String) -> String {
+        query
+    }
+}
+
+#[agent(tools(ordinary::lookup, privileged::lookup))]
+fn conflicting_agent(question: String) -> String;
+
+#[test]
+fn different_same_named_tools_are_rejected_during_linking() {
+    use dspy_rs::ir::{FieldType, ModuleSpec, ModuleStep, ModuleStepKind, PortSpec, build_module_program};
+    let spec = ModuleSpec {
+        name: "conflicting_tools",
+        caps: &["demo:shout"],
+        params: vec![("question", Some(FieldType::String))],
+        steps: vec![ModuleStep {
+            binding: "result",
+            kind: ModuleStepKind::Call {
+                def: conflicting_agent::__dsrs_step(),
+                args: vec![PortSpec::Input("question")],
+            },
+        }],
+        outs: vec![(
+            "answer",
+            PortSpec::Out {
+                node: "result",
+                field: "conflicting_agent",
+            },
+        )],
+    };
+    let result = build_module_program(spec);
+    assert!(matches!(
+        &result,
+        Err(dspy_rs::ir::ModuleBuildError::ToolConflict { name }) if name == "lookup"
+    ), "{result:?}");
+}
+
 // ---------------------------------------------------------------------------
 // M-2: metadata
 // ---------------------------------------------------------------------------
