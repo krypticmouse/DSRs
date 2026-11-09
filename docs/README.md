@@ -63,7 +63,12 @@ repository secret.
 `docs/toast-chat.js` is auto-injected into every page by Mintlify and adds
 an "Ask AI" chat backed by toast-1, grounded in the `dsrs-docs` store. The
 browser never sees the API key: requests go through the Cloudflare Worker
-in `docs-chat-worker/`. To deploy it:
+in `docs-chat-worker/`. A SQLite-backed Durable Object reserves one unit
+before each Mixedbread request, including the fallback retry, and stops
+upstream calls after `CHAT_DAILY_BUDGET` (200 by default) across all Worker
+locations. If its quota binding is unavailable, chat fails closed. Set the
+budget in `docs-chat-worker/wrangler.toml` to match the provider allowance.
+To deploy it:
 
 ```bash
 cd docs-chat-worker

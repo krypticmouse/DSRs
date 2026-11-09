@@ -5,3 +5,12 @@ compatibility_date = "2026-08-01"
 [vars]
 STORES = "dsrs-docs,dsrs-code"
 ALLOWED_ORIGINS = "https://dsrs.herumbshandilya.com"
+CHAT_DAILY_BUDGET = "200"
+
+[[durable_objects.bindings]]
+name = "CHAT_QUOTA"
+class_name = "ChatQuota"
+
+[exports.ChatQuota]
+type = "durable-object"
+storage = "sqlite"
