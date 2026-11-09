@@ -65,9 +65,8 @@ pub(crate) fn validate_constraint_expression(expression: &str) -> Result<(), &'s
                         | BinOpKind::Rem
                 ) =>
             {
-                let numeric_literal = |expr: &Expr<'_>| {
-                    matches!(expr, Expr::Const(value) if value.value.is_number())
-                };
+                let numeric_literal =
+                    |expr: &Expr<'_>| matches!(expr, Expr::Const(value) if value.value.is_number());
                 if !numeric_literal(&op.left) && !numeric_literal(&op.right) {
                     return Err("constraint arithmetic requires a numeric literal");
                 }
@@ -140,6 +139,27 @@ pub fn evaluate_expression(expression: &str, value: &Value) -> bool {
     eval_expression(expression, value).unwrap_or(false)
 }
 
+/// Reuses validated dynamic expressions only for the lifetime of one coercion.
+/// Owned IR expressions must not accumulate in the process-wide static cache.
+#[derive(Default)]
+pub(crate) struct ConstraintEvalCache<'a> {
+    expressions: HashMap<&'a str, Option<Expression<'a, 'a>>>,
+}
+
+impl<'a> ConstraintEvalCache<'a> {
+    pub(crate) fn evaluate(&mut self, expression: &'a str, value: &Value) -> bool {
+        let env: &'a Environment<'a> = &CONSTRAINT_ENV;
+        let compiled = self.expressions.entry(expression).or_insert_with(|| {
+            validate_constraint_expression(expression)
+                .ok()
+                .and_then(|_| env.compile_expression(expression).ok())
+        });
+        compiled
+            .as_ref()
+            .is_some_and(|expr| eval_compiled(expr, value))
+    }
+}
+
 fn eval_expression(expression: &str, value: &Value) -> Result<bool, minijinja::Error> {
     let ctx = minijinja::context! { this => value };
     let expr = CONSTRAINT_ENV.compile_expression(expression)?;
@@ -182,7 +202,7 @@ pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -
     passed
 }
 
-fn eval_compiled(expr: &Expression<'static, 'static>, value: &Value) -> bool {
+fn eval_compiled(expr: &Expression<'_, '_>, value: &Value) -> bool {
     let ctx = minijinja::context! { this => value };
     expr.eval(ctx)
         .map(|result| result.is_true())

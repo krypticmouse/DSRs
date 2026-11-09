@@ -1852,7 +1852,7 @@ impl Interpreter {
                     duration_us,
                     error: None,
                 };
-                match coerce_outputs(&at, def, &p.types, &value) {
+                match coerce_outputs(&at, def, &p.types, value, &raw) {
                     Ok(output) => {
                         if let Some(guard) = guard {
                             guard.finish(SpanOutcome {
@@ -2170,10 +2170,11 @@ impl Interpreter {
                     .find(|call| lc.stop_names.contains(&call.function.name))
                 {
                     let args = call.function.arguments.clone();
-                    let output = coerce_outputs(lc.at, lc.def, types, &args)?;
+                    let raw = args.to_string();
+                    let output = coerce_outputs(lc.at, lc.def, types, args, &raw)?;
                     return Ok(LoopOutcome::Done {
                         output,
-                        raw: args.to_string(),
+                        raw,
                         field_meta: IndexMap::new(),
                         chat,
                     });
@@ -2854,25 +2855,26 @@ fn coerce_outputs(
     at: &str,
     def: &SignatureDef,
     types: &TypeTable,
-    value: &Value,
+    value: Value,
+    raw: &str,
 ) -> Result<JsonMap, RunError> {
-    let Some(object) = value.as_object() else {
+    let Value::Object(mut object) = value else {
         return Err(RunError::Parse {
             at: at.into(),
-            raw: value.to_string(),
+            raw: raw.to_string(),
             source: None,
             usage: LmUsage::default(),
         });
     };
     let mut output = JsonMap::new();
     for field in def.outputs.iter() {
-        match object.get(&*field.name) {
+        match object.remove(&*field.name) {
             Some(v)
-                if json_matches_type(v, &field.ty, types)
-                    && crate::typesys::coerce::validate_json_constraints(v, &field.ty, types)
+                if json_matches_type(&v, &field.ty, types)
+                    && crate::typesys::coerce::validate_json_constraints(&v, &field.ty, types)
                         .is_ok() =>
             {
-                output.insert(field.name.to_string(), v.clone());
+                output.insert(field.name.to_string(), v);
             }
             None if field.ty.is_optional() => {
                 output.insert(field.name.to_string(), Value::Null);
@@ -2880,7 +2882,7 @@ fn coerce_outputs(
             _ => {
                 return Err(RunError::Parse {
                     at: at.into(),
-                    raw: value.to_string(),
+                    raw: raw.to_string(),
                     source: None,
                     usage: LmUsage::default(),
                 });
@@ -2923,11 +2925,15 @@ mod output_constraint_tests {
             .output("score", crate::typesys::FieldType::Class("Score".into()))
             .finish()
             .unwrap();
+        let invalid = serde_json::json!({"score":{"value":0}});
+        let raw = invalid.to_string();
         assert!(matches!(
-            coerce_outputs("stop", &def, &types, &serde_json::json!({"score":{"value":0}})),
+            coerce_outputs("stop", &def, &types, invalid, &raw),
             Err(RunError::Parse { .. })
         ));
-        assert!(coerce_outputs("stop", &def, &types, &serde_json::json!({"score":{"value":1}})).is_ok());
+        let valid = serde_json::json!({"score":{"value":1}});
+        let raw = valid.to_string();
+        assert!(coerce_outputs("stop", &def, &types, valid, &raw).is_ok());
     }
 }
 
