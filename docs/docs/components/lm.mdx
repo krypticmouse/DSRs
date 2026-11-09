@@ -145,6 +145,27 @@ fn main() -> anyhow::Result<()> {
   </Tab>
 </Tabs>
 
+## Response caching and sampling
+
+Enable response caching with `.cache(true)`. Cache keys use the formatted messages and generation settings, including model, endpoint, effective temperature, token limit, output-schema/JSON-mode options, and scoped sampling identity. Responses with tools bypass the cache so tool side effects are not replayed. Cached entries retain raw assistant text and the original token usage; cache hits report zero new token usage.
+
+Use a stable sampling identity to reuse an earlier response, or a distinct identity to request a fresh sample:
+
+```rust
+use dspy_rs::{SamplingOptions, with_sampling_options};
+
+let prediction = with_sampling_options(
+    SamplingOptions {
+        id: Some("trial-2".to_string()),
+        temperature: Some(0.8),
+    },
+    predictor.call(input),
+)
+.await?;
+```
+
+Sampling settings apply within the current task-local scope and are restored afterward. Matching identities can reuse cache entries only when the rest of the request also matches.
+
 ## Inspecting history
 
 ```rust

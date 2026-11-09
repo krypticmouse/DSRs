@@ -17,6 +17,30 @@ LM Response → Adapter.parse() → Typed Output
 
 ## ChatAdapter
 
+### Provider-native JSON output
+
+`Predict` automatically selects the response format from the configured LM and output signature:
+
+- For OpenAI, Gemini, and Anthropic clients, compatible signatures use provider-native JSON Schema output.
+- When a signature cannot use strict schemas, OpenAI and Gemini clients use JSON mode.
+- Other clients use the delimiter protocol described below.
+
+JSON responses pass through typed coercion and constraint checking, with output aliases mapped back to canonical field names. This behavior is provided by `ChatAdapter`; there is no separate `JSONAdapter` to configure.
+
+Custom OpenAI-compatible endpoints use the delimiter protocol by default. If your endpoint supports native structured output, opt in when constructing its LM:
+
+```rust
+let lm = LM::builder()
+    .base_url("http://localhost:8000/v1".to_string())
+    .model("my-model".to_string())
+    .build()
+    .await?
+    .with_custom_output_schema(true);
+configure(lm);
+```
+
+Capability selection happens before the request. A provider error is returned to the caller; it does not trigger an automatic retry with a different response format.
+
 ### Prompt structure
 
 The system message has four parts (in this order):

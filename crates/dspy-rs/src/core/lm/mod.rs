@@ -388,9 +388,10 @@ enum ChoiceAction {
 /// Anthropic returns `[Reasoning, ToolCall]` or `[Reasoning, Text]`;
 /// OpenAI Responses API returns `[Reasoning, FunctionCall]`.
 /// Multiple tool calls in one response are supported (parallel tool calling).
-fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
+fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> Result<ChoiceAction> {
     let mut text: Option<String> = None;
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut has_image = false;
 
     for item in choice.iter() {
         match item {
@@ -400,20 +401,25 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
             AssistantContent::Text(t) => {
                 text = Some(t.text.clone());
             }
-            AssistantContent::Reasoning(_) | AssistantContent::Image(_) => {}
+            AssistantContent::Reasoning(_) => {}
+            AssistantContent::Image(_) => has_image = true,
         }
     }
 
     if !tool_calls.is_empty() {
-        return ChoiceAction::ToolCalls {
+        return Ok(ChoiceAction::ToolCalls {
             calls: tool_calls,
             full_content: Box::new(choice),
             assistant_text: text,
-        };
+        });
     }
 
     if let Some(t) = text {
-        return ChoiceAction::Text(t);
+        return Ok(ChoiceAction::Text(t));
+    }
+
+    if has_image {
+        anyhow::bail!("Image responses without text or tool calls are not supported");
     }
 
     // Fallback: only reasoning blocks — extract display text
@@ -425,7 +431,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    ChoiceAction::Text(display)
+    Ok(ChoiceAction::Text(display))
 }
 
 /// Whether a rig completion error is worth retrying.
@@ -759,7 +765,7 @@ impl LM {
 
             // Scan ALL content blocks — don't just look at .first(), since
             // responses can be [Reasoning, ToolCall] or [Reasoning, Text].
-            match classify_choice(response.choice) {
+            match classify_choice(response.choice)? {
                 ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
                     let message = Message::assistant(&text);
@@ -972,7 +978,7 @@ impl LM {
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
         let mut events: Vec<SpanEvent> = Vec::new();
-        let classified = classify_choice(response.choice);
+        let classified = classify_choice(response.choice)?;
         let first_choice = match classified {
             ChoiceAction::Text(text) => {
                 let message = Message::assistant(&text);
@@ -1377,7 +1383,7 @@ mod tests {
     #[test]
     fn classify_text_only() {
         let choice = OneOrMany::one(make_text("hello"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "hello"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1386,7 +1392,7 @@ mod tests {
     #[test]
     fn classify_single_tool_call() {
         let choice = OneOrMany::one(make_tool_call("search"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1409,7 +1415,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1433,7 +1439,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "the answer is 42"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1442,7 +1448,7 @@ mod tests {
     #[test]
     fn classify_reasoning_only_fallback() {
         let choice = OneOrMany::one(make_reasoning("just thinking"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "just thinking"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1453,7 +1459,7 @@ mod tests {
         let choice =
             OneOrMany::many(vec![make_text("some text"), make_tool_call("search")]).unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 assistant_text,
@@ -1476,7 +1482,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1493,13 +1499,54 @@ mod tests {
     }
 
     #[test]
-    fn classify_image_only_fallback() {
+    fn classify_image_only_returns_error() {
         let choice = OneOrMany::one(AssistantContent::Image(
             rig::completion::message::Image::default(),
         ));
-        match classify_choice(choice) {
-            ChoiceAction::Text(t) => assert!(t.is_empty()),
-            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        let error = classify_choice(choice)
+            .err()
+            .expect("image output must fail");
+        assert!(error.to_string().contains("Image responses"));
+    }
+
+    #[test]
+    fn classify_image_with_text_preserves_text() {
+        let choice = OneOrMany::many(vec![
+            AssistantContent::Image(rig::completion::message::Image::default()),
+            make_text("caption"),
+        ])
+        .unwrap();
+        match classify_choice(choice).unwrap() {
+            ChoiceAction::Text(text) => assert_eq!(text, "caption"),
+            _ => panic!("expected caption"),
+        }
+    }
+
+    #[tokio::test]
+    async fn image_response_errors_propagate_from_initial_and_tool_loop_completions() {
+        for after_tool in [false, true] {
+            let mut responses = Vec::new();
+            if after_tool {
+                responses.push(make_tool_call("counter"));
+            }
+            responses.push(AssistantContent::Image(
+                rig::completion::message::Image::default(),
+            ));
+            let lm = test_lm_with_model(TestCompletionModel::new(responses));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let tools: Vec<Arc<dyn ToolDyn>> = if after_tool {
+                vec![Arc::new(CountingTool {
+                    calls: Arc::clone(&calls),
+                })]
+            } else {
+                vec![]
+            };
+            let error = lm
+                .call(Chat::new(vec![Message::user("hello")]), tools)
+                .await
+                .expect_err("image response must fail");
+            assert!(error.to_string().contains("Image responses"));
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(after_tool));
         }
     }
 
