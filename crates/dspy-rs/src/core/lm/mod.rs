@@ -252,9 +252,17 @@ impl LM {
         })
     }
 
+    /// Replaces the provider client and starts a fresh response cache and history
+    /// when caching is enabled. Existing clones retain their client and cache.
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        let cache_handler = if self.config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
         Ok(LM {
             client: Some(Arc::new(client)),
+            cache_handler,
             ..self
         })
     }
