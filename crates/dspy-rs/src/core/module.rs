@@ -53,6 +53,13 @@ pub trait PredictorInfo: Send + Sync {
     /// typed `Demo<S>` form (schema mismatch).
     fn load_state(&mut self, state: PredictState) -> AnyResult<()>;
 
+    /// Checks whether [`load_state`](Self::load_state) will accept `state`
+    /// without changing the predictor. Implementations that can reject a
+    /// state should override this method.
+    fn validate_state(&self, _state: &PredictState) -> AnyResult<()> {
+        Ok(())
+    }
+
     /// Assigns the component name this predictor records on trace spans.
     ///
     /// Part of the trace-name contract (see [`Predictors`]): the optimizer

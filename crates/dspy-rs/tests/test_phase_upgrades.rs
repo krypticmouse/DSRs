@@ -56,6 +56,8 @@ struct TwoStep {
     second: Predict<QA>,
 }
 
+dspy_rs::predictors!(TwoStep { first, second });
+
 impl Module for TwoStep {
     type Input = QAInput;
     type Output = QAOutput;
@@ -173,8 +175,14 @@ fn module_state_apply_rejects_unknown_predictors() {
         predictor: Predict::<QA>::builder().instruction("tuned").build(),
     };
     let mut state = ModuleState::from_module(&mut tuned).expect("dump should succeed");
+    let before = ModuleState::from_module(&tuned).unwrap().predictors;
 
     // Simulate a saved state whose structure diverged from the module.
+    state
+        .predictors
+        .get_mut("predictor")
+        .unwrap()
+        .instruction_override = Some("changed".into());
     let ghost = state.predictors["predictor"].clone();
     state.predictors.insert("ghost".to_string(), ghost);
 
@@ -182,6 +190,105 @@ fn module_state_apply_rejects_unknown_predictors() {
         .apply(&mut tuned)
         .expect_err("unknown predictor paths should be rejected");
     assert!(err.to_string().contains("ghost"));
+    assert_eq!(ModuleState::from_module(&tuned).unwrap().predictors, before);
+}
+
+#[test]
+fn module_state_apply_rejects_malformed_later_predictor_without_mutation() {
+    let mut module = TwoStep {
+        first: Predict::<QA>::builder()
+            .instruction("original first")
+            .build(),
+        second: Predict::<QA>::builder()
+            .instruction("original second")
+            .build(),
+    };
+    let mut state = ModuleState::from_module(&module).unwrap();
+    let before = state.predictors.clone();
+    state
+        .predictors
+        .get_mut("first")
+        .unwrap()
+        .instruction_override = Some("changed first".into());
+    state.predictors.get_mut("second").unwrap().demos.push(
+        serde_json::json!({"question": "missing answer"})
+            .as_object()
+            .unwrap()
+            .clone(),
+    );
+
+    let err = state
+        .apply(&mut module)
+        .expect_err("invalid demo must fail");
+    assert!(err.to_string().contains("second"));
+    assert_eq!(
+        ModuleState::from_module(&module).unwrap().predictors,
+        before
+    );
+}
+
+struct FailAfterMutation {
+    inner: Predict<QA>,
+}
+
+impl dspy_rs::PredictorInfo for FailAfterMutation {
+    fn schema(&self) -> &'static dspy_rs::SignatureSchema {
+        dspy_rs::PredictorInfo::schema(&self.inner)
+    }
+
+    fn instruction(&self) -> String {
+        dspy_rs::PredictorInfo::instruction(&self.inner)
+    }
+
+    fn default_instruction(&self) -> String {
+        dspy_rs::PredictorInfo::default_instruction(&self.inner)
+    }
+
+    fn demos_as_json(&self) -> Vec<dspy_rs::trace::JsonMap> {
+        dspy_rs::PredictorInfo::demos_as_json(&self.inner)
+    }
+
+    fn dump_state(&self) -> dspy_rs::PredictState {
+        dspy_rs::PredictorInfo::dump_state(&self.inner)
+    }
+
+    fn load_state(&mut self, state: dspy_rs::PredictState) -> Result<()> {
+        let fail = state.instruction_override.as_deref() == Some("reject");
+        dspy_rs::PredictorInfo::load_state(&mut self.inner, state)?;
+        if fail {
+            anyhow::bail!("injected load failure");
+        }
+        Ok(())
+    }
+
+    fn set_trace_name(&mut self, name: &str) {
+        dspy_rs::PredictorInfo::set_trace_name(&mut self.inner, name);
+    }
+}
+
+struct RollbackPair {
+    first: Predict<QA>,
+    second: FailAfterMutation,
+}
+
+dspy_rs::predictors!(RollbackPair { first, second });
+
+#[test]
+fn module_state_apply_restores_prior_state_after_unexpected_load_error() {
+    let mut module = RollbackPair {
+        first: Predict::<QA>::builder().instruction("original first").build(),
+        second: FailAfterMutation {
+            inner: Predict::<QA>::builder().instruction("original second").build(),
+        },
+    };
+    let mut state = ModuleState::from_module(&module).unwrap();
+    let before = state.predictors.clone();
+    state.predictors.get_mut("first").unwrap().instruction_override = Some("changed".into());
+    state.predictors.get_mut("second").unwrap().instruction_override = Some("reject".into());
+
+    let err = state.apply(&mut module).expect_err("second predictor must fail");
+    assert!(err.to_string().contains("injected load failure"));
+    assert_eq!(ModuleState::from_module(&module).unwrap().predictors, before);
 }
 
 // --- Concurrent evaluation preserves order ---------------------------------
