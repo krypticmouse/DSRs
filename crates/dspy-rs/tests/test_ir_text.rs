@@ -525,6 +525,45 @@ fn parse_err(src: &str) -> ParseError {
     Program::from_dsrs(src).expect_err("must not parse")
 }
 
+fn nested_program(containers: usize) -> String {
+    let mut src = String::from(
+        "dsrs 1\nprogram p\nmodel m = \"openai:gpt-4o-mini\"\nsig S { in q: string out a: string }\nmain: S = seq {\n",
+    );
+    for i in 0..containers {
+        src.push_str(&format!("s{i} = seq {{\n"));
+    }
+    src.push_str("x = predict S @m (q = $.q)\n");
+    for i in (0..containers).rev() {
+        let child = if i + 1 == containers {
+            "x".to_string()
+        } else {
+            format!("s{}", i + 1)
+        };
+        src.push_str(&format!("out {{ a = {child}.a }}\n}}\n"));
+    }
+    let child = if containers == 0 { "x" } else { "s0" };
+    src.push_str(&format!("out {{ a = {child}.a }}\n}}\n"));
+    src
+}
+
+#[test]
+fn deeply_nested_program_is_rejected_before_parser_recursion() {
+    Program::from_dsrs(&nested_program(2)).unwrap();
+    let err = parse_err(&nested_program(66));
+    assert!(err.message.contains("nesting limit"), "{err}");
+}
+
+#[test]
+fn deeply_nested_field_type_is_rejected_before_signature_validation() {
+    let source = fixture("qa.dsrs").replacen(
+        "in  question: string",
+        &format!("in  question: string{}", "[]".repeat(2_000)),
+        1,
+    );
+    let err = Program::from_dsrs(&source).unwrap_err();
+    assert!(err.to_string().contains("type exceeds the 64-level nesting limit"), "{err}");
+}
+
 #[test]
 fn missing_capability_declaration_names_the_line_and_the_cap() {
     let src = r#"dsrs 1

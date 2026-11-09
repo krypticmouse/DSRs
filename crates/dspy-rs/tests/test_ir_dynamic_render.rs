@@ -13,7 +13,7 @@
 
 use dspy_rs::ChatAdapter;
 use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SignatureDef, TypeTable};
-use dspy_rs::typesys::{ClassDef, EnumDef, EnumValueDef, FieldDef as TypeFieldDef};
+use dspy_rs::typesys::{ClassDef, Constraint, ConstraintKind, EnumDef, EnumValueDef, FieldDef as TypeFieldDef};
 use dspy_rs::{Schema, Message, ParseError, Signature};
 
 #[test]
@@ -194,6 +194,55 @@ fn derive_bridged_parse_assembles_typed_output_and_checks() {
     assert_eq!(confidence.checks.len(), 1);
     assert_eq!(confidence.checks[0].label, "range");
     assert!(confidence.checks[0].passed);
+}
+
+#[test]
+fn nested_class_assertions_and_checks_are_enforced() {
+    let mut types = TypeTable::default();
+    types.classes.insert(
+        "Score".into(),
+        ClassDef {
+            internal_name: "Score".into(),
+            rendered_name: "Score".into(),
+            docs: None,
+            fields: vec![TypeFieldDef {
+                name: "value".into(),
+                rendered_name: "score".into(),
+                field_type: FieldType::Int,
+                docs: None,
+                constraints: vec![
+                    Constraint {
+                        level: ConstraintKind::Assert,
+                        label: Some("positive".into()),
+                        expression: "this > 0".into(),
+                    },
+                    Constraint {
+                        level: ConstraintKind::Check,
+                        label: Some("small".into()),
+                        expression: "this < 10".into(),
+                    },
+                ],
+            }],
+            constraints: Vec::new(),
+        },
+    );
+    let def = SignatureDef::build("Scored")
+        .input("question", FieldType::String)
+        .output("result", FieldType::List(Box::new(FieldType::Class("Score".into()))))
+        .finish()
+        .unwrap();
+
+    let invalid = Message::assistant("[[ ## result ## ]]\n[{\"score\": 0}]\n[[ ## completed ## ]]");
+    let err = ChatAdapter.parse_output_def(&def, &types, &invalid).unwrap_err();
+    assert!(format!("{err:?}").contains("assert constraint"), "{err:?}");
+
+    let valid = Message::assistant("[[ ## result ## ]]\n[{\"score\": 12}]\n[[ ## completed ## ]]");
+    let (value, meta) = ChatAdapter.parse_output_def(&def, &types, &valid).unwrap();
+    assert_eq!(value["result"][0]["value"], 12);
+    let checks = &meta["result"].checks;
+    assert_eq!(checks.len(), 1);
+    assert_eq!(checks[0].label, "small");
+    assert!(!checks[0].passed);
 }
 
 /// A signature that exists nowhere as a type: built at runtime from owned

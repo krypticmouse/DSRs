@@ -8,6 +8,13 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::{Map, Value};
 
 use super::schema::{FieldType, TypeTable};
+use super::constraint::{ConstraintKind, evaluate_expression};
+
+pub(crate) struct NestedCheck {
+    pub label: String,
+    pub expression: String,
+    pub passed: bool,
+}
 
 /// A non-fatal observation made while coercing a value (e.g. a code fence was stripped).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,9 +50,35 @@ pub struct Coerced {
 
 /// Coerces `raw` into a `serde_json::Value` matching `field_type`.
 pub fn coerce(raw: &str, field_type: &FieldType, schema: &TypeTable) -> Result<Coerced> {
+    coerce_with_checks(raw, field_type, schema).map(|(coerced, _)| coerced)
+}
+
+pub(crate) fn coerce_with_checks(
+    raw: &str,
+    field_type: &FieldType,
+    schema: &TypeTable,
+) -> Result<(Coerced, Vec<NestedCheck>)> {
     let mut flags = Vec::new();
-    let value = coerce_inner(raw, field_type, schema, &mut flags)?;
-    Ok(Coerced { value, flags })
+    let mut checks = Vec::new();
+    let value = coerce_inner(raw, field_type, schema, &mut flags, &mut checks)?;
+    Ok((Coerced { value, flags }, checks))
+}
+
+/// Check class constraints on JSON that has already passed structural type validation.
+/// Hole and stop-tool outputs use this path rather than text coercion.
+pub(crate) fn validate_json_constraints(
+    value: &Value,
+    field_type: &FieldType,
+    schema: &TypeTable,
+) -> Result<()> {
+    coerce_json_value(
+        value.clone(),
+        field_type,
+        schema,
+        &mut Vec::new(),
+        &mut Vec::new(),
+    )?;
+    Ok(())
 }
 
 fn coerce_inner(
@@ -53,6 +86,7 @@ fn coerce_inner(
     field_type: &FieldType,
     schema: &TypeTable,
     flags: &mut Vec<Flag>,
+    checks: &mut Vec<NestedCheck>,
 ) -> Result<Value> {
     match field_type {
         FieldType::String => Ok(Value::String(
@@ -73,19 +107,23 @@ fn coerce_inner(
             if is_nullish(raw) {
                 Ok(Value::Null)
             } else {
-                coerce_inner(raw, inner, schema, flags)
+                coerce_inner(raw, inner, schema, flags, checks)
             }
         }
-        FieldType::List(inner) => coerce_list(raw, inner, schema, flags),
-        FieldType::Map(_, value_type) => coerce_map(raw, value_type, schema, flags),
-        FieldType::Class(name) => coerce_class(raw, name, schema, flags),
+        FieldType::List(inner) => coerce_list(raw, inner, schema, flags, checks),
+        FieldType::Map(_, value_type) => coerce_map(raw, value_type, schema, flags, checks),
+        FieldType::Class(name) => coerce_class(raw, name, schema, flags, checks),
         FieldType::Enum(name) => coerce_enum(raw, name, schema),
         FieldType::Union(items) => {
             let mut last_err = None;
             for item in items {
-                match coerce_inner(raw, item, schema, flags) {
+                let previous_checks = checks.len();
+                match coerce_inner(raw, item, schema, flags, checks) {
                     Ok(value) => return Ok(value),
-                    Err(err) => last_err = Some(err),
+                    Err(err) => {
+                        checks.truncate(previous_checks);
+                        last_err = Some(err);
+                    }
                 }
             }
             Err(last_err.unwrap_or_else(|| anyhow!("empty union")))
@@ -173,6 +211,7 @@ fn coerce_list(
     inner: &FieldType,
     schema: &TypeTable,
     flags: &mut Vec<Flag>,
+    checks: &mut Vec<NestedCheck>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
     let trimmed = cleaned.trim();
@@ -183,7 +222,7 @@ fn coerce_list(
             if let Value::Array(items) = json {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(coerce_json_value(item, inner, schema, flags)?);
+                    out.push(coerce_json_value(item, inner, schema, flags, checks)?);
                 }
                 return Ok(Value::Array(out));
             }
@@ -198,7 +237,7 @@ fn coerce_list(
     flags.push(Flag::ParsedListFromText);
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        out.push(coerce_inner(&item, inner, schema, flags)?);
+        out.push(coerce_inner(&item, inner, schema, flags, checks)?);
     }
     Ok(Value::Array(out))
 }
@@ -208,6 +247,7 @@ fn coerce_map(
     value_type: &FieldType,
     schema: &TypeTable,
     flags: &mut Vec<Flag>,
+    checks: &mut Vec<NestedCheck>,
 ) -> Result<Value> {
     let cleaned = strip_code_fence(raw, flags);
     let json = extract_json(cleaned.trim())
@@ -217,7 +257,7 @@ fn coerce_map(
     };
     let mut out = Map::new();
     for (key, value) in obj {
-        out.insert(key, coerce_json_value(value, value_type, schema, flags)?);
+        out.insert(key, coerce_json_value(value, value_type, schema, flags, checks)?);
     }
     Ok(Value::Object(out))
 }
@@ -227,6 +267,7 @@ fn coerce_class(
     class_name: &str,
     schema: &TypeTable,
     flags: &mut Vec<Flag>,
+    checks: &mut Vec<NestedCheck>,
 ) -> Result<Value> {
     let class = schema
         .classes
@@ -245,23 +286,52 @@ fn coerce_class(
             .get(&field.rendered_name)
             .or_else(|| obj.get(&field.name))
             .cloned();
-        match raw_value {
-            Some(value) => {
-                out.insert(
-                    field.name.clone(),
-                    coerce_json_value(value, &field.field_type, schema, flags)?,
-                );
-            }
-            None if field.field_type.is_optional() => {
-                out.insert(field.name.clone(), Value::Null);
-            }
+        let value = match raw_value {
+            Some(value) => coerce_json_value(value, &field.field_type, schema, flags, checks)?,
+            None if field.field_type.is_optional() => Value::Null,
             None => bail!(
                 "missing field `{}` for class `{class_name}`",
                 field.rendered_name
             ),
+        };
+        for constraint in &field.constraints {
+            let passed = evaluate_expression(&constraint.expression, &value);
+            match constraint.level {
+                ConstraintKind::Assert if !passed => bail!(
+                    "assert constraint `{}` failed for class `{class_name}` field `{}`",
+                    constraint.label.as_deref().unwrap_or(&constraint.expression),
+                    field.name
+                ),
+                ConstraintKind::Check => checks.push(NestedCheck {
+                    label: constraint
+                        .label
+                        .clone()
+                        .unwrap_or_else(|| format!("{class_name}.{}", field.name)),
+                    expression: constraint.expression.clone(),
+                    passed,
+                }),
+                ConstraintKind::Assert => {}
+            }
+        }
+        out.insert(field.name.clone(), value);
+    }
+    let value = Value::Object(out);
+    for constraint in &class.constraints {
+        let passed = evaluate_expression(&constraint.expression, &value);
+        match constraint.level {
+            ConstraintKind::Assert if !passed => bail!(
+                "assert constraint `{}` failed for class `{class_name}`",
+                constraint.label.as_deref().unwrap_or(&constraint.expression)
+            ),
+            ConstraintKind::Check => checks.push(NestedCheck {
+                label: constraint.label.clone().unwrap_or_else(|| class_name.to_string()),
+                expression: constraint.expression.clone(),
+                passed,
+            }),
+            ConstraintKind::Assert => {}
         }
     }
-    Ok(Value::Object(out))
+    Ok(value)
 }
 
 fn coerce_enum(raw: &str, enum_name: &str, schema: &TypeTable) -> Result<Value> {
@@ -291,6 +361,7 @@ fn coerce_json_value(
     field_type: &FieldType,
     schema: &TypeTable,
     flags: &mut Vec<Flag>,
+    checks: &mut Vec<NestedCheck>,
 ) -> Result<Value> {
     match field_type {
         FieldType::String => match value {
@@ -309,15 +380,15 @@ fn coerce_json_value(
             }
             // Fall back to textual coercion.
             match &value {
-                Value::String(s) => coerce_inner(s, field_type, schema, flags),
-                other => coerce_inner(&json_scalar_to_string(other), field_type, schema, flags),
+                Value::String(s) => coerce_inner(s, field_type, schema, flags, checks),
+                other => coerce_inner(&json_scalar_to_string(other), field_type, schema, flags, checks),
             }
         }
         FieldType::Optional(inner) => {
             if value.is_null() {
                 Ok(Value::Null)
             } else {
-                coerce_json_value(value, inner, schema, flags)
+                coerce_json_value(value, inner, schema, flags, checks)
             }
         }
         FieldType::List(inner) => {
@@ -326,7 +397,7 @@ fn coerce_json_value(
             };
             let mut out = Vec::with_capacity(items.len());
             for item in items {
-                out.push(coerce_json_value(item, inner, schema, flags)?);
+                out.push(coerce_json_value(item, inner, schema, flags, checks)?);
             }
             Ok(Value::Array(out))
         }
@@ -336,13 +407,13 @@ fn coerce_json_value(
             };
             let mut out = Map::new();
             for (key, entry) in obj {
-                out.insert(key, coerce_json_value(entry, value_type, schema, flags)?);
+                out.insert(key, coerce_json_value(entry, value_type, schema, flags, checks)?);
             }
             Ok(Value::Object(out))
         }
         FieldType::Class(name) => {
             let text = value.to_string();
-            coerce_class(&text, name, schema, flags)
+            coerce_class(&text, name, schema, flags, checks)
         }
         FieldType::Enum(name) => {
             let text = match value {
@@ -365,9 +436,13 @@ fn coerce_json_value(
         FieldType::Union(items) => {
             let mut last_err = None;
             for item in items {
-                match coerce_json_value(value.clone(), item, schema, flags) {
+                let previous_checks = checks.len();
+                match coerce_json_value(value.clone(), item, schema, flags, checks) {
                     Ok(v) => return Ok(v),
-                    Err(err) => last_err = Some(err),
+                    Err(err) => {
+                        checks.truncate(previous_checks);
+                        last_err = Some(err);
+                    }
                 }
             }
             Err(last_err.unwrap_or_else(|| anyhow!("empty union")))

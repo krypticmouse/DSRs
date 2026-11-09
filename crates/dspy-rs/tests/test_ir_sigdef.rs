@@ -33,6 +33,10 @@ fn constraint_predicates_reject_allocation_operations() {
         "this|length > 0",
         &serde_json::json!("x")
     ));
+    assert!(dspy_rs::typesys::evaluate_expression(
+        "this + 1 > 2",
+        &serde_json::json!(2)
+    ));
 }
 
 #[derive(Signature, Clone, Debug)]

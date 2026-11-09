@@ -2867,7 +2867,11 @@ fn coerce_outputs(
     let mut output = JsonMap::new();
     for field in def.outputs.iter() {
         match object.get(&*field.name) {
-            Some(v) if json_matches_type(v, &field.ty, types) => {
+            Some(v)
+                if json_matches_type(v, &field.ty, types)
+                    && crate::typesys::coerce::validate_json_constraints(v, &field.ty, types)
+                        .is_ok() =>
+            {
                 output.insert(field.name.to_string(), v.clone());
             }
             None if field.ty.is_optional() => {
@@ -2884,6 +2888,47 @@ fn coerce_outputs(
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod output_constraint_tests {
+    use super::*;
+    use crate::typesys::{ClassDef, Constraint, ConstraintKind, FieldDef as TypeFieldDef};
+
+    #[test]
+    fn structured_stop_output_enforces_nested_assert() {
+        let mut types = TypeTable::default();
+        types.classes.insert(
+            "Score".into(),
+            ClassDef {
+                internal_name: "Score".into(),
+                rendered_name: "Score".into(),
+                docs: None,
+                fields: vec![TypeFieldDef {
+                    name: "value".into(),
+                    rendered_name: "value".into(),
+                    field_type: crate::typesys::FieldType::Int,
+                    docs: None,
+                    constraints: vec![Constraint {
+                        level: ConstraintKind::Assert,
+                        label: Some("positive".into()),
+                        expression: "this > 0".into(),
+                    }],
+                }],
+                constraints: Vec::new(),
+            },
+        );
+        let def = SignatureDef::build("Result")
+            .input("question", crate::typesys::FieldType::String)
+            .output("score", crate::typesys::FieldType::Class("Score".into()))
+            .finish()
+            .unwrap();
+        assert!(matches!(
+            coerce_outputs("stop", &def, &types, &serde_json::json!({"score":{"value":0}})),
+            Err(RunError::Parse { .. })
+        ));
+        assert!(coerce_outputs("stop", &def, &types, &serde_json::json!({"score":{"value":1}})).is_ok());
+    }
 }
 
 /// Projects a tool/hole signature's *input* side to a JSON Schema object —

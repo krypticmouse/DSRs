@@ -9,7 +9,7 @@ use tracing::{debug, trace};
 
 use crate::ir::{RenderSpec, SignatureDef};
 use crate::trace::JsonMap;
-use crate::typesys::coerce::coerce;
+use crate::typesys::coerce::coerce_with_checks;
 use crate::typesys::constraint::evaluate_expression;
 use crate::typesys::render::{schema_block, type_name};
 use crate::typesys::{FieldType, TypeTable};
@@ -384,7 +384,7 @@ impl ChatAdapter {
                 }
             };
 
-            let coerced = match coerce(raw_text, &field.ty, types) {
+            let (coerced, nested_checks) = match coerce_with_checks(raw_text, &field.ty, types) {
                 Ok(value) => value,
                 Err(err) => {
                     let expected_type = type_name(&field.ty, Some(types));
@@ -404,7 +404,14 @@ impl ChatAdapter {
                 }
             };
 
-            let mut checks = Vec::new();
+            let mut checks = nested_checks
+                .into_iter()
+                .map(|check| ConstraintResult {
+                    label: check.label,
+                    expression: check.expression,
+                    passed: check.passed,
+                })
+                .collect::<Vec<_>>();
             for constraint in field.constraints.iter() {
                 let passed = evaluate_expression(&constraint.expr, &coerced.value);
                 match constraint.kind {

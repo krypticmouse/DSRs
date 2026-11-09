@@ -44,9 +44,14 @@ main: <MainSig> = seq { … }                      // the program body; always a
 
 Constraint expressions are limited to 1024 bytes and predicate operations:
 comparisons, logical operators, field/item lookup, and the `length`, `int`,
-and `float` filters. Binary arithmetic, concatenation, collection construction,
+and `float` filters. Arithmetic with a numeric literal is supported, with
+bounded multiplication; concatenation, collection construction, exponentiation,
 and function calls are rejected before evaluation. Recursive class references
 and class nesting beyond 64 levels are rejected during program validation.
+Program node nesting beyond 64 levels is rejected while parsing or loading.
+Field type nesting beyond 64 levels is rejected while parsing.
+Nested class `assert` constraints reject invalid LM output; nested `check`
+results are included in the output field's metadata.
 
 ## Nodes (inside `seq { … }`)
 

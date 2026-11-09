@@ -29,6 +29,7 @@ pub(crate) fn validate_constraint_expression(expression: &str) -> Result<(), &'s
     }
     let parsed = parse_expr(expression).map_err(|_| "invalid constraint expression")?;
     let mut pending = vec![&parsed];
+    let mut multiplications = 0;
     while let Some(expr) = pending.pop() {
         match expr {
             Expr::Var(var) if var.id == "this" => {}
@@ -50,6 +51,36 @@ pub(crate) fn validate_constraint_expression(expression: &str) -> Result<(), &'s
                         | BinOpKind::In
                 ) =>
             {
+                pending.push(&op.left);
+                pending.push(&op.right);
+            }
+            Expr::BinOp(op)
+                if matches!(
+                    &op.op,
+                    BinOpKind::Add
+                        | BinOpKind::Sub
+                        | BinOpKind::Mul
+                        | BinOpKind::Div
+                        | BinOpKind::FloorDiv
+                        | BinOpKind::Rem
+                ) =>
+            {
+                let numeric_literal = |expr: &Expr<'_>| {
+                    matches!(expr, Expr::Const(value) if value.value.is_number())
+                };
+                if !numeric_literal(&op.left) && !numeric_literal(&op.right) {
+                    return Err("constraint arithmetic requires a numeric literal");
+                }
+                if matches!(&op.op, BinOpKind::Mul) {
+                    multiplications += 1;
+                    let bounded_multiplier = [&op.left, &op.right].into_iter().any(|expr| {
+                        matches!(expr, Expr::Const(value)
+                            if value.value.to_string().parse::<f64>().is_ok_and(|n| n.abs() <= 4.0))
+                    });
+                    if multiplications > 2 || !bounded_multiplier {
+                        return Err("constraint multiplication exceeds its limit");
+                    }
+                }
                 pending.push(&op.left);
                 pending.push(&op.right);
             }
