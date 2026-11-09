@@ -252,6 +252,32 @@ impl LM {
         })
     }
 
+    /// Copies this LM, applying changes over its existing configuration.
+    ///
+    /// Generation-only changes retain the provider client (including injected
+    /// clients). Model, endpoint, or credential changes initialize a new client.
+    /// Copies always start with a fresh cache when caching is enabled.
+    pub async fn copy_with(&self, overrides: impl FnOnce(&mut LMConfig)) -> Result<Self> {
+        let mut config = self.config.clone();
+        overrides(&mut config);
+        if config.model != self.config.model
+            || config.base_url != self.config.base_url
+            || config.api_key != self.config.api_key
+        {
+            return Self::from_config(config).await;
+        }
+        let cache_handler = if config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
+        Ok(Self {
+            config,
+            cache_handler,
+            ..self.clone()
+        })
+    }
+
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
         Ok(LM {
             client: Some(Arc::new(client)),
@@ -378,11 +404,22 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
 
 /// Whether a rig completion error is worth retrying.
 ///
-/// HTTP-layer failures (connect, timeout) always are. Provider errors are string-typed
-/// in rig, so transient markers (429/5xx/overload) are matched textually.
+/// Retry transport failures and HTTP 429/5xx. Permanent HTTP errors and
+/// request-construction errors fail immediately. Provider errors are string-typed
+/// in rig, so transient markers are matched textually only for that variant.
 fn is_retryable_completion_error(err: &CompletionError) -> bool {
     match err {
-        CompletionError::HttpError(_) => true,
+        CompletionError::HttpError(error) => match error {
+            rig::http_client::Error::InvalidStatusCode(status)
+            | rig::http_client::Error::InvalidStatusCodeWithMessage(status, _) => {
+                status.as_u16() == 429 || status.is_server_error()
+            }
+            rig::http_client::Error::Instance(source) => source
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(|error| error.is_connect() || error.is_timeout() || error.is_body()),
+            rig::http_client::Error::StreamEnded => true,
+            _ => false,
+        },
         CompletionError::ProviderError(message) => {
             let message = message.to_ascii_lowercase();
             [

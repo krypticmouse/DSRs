@@ -145,6 +145,66 @@ fn main() -> anyhow::Result<()> {
   </Tab>
 </Tabs>
 
+## Selecting an LM for a call or module
+
+LM selection uses this precedence:
+
+1. An explicit `call_with_lm` override.
+2. The predictor's `.lm(...)` setting.
+3. The innermost task-local or module default.
+4. The global LM installed by `configure`.
+
+An explicit call override applies to the module's predictor leaves for that call, including leaves with their own LM. A scoped default fills in leaves without an instance LM.
+
+```rust
+use dspy_rs::{Module, with_lm};
+
+// A default for the current future, restored when it finishes.
+let result = with_lm(alternative_lm.clone(), module.call(input.clone())).await?;
+
+// An explicit override for this call and its predictor leaves.
+let result = module.call_with_lm(input.clone(), alternative_lm).await?;
+
+// A persistent module default; predictor-specific LMs take precedence.
+let configured_module = module.with_lm(default_lm);
+let result = configured_module.call(input).await?;
+```
+
+These methods accept an owned `LM` or an `Arc<LM>`. Scopes restore automatically on success, error, panic, and cancellation, and concurrent scopes do not change the global configuration. Spawned Tokio tasks do not inherit scopes: pass the LM explicitly into the spawned future and establish its scope there. Generated `#[module]` programs also use the active scope when binding their default model; explicitly bound named models retain their bindings.
+
+For a predictor-level conversation, use `build_chat_with_lm(&input, lm.clone())` and `call_and_parse_with_lm(chat, lm)` to select the same LM when building and sending the prompt.
+
+## Copying and overriding configuration
+
+`LM::copy_with` clones the existing configuration and applies only the changes made by your closure:
+
+```rust
+let deterministic = lm.copy_with(|config| {
+    config.temperature = 0.0;
+    config.max_tokens = 1_024;
+}).await?;
+```
+
+Generation-only changes retain the current provider client, including injected custom clients. Changes to `model`, `base_url`, or `api_key` rebuild the client from the resulting configuration. Set optional fields to `None` to clear them; provider credential lookup then follows the normal initialization rules. The original LM remains unchanged, including if initialization fails. Each copy starts with a fresh response cache when caching is enabled.
+
+Prefer this method over directly changing provider-identity fields on `lm.config`, because a config mutation alone does not rebuild the live client.
+
+A predictor can also merge configuration changes for one call:
+
+```rust
+let result = predictor.call_with_config(input, |config| {
+    config.temperature = 0.2;
+}).await?;
+```
+
+This starts from the predictor's resolved LM, applies the closure, and uses the variant as an explicit override. To reuse a variant's cache across calls, construct it once with `copy_with` and pass its `Arc<LM>` to subsequent calls.
+
+## Retry behavior
+
+`max_retries` counts additional attempts after the first request; `0` disables retries. HTTP 429 and 5xx responses, connection failures, timeouts, and interrupted response-body reads are retryable. Other HTTP 4xx responses and request-construction errors fail immediately. Provider errors without a typed HTTP status use the existing transient-message classifier.
+
+Retries wait for `retry_base_delay_ms * 2^attempt`, with up to 50% random jitter and saturated arithmetic. The base delay defaults to 250 ms; the exponent is capped at 16. Retries do not switch the selected LM or response format.
+
 ## Inspecting history
 
 ```rust

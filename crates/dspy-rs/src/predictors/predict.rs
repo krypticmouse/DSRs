@@ -12,8 +12,8 @@ use crate::ir::{
     self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
 };
 use crate::{
-    CallMetadata, Chat, FieldSchema, GLOBAL_SETTINGS, LmError, LmUsage, ParseError, PredictError,
-    Predicted, Schema, SignatureSchema,
+    CallMetadata, Chat, FieldSchema, LmError, LmUsage, ParseError, PredictError, Predicted, Schema,
+    SignatureSchema,
 };
 
 /// Loop options for a tooled predictor's 1-node `agent` program.
@@ -251,6 +251,36 @@ impl<S: Signature> Predict<S> {
         predicted_from_run::<S>(run)
     }
 
+    /// Calls with an explicit LM, overriding the predictor, scoped, and global
+    /// LMs for this call without mutating them.
+    pub async fn call_with_lm(
+        &self,
+        input: S::Input,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<Predicted<S::Output>, PredictError> {
+        crate::core::settings::with_call_lm(lm, self.call(input)).await
+    }
+
+    /// Merges configuration changes into the resolved LM for this call only.
+    pub async fn call_with_config(
+        &self,
+        input: S::Input,
+        overrides: impl FnOnce(&mut crate::LMConfig),
+    ) -> Result<Predicted<S::Output>, PredictError> {
+        let lm = self
+            .resolve_lm()
+            .copy_with(overrides)
+            .await
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: "configuration".into(),
+                    message: "failed to initialize LM override".into(),
+                    source: Some(err.into()),
+                },
+            })?;
+        self.call_with_lm(input, lm).await
+    }
+
     /// Returns the cached 1-node program, building it on first use: a
     /// `predict` leaf, or an `agent` leaf when tools are attached (the IR
     /// says `Predict` carries no tools — a tooled predictor *is* an agent
@@ -475,18 +505,11 @@ impl<S: Signature> Predict<S> {
         Ok(merged.map(Arc::new))
     }
 
-    /// Resolves the LM this call uses: instance LM > global
-    /// [`configure()`](crate::configure) settings. Panics exactly like the
-    /// pre-IR path when no global LM is configured and no instance LM is set.
+    /// Resolves the LM: explicit call > instance > scoped default > global.
     fn resolve_lm(&self) -> Arc<crate::core::LM> {
-        match &self.lm {
-            Some(lm) => Arc::clone(lm),
-            None => {
-                let guard = GLOBAL_SETTINGS.read().unwrap();
-                let settings = guard.as_ref().unwrap();
-                Arc::clone(&settings.lm)
-            }
-        }
+        crate::core::settings::call_lm()
+            .or_else(|| self.lm.as_ref().map(Arc::clone))
+            .unwrap_or_else(crate::get_lm)
     }
 
     /// Returns the loaded interpreter for `lm`, reloading when the resolved
@@ -548,6 +571,16 @@ impl<S: Signature> Predict<S> {
             .map_err(map_run_error::<S>)?;
         trace!(message_count = chat.len(), "chat constructed");
         Ok(chat)
+    }
+
+    /// Builds the prompt using the same explicit LM as a subsequent
+    /// [`call_and_parse_with_lm`](Self::call_and_parse_with_lm).
+    pub async fn build_chat_with_lm(
+        &self,
+        input: &S::Input,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<Chat, PredictError> {
+        crate::core::settings::with_call_lm(lm, self.build_chat(input)).await
     }
 
     /// The component name recorded on trace spans: the assigned `trace_name`
@@ -619,6 +652,15 @@ impl<S: Signature> Predict<S> {
             .map_err(map_run_error::<S>)?;
         let predicted = predicted_from_run::<S>(run)?;
         Ok((predicted, chat))
+    }
+
+    /// Sends a conversation with an explicit LM for this turn.
+    pub async fn call_and_parse_with_lm(
+        &self,
+        chat: Chat,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError> {
+        crate::core::settings::with_call_lm(lm, self.call_and_parse(chat)).await
     }
 }
 
