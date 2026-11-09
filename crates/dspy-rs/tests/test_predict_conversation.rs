@@ -142,10 +142,8 @@ async fn predict_uses_provider_schema_and_parses_native_json() {
         .unwrap();
     assert_eq!(predicted.into_inner().answer, "a \"quoted\" answer");
     let request = client.last_request().unwrap();
-    assert_eq!(
-        request.output_schema.as_ref().unwrap()["properties"]["answer.value"]["type"],
-        "string"
-    );
+    let schema = serde_json::to_value(request.output_schema.as_ref().unwrap()).unwrap();
+    assert_eq!(schema["properties"]["answer.value"]["type"], "string");
     assert!(request.preamble.unwrap().contains("provider JSON Schema"));
 }
 
