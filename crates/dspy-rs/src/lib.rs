@@ -166,7 +166,7 @@ pub mod prelude {
     pub use crate::core::settings::configure;
 
     // Data loading.
-    pub use crate::data::dataloader::{DataLoader, TypedLoadOptions};
+    pub use crate::data::dataloader::{DataLoader, RemoteLoadLimits, TypedLoadOptions};
 
     // Evaluation.
     pub use crate::evaluate::{

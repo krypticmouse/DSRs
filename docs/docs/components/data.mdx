@@ -129,6 +129,8 @@ A source field missing from a row is `DataLoadError::MissingField` unless the ro
 
 Each of `load_json`, `load_csv`, `load_parquet`, and `load_hf` has a `_with` mapper overload (`load_json_with`, `load_csv_with`, `load_parquet_with`, `load_hf_with`) that takes the same parameters plus a closure `Fn(&RowRecord) -> anyhow::Result<E>`, with no `Deserialize` or `Facet` bound on `E`. Mapper overloads bypass shape-driven conversion entirely: `opts` is accepted for API parity but is not applied, so `field_map` and `unknown_fields` have no effect on `_with` calls.
 
+HTTP JSON and CSV loads have a 30-second deadline, a 16 MiB response limit, and a 50,000-row limit by default. Set `RemoteLoadLimits { max_bytes, max_rows, timeout }` and call `load_json_with_limits` or `load_csv_with_limits` to adjust them; mapper equivalents are `load_json_with_mapper_limits` and `load_csv_with_mapper_limits`. These limits do not apply to local files or HuggingFace downloads.
+
 ## TypedLoadOptions
 
 | Field | Type | Default | Meaning |
