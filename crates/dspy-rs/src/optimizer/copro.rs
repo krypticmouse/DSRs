@@ -41,9 +41,14 @@ fn set_instruction_if_changed(candidate: &mut Candidate, leaf: &LeafInfo, instru
 /// instruction always competes) deduplicate by content hash and are served
 /// from the rollout cache.
 ///
-/// Metric feedback is included in training-only proposal evidence when available;
-/// numerical scores select round winners. If you want feedback-driven acceptance
+/// Numerical scores select round winners. If you want feedback-driven acceptance
 /// and evolution strategies, use [`GEPA`](crate::GEPA) instead.
+/// By default, rollout evidence contains only component names and numerical
+/// scores. Set `share_training_examples(true)` to also send parsed training
+/// inputs, outputs, and metric feedback to the proposal LM. Raw prompts, tool
+/// events, and unparsed model output are always excluded unless
+/// `share_full_training_traces(true)` is set, which sends the complete raw trace
+/// including tool arguments, results, and model outputs.
 ///
 /// # Hyperparameters
 ///
@@ -81,6 +86,15 @@ pub struct COPRO {
     pub track_stats: bool,
     /// Optional separate LM for generating candidate instructions.
     pub prompt_model: Option<crate::LM>,
+    /// Share parsed training inputs, outputs, and metric feedback with the
+    /// proposal LM. Raw trace content remains excluded.
+    #[builder(default = false)]
+    pub share_training_examples: bool,
+    /// Send complete raw training traces, including tool arguments/results
+    /// and unparsed model output, to the proposal LM. Takes precedence over
+    /// `share_training_examples`.
+    #[builder(default = false)]
+    pub share_full_training_traces: bool,
     /// Concurrent LM calls in flight during candidate evaluation.
     #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
     pub eval_concurrency: usize,
@@ -192,11 +206,12 @@ impl Optimizer for COPRO {
             .iter()
             .filter_map(|rollout| {
                 rollout.trace.as_ref().map(|trace| {
-                    Ok(serde_json::json!({
-                        "score": rollout.eval.score,
-                        "feedback": rollout.eval.feedback.as_deref(),
-                        "trace": trace.to_jsonl()?,
-                    }))
+                    Ok(super::observation::proposal_observation(
+                        trace,
+                        &rollout.eval,
+                        self.share_training_examples,
+                        self.share_full_training_traces,
+                    )?)
                 })
             })
             .take(8)

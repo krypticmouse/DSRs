@@ -105,8 +105,9 @@ impl PromptingTips {
 ///    that produced them via the trace name-join (top
 ///    `max_bootstrapped_demos` by score, deduplicated on inputs). They are
 ///    sampled alongside incumbent and empty demo sets during joint trials.
-/// 3. **Candidate generation** — a proposal LM reads training traces, the task
-///    contract, and incumbent instruction; the incumbent remains a candidate.
+/// 3. **Candidate generation** — a proposal LM reads the configured rollout
+///    summaries, task contract, and incumbent instruction; the incumbent remains
+///    a candidate.
 /// 4. **Joint search** — seeded random trials combine instruction and demo
 ///    choices across all predictors. The best minibatch trial per interval
 ///    competes against the baseline on the full validation set. This search
@@ -116,8 +117,14 @@ impl PromptingTips {
 /// the end through [`OptimizeTarget::install`].
 ///
 /// Unlike [`GEPA`](crate::GEPA), MIPROv2 does not require feedback — only numerical scores.
-/// Unlike [`COPRO`](crate::COPRO), it uses execution traces to inform candidate generation
-/// rather than blind search.
+/// Unlike [`COPRO`](crate::COPRO), it uses safe rollout summaries to inform
+/// candidate generation rather than blind search.
+/// By default, rollout evidence contains only component names and numerical
+/// scores. Set `share_training_examples(true)` to also send parsed training
+/// inputs, outputs, and metric feedback to the proposal LM. Raw prompts, tool
+/// events, and unparsed model output are always excluded unless
+/// `share_full_training_traces(true)` is set, which sends the complete raw trace
+/// including tool arguments, results, and model outputs.
 ///
 /// # Hyperparameters
 ///
@@ -181,6 +188,15 @@ pub struct MIPROv2 {
     pub seed: Option<u64>,
     /// LM used for grounded proposals; defaults to the configured global LM.
     pub prompt_model: Option<crate::LM>,
+    /// Share parsed training inputs, outputs, and metric feedback with the
+    /// proposal LM. Raw trace content remains excluded.
+    #[builder(default = false)]
+    pub share_training_examples: bool,
+    /// Send complete raw training traces, including tool arguments/results
+    /// and unparsed model output, to the proposal LM. Takes precedence over
+    /// `share_training_examples`.
+    #[builder(default = false)]
+    pub share_full_training_traces: bool,
     #[builder(default = 1.0)]
     pub temperature: f32,
     /// Re-evaluate the best minibatch candidate on all validation examples.
@@ -277,14 +293,32 @@ impl Optimizer for MIPROv2 {
             self.max_bootstrapped_demos,
         );
         // Only training traces enter the proposal prompt or demo pool.
-        let observations = baseline_eval
-            .rollouts
-            .iter()
-            .filter_map(|r| r.trace.as_ref())
-            .take(8)
-            .map(Trace::to_jsonl)
-            .collect::<Result<Vec<_>>>()?
-            .join("\n");
+        let observations = if self.share_full_training_traces {
+            baseline_eval
+                .rollouts
+                .iter()
+                .filter_map(|r| r.trace.as_ref().map(Trace::to_jsonl))
+                .take(8)
+                .collect::<Result<Vec<_>>>()?
+                .join("\n")
+        } else {
+            let observations = baseline_eval
+                .rollouts
+                .iter()
+                .filter_map(|r| {
+                    r.trace.as_ref().map(|trace| {
+                        super::observation::proposal_observation(
+                            trace,
+                            &r.eval,
+                            self.share_training_examples,
+                            false,
+                        )
+                    })
+                })
+                .take(8)
+                .collect::<Result<Vec<_>>>()?;
+            serde_json::to_string(&observations)?
+        };
         let observations = crate::utils::truncate(&observations, 24000);
         let mut instruction_sets = Vec::new();
         for leaf in &leaves {

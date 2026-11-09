@@ -96,6 +96,7 @@ async fn mipro_keeps_baseline_and_excludes_validation_from_proposals_and_demos()
     let mut engine = Engine::new(EngineConfig::default());
     let optimizer = MIPROv2::builder()
         .prompt_model(proposal_lm)
+        .share_full_training_traces(true)
         .num_candidates(2)
         .num_trials(12)
         .full_eval_steps(2)
@@ -112,6 +113,7 @@ async fn mipro_keeps_baseline_and_excludes_validation_from_proposals_and_demos()
     let request = format!("{:?}", proposal.last_request().unwrap());
     assert!(request.contains("TRAIN_ONLY"));
     assert!(request.contains("Preserve original task"));
+    assert!(request.contains("raw_output"));
     assert!(!request.contains("VALIDATION_SECRET"));
     drop(target);
     assert_eq!(
@@ -137,6 +139,7 @@ async fn copro_uses_proposal_model_and_installs_improvement() -> Result<()> {
     };
     COPRO::builder()
         .prompt_model(proposal_lm)
+        .share_full_training_traces(true)
         .init_temperature(0.8)
         .breadth(2)
         .depth(1)
@@ -148,7 +151,9 @@ async fn copro_uses_proposal_model_and_installs_improvement() -> Result<()> {
         "Improved task instruction"
     );
     assert!((proposal.last_request().unwrap().temperature.unwrap() - 0.8).abs() < 1e-6);
-    assert!(format!("{:?}", proposal.last_request().unwrap()).contains("COPRO_TRAIN_MARKER"));
+    let request = format!("{:?}", proposal.last_request().unwrap());
+    assert!(request.contains("COPRO_TRAIN_MARKER"));
+    assert!(request.contains("raw_output"));
     Ok(())
 }
 
