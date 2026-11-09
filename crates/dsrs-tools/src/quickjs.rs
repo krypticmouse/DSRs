@@ -45,6 +45,53 @@ const CAP_ERROR_MARKER: &str = "__dsrs_capability_error__";
 /// Module name used for every compiled tool (fixed so bytecode depends only on
 /// source content and stays cacheable across tool names).
 const MODULE_NAME: &str = "dsrs_tool";
+pub(crate) const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+const MAX_OUTPUT_VALUES: usize = 10_000;
+
+fn output_limit(name: &str) -> ExecError {
+    ExecError::OutputLimit {
+        name: name.to_string(),
+        limit_bytes: MAX_OUTPUT_BYTES,
+        limit_values: MAX_OUTPUT_VALUES,
+        limit_depth: 64,
+    }
+}
+
+fn check_value_limits(name: &str, value: &Value) -> Result<(), ExecError> {
+    let mut pending = vec![(value, 0usize)];
+    let mut values = 0usize;
+    let mut minimum_bytes = 0usize;
+    while let Some((value, depth)) = pending.pop() {
+        values += 1;
+        minimum_bytes += 1;
+        if values > MAX_OUTPUT_VALUES || minimum_bytes > MAX_OUTPUT_BYTES || depth > 64 {
+            return Err(output_limit(name));
+        }
+        match value {
+            Value::String(text) => minimum_bytes += text.len(),
+            Value::Array(items) => {
+                if values + pending.len() + items.len() > MAX_OUTPUT_VALUES {
+                    return Err(output_limit(name));
+                }
+                pending.extend(items.iter().map(|item| (item, depth + 1)));
+            }
+            Value::Object(fields) => {
+                if values + pending.len() + fields.len() > MAX_OUTPUT_VALUES {
+                    return Err(output_limit(name));
+                }
+                for (key, child) in fields {
+                    minimum_bytes += key.len();
+                    pending.push((child, depth + 1));
+                }
+            }
+            _ => {}
+        }
+        if minimum_bytes > MAX_OUTPUT_BYTES {
+            return Err(output_limit(name));
+        }
+    }
+    Ok(())
+}
 
 /// Resource limits applied to every sandbox instance.
 #[derive(Debug, Clone, Copy)]
@@ -190,8 +237,8 @@ impl QuickJsExecutor {
         self.config
     }
 
-    /// Inject a host capability. Its name becomes a global JS function inside
-    /// every sandbox created from now on.
+    /// Register a host capability. Scoped calls expose it only when the
+    /// current node declares its required capability.
     pub fn add_capability(&self, capability: Capability) -> Result<(), RegisterError> {
         Capability::validate_name(capability.name())?;
         let mut caps = self.capabilities.write().expect("capability lock poisoned");
@@ -263,6 +310,7 @@ impl QuickJsExecutor {
     /// Do not call this from inside an async task: it blocks the thread for
     /// the whole sandbox run.
     pub fn execute_blocking(&self, invocation: ToolInvocation) -> Result<Value, ExecError> {
+        let deadline = Instant::now() + self.config.deadline;
         let (name, entry, args_json) = self.prepare(invocation)?;
         run_tool(
             &name,
@@ -271,6 +319,7 @@ impl QuickJsExecutor {
             &self.snapshot_capabilities(),
             self.config,
             Handle::try_current().ok(),
+            deadline,
         )
     }
 
@@ -297,6 +346,100 @@ impl QuickJsExecutor {
             .read()
             .expect("capability lock poisoned")
             .clone()
+    }
+
+    fn scoped_capabilities(&self, allowed: &[String]) -> Vec<Capability> {
+        self.capabilities
+            .read()
+            .expect("capability lock poisoned")
+            .iter()
+            .filter(|cap| allowed.iter().any(|name| name == cap.required_cap()))
+            .cloned()
+            .collect()
+    }
+
+    async fn register_inner(
+        &self,
+        source: ToolSource,
+        capabilities: Vec<Capability>,
+    ) -> Result<RegisteredTool, RegisterError> {
+        self.validate(&source)?;
+        let handle = current_handle().map_err(RegisterError::Execution)?;
+        let config = self.config;
+        let (bytecode, hash) = self.compile_or_cached(&source.js_source)?;
+        let source_hash = blake3::Hash::from_bytes(hash).to_hex().to_string();
+
+        let name = source.name.clone();
+        let self_test = source.self_test.clone();
+        let self_tested = self_test.is_some();
+        let validation_bytecode = Arc::clone(&bytecode);
+        let validation_handle = handle.clone();
+        handle
+            .spawn_blocking(move || {
+                run_validation(
+                    &name,
+                    &validation_bytecode,
+                    self_test.as_deref(),
+                    &capabilities,
+                    config,
+                    validation_handle,
+                )
+            })
+            .await
+            .map_err(|e| {
+                RegisterError::Execution(ExecError::Internal {
+                    message: format!("sandbox validation task failed: {e}"),
+                })
+            })??;
+
+        let meta = RegisteredTool {
+            name: source.name.clone(),
+            description: source.description.clone(),
+            parameters: source.params.clone(),
+            source_hash,
+            self_tested,
+        };
+        let entry = ToolEntry {
+            meta: meta.clone(),
+            bytecode,
+            required: Arc::new(source.required_params()),
+            hash,
+        };
+        let mut tools = self.tools.write().expect("tool lock poisoned");
+        if tools.contains_key(&source.name) {
+            return Err(RegisterError::Duplicate { name: source.name });
+        }
+        tools.insert(source.name, entry);
+        Ok(meta)
+    }
+
+    async fn execute_inner(
+        &self,
+        invocation: ToolInvocation,
+        capabilities: Vec<Capability>,
+    ) -> Result<Value, ExecError> {
+        let deadline = Instant::now() + self.config.deadline;
+        let (name, entry, args_json) = self.prepare(invocation)?;
+        let handle = current_handle()?;
+        let config = self.config;
+        let bytecode = Arc::clone(&entry.bytecode);
+        let cap_handle = handle.clone();
+        handle
+            .spawn_blocking(move || {
+                run_tool(
+                    &name,
+                    &bytecode,
+                    &args_json,
+                    &capabilities,
+                    config,
+                    Some(cap_handle),
+                    deadline,
+                )
+            })
+            .await
+            .map_err(|e| ExecError::Internal {
+                message: format!("sandbox task failed: {e}"),
+            })?
     }
 
     /// Compile `js_source` (wrapped as an ES module) to bytecode, reusing the
@@ -378,88 +521,31 @@ impl Executor for QuickJsExecutor {
     }
 
     async fn register(&self, source: ToolSource) -> Result<RegisteredTool, RegisterError> {
-        // Stage 1: structural validation (name, schema shape, duplicates).
-        self.validate(&source)?;
-
-        // Stage 2+3: compile and self-test on the blocking pool.
-        let handle = current_handle().map_err(RegisterError::Execution)?;
-        let config = self.config;
-        let capabilities = self.snapshot_capabilities();
-
-        // Stage 2: parse/compile (content-hash cached).
-        let (bytecode, hash) = self.compile_or_cached(&source.js_source)?;
-        let source_hash = blake3::Hash::from_bytes(hash).to_hex().to_string();
-
-        // Stage 3: instantiate in a sandbox, check the module evaluates to a
-        // function, and run the self-test if present.
-        let name = source.name.clone();
-        let self_test = source.self_test.clone();
-        let self_tested = self_test.is_some();
-        let validation_bytecode = Arc::clone(&bytecode);
-        let validation_handle = handle.clone();
-        handle
-            .spawn_blocking(move || {
-                run_validation(
-                    &name,
-                    &validation_bytecode,
-                    self_test.as_deref(),
-                    &capabilities,
-                    config,
-                    validation_handle,
-                )
-            })
+        self.register_inner(source, self.snapshot_capabilities())
             .await
-            .map_err(|e| {
-                RegisterError::Execution(ExecError::Internal {
-                    message: format!("sandbox validation task failed: {e}"),
-                })
-            })??;
+    }
 
-        // Stage 4: register.
-        let meta = RegisteredTool {
-            name: source.name.clone(),
-            description: source.description.clone(),
-            parameters: source.params.clone(),
-            source_hash,
-            self_tested,
-        };
-        let entry = ToolEntry {
-            meta: meta.clone(),
-            bytecode,
-            required: Arc::new(source.required_params()),
-            hash,
-        };
-        let mut tools = self.tools.write().expect("tool lock poisoned");
-        if tools.contains_key(&source.name) {
-            return Err(RegisterError::Duplicate { name: source.name });
-        }
-        tools.insert(source.name, entry);
-        Ok(meta)
+    async fn register_scoped(
+        &self,
+        source: ToolSource,
+        allowed_caps: &[String],
+    ) -> Result<RegisteredTool, RegisterError> {
+        self.register_inner(source, self.scoped_capabilities(allowed_caps))
+            .await
     }
 
     async fn execute(&self, invocation: ToolInvocation) -> Result<Value, ExecError> {
-        let (name, entry, args_json) = self.prepare(invocation)?;
-
-        let handle = current_handle()?;
-        let config = self.config;
-        let capabilities = self.snapshot_capabilities();
-        let bytecode = Arc::clone(&entry.bytecode);
-        let cap_handle = handle.clone();
-        handle
-            .spawn_blocking(move || {
-                run_tool(
-                    &name,
-                    &bytecode,
-                    &args_json,
-                    &capabilities,
-                    config,
-                    Some(cap_handle),
-                )
-            })
+        self.execute_inner(invocation, self.snapshot_capabilities())
             .await
-            .map_err(|e| ExecError::Internal {
-                message: format!("sandbox task failed: {e}"),
-            })?
+    }
+
+    async fn execute_scoped(
+        &self,
+        invocation: ToolInvocation,
+        allowed_caps: &[String],
+    ) -> Result<Value, ExecError> {
+        self.execute_inner(invocation, self.scoped_capabilities(allowed_caps))
+            .await
     }
 
     fn tool(&self, name: &str) -> Option<RegisteredTool> {
@@ -509,11 +595,14 @@ pub async fn run_script(
     capabilities: Vec<Capability>,
     config: SandboxConfig,
 ) -> Result<Value, ExecError> {
+    let deadline = Instant::now() + config.deadline;
     let handle = current_handle()?;
     let source = source.to_string();
     let cap_handle = handle.clone();
     handle
-        .spawn_blocking(move || run_script_blocking(&source, &capabilities, config, Some(cap_handle)))
+        .spawn_blocking(move || {
+            run_script_blocking(&source, &capabilities, config, Some(cap_handle), deadline)
+        })
         .await
         .map_err(|e| ExecError::Internal {
             message: format!("sandbox task failed: {e}"),
@@ -525,9 +614,17 @@ fn run_script_blocking(
     capabilities: &[Capability],
     config: SandboxConfig,
     handle: Option<Handle>,
+    deadline: Instant,
 ) -> Result<Value, ExecError> {
     let name = crate::code_mode::RUN_JS_TOOL_NAME;
-    let sandbox = Sandbox::create(config, capabilities, handle)?;
+    if Instant::now() >= deadline {
+        return Err(ExecError::Timeout {
+            name: name.to_string(),
+            deadline_ms: config.deadline.as_millis() as u64,
+        });
+    }
+    let sandbox = Sandbox::create_at(config, capabilities, handle, deadline)?;
+    check_deadline(name, &sandbox)?;
     let wrapped = format!("export default (async () => {{\n{source}\n}})();");
     sandbox.context.with(|ctx| {
         let module = Module::declare(ctx.clone(), "dsrs_script", wrapped)
@@ -554,22 +651,37 @@ fn run_script_blocking(
                 .map_err(|caught| classify(name, &caught, &sandbox))?,
             None => export,
         };
-        let serialized = ctx
-            .json_stringify(result)
-            .catch(&ctx)
-            .map_err(|caught| classify(name, &caught, &sandbox))?;
-        match serialized {
-            None => Ok(Value::Null),
-            Some(json) => {
-                let json = json.to_string().map_err(|e| ExecError::Internal {
-                    message: format!("result was not valid UTF-8: {e}"),
-                })?;
-                serde_json::from_str(&json).map_err(|e| ExecError::Internal {
-                    message: format!("result round-trip failed: {e}"),
-                })
-            }
-        }
+        json_result(name, &sandbox, &ctx, result)
     })
+}
+
+fn json_result<'js>(
+    name: &str,
+    sandbox: &Sandbox,
+    ctx: &Ctx<'js>,
+    result: JsValue<'js>,
+) -> Result<Value, ExecError> {
+    check_deadline(name, sandbox)?;
+    let serialized = ctx
+        .json_stringify(result)
+        .catch(ctx)
+        .map_err(|caught| classify(name, &caught, sandbox))?;
+    check_deadline(name, sandbox)?;
+    let Some(json) = serialized else {
+        return Ok(Value::Null);
+    };
+    let json = json.to_cstring().map_err(|e| ExecError::Internal {
+        message: format!("result was not valid UTF-8: {e}"),
+    })?;
+    if json.len() > MAX_OUTPUT_BYTES {
+        return Err(output_limit(name));
+    }
+    let value: Value = serde_json::from_str(json.as_str()).map_err(|e| ExecError::Internal {
+        message: format!("result round-trip failed: {e}"),
+    })?;
+    check_value_limits(name, &value)?;
+    check_deadline(name, sandbox)?;
+    Ok(value)
 }
 
 fn current_handle() -> Result<Handle, ExecError> {
@@ -643,7 +755,19 @@ struct Sandbox {
     #[allow(dead_code)]
     runtime: Runtime,
     timed_out: Arc<AtomicBool>,
+    deadline: Instant,
     config: SandboxConfig,
+}
+
+fn check_deadline(name: &str, sandbox: &Sandbox) -> Result<(), ExecError> {
+    if Instant::now() < sandbox.deadline {
+        return Ok(());
+    }
+    sandbox.timed_out.store(true, Ordering::SeqCst);
+    Err(ExecError::Timeout {
+        name: name.to_string(),
+        deadline_ms: sandbox.config.deadline.as_millis() as u64,
+    })
 }
 
 impl Sandbox {
@@ -651,6 +775,20 @@ impl Sandbox {
         config: SandboxConfig,
         capabilities: &[Capability],
         handle: Option<Handle>,
+    ) -> Result<Self, ExecError> {
+        Self::create_at(
+            config,
+            capabilities,
+            handle,
+            Instant::now() + config.deadline,
+        )
+    }
+
+    fn create_at(
+        config: SandboxConfig,
+        capabilities: &[Capability],
+        handle: Option<Handle>,
+        deadline: Instant,
     ) -> Result<Self, ExecError> {
         let internal = |message: String| ExecError::Internal { message };
 
@@ -660,7 +798,6 @@ impl Sandbox {
         runtime.set_max_stack_size(config.max_stack);
 
         let timed_out = Arc::new(AtomicBool::new(false));
-        let deadline = Instant::now() + config.deadline;
         let flag = Arc::clone(&timed_out);
         runtime.set_interrupt_handler(Some(Box::new(move || {
             if Instant::now() >= deadline {
@@ -687,6 +824,7 @@ impl Sandbox {
             context,
             runtime,
             timed_out,
+            deadline,
             config,
         })
     }
@@ -758,8 +896,26 @@ fn install_capabilities(
                     &format!("{CAP_ERROR_MARKER}:{thrown_name}:{message}"),
                 )
             };
+            if Instant::now() >= deadline {
+                timed_out.store(true, Ordering::SeqCst);
+                return Err(throw(format!(
+                    "call exceeded the sandbox's {deadline_ms}ms deadline"
+                )));
+            }
+            if args_json.len() > MAX_OUTPUT_BYTES {
+                return Err(throw(
+                    "capability arguments exceed the bridge byte limit".to_string(),
+                ));
+            }
             let args: Value = serde_json::from_str(&args_json)
                 .map_err(|e| throw(format!("argument round-trip failed: {e}")))?;
+            check_value_limits(&thrown_name, &args).map_err(|err| throw(err.to_string()))?;
+            if Instant::now() >= deadline {
+                timed_out.store(true, Ordering::SeqCst);
+                return Err(throw(format!(
+                    "call exceeded the sandbox's {deadline_ms}ms deadline"
+                )));
+            }
 
             // Bound the handler by whatever is left of the sandbox deadline.
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -789,8 +945,25 @@ fn install_capabilities(
                 }
             };
             let result = result.map_err(throw)?;
-            serde_json::to_string(&result)
-                .map_err(|e| throw(format!("result serialization failed: {e}")))
+            check_value_limits(&thrown_name, &result).map_err(|err| throw(err.to_string()))?;
+            if Instant::now() >= deadline {
+                timed_out.store(true, Ordering::SeqCst);
+                return Err(throw(format!(
+                    "call exceeded the sandbox's {deadline_ms}ms deadline"
+                )));
+            }
+            let serialized = serde_json::to_string(&result)
+                .map_err(|e| throw(format!("result serialization failed: {e}")))?;
+            if serialized.len() > MAX_OUTPUT_BYTES {
+                return Err(throw(output_limit(&thrown_name).to_string()));
+            }
+            if Instant::now() >= deadline {
+                timed_out.store(true, Ordering::SeqCst);
+                return Err(throw(format!(
+                    "call exceeded the sandbox's {deadline_ms}ms deadline"
+                )));
+            }
+            Ok(serialized)
         };
 
         let shim: Function<'_> = factory
@@ -928,8 +1101,16 @@ fn run_tool(
     capabilities: &[Capability],
     config: SandboxConfig,
     handle: Option<Handle>,
+    deadline: Instant,
 ) -> Result<Value, ExecError> {
-    let sandbox = Sandbox::create(config, capabilities, handle)?;
+    if Instant::now() >= deadline {
+        return Err(ExecError::Timeout {
+            name: tool_name.to_string(),
+            deadline_ms: config.deadline.as_millis() as u64,
+        });
+    }
+    let sandbox = Sandbox::create_at(config, capabilities, handle, deadline)?;
+    check_deadline(tool_name, &sandbox)?;
     sandbox.context.with(|ctx| {
         let function = match instantiate_tool(&ctx, bytecode) {
             Ok(function) => function,
@@ -965,21 +1146,7 @@ fn run_tool(
             None => result,
         };
 
-        let serialized = ctx
-            .json_stringify(result)
-            .catch(&ctx)
-            .map_err(|caught| classify(tool_name, &caught, &sandbox))?;
-        match serialized {
-            None => Ok(Value::Null),
-            Some(json) => {
-                let json = json.to_string().map_err(|e| ExecError::Internal {
-                    message: format!("result was not valid UTF-8: {e}"),
-                })?;
-                serde_json::from_str(&json).map_err(|e| ExecError::Internal {
-                    message: format!("result round-trip failed: {e}"),
-                })
-            }
-        }
+        json_result(tool_name, &sandbox, &ctx, result)
     })
 }
 

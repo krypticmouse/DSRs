@@ -213,6 +213,7 @@ pub type CapabilityHandler =
 #[derive(Clone)]
 pub struct Capability {
     name: String,
+    required_cap: String,
     description: String,
     handler: CapabilityHandler,
 }
@@ -232,11 +233,21 @@ impl Capability {
         F: Fn(Value) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, String>> + Send + 'static,
     {
+        let name = name.into();
         Self {
-            name: name.into(),
+            required_cap: name.clone(),
+            name,
             description: description.into(),
             handler: Arc::new(move |args| Box::pin(f(args))),
         }
+    }
+
+    /// Set the program capability that authorizes this JS function. Use this
+    /// when the declared name is namespaced (for example `secrets:read`),
+    /// since a colon cannot appear in a JavaScript function name.
+    pub fn requiring(mut self, cap: impl Into<String>) -> Self {
+        self.required_cap = cap.into();
+        self
     }
 
     /// Wrap an existing DSRs tool (any [`rig::tool::ToolDyn`]) as a sandbox
@@ -310,6 +321,9 @@ impl Capability {
                     .call(args.to_string())
                     .await
                     .map_err(|err| format!("tool `{tool_name}` failed: {err}"))?;
+                if result.len() > crate::quickjs::MAX_OUTPUT_BYTES {
+                    return Err(format!("tool `{tool_name}` result exceeds the sandbox output byte limit"));
+                }
                 // Tool results are strings by contract; most DSRs tools return
                 // JSON. Give JS the parsed value when possible so results
                 // compose (`r.field`), falling back to the raw string.
@@ -320,6 +334,10 @@ impl Capability {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn required_cap(&self) -> &str {
+        &self.required_cap
     }
 
     pub fn description(&self) -> &str {

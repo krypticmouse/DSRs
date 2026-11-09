@@ -65,8 +65,31 @@ pub trait Executor: Send + Sync {
     /// per stage so a generating LLM can repair the specific artifact.
     async fn register(&self, source: ToolSource) -> Result<RegisteredTool, RegisterError>;
 
+    /// Register code under the current node's capability declaration.
+    /// Executors without scoped support fail closed.
+    async fn register_scoped(
+        &self,
+        _source: ToolSource,
+        _allowed_caps: &[String],
+    ) -> Result<RegisteredTool, RegisterError> {
+        Err(RegisterError::Execution(ExecError::Internal {
+            message: "executor does not support node-scoped capabilities".to_string(),
+        }))
+    }
+
     /// Execute a registered tool with JSON args, returning its JSON result.
     async fn execute(&self, invocation: ToolInvocation) -> Result<Value, ExecError>;
+
+    /// Execute with only the capabilities declared by the current node.
+    async fn execute_scoped(
+        &self,
+        _invocation: ToolInvocation,
+        _allowed_caps: &[String],
+    ) -> Result<Value, ExecError> {
+        Err(ExecError::Internal {
+            message: "executor does not support node-scoped capabilities".to_string(),
+        })
+    }
 
     /// Metadata for one registered tool, if present.
     fn tool(&self, name: &str) -> Option<RegisteredTool>;
