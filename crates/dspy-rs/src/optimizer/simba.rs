@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use anyhow::{Result, anyhow};
 use bon::Builder;
-use rand::seq::SliceRandom;
+use rand::{Rng, seq::SliceRandom};
 use serde::{Deserialize, Serialize};
 
 use crate::core::ToInput;
@@ -61,6 +61,8 @@ pub enum SimbaMove {
     AppendDemo,
     /// Append an instruction rule distilled from best/worst introspection.
     AppendRule,
+    /// No same-example score gap was observed.
+    NoOp,
 }
 
 /// What one SIMBA step did.
@@ -78,6 +80,12 @@ pub struct SimbaStep {
     pub accepted: bool,
     /// Full-trainset mean of the child; `Some` only when promoted.
     pub full_score: Option<f64>,
+    /// Trainset example used for the best/worst trajectory pair.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contrast_example: Option<usize>,
+    /// Positive best-minus-worst gap; absent when this step was a no-op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contrast_gap: Option<f64>,
 }
 
 /// What a [`SIMBA`] run did.
@@ -104,10 +112,10 @@ pub struct SimbaReport {
 ///
 /// 1. **Sample** a trainset minibatch (seeded RNG, indices sorted for
 ///    deterministic evaluation order).
-/// 2. **Introspect** — from the current program's rollouts (all served from
-///    engine bookkeeping; the current program always has full-trainset
-///    coverage, so this costs nothing) pick the minibatch's best and worst
-///    rollout by score.
+/// 2. **Introspect** — run two independent trajectories for each sampled
+///    training example and select the largest positive best-minus-worst gap
+///    among trajectories of the same input. If every gap is zero, record a
+///    no-op step without proposing or gating a candidate.
 /// 3. **Move** — exactly one of:
 ///    - **append-demo**: when the best rollout reached `min_demo_score`, its
 ///      successful `Predict` spans become one new few-shot demo per predictor
@@ -143,10 +151,10 @@ pub struct SimbaReport {
 ///
 /// # Cost
 ///
-/// `trainset_size` for the baseline pass, then per step: `minibatch_size`
-/// rollouts for the gate (+ the remaining `trainset_size - minibatch_size`
-/// only when promoted, + 1 reflection call for rule moves). Rejected moves
-/// never pay for a full evaluation.
+/// `trainset_size` rollouts for the baseline, then per step: two probes per
+/// sampled example, `minibatch_size` rollouts for the candidate gate, and the
+/// remaining examples for full validation only when promoted. Rule moves may
+/// also spend one reflection call. Zero-gap steps still spend their probes.
 ///
 /// ```ignore
 /// let simba = SIMBA::builder().max_steps(8).minibatch_size(8).build();
@@ -192,10 +200,6 @@ pub struct SIMBA {
     pub seed: Option<u64>,
 }
 
-/// Per-example bookkeeping for the *current* program: metric result plus the
-/// trace when the engine ran it fresh (cache-served cells carry no trace).
-type RolloutStore = Vec<Option<(Eval, Option<Trace>)>>;
-
 impl SIMBA {
     fn common(&self) -> OptimizerCommon {
         OptimizerCommon {
@@ -238,7 +242,11 @@ impl SIMBA {
                 ),
                 (None, None) => "-".to_string(),
             };
-            let _ = writeln!(text, "  {name} call {}: input={input}; output={output}", span.seq);
+            let _ = writeln!(
+                text,
+                "  {name} call {}: input={input}; output={output}",
+                span.seq
+            );
         }
         text.trim_end().to_string()
     }
@@ -405,21 +413,20 @@ impl Optimizer for SIMBA {
             return Err(anyhow!("no optimizable predictors found"));
         }
 
-        let num_examples = target.num_examples();
-        let all_indices: Vec<usize> = (0..num_examples).collect();
+        let train_indices = target.train_columns();
 
-        let reflector = self
-            .prompt_model
-            .as_ref()
-            .map(|lm| Predict::<IntrospectRollouts>::builder().lm(lm.clone()).build());
+        let reflector = self.prompt_model.as_ref().map(|lm| {
+            Predict::<IntrospectRollouts>::builder()
+                .lm(lm.clone())
+                .build()
+        });
         let mut rng = self.common().rng();
 
-        // Baseline: the empty candidate over the full trainset, traced. This
-        // seeds the rollout store; because every later *current* program is
-        // promoted through a full evaluation, per-step introspection never
-        // needs extra rollouts.
+        // Baseline: the incumbent's full-set score and cache coverage for
+        // parent thresholds and acceptance gates. Contrast probes below use
+        // fresh sampling identities and never overwrite these cache entries.
         let mut current = Candidate::new();
-        let current_idx = engine.register(current.clone());
+        let mut current_idx = engine.register(current.clone());
         let baseline_eval = match engine.evaluate(target, current_idx, None).await? {
             EvalOutcome::Complete(eval) => eval,
             EvalOutcome::BudgetExhausted { needed } => {
@@ -431,70 +438,106 @@ impl Optimizer for SIMBA {
         let baseline_score = baseline_eval.mean();
         let mut final_score = baseline_score;
 
-        let mut store: RolloutStore = vec![None; num_examples];
-        for rollout in &baseline_eval.rollouts {
-            store[rollout.example] = Some((rollout.eval.clone(), rollout.trace.clone()));
-        }
-
         let mut steps = Vec::new();
         let mut accepted = 0usize;
         let mut rejected = 0usize;
 
         for step in 0..self.max_steps {
-            if !engine.budget_allows(1) {
+            let minibatch_size = train_indices.len().min(self.minibatch_size.max(1));
+            let probe_budget = minibatch_size.saturating_mul(2);
+            if minibatch_size == 0 || !engine.budget_allows(probe_budget) {
                 break;
             }
+            let sample_nonce: u64 = rng.r#gen();
 
             // 1. Sample a minibatch; sort so evaluation order is deterministic.
-            let minibatch_size = num_examples.min(self.minibatch_size.max(1));
-            let mut minibatch: Vec<usize> = all_indices
+            let mut minibatch: Vec<usize> = train_indices
                 .choose_multiple(&mut rng, minibatch_size)
                 .copied()
                 .collect();
             minibatch.sort_unstable();
 
-            // 2. Introspect the current program's rollouts on the minibatch.
-            let threshold = minibatch
-                .iter()
-                .filter_map(|&idx| store[idx].as_ref().map(|(eval, _)| eval.score))
-                .sum::<f64>()
-                / minibatch.len() as f64;
-            let mut best = minibatch[0];
-            let mut worst = minibatch[0];
-            for &idx in &minibatch {
-                let score = store[idx].as_ref().map_or(0.0, |(eval, _)| eval.score);
-                if score > store[best].as_ref().map_or(0.0, |(e, _)| e.score) {
-                    best = idx;
-                }
-                if score < store[worst].as_ref().map_or(0.0, |(e, _)| e.score) {
-                    worst = idx;
+            // 2. Rank within-example trajectory gaps. A zero gap has no
+            // contrast for introspection and leaves the incumbent untouched.
+            let samples = engine
+                .evaluate_sampled(
+                    target,
+                    current_idx,
+                    &minibatch,
+                    2,
+                    &format!("simba/{sample_nonce:016x}/{step}"),
+                )
+                .await?;
+            let mut contrast: Option<(f64, usize, Eval, Trace, Eval, Trace)> = None;
+            for (position, &example) in minibatch.iter().enumerate() {
+                let example_samples: Vec<_> = samples
+                    .iter()
+                    .filter(|sample| sample.example_position == position)
+                    .collect();
+                let best = example_samples
+                    .iter()
+                    .max_by(|a, b| a.eval.score.total_cmp(&b.eval.score))
+                    .unwrap();
+                let worst = example_samples
+                    .iter()
+                    .min_by(|a, b| a.eval.score.total_cmp(&b.eval.score))
+                    .unwrap();
+                let gap = best.eval.score - worst.eval.score;
+                if gap > 0.0 && contrast.as_ref().map_or(true, |(old, ..)| gap > *old) {
+                    contrast = Some((
+                        gap,
+                        example,
+                        best.eval.clone(),
+                        best.trace.clone(),
+                        worst.eval.clone(),
+                        worst.trace.clone(),
+                    ));
                 }
             }
-            let (best_eval, best_trace) = store[best]
-                .as_ref()
-                .map(|(eval, trace)| (eval.clone(), trace.clone()))
-                .expect("store is seeded by the baseline pass");
-            let (worst_eval, worst_trace) = store[worst]
-                .as_ref()
-                .map(|(eval, trace)| (eval.clone(), trace.clone()))
-                .expect("store is seeded by the baseline pass");
+            let parent = match engine
+                .evaluate(target, current_idx, Some(&minibatch))
+                .await?
+            {
+                EvalOutcome::Complete(eval) => eval,
+                EvalOutcome::BudgetExhausted { .. } => break,
+            };
+            let threshold = parent.mean();
+            let Some((
+                contrast_gap,
+                contrast_example,
+                best_eval,
+                best_trace,
+                worst_eval,
+                worst_trace,
+            )) = contrast
+            else {
+                steps.push(SimbaStep {
+                    step,
+                    move_kind: SimbaMove::NoOp,
+                    parent_minibatch_score: threshold,
+                    child_minibatch_score: threshold,
+                    accepted: false,
+                    full_score: None,
+                    contrast_example: None,
+                    contrast_gap: None,
+                });
+                continue;
+            };
 
             // 3. Propose exactly one move.
             let demo_child = if best_eval.score >= self.min_demo_score {
-                match &best_trace {
-                    Some(trace) => {
-                        self.append_demo_child(&leaves, &current, best_eval.score, trace)
-                    }
-                    None => None,
-                }
+                self.append_demo_child(&leaves, &current, best_eval.score, &best_trace)
             } else {
                 None
             };
+            if demo_child.is_none() && reflector.is_some() && !engine.budget_allows(1) {
+                break;
+            }
 
             let (child, move_kind) = match demo_child {
                 Some(child) => (child, SimbaMove::AppendDemo),
                 None => {
-                    let leaf = Self::rule_target(&leaves, worst_trace.as_ref());
+                    let leaf = Self::rule_target(&leaves, Some(&worst_trace));
                     let base_instruction = match current.instruction_of(&leaf.name) {
                         Some(instruction) => instruction.to_string(),
                         None => leaf.instruction.clone(),
@@ -503,8 +546,8 @@ impl Optimizer for SIMBA {
                         .propose_rule(
                             leaf,
                             &base_instruction,
-                            Self::summarize_rollout(&best_eval, best_trace.as_ref()),
-                            Self::summarize_rollout(&worst_eval, worst_trace.as_ref()),
+                            Self::summarize_rollout(&best_eval, Some(&best_trace)),
+                            Self::summarize_rollout(&worst_eval, Some(&worst_trace)),
                             &worst_eval,
                             reflector.as_ref(),
                         )
@@ -536,25 +579,14 @@ impl Optimizer for SIMBA {
                         child_minibatch_score: mb_eval.mean(),
                         accepted: false,
                         full_score: None,
+                        contrast_example: Some(contrast_example),
+                        contrast_gap: Some(contrast_gap),
                     });
                 }
                 GateOutcome::Promoted {
                     minibatch: mb_eval,
                     full,
                 } => {
-                    // The child is the new current program. Refresh the store
-                    // from the full pass, preferring the gate minibatch's
-                    // fresh traces over cache-served cells.
-                    for rollout in &full.rollouts {
-                        store[rollout.example] =
-                            Some((rollout.eval.clone(), rollout.trace.clone()));
-                    }
-                    for rollout in &mb_eval.rollouts {
-                        if rollout.trace.is_some() {
-                            store[rollout.example] =
-                                Some((rollout.eval.clone(), rollout.trace.clone()));
-                        }
-                    }
                     final_score = full.mean();
                     accepted += 1;
                     steps.push(SimbaStep {
@@ -564,8 +596,11 @@ impl Optimizer for SIMBA {
                         child_minibatch_score: mb_eval.mean(),
                         accepted: true,
                         full_score: Some(final_score),
+                        contrast_example: Some(contrast_example),
+                        contrast_gap: Some(contrast_gap),
                     });
                     current = child;
+                    current_idx = child_idx;
                 }
             }
         }

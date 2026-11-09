@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+use crate::ResponseCache;
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -421,7 +421,16 @@ impl LM {
 
         let mut hasher = StableHasher::new();
         hasher.write(self.config.model.as_bytes());
-        hasher.write(&self.config.temperature.to_bits().to_le_bytes());
+        let sampling = crate::core::sampling::current_sampling_options();
+        hasher.write(
+            &crate::core::sampling::effective_temperature(self.config.temperature)
+                .to_bits()
+                .to_le_bytes(),
+        );
+        if let Some(id) = sampling.id {
+            hasher.write(&(id.len() as u64).to_le_bytes());
+            hasher.write(id.as_bytes());
+        }
         hasher.write(&self.config.max_tokens.to_le_bytes());
         use std::fmt::Write as _;
         let _ = write!(HashWriter(&mut hasher), "{messages:?}");
@@ -462,7 +471,9 @@ impl LM {
             },
             documents: Vec::new(),
             tools: tool_definitions.to_vec(),
-            temperature: Some(self.config.temperature as f64),
+            temperature: Some(
+                crate::core::sampling::effective_temperature(self.config.temperature) as f64,
+            ),
             max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
             additional_params: None,
@@ -478,16 +489,17 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+        let client = self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+        })?;
 
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err)
+                    if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
+                {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -526,17 +538,17 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed ({}): {:?}",
-                                    tc.function.name,
-                                    context,
-                                    err
-                                )
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| {
+                                    anyhow::anyhow!(
+                                        "tool `{}` execution failed ({}): {:?}",
+                                        tc.function.name,
+                                        context,
+                                        err
+                                    )
+                                })?;
                         (result, None)
                     }
                     None => {
@@ -695,7 +707,8 @@ impl LM {
                     });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
+                    let results =
+                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
@@ -777,13 +790,13 @@ impl LM {
             chat.push_message(output.clone());
             return Ok(LMResponse {
                 output: output.clone(),
-                usage: entry.usage,
+                usage: LmUsage::default(),
                 chat,
                 tool_calls: Vec::new(),
                 tool_executions: Vec::new(),
                 events: vec![SpanEvent::Exchange {
                     message: output,
-                    usage: entry.usage,
+                    usage: LmUsage::default(),
                 }],
             });
         }
@@ -1020,6 +1033,117 @@ mod tests {
         assert!(!is_retryable_completion_error(
             &CompletionError::ResponseError("test response queue is empty".to_string())
         ));
+    }
+
+    #[tokio::test]
+    async fn cache_key_uses_sample_identity_and_effective_temperature() {
+        let lm = LM {
+            config: LMConfig::default(),
+            cache_handler: None,
+            client: None,
+        };
+        let chat = Chat::new(vec![Message::user("same prompt")]);
+        let first = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat) },
+        )
+        .await;
+        let same = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat) },
+        )
+        .await;
+        let distinct = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("second".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat) },
+        )
+        .await;
+        let temperature = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.8),
+            },
+            async { lm.cache_key_for(&chat) },
+        )
+        .await;
+        assert_eq!(first, same);
+        assert_ne!(first, distinct);
+        assert_ne!(first, temperature);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_reports_zero_usage_and_keeps_original_entry() {
+        let cache = Arc::new(ResponseCache::new().await);
+        let lm = LM {
+            config: LMConfig {
+                cache: true,
+                ..LMConfig::default()
+            },
+            cache_handler: Some(cache.clone()),
+            client: None,
+        };
+        let messages = Chat::new(vec![Message::user("cached prompt")]);
+        let key = lm.cache_key_for(&messages);
+        let original = LmUsage {
+            prompt_tokens: 12,
+            completion_tokens: 3,
+            total_tokens: 15,
+        };
+        cache.insert_entry(
+            key,
+            CacheEntry {
+                prompt: messages.to_json().to_string(),
+                usage: original,
+                raw_output: Some("cached answer".into()),
+            },
+        );
+        let response = lm
+            .call_with_toolset(messages, &ToolSet::default(), ToolLoopMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(response.usage.total_tokens, 0);
+        assert!(response.events.iter().all(|event| match event {
+            SpanEvent::Exchange { usage, .. } => usage.total_tokens == 0,
+            SpanEvent::ToolRun { .. } | SpanEvent::Unknown => true,
+        }));
+        let entry = cache.get_entry(key).await.unwrap().unwrap();
+        assert_eq!(entry.usage.total_tokens, original.total_tokens);
+    }
+
+    #[tokio::test]
+    async fn equal_sample_identity_reuses_cache_but_distinct_identity_reaches_provider() {
+        let model =
+            TestCompletionModel::new([make_text("first answer"), make_text("second answer")]);
+        let mut lm = test_lm_with_model(model.clone());
+        lm.config.cache = true;
+        lm.cache_handler = Some(Arc::new(ResponseCache::new().await));
+        let messages = Chat::new(vec![Message::user("same prompt")]);
+        for (id, expected) in [
+            ("same", "first answer"),
+            ("same", "first answer"),
+            ("different", "second answer"),
+        ] {
+            let response = crate::with_sampling_options(
+                crate::SamplingOptions {
+                    id: Some(id.into()),
+                    temperature: None,
+                },
+                lm.call_with_toolset(messages.clone(), &ToolSet::default(), ToolLoopMode::Auto),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.output.text_content(), expected);
+        }
+        assert_eq!(model.call_count(), 2);
     }
 
     #[test]
