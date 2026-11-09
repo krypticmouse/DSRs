@@ -12,7 +12,7 @@ use std::{
     collections::VecDeque,
     sync::{Arc, Mutex},
 };
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 #[enum_dispatch]
 #[allow(async_fn_in_trait)]
@@ -244,7 +244,6 @@ impl LMClient {
         fields(model, base_url_present = true, api_key_present = true)
     )]
     pub fn from_openai_compatible(base_url: &str, api_key: &str, model: &str) -> Result<Self> {
-        trace!(base_url, "creating openai-compatible client");
         let client = openai::CompletionsClient::builder()
             .api_key(api_key)
             .base_url(base_url)
@@ -264,7 +263,6 @@ impl LMClient {
         fields(model, base_url_present = true)
     )]
     pub fn from_local(base_url: &str, model: &str) -> Result<Self> {
-        trace!(base_url, "creating local openai-compatible client");
         let client = openai::CompletionsClient::builder()
             .api_key("dummy-key-for-local-server")
             .base_url(base_url)
