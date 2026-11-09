@@ -67,12 +67,15 @@ impl ModuleState {
         Ok(Self { predictors })
     }
 
-    /// Applies this state to a module in place, stamping each restored leaf's
-    /// trace name with its declared name.
+    /// Applies this state to a module, stamping each restored leaf's trace
+    /// name with its declared name after all loads succeed.
     ///
     /// Every name in the state must resolve to a `Predict` leaf in `module` —
     /// unknown names are an error, since they mean the saved state and the module
     /// structure have diverged. Predictors not named in the state are left untouched.
+    /// Built-in `Predict` leaves validate demo rows before mutation. If an
+    /// unexpected load error occurs, previously loaded leaves are restored
+    /// from their original snapshots; a failed rollback is reported.
     pub fn apply<M>(&self, module: &mut M) -> Result<()>
     where
         M: Predictors + ?Sized,
@@ -82,20 +85,58 @@ impl ModuleState {
             .iter()
             .map(|(name, state)| (name.as_str(), state))
             .collect();
-
-        for (name, info) in module.predictors_mut() {
-            if let Some(state) = remaining.remove(name.as_str()) {
-                info.set_trace_name(&name);
-                info.load_state(state.clone())
-                    .map_err(|err| anyhow!("failed to load state for `{name}`: {err}"))?;
-            }
+        let mut predictors = module.predictors_mut();
+        for (name, _) in &predictors {
+            remaining.remove(name.as_str());
         }
-
         if !remaining.is_empty() {
             let missing = remaining.keys().copied().collect::<Vec<_>>().join("`, `");
             return Err(anyhow!(
                 "state refers to predictors not present in the module: `{missing}`"
             ));
+        }
+
+        for (name, info) in &predictors {
+            if let Some(state) = self.predictors.get(name.as_str()) {
+                info.validate_state(state)
+                    .map_err(|err| anyhow!("failed to load state for `{name}`: {err}"))?;
+            }
+        }
+
+        let original = predictors
+            .iter()
+            .map(|(_, info)| info.dump_state())
+            .collect::<Vec<_>>();
+        for index in 0..predictors.len() {
+            let (name, info) = &mut predictors[index];
+            if let Some(state) = self.predictors.get(name.as_str())
+                && let Err(err) = info.load_state(state.clone())
+            {
+                let failed_name = name.clone();
+                let mut rollback_errors = Vec::new();
+                for rollback_index in 0..=index {
+                    let (rollback_name, rollback_info) = &mut predictors[rollback_index];
+                    if self.predictors.contains_key(rollback_name.as_str())
+                        && let Err(rollback_err) =
+                            rollback_info.load_state(original[rollback_index].clone())
+                    {
+                        rollback_errors.push(format!("`{rollback_name}`: {rollback_err}"));
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    return Err(anyhow!("failed to load state for `{failed_name}`: {err}"));
+                }
+                return Err(anyhow!(
+                    "failed to load state for `{failed_name}`: {err}; rollback failed for {}",
+                    rollback_errors.join(", ")
+                ));
+            }
+        }
+
+        for (name, info) in predictors {
+            if self.predictors.contains_key(name.as_str()) {
+                info.set_trace_name(&name);
+            }
         }
         Ok(())
     }
