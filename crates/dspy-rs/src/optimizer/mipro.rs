@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Result, anyhow};
 use bon::Builder;
 use rand::{Rng, seq::SliceRandom};
@@ -5,7 +7,7 @@ use tracing::debug;
 
 use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
-use crate::optimizer::engine::{Candidate, Engine, EngineConfig, EvalOutcome};
+use crate::optimizer::engine::{BatchEvalOutcome, Candidate, Engine, EngineConfig, EvalOutcome};
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
 use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::trace::Trace;
@@ -135,6 +137,9 @@ impl PromptingTips {
 /// - **`min_demo_score`** (default: 0.0) — score gate for demo-eligible spans
 ///   (span eval when present, rollout score otherwise).
 /// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
+/// - **`candidate_batch_size`** (default: 1) — upper bound on joint trials
+///   evaluated together within each validation interval when no budget cap is
+///   configured. The engine also limits batch size to its available rollout slots.
 /// - **`seed`** — fixes minibatch sampling for reproducible runs.
 ///
 /// # Errors
@@ -183,6 +188,12 @@ pub struct MIPROv2 {
     /// Concurrent LM calls in flight during candidate evaluation.
     #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
     pub eval_concurrency: usize,
+
+    /// Upper bound on joint trials evaluated together within a validation interval. The
+    /// default retains sequential trial evaluation; capped-budget engines
+    /// retain sequential evaluation and stopping behavior.
+    #[builder(default = 1)]
+    pub candidate_batch_size: usize,
 
     /// Seed for minibatch sampling. `None` uses a nondeterministic seed.
     pub seed: Option<u64>,
@@ -251,8 +262,11 @@ impl Optimizer for MIPROv2 {
 
         let mut rng = self.common().rng();
         anyhow::ensure!(
-            self.num_candidates > 0 && self.num_trials > 0 && self.full_eval_steps > 0,
-            "candidate, trial, and full evaluation counts must be positive"
+            self.num_candidates > 0
+                && self.num_trials > 0
+                && self.full_eval_steps > 0
+                && self.candidate_batch_size > 0,
+            "candidate, trial, full evaluation, and batch counts must be positive"
         );
         let train = target.train_columns();
         let validation = target.val_columns();
@@ -353,42 +367,89 @@ impl Optimizer for MIPROv2 {
             .copied()
             .collect();
         let mut pending: Option<(f64, usize, Candidate)> = None;
-        for trial in 0..self.num_trials {
-            let mut candidate = Candidate::new();
-            for (leaf, instructions) in leaves.iter().zip(&instruction_sets) {
-                let instruction = &instructions[rng.gen_range(0..instructions.len())];
-                set_instruction_if_changed(&mut candidate, leaf, instruction);
-                if let Some(demos) = bootstrapped_demos.get(&leaf.name) {
-                    // Jointly search incumbent demos, no demos, and sampled
-                    // bootstrap subsets instead of fixing demos for every trial.
-                    match rng.gen_range(0..3) {
-                        0 => {}
-                        1 => {
-                            set_demos_if_changed(&mut candidate, leaf, Vec::new());
-                        }
-                        _ => {
-                            let count = rng.gen_range(1..=demos.len());
-                            set_demos_if_changed(
-                                &mut candidate,
-                                leaf,
-                                demos.choose_multiple(&mut rng, count).cloned().collect(),
-                            );
+        let budget = &engine.config().budget;
+        let batch_size = if budget.max_metric_calls.is_some()
+            || budget.max_lm_calls.is_some()
+            || budget.max_tokens.is_some()
+        {
+            1
+        } else {
+            self.candidate_batch_size
+                .min((engine.config().concurrency / minibatch.len()).max(1))
+        };
+        let mut trial = 0;
+        while trial < self.num_trials {
+            let interval_remaining = self.full_eval_steps - trial % self.full_eval_steps;
+            let batch_len = batch_size
+                .min(interval_remaining)
+                .min(self.num_trials - trial);
+            let mut trials = Vec::with_capacity(batch_len);
+            for _ in 0..batch_len {
+                let mut candidate = Candidate::new();
+                for (leaf, instructions) in leaves.iter().zip(&instruction_sets) {
+                    let instruction = &instructions[rng.gen_range(0..instructions.len())];
+                    set_instruction_if_changed(&mut candidate, leaf, instruction);
+                    if let Some(demos) = bootstrapped_demos.get(&leaf.name) {
+                        // Jointly search incumbent demos, no demos, and sampled
+                        // bootstrap subsets instead of fixing demos for every trial.
+                        match rng.gen_range(0..3) {
+                            0 => {}
+                            1 => {
+                                set_demos_if_changed(&mut candidate, leaf, Vec::new());
+                            }
+                            _ => {
+                                let count = rng.gen_range(1..=demos.len());
+                                set_demos_if_changed(
+                                    &mut candidate,
+                                    leaf,
+                                    demos.choose_multiple(&mut rng, count).cloned().collect(),
+                                );
+                            }
                         }
                     }
                 }
+                let row = engine.register(candidate.clone());
+                trials.push((row, candidate));
             }
-            let row = engine.register(candidate.clone());
-            let minibatch_score = score(engine.evaluate(target, row, Some(&minibatch)).await?)?;
-            if pending
-                .as_ref()
-                .is_none_or(|(s, _, _)| minibatch_score > *s)
+
+            let mut seen = HashSet::with_capacity(trials.len());
+            let rows = trials
+                .iter()
+                .map(|(row, _)| *row)
+                .filter(|row| seen.insert(*row))
+                .collect::<Vec<_>>();
+            let evaluations = match engine
+                .evaluate_many(target, &rows, Some(&minibatch))
+                .await?
             {
-                pending = Some((minibatch_score, row, candidate));
+                BatchEvalOutcome::Complete(evals) => evals,
+                BatchEvalOutcome::BudgetExhausted { needed } => {
+                    return Err(anyhow!("budget exhausted ({needed} rollouts needed)"));
+                }
+            };
+            let scores = rows
+                .into_iter()
+                .zip(evaluations)
+                .map(|(row, eval)| (row, eval.mean()))
+                .collect::<HashMap<_, _>>();
+            for (row, candidate) in trials {
+                let minibatch_score = scores[&row];
+                if pending
+                    .as_ref()
+                    .is_none_or(|(s, _, _)| minibatch_score > *s)
+                {
+                    pending = Some((minibatch_score, row, candidate));
+                }
             }
-            if (trial + 1) % self.full_eval_steps == 0 || trial + 1 == self.num_trials {
+
+            trial += batch_len;
+            if trial % self.full_eval_steps == 0 || trial == self.num_trials {
                 let (_, row, candidate) = pending.take().expect("at least one trial per interval");
                 let full_score = score(engine.evaluate(target, row, Some(&validation)).await?)?;
-                debug!(trial, full_score, best_score, "MIPRO validation");
+                debug!(
+                    trial = trial - 1,
+                    full_score, best_score, "MIPRO validation"
+                );
                 if full_score > best_score {
                     best_score = full_score;
                     winner = candidate;
@@ -409,7 +470,11 @@ mod tests {
 
     use super::*;
     use crate::evaluate::{Eval, TypedMetric};
-    use crate::{CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature};
+    use crate::{
+        CallMetadata, LM, LMClient, LMConfig, Predict, PredictError, Predicted, PredictorInfo,
+        Signature, TestCompletionModel,
+    };
+    use rig::completion::AssistantContent;
 
     #[derive(Signature, Clone, Debug)]
     struct MiproStateSig {
@@ -444,6 +509,7 @@ mod tests {
     }
 
     struct AlwaysFailMetric;
+    struct ConstantMetric;
 
     type MiproRow = (MiproStateSigInput, MiproStateSigOutput);
 
@@ -455,6 +521,17 @@ mod tests {
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
+        }
+    }
+
+    impl TypedMetric<MiproRow, MiproStateModule> for ConstantMetric {
+        async fn evaluate(
+            &self,
+            _example: &MiproRow,
+            _prediction: &Predicted<MiproStateSigOutput>,
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
+            Ok(Eval::score(1.0))
         }
     }
 
@@ -492,5 +569,61 @@ mod tests {
             PredictorInfo::instruction(&module.predictor),
             "seed-instruction"
         );
+    }
+
+    #[tokio::test]
+    async fn capped_budget_keeps_sequential_stopping_with_batch_option() {
+        async fn run(batch_size: usize) -> (String, usize, usize, String) {
+            let proposal = TestCompletionModel::new([AssistantContent::text(
+                "[[ ## instructions ## ]]\n[\"one\",\"two\",\"three\",\"four\"]\n[[ ## completed ## ]]",
+            )]);
+            let lm = LM::from_config(LMConfig {
+                base_url: Some("http://localhost/v1".into()),
+                ..LMConfig::default()
+            })
+            .await
+            .unwrap()
+            .with_client(LMClient::Test(proposal))
+            .await
+            .unwrap();
+            let mut module = MiproStateModule {
+                predictor: Predict::<MiproStateSig>::builder()
+                    .instruction("seed-instruction")
+                    .build(),
+            };
+            let optimizer = MIPROv2::builder()
+                .num_candidates(5)
+                .num_trials(20)
+                .full_eval_steps(5)
+                .minibatch_size(1)
+                .seed(42)
+                .candidate_batch_size(batch_size)
+                .prompt_model(lm)
+                .build();
+            let train = trainset();
+            let mut target = OptimizeTarget::module(&mut module, &train, &ConstantMetric);
+            let mut engine = Engine::new(EngineConfig {
+                budget: crate::optimizer::engine::Budget {
+                    max_metric_calls: Some(2),
+                    ..Default::default()
+                },
+                ..EngineConfig::default()
+            });
+            let error = optimizer
+                .compile(&mut target, &mut engine)
+                .await
+                .expect_err("later fresh trials must exceed the budget");
+            drop(target);
+            (
+                error.to_string(),
+                engine.num_candidates(),
+                engine.spend().metric_calls,
+                PredictorInfo::instruction(&module.predictor).to_string(),
+            )
+        }
+
+        let sequential = run(1).await;
+        assert!(sequential.0.contains("budget exhausted"));
+        assert_eq!(sequential, run(5).await);
     }
 }
