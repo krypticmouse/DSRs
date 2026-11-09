@@ -111,7 +111,7 @@ pub enum ModuleBuildError {
     ZeroMaxTurns { step: String },
     #[error("signature `{name}` is declared twice with different shapes")]
     SigConflict { name: String },
-    #[error("tool `{name}` is declared twice with different signatures")]
+    #[error("tool `{name}` is declared twice with conflicting definitions or implementations")]
     ToolConflict { name: String },
     #[error(transparent)]
     Sig(#[from] SigError),
@@ -276,7 +276,7 @@ pub fn build_module_program(spec: ModuleSpec) -> Result<Program, ModuleBuildErro
     // decl); conflicting shapes under one name are refused. Tools likewise.
     type SigIds = IndexMap<String, (crate::ir::graph::SigId, SignatureDef)>;
     let mut sig_ids: SigIds = IndexMap::new();
-    let mut tool_ids: IndexMap<&str, ToolId> = IndexMap::new();
+    let mut tool_ids: IndexMap<&str, (ToolId, &ToolStepDef)> = IndexMap::new();
 
     fn register_sig(
         b: &mut ProgramBuilder,
@@ -299,11 +299,21 @@ pub fn build_module_program(spec: ModuleSpec) -> Result<Program, ModuleBuildErro
     fn register_tool<'a>(
         b: &mut ProgramBuilder,
         sig_ids: &mut SigIds,
-        tool_ids: &mut IndexMap<&'a str, ToolId>,
+        tool_ids: &mut IndexMap<&'a str, (ToolId, &'a ToolStepDef)>,
         tool: &'a ToolStepDef,
     ) -> Result<ToolId, ModuleBuildError> {
-        if let Some(id) = tool_ids.get(tool.name) {
-            return Ok(*id);
+        if let Some((id, existing)) = tool_ids.get(tool.name) {
+            if existing.implementation == tool.implementation
+                && existing.sig == tool.sig
+                && existing.types == tool.types
+                && existing.caps == tool.caps
+                && existing.desc == tool.desc
+            {
+                return Ok(*id);
+            }
+            return Err(ModuleBuildError::ToolConflict {
+                name: tool.name.to_string(),
+            });
         }
         b.add_types(tool.types);
         // Same rename rule as steps: the tool's sig takes the tool name,
@@ -323,7 +333,7 @@ pub fn build_module_program(spec: ModuleSpec) -> Result<Program, ModuleBuildErro
             id
         };
         let id = b.host_tool(tool.name, tool.desc, sid, tool.caps);
-        tool_ids.insert(tool.name, id);
+        tool_ids.insert(tool.name, (id, tool));
         Ok(id)
     }
 

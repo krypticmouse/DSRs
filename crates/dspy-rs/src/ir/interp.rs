@@ -289,6 +289,8 @@ pub enum LoadError {
     Model { name: String, message: String },
     #[error("host tool `{name}` is not bound in the runtime environment")]
     HostToolUnbound { name: String },
+    #[error("host binding `{name}` requires capabilities absent from the artifact: {missing:?}")]
+    HostBindingCapsUnderdeclared { name: String, missing: Vec<String> },
     #[error("host (extern) hole `{name}` is not bound in the runtime environment")]
     HostHoleUnbound { name: String },
     #[error("program contains sandboxed code but the environment has no sandbox executor")]
@@ -383,12 +385,12 @@ pub struct RuntimeEnv {
     /// Pre-bound live models by declared model name (`"fast"`). Models not
     /// bound here are constructed from their `ModelDef.config` at load.
     pub models: HashMap<String, Arc<LM>>,
-    /// Host tool bindings by tool name, consulted once at load.
-    pub host_tools: HashMap<String, Arc<dyn rig::tool::ToolDyn>>,
+    /// Host tool bindings and host-owned capability requirements.
+    host_tools: HashMap<String, (Arc<dyn rig::tool::ToolDyn>, CapSet)>,
     /// Host (extern) hole bindings by leaf name, consulted once at load
     /// (RFC 0003 §4.1). The fn receives the hole's resolved input map and
     /// returns a JSON value coerced against the hole's output signature.
-    pub host_holes: HashMap<String, HostHoleFn>,
+    host_holes: HashMap<String, (HostHoleFn, CapSet)>,
     /// The sandbox executing holes and sandboxed tools (QuickJS in v1).
     /// Required iff the program carries sandboxed code.
     pub sandbox: Option<Arc<dyn dsrs_tools::Executor>>,
@@ -418,19 +420,33 @@ impl RuntimeEnv {
         self
     }
 
-    pub fn bind_host_tool(mut self, name: &str, tool: Arc<dyn rig::tool::ToolDyn>) -> Self {
-        self.host_tools.insert(name.to_string(), tool);
+    /// Bind a native tool with requirements owned by the host, independent of
+    /// any capability claim in a loaded artifact. Pass `&[]` only for tools
+    /// that genuinely need no capability.
+    pub fn bind_host_tool(
+        mut self,
+        name: &str,
+        tool: Arc<dyn rig::tool::ToolDyn>,
+        required_caps: &[&str],
+    ) -> Self {
+        self.host_tools
+            .insert(name.to_string(), (tool, required_caps.iter().copied().collect()));
         self
     }
 
     /// Binds a native implementation for an extern hole by leaf name.
-    pub fn bind_host_hole<F, Fut>(mut self, name: &str, f: F) -> Self
+    pub fn bind_host_hole<F, Fut>(mut self, name: &str, required_caps: &[&str], f: F) -> Self
     where
         F: Fn(JsonMap) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Value, String>> + Send + 'static,
     {
-        self.host_holes
-            .insert(name.to_string(), Arc::new(move |input| Box::pin(f(input))));
+        self.host_holes.insert(
+            name.to_string(),
+            (
+                Arc::new(move |input| Box::pin(f(input))),
+                required_caps.iter().copied().collect(),
+            ),
+        );
         self
     }
 
@@ -531,12 +547,17 @@ impl Interpreter {
             let name = program.syms.get(tool.name).to_string();
             match tool.kind {
                 ToolKind::Host => {
-                    let bound = env
+                    let (bound, required) = env
                         .host_tools
                         .get(&name)
-                        .cloned()
                         .ok_or(LoadError::HostToolUnbound { name: name.clone() })?;
-                    tool_exec[id] = Some(ToolExec::Host(bound));
+                    if !required.is_subset(&tool.caps) {
+                        return Err(LoadError::HostBindingCapsUnderdeclared {
+                            name,
+                            missing: required.missing_from(&tool.caps),
+                        });
+                    }
+                    tool_exec[id] = Some(ToolExec::Host(Arc::clone(bound)));
                 }
                 ToolKind::Sandboxed { code } => {
                     sandboxed.push((name, code, tool.sig));
@@ -551,12 +572,17 @@ impl Interpreter {
                 match hole.imp {
                     HoleImpl::Sandboxed { code } => sandboxed.push((name, code, hole.sig)),
                     HoleImpl::Host { .. } => {
-                        let bound = env
+                        let (bound, required) = env
                             .host_holes
                             .get(&name)
-                            .cloned()
                             .ok_or(LoadError::HostHoleUnbound { name: name.clone() })?;
-                        host_holes.insert(name, bound);
+                        if !required.is_subset(&hole.caps) {
+                            return Err(LoadError::HostBindingCapsUnderdeclared {
+                                name,
+                                missing: required.missing_from(&hole.caps),
+                            });
+                        }
+                        host_holes.insert(name, Arc::clone(bound));
                     }
                 }
             }

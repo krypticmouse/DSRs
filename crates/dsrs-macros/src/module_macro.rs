@@ -643,7 +643,7 @@ fn expand_module_inner(
                 })
                 .collect();
             Some(quote! {
-                env = env.bind_host_hole(#binding, |mut __input: #runtime::trace::JsonMap| async move {
+                env = env.bind_host_hole(#binding, &[], |mut __input: #runtime::trace::JsonMap| async move {
                     #(#extractions)*
                     let __out: #output_ty = #residual;
                     let __value = #sj::to_value(&__out).map_err(|e| e.to_string())?;
@@ -720,7 +720,7 @@ fn expand_module_inner(
                     if let #runtime::ir::ModuleStepKind::Call { def, .. } = step.kind {
                         if let ::core::option::Option::Some(agent) = def.agent {
                             for tool in agent.tools {
-                                env = env.bind_host_tool(tool.name, tool.dyn_tool);
+                                env = env.bind_host_tool(tool.name, tool.dyn_tool, tool.caps);
                             }
                         }
                     }

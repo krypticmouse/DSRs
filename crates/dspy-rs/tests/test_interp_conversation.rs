@@ -208,6 +208,7 @@ async fn load_agent(program: Program, lm: Arc<LM>, counter: &Arc<AtomicUsize>) -
         Arc::new(CountingSearch {
             calls: Arc::clone(counter),
         }),
+        &[],
     );
     if program
         .tools
@@ -219,6 +220,7 @@ async fn load_agent(program: Program, lm: Arc<LM>, counter: &Arc<AtomicUsize>) -
             Arc::new(CountingSearch {
                 calls: Arc::clone(counter),
             }),
+            &[],
         );
     }
     Interpreter::load(program, env).await.unwrap()

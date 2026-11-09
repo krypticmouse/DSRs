@@ -614,7 +614,7 @@ async fn agent_loop_is_one_span_with_tool_events() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
         .grant("net:search");
     let interp = Interpreter::load(agent_program(), env).await.unwrap();
 
@@ -737,8 +737,8 @@ async fn tool_set_overlay_selects_the_tool_surface() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
-        .bind_host_tool("calc", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
+        .bind_host_tool("calc", Arc::new(SearchTool), &[])
         .grant("net:search");
     let interp = Interpreter::load(two_tool_agent_program(), env)
         .await
@@ -1038,7 +1038,7 @@ async fn caps_exceeding_grants_refuse_the_load() {
     let (lm, _client) = canned_lm(vec![]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("search", Arc::new(SearchTool));
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"]);
     // agent_program declares net:search; the env grants nothing.
     let err = Interpreter::load(agent_program(), env).await.unwrap_err();
     assert!(matches!(
@@ -1053,6 +1053,26 @@ async fn unbound_host_tool_refuses_the_load() {
     let env = RuntimeEnv::new().bind_model("m", lm).grant("net:search");
     let err = Interpreter::load(agent_program(), env).await.unwrap_err();
     assert!(matches!(err, LoadError::HostToolUnbound { ref name } if name == "search"));
+}
+
+#[tokio::test]
+async fn artifact_cannot_underdeclare_a_bound_host_tool() {
+    let mut program = agent_program();
+    program.caps = Default::default();
+    for (_, tool) in program.tools.iter_mut() {
+        tool.caps = Default::default();
+    }
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
+        .grant("net:search");
+    let err = Interpreter::load(program, env).await.unwrap_err();
+    assert!(matches!(
+        err,
+        LoadError::HostBindingCapsUnderdeclared { ref name, ref missing }
+            if name == "search" && missing == &["net:search".to_string()]
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1227,7 +1247,7 @@ async fn worked_example_runs_end_to_end() {
     let env = RuntimeEnv::new()
         .bind_model("deep", deep_lm)
         .bind_model("fast", fast_lm)
-        .bind_host_tool("search", Arc::new(SearchTool))
+        .bind_host_tool("search", Arc::new(SearchTool), &["net:search"])
         .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
         .grant("net:search");
     let interp = Interpreter::load(program, env).await.unwrap();

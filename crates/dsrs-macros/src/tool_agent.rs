@@ -197,6 +197,7 @@ fn expand_tool_inner(
             pub fn __dsrs_tool() -> #runtime::ir::ToolStepDef {
                 #runtime::ir::ToolStepDef {
                     name: #fn_name_str,
+                    implementation: ::std::any::type_name::<__HostTool>(),
                     desc: #desc,
                     caps: &[#(#caps),*],
                     sig: #runtime::ir::SignatureDef::of::<Sig>(),

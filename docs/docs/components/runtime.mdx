@@ -25,8 +25,8 @@ What the host supplies at load: live models, host tool and hole bindings, the sa
 |---|---|
 | `RuntimeEnv::new()` | An empty environment. |
 | `bind_model(name, lm)` | Pre-binds a live model by declared model name (for example `"fast"`). Models not bound here are constructed from their artifact config at load. |
-| `bind_host_tool(name, tool)` | Binds a host tool implementation (a `rig` dyn tool) by tool name. Consulted once at load. |
-| `bind_host_hole(name, f)` | Binds a native implementation for an extern hole by leaf name. The function receives the hole's resolved input map and returns a JSON value coerced against the hole's output signature. |
+| `bind_host_tool(name, tool, required_caps)` | Binds a host tool and its host-owned capability requirements. Load rejects an artifact that omits any requirement. Use `&[]` only for a tool that needs no capability. |
+| `bind_host_hole(name, required_caps, f)` | Binds an extern hole with host-owned requirements. The function receives the resolved input map and returns a JSON value coerced against the hole's output signature. |
 | `with_sandbox(executor)` | Sets the sandbox that executes holes and sandboxed tools (QuickJS in v1). Required if and only if the program carries sandboxed code. |
 | `grant(cap)` | Grants one capability. The program's `caps` must be a subset of the grants or the load is refused. |
 | `with_code_mode(config)` | Behind the `code-mode` feature (on by default). When set, every `AgentLoop` presents its non-stop tools as one sandboxed `run_js` tool instead of N JSON tools; the model writes JavaScript that calls them as globals. This is a host presentation choice, not program semantics: the same artifact runs identically either way. See [Code Mode](/docs/components/code-mode). |

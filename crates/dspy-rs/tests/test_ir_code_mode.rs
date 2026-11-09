@@ -202,8 +202,8 @@ async fn agent_loop_code_mode_chains_two_tools_in_one_run_js() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("get-weather", Arc::new(weather))
-        .bind_host_tool("counter", Arc::new(counter))
+        .bind_host_tool("get-weather", Arc::new(weather), &[])
+        .bind_host_tool("counter", Arc::new(counter), &[])
         .grant("net:tools")
         .with_code_mode(SandboxConfig::default());
     let interp = Interpreter::load(two_tool_program("get-weather", "counter"), env)
@@ -322,10 +322,10 @@ async fn stop_tools_stay_individual_next_to_run_js() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("counter", Arc::new(counter_tool))
+        .bind_host_tool("counter", Arc::new(counter_tool), &[])
         // Stop tools end the loop before execution; a bound ToolDyn is still
         // required at load.
-        .bind_host_tool("submit", Arc::new(CounterTool::default()))
+        .bind_host_tool("submit", Arc::new(CounterTool::default()), &[])
         .grant("net:tools")
         .with_code_mode(SandboxConfig::default());
     let interp = Interpreter::load(program, env).await.unwrap();
@@ -410,7 +410,7 @@ async fn sandboxed_tools_join_the_js_api() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("get-weather", Arc::new(weather_tool))
+        .bind_host_tool("get-weather", Arc::new(weather_tool), &[])
         .grant("net:tools")
         .with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()))
         .with_code_mode(SandboxConfig::default());
@@ -449,8 +449,8 @@ async fn script_failure_is_conversational_and_recorded() {
     .await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("get-weather", Arc::new(weather))
-        .bind_host_tool("counter", Arc::new(counter))
+        .bind_host_tool("get-weather", Arc::new(weather), &[])
+        .bind_host_tool("counter", Arc::new(counter), &[])
         .grant("net:tools")
         .with_code_mode(SandboxConfig::default());
     let interp = Interpreter::load(two_tool_program("get-weather", "counter"), env)
@@ -489,8 +489,8 @@ async fn js_identifier_collision_refuses_the_load() {
     let (lm, _client) = canned_lm(vec![]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("counter-x", Arc::new(CounterTool::default()))
-        .bind_host_tool("counter.x", Arc::new(CounterTool::default()))
+        .bind_host_tool("counter-x", Arc::new(CounterTool::default()), &[])
+        .bind_host_tool("counter.x", Arc::new(CounterTool::default()), &[])
         .grant("net:tools")
         .with_code_mode(SandboxConfig::default());
     let err = Interpreter::load(two_tool_program("counter-x", "counter.x"), env)
@@ -513,8 +513,8 @@ async fn without_code_mode_binding_tools_stay_individual() {
     let (lm, client) = canned_lm(vec![text(fields(&[("answer", "direct")]))]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_tool("get-weather", Arc::new(weather))
-        .bind_host_tool("counter", Arc::new(counter))
+        .bind_host_tool("get-weather", Arc::new(weather), &[])
+        .bind_host_tool("counter", Arc::new(counter), &[])
         .grant("net:tools");
     let interp = Interpreter::load(two_tool_program("get-weather", "counter"), env)
         .await

@@ -67,7 +67,14 @@ fn obj(pairs: &[(&str, serde_json::Value)]) -> JsonMap {
 
 /// question → shouter (extern hole) → shout.
 fn extern_program() -> Program {
+    extern_program_with_caps(&[])
+}
+
+fn extern_program_with_caps(caps: &[&str]) -> Program {
     let mut b = ProgramBuilder::new("externed");
+    for cap in caps {
+        b.cap(cap);
+    }
     b.model("m", config());
     let main_sig = b.sig(
         SignatureDef::build("Main")
@@ -83,13 +90,45 @@ fn extern_program() -> Program {
             .finish()
             .unwrap(),
     );
-    let shouter = ir::extern_hole("shouter", shout_sig, 0xdead_beef, &[])
+    let shouter = ir::extern_hole("shouter", shout_sig, 0xdead_beef, caps)
         .bind("question", ir::input("question"));
     b.main(
         main_sig,
         ir::seq([shouter]).out("shout", ir::out("shouter", "shout")),
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn artifact_cannot_underdeclare_a_bound_host_hole() {
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .bind_host_hole("shouter", &["net:search"], |_| async { Ok(json!({"shout": "x"})) })
+        .grant("net:search");
+    let err = Interpreter::load(extern_program(), env).await.unwrap_err();
+    assert!(matches!(
+        err,
+        LoadError::HostBindingCapsUnderdeclared { ref name, ref missing }
+            if name == "shouter" && missing == &["net:search".to_string()]
+    ));
+}
+
+#[tokio::test]
+async fn declared_host_hole_requirement_remains_callable() {
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .bind_host_hole("shouter", &["net:search"], |_| async { Ok(json!({"shout": "ok"})) })
+        .grant("net:search");
+    let interp = Interpreter::load(extern_program_with_caps(&["net:search"]), env)
+        .await
+        .unwrap();
+    let result = interp
+        .run(obj(&[("question", json!("q"))]), None, Budget::unlimited())
+        .await
+        .unwrap();
+    assert_eq!(result["shout"], "ok");
 }
 
 /// question → drafter (Predict) → shouter (sandboxed JS hole) → shout.
@@ -162,7 +201,7 @@ async fn host_hole_binds_and_executes() {
     let (lm, _client) = canned_lm(vec![]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+        .bind_host_hole("shouter", &[], |input: JsonMap| async move {
             let q = input
                 .get("question")
                 .and_then(|v| v.as_str())
@@ -375,7 +414,7 @@ async fn strict_replay_refuses_changed_host_hole_hash() {
     let (lm, _client) = canned_lm(vec![]).await;
     let env = RuntimeEnv::new()
         .bind_model("m", lm)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+        .bind_host_hole("shouter", &[], |input: JsonMap| async move {
             let q = input
                 .get("question")
                 .and_then(|v| v.as_str())
@@ -424,7 +463,7 @@ async fn strict_replay_refuses_changed_host_hole_hash() {
     let (lm2, _client2) = canned_lm(vec![]).await;
     let env2 = RuntimeEnv::new()
         .bind_model("m", lm2)
-        .bind_host_hole("shouter", |input: JsonMap| async move {
+        .bind_host_hole("shouter", &[], |input: JsonMap| async move {
             Ok(json!({ "shout": input.get("question").cloned().unwrap_or_default() }))
         });
     let interp2 = Interpreter::load(changed, env2).await.unwrap();
