@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use dspy_rs::ir::{
     self, Budget, FieldType as T, Interpreter, LoadError, Overlay, ParamValue, Program,
-    ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
+    ProgramBuilder, RenderSpec, RunError, RuntimeEnv, SignatureDef,
 };
 use dspy_rs::trace::{SpanEvent, capture};
 use dspy_rs::typesys::{EnumDef, EnumValueDef, TypeTable};
@@ -108,6 +108,96 @@ fn seq_program() -> Program {
         ir::seq([drafter, checker]).out("verdict", ir::out("checker", "verdict")),
     )
     .unwrap()
+}
+
+fn jinja_program(template: &str) -> Program {
+    let mut b = ProgramBuilder::new("jinja-render");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .input("context", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let leaf_sig = b.sig(
+        SignatureDef::build("QA")
+            .input_full(
+                ir::FieldDef::new("question", T::String)
+                    .with_render(RenderSpec::Jinja(template.into())),
+            )
+            .input("context", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let node = ir::predict("answerer", leaf_sig)
+        .bind("question", ir::input("question"))
+        .bind("context", ir::input("context"));
+    b.main(
+        main_sig,
+        ir::seq([node]).out("answer", ir::out("answerer", "answer")),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn jinja_render_failure_returns_input_error_before_lm_call() {
+    let (lm, client) = canned_lm(vec![]).await;
+    let interp = Interpreter::load(
+        jinja_program("{{ this.missing }}"),
+        RuntimeEnv::new().bind_model("m", lm),
+    )
+    .await
+    .unwrap();
+    let input = obj(&[("question", json!("hello")), ("context", json!("known"))]);
+    let err = interp
+        .run(input.clone(), None, Budget::unlimited())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(err.to_string().contains("failed to render input field"));
+
+    let err = interp
+        .run_conversation(
+            dspy_rs::Chat::new(vec![dspy_rs::Message::system("previous turn")]),
+            Some(input),
+            None,
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(client.last_request().is_none());
+}
+
+#[tokio::test]
+async fn jinja_render_failure_in_demo_returns_input_error() {
+    let (lm, client) = canned_lm(vec![]).await;
+    let program = jinja_program("{{ input.context }}");
+    let demos_slot = program.slot_of::<ir::Demos>("answerer.demos").unwrap();
+    let mut overlay = Overlay::new(&program);
+    overlay.set_demos(
+        demos_slot,
+        vec![ir::DemoRow {
+            input: obj(&[("question", json!("demo"))]),
+            output: obj(&[("answer", json!("example"))]),
+        }],
+    );
+    let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let err = interp
+        .run(
+            obj(&[("question", json!("live")), ("context", json!("known"))]),
+            Some(Arc::new(overlay)),
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(client.last_request().is_none());
 }
 
 // ---------------------------------------------------------------------------

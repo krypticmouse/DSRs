@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use indexmap::IndexMap;
 use minijinja::UndefinedBehavior;
 use minijinja::value::{Kwargs, Value as MiniJinjaValue};
@@ -40,21 +40,23 @@ fn regex_match(value: String, regex: String) -> bool {
     }
 }
 
-fn sum_filter(value: Vec<MiniJinjaValue>) -> MiniJinjaValue {
-    let int_sum: Option<i64> = value
+fn sum_filter(value: Vec<MiniJinjaValue>) -> Result<MiniJinjaValue, minijinja::Error> {
+    let ints: Option<Vec<i64>> = value
         .iter()
         .map(|value| <i64>::try_from(value.clone()).ok())
-        .collect::<Option<Vec<_>>>()
-        .map(|ints| ints.into_iter().sum());
+        .collect();
+    if let Some(ints) = ints {
+        let sum = ints.into_iter().try_fold(0_i64, i64::checked_add).ok_or_else(|| {
+            minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, "sum overflow")
+        })?;
+        return Ok(MiniJinjaValue::from(sum));
+    }
     let float_sum: Option<f64> = value
         .into_iter()
         .map(|value| <f64>::try_from(value).ok())
         .collect::<Option<Vec<_>>>()
         .map(|floats| floats.into_iter().sum());
-    int_sum.map_or(
-        float_sum.map_or(MiniJinjaValue::from(0), MiniJinjaValue::from),
-        MiniJinjaValue::from,
-    )
+    Ok(float_sum.map_or(MiniJinjaValue::from(0), MiniJinjaValue::from))
 }
 
 fn truncate_filter(
@@ -313,19 +315,27 @@ impl ChatAdapter {
     /// per call — dynamic defs own their template strings, and a
     /// process-global cache keyed on them would reintroduce the leak-per-load
     /// RFC 0002 IR-1 removed.
+    /// On a template error, returns an explicit marker. Use
+    /// [`try_format_input_def`](Self::try_format_input_def) to handle the error.
     pub fn format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
+        self.try_format_input_def(def, input)
+            .unwrap_or_else(|_| "[[ ## input_render_error ## ]]".to_string())
+    }
+
+    /// Fallible input formatting for runtime callers that must reject bad templates.
+    pub fn try_format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
         let mut result = String::new();
         for field in def.inputs.iter() {
             let Some(value) = input.get(&*field.name) else {
                 continue;
             };
             result.push_str(&format!("[[ ## {} ## ]]\n", field.lm_name));
-            result.push_str(&render_input_field_def(def, field, value, input));
+            result.push_str(&render_input_field_def(def, field, value, input)?);
             result.push_str("\n\n");
         }
 
         result.push_str(&format_response_instructions_view(&def_views(&def.outputs)));
-        result
+        Ok(result)
     }
 
     /// Formats a value-level output map as an assistant message for few-shot
@@ -540,25 +550,20 @@ fn render_input_field_def(
     field: &crate::ir::FieldDef,
     value: &Value,
     input: &JsonMap,
-) -> String {
+) -> Result<String> {
     match &field.render {
-        RenderSpec::Default => match value {
+        RenderSpec::Default => Ok(match value {
             Value::String(s) => s.clone(),
             _ => serde_json::to_string(value).unwrap_or_else(|_| "<error>".to_string()),
-        },
-        RenderSpec::Format(format) => crate::typesys::format_value(value, format),
+        }),
+        RenderSpec::Format(format) => Ok(crate::typesys::format_value(value, format)),
         RenderSpec::Jinja(template) => {
             let mut env = build_input_render_environment();
             env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to compile input render template for `{}` ({}): {err}",
-                        field.lm_name, field.name
-                    )
-                });
+                .with_context(|| format!("failed to compile input render template for `{}`", field.name))?;
             let compiled = env
                 .get_template(INPUT_RENDER_TEMPLATE_NAME)
-                .expect("template registered above");
+                .with_context(|| format!("failed to load input render template for `{}`", field.name))?;
 
             let context = json!({
                 "this": value,
@@ -573,12 +578,7 @@ fn render_input_field_def(
 
             compiled
                 .render(minijinja::Value::from_serialize(context))
-                .unwrap_or_else(|err| {
-                    panic!(
-                        "failed to render input field `{}` (rust `{}`) with jinja template `{}`: {err}",
-                        field.lm_name, field.name, template
-                    )
-                })
+                .with_context(|| format!("failed to render input field `{}`", field.name))
         }
     }
 }
