@@ -137,7 +137,8 @@ Usually you do not touch the adapter - `Predict` handles it. The public surface 
 | Method | Produces |
 |--------|----------|
 | `build_system_def(def, types, instruction_override)` | The system message (field descriptions, structure template, response instructions, task description) |
-| `format_input_def(def, input)` | The user message: input fields with `[[ ## field ## ]]` markers plus response instructions. `input` is a `JsonMap`; absent fields are skipped |
+| `format_input_def(def, input)` | Returns the user message as `String`; template errors produce an explicit error marker for compatibility |
+| `try_format_input_def(def, input)` | Returns `Result<String>` so runtime callers can reject Jinja compile or render errors |
 | `format_output_def(def, output)` | An assistant message for few-shot demos, ending with `[[ ## completed ## ]]` |
 | `parse_output_def(def, types, response)` | `(JsonMap, IndexMap<String, FieldMeta>)` — the parsed output map plus per-field parse metadata |
 | `ChatAdapter::parse_sections(content)` | Ordered map of `field_name → section_content` split by the delimiters |

@@ -897,7 +897,13 @@ impl Interpreter {
         } else {
             if let Some(input_map) = input.as_ref() {
                 self.validate_input(&at, def, input_map)?;
-                chat.push_message(Message::user(ChatAdapter.format_input_def(def, input_map)));
+                let rendered = ChatAdapter.try_format_input_def(def, input_map).map_err(|err| {
+                    RunError::Input {
+                        at: at.clone().into(),
+                        message: format!("{err:#}"),
+                    }
+                })?;
+                chat.push_message(Message::user(rendered));
             }
             (Vec::new(), chat.messages)
         };
@@ -1301,7 +1307,7 @@ impl Interpreter {
         cx: &Cx,
     ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
         let p = &*self.program;
-        Ok(match &p.nodes[node] {
+        let rendered = match &p.nodes[node] {
             Node::Predict(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
@@ -1321,6 +1327,10 @@ impl Interpreter {
                 )
             }
             _ => unreachable!("conversation_leaf returns only leaves"),
+        };
+        rendered.map_err(|err| RunError::Input {
+            at: p.node_display(node).into(),
+            message: format!("{err:#}"),
         })
     }
 
@@ -1599,7 +1609,11 @@ impl Interpreter {
 
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
-        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None);
+        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None)
+            .map_err(|err| RunError::Input {
+                at: at.clone().into(),
+                message: format!("{err:#}"),
+            })?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -1965,7 +1979,11 @@ impl Interpreter {
             &demos,
             &input,
             policy.playbook.as_deref(),
-        );
+        )
+        .map_err(|err| RunError::Input {
+            at: at.clone().into(),
+            message: format!("{err:#}"),
+        })?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
@@ -2814,7 +2832,7 @@ fn render_prompt(
     demos: &[DemoRow],
     input: &JsonMap,
     playbook: Option<&str>,
-) -> (Vec<Message>, Vec<Message>) {
+) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     let adapter = ChatAdapter;
     let mut system = adapter.build_system_def(def, types, Some(instruction));
     if let Some(playbook) = playbook {
@@ -2824,13 +2842,13 @@ fn render_prompt(
     let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
     prefix.push(Message::system(system));
     for row in demos {
-        prefix.push(Message::user(adapter.format_input_def(def, &row.input)));
+        prefix.push(Message::user(adapter.try_format_input_def(def, &row.input)?));
         prefix.push(Message::assistant(
             adapter.format_output_def(def, &row.output),
         ));
     }
-    let suffix = vec![Message::user(adapter.format_input_def(def, input))];
-    (prefix, suffix)
+    let suffix = vec![Message::user(adapter.try_format_input_def(def, input)?)];
+    Ok((prefix, suffix))
 }
 
 fn span_error(

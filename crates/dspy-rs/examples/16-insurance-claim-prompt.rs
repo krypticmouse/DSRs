@@ -207,7 +207,7 @@ fn main() {
         serde_json::Value::Object(map) => map,
         _ => unreachable!("signature inputs serialize as objects"),
     };
-    let user = adapter.format_input_def(def, &input_map);
+    let user = adapter.try_format_input_def(def, &input_map).expect("valid input renderer");
 
     println!("=== System ===\n{system}\n");
     println!("=== User ===\n{user}");

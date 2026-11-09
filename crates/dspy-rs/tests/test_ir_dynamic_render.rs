@@ -97,6 +97,15 @@ struct JinjaSig {
     answer: String,
 }
 
+#[derive(Signature, Clone, Debug)]
+struct MissingMemberJinjaSig {
+    #[input]
+    #[render(jinja = "{{ this.missing }}")]
+    question: String,
+    #[output]
+    answer: String,
+}
+
 fn graded_response() -> Message {
     Message::assistant(
         "[[ ## score ## ]]\n0.9\n\n[[ ## verdict ## ]]\nSupported\n\n[[ ## completed ## ]]\n",
@@ -150,7 +159,7 @@ fn derive_bridged_input_honors_format_hints() {
         .as_object()
         .cloned()
         .unwrap();
-    let value_lane = adapter.format_input_def(SignatureDef::of::<Graded>(), &value_input);
+    let value_lane = adapter.try_format_input_def(SignatureDef::of::<Graded>(), &value_input).unwrap();
     assert!(value_lane.contains("[[ ## question ## ]]\nIs the sky blue?"));
     // `#[format("json")]` renders the list as JSON.
     assert!(value_lane.contains(r#"["observation log"]"#));
@@ -167,8 +176,22 @@ fn derive_bridged_jinja_input_renders_template() {
         .as_object()
         .cloned()
         .unwrap();
-    let value_lane = adapter.format_input_def(SignatureDef::of::<JinjaSig>(), &value_input);
+    let value_lane = adapter.try_format_input_def(SignatureDef::of::<JinjaSig>(), &value_input).unwrap();
     assert!(value_lane.contains("Q: What is 2+2? [What is 2+2?]"));
+}
+
+#[test]
+fn jinja_input_render_errors_are_returned() {
+    let input = MissingMemberJinjaSigInput::new("hello".to_string());
+    let value_input = serde_json::to_value(&input)
+        .unwrap()
+        .as_object()
+        .cloned()
+        .unwrap();
+    let err = ChatAdapter
+        .try_format_input_def(SignatureDef::of::<MissingMemberJinjaSig>(), &value_input)
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("undefined"));
 }
 
 #[test]
@@ -346,7 +369,7 @@ fn runtime_only_signature_round_trips() {
     let mut input = serde_json::Map::new();
     input.insert("ticket".into(), "App crashes on login".into());
     input.insert("context_notes".into(), serde_json::json!(["seen twice"]));
-    let user = adapter.format_input_def(&def, &input);
+    let user = adapter.try_format_input_def(&def, &input).unwrap();
     assert!(user.contains("[[ ## ticket ## ]]\nApp crashes on login"));
     assert!(user.contains("[\"seen twice\"]"));
     assert!(user.contains("starting with the field `[[ ## severity ## ]]`"));
