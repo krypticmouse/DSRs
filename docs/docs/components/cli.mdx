@@ -97,7 +97,7 @@ Host tools cannot be served: a program declaring a host tool needs an embedding 
 | `GET /program` | The canonical `.dsrs` text, as `text/plain; charset=utf-8`. |
 | `GET /healthz` | `{"status": "ok"}` plus the program name and hash. |
 
-Send `Authorization: Bearer <token>` to `/run`, `/schema`, and `/program`; `/healthz` is public. The server admits at most four concurrent runs and 30 runs per minute per process. Each run has a 60-second deadline, eight model calls, and a 16,384-token budget. Authentication failures return 401, admission and budget failures return 429, and timeouts return 504. Other errors use `{"error": ...}` with the interpreter's message.
+Send `Authorization: Bearer <token>` to `/run`, `/schema`, and `/program`; `/healthz` is public. The server admits at most four concurrent runs and 30 runs per minute per process. Each run has a 60-second deadline, eight model calls, and a soft 16,384-token usage budget (usage is known only after each provider response). Authentication failures return 401, admission and budget failures return 429, and timeouts return 504. Other errors use `{"error": ...}` with the interpreter's message.
 
 ## From code to endpoint
 
