@@ -181,6 +181,7 @@ impl ModelEntry {
         // each other's completions. The raw endpoint never enters the trace.
         let endpoint_identity = config.base_url.clone();
         let mut config = config.clone();
+        config.temperature = crate::core::sampling::effective_temperature(config.temperature);
         config.api_key = None;
         config.base_url = config.base_url.as_deref().map(url_origin);
         let config_hash = stable_hash_debug(&(config.clone(), endpoint_identity));
@@ -420,6 +421,10 @@ pub(crate) fn request_hash(config_hash: u64, prefix: &[Message], suffix: &[Messa
 
     let mut hasher = StableHasher::new();
     hasher.write(&config_hash.to_le_bytes());
+    if let Some(id) = crate::core::sampling::current_sampling_options().id {
+        hasher.write(&(id.len() as u64).to_le_bytes());
+        hasher.write(id.as_bytes());
+    }
     let mut writer = HashWriter(&mut hasher);
     for message in prefix.iter().chain(suffix) {
         let _ = write!(writer, "{message:?}");
@@ -495,5 +500,39 @@ mod tests {
         assert_eq!(left_entry.config.base_url, right_entry.config.base_url);
         assert_ne!(left_entry.config_hash, right_entry.config_hash);
         assert!(!format!("{:?}", left_entry.config).contains("/v1/first"));
+    }
+
+    #[tokio::test]
+    async fn request_hash_includes_sampling_identity_and_temperature() {
+        let prompt = [Message::user("hello")];
+        let config = LMConfig::default();
+        let plain = request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt);
+        let first = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-a".into()),
+                temperature: Some(0.2),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        let second = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-b".into()),
+                temperature: Some(0.2),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        let changed_temperature = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-a".into()),
+                temperature: Some(0.8),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        assert_ne!(plain, first);
+        assert_ne!(first, second);
+        assert_ne!(first, changed_temperature);
     }
 }

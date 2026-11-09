@@ -10,7 +10,10 @@ use rig::{
 use std::{
     borrow::Cow,
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 use tracing::{debug, trace, warn};
 
@@ -37,6 +40,7 @@ pub struct TestCompletionModel {
     responses: Arc<Mutex<VecDeque<AssistantContent>>>,
     last_request: Arc<Mutex<Option<CompletionRequest>>>,
     usage: Arc<Mutex<Usage>>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl TestCompletionModel {
@@ -45,6 +49,7 @@ impl TestCompletionModel {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             last_request: Arc::new(Mutex::new(None)),
             usage: Arc::new(Mutex::new(Usage::new())),
+            calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -61,6 +66,11 @@ impl TestCompletionModel {
     pub fn set_usage(&self, usage: Usage) {
         *self.usage.lock().unwrap() = usage;
     }
+
+    /// Number of provider requests received by this test model.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 
 impl CompletionProvider for TestCompletionModel {
@@ -68,6 +78,7 @@ impl CompletionProvider for TestCompletionModel {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         *self.last_request.lock().unwrap() = Some(request);
         let response = self.responses.lock().unwrap().pop_front().ok_or_else(|| {
             CompletionError::ResponseError("test response queue is empty".to_string())

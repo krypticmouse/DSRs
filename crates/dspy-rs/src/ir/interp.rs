@@ -1511,7 +1511,11 @@ impl Interpreter {
                 Node::Retry(n) => {
                     let mut attempt = 0u32;
                     loop {
-                        match self.eval(n.child, cx).await {
+                        let options = crate::current_sampling_options().child(
+                            format!("retry-{}", self.program.node_display(id)),
+                            attempt as usize,
+                        );
+                        match crate::with_sampling_options(options, self.eval(n.child, cx)).await {
                             Ok(out) => break out,
                             Err(err) if err.retryable() && attempt + 1 < n.max_attempts.get() => {
                                 attempt += 1;
@@ -1592,21 +1596,65 @@ impl Interpreter {
         n: &crate::ir::graph::RefineNode,
         cx: &mut Cx,
     ) -> Result<JsonMap, RunError> {
+        let mut best: Option<(f64, usize, JsonMap, SecondaryMap<NodeId, Option<JsonMap>>)> = None;
         for round in 0..n.max_rounds.get() {
-            let out = self.eval(n.child, cx).await?;
-            let judge_out = self.eval(n.judge, cx).await?;
+            let child_scope = crate::current_sampling_options().child(
+                format!("refine-{}", self.program.node_display(n.child)),
+                round as usize,
+            );
+            let out = crate::with_sampling_options(child_scope, self.eval(n.child, cx)).await?;
+            let judge_scope = crate::current_sampling_options().child(
+                format!("refine-judge-{}", self.program.node_display(n.judge)),
+                round as usize,
+            );
+            let judge_out =
+                crate::with_sampling_options(judge_scope, self.eval(n.judge, cx)).await?;
             let score = judge_out
                 .get("score")
                 .and_then(Value::as_f64)
                 .unwrap_or(f64::NEG_INFINITY);
-            if score >= n.threshold || round + 1 == n.max_rounds.get() {
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _, _, _)| score > *best_score)
+            {
+                best = Some((score, round as usize, out.clone(), cx.frames.clone()));
+            }
+            if score >= n.threshold {
+                let key = format!(
+                    "refine.{}.selected_round",
+                    self.program.node_display(n.child)
+                );
+                crate::trace::capture::set_trace_tag(key, (round + 1).to_string());
+                crate::trace::capture::set_trace_tag(
+                    format!(
+                        "refine.{}.selected_score",
+                        self.program.node_display(n.child)
+                    ),
+                    score.to_string(),
+                );
                 return Ok(out);
             }
             let feedback = judge_out.get("feedback").cloned().unwrap_or(Value::Null);
             let field = self.program.syms.get(n.feedback_field).to_string();
             cx.refine_feedback = Some((n.child, field, feedback));
         }
-        unreachable!("refine rounds are bounded and return inside the loop")
+        let (score, round, out, frames) = best.expect("refine has at least one bounded attempt");
+        cx.frames = frames;
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_round",
+                self.program.node_display(n.child)
+            ),
+            (round + 1).to_string(),
+        );
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_score",
+                self.program.node_display(n.child)
+            ),
+            score.to_string(),
+        );
+        Ok(out)
     }
 
     // -- leaves ---------------------------------------------------------------
