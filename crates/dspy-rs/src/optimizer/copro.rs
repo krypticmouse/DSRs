@@ -9,6 +9,22 @@ use crate::optimizer::target::LeafInfo;
 use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::{Module, Predictors};
 
+fn set_instruction_if_changed(candidate: &mut Candidate, leaf: &LeafInfo, instruction: &str) {
+    if instruction == leaf.instruction {
+        let remove = if let Some(slot) = candidate.slots.get_mut(&leaf.name) {
+            slot.instruction = None;
+            slot.demos.is_none() && !slot.clear_instruction
+        } else {
+            false
+        };
+        if remove {
+            candidate.slots.remove(&leaf.name);
+        }
+    } else {
+        candidate.set_instruction(&leaf.name, instruction);
+    }
+}
+
 /// Breadth-first instruction optimizer.
 ///
 /// COPRO (Collaborative Prompt Optimization) generates `breadth` candidate instructions
@@ -25,8 +41,9 @@ use crate::{Module, Predictors};
 /// instruction always competes) deduplicate by content hash and are served
 /// from the rollout cache.
 ///
-/// Does not use feedback from the metric — only the numerical score matters. If you
-/// have rich textual feedback, use [`GEPA`](crate::GEPA) instead.
+/// Metric feedback is included in training-only proposal evidence when available;
+/// numerical scores select round winners. If you want feedback-driven acceptance
+/// and evolution strategies, use [`GEPA`](crate::GEPA) instead.
 ///
 /// # Hyperparameters
 ///
@@ -34,8 +51,7 @@ use crate::{Module, Predictors};
 ///   exploration but proportionally more LM calls. Must be > 1.
 /// - **`depth`** (default: 3) — optimization rounds. Each round refines the previous
 ///   best instruction. Diminishing returns beyond ~5.
-/// - **`init_temperature`** (default: 1.4) — **currently unused.** Reserved for LM-generated
-///   candidate diversity. Setting this has no effect.
+/// - **`init_temperature`** (default: 1.4) — proposal LM temperature.
 /// - **`prompt_model`** — optional separate LM for generating candidate instructions.
 ///   Falls back to the global LM if unset.
 ///
@@ -57,8 +73,7 @@ pub struct COPRO {
     /// Optimization rounds — each refines the previous best.
     #[builder(default = 3)]
     pub depth: usize,
-    /// **Currently unused.** Reserved for controlling LM-generated candidate diversity.
-    /// Setting this has no effect.
+    /// Proposal LM temperature.
     #[builder(default = 1.4)]
     pub init_temperature: f32,
     /// Whether to track per-round statistics.
@@ -79,31 +94,29 @@ impl COPRO {
         }
     }
 
-    fn candidate_instructions(
+    async fn candidate_instructions(
         &self,
         base_instruction: &str,
         leaf: &LeafInfo,
-        depth: usize,
-    ) -> Vec<String> {
+        observations: String,
+        engine: &mut Engine,
+    ) -> Result<Vec<String>> {
         let mut candidates = Vec::with_capacity(self.breadth.max(1));
         candidates.push(base_instruction.to_string());
 
-        let output_hint = leaf
-            .output_fields
-            .last()
-            .map(|(name, _)| name.as_str())
-            .unwrap_or("output");
-
-        for idx in 0..self.breadth.saturating_sub(1) {
-            candidates.push(format!(
-                "{base_instruction}\n\nOptimization hint (d{} c{}): Be explicit and concise for `{}`.",
-                depth + 1,
-                idx + 1,
-                output_hint,
-            ));
-        }
-
-        candidates
+        candidates.extend(
+            super::propose::propose(
+                self.prompt_model.as_ref(),
+                self.init_temperature,
+                leaf,
+                base_instruction,
+                observations,
+                self.breadth - 1,
+                engine,
+            )
+            .await?,
+        );
+        Ok(candidates)
     }
 
     /// Convenience: optimizes a typed module over a trainset with this
@@ -148,7 +161,51 @@ impl Optimizer for COPRO {
 
         // Winners accumulate here; the module itself is never touched until
         // the final install.
+        let train = target.train_columns();
+        let validation = target.val_columns();
+        anyhow::ensure!(
+            !train.is_empty() && !validation.is_empty(),
+            "training and validation sets must be nonempty"
+        );
         let mut current = Candidate::new();
+        let baseline = engine.register(current.clone());
+        let baseline_train = match engine.evaluate(target, baseline, Some(&train)).await? {
+            EvalOutcome::Complete(eval) => eval,
+            EvalOutcome::BudgetExhausted { needed } => {
+                return Err(anyhow!(
+                    "budget exhausted ({needed} rollouts needed) during baseline training evaluation"
+                ));
+            }
+        };
+        let baseline_validation = match engine.evaluate(target, baseline, Some(&validation)).await?
+        {
+            EvalOutcome::Complete(eval) => eval.mean(),
+            EvalOutcome::BudgetExhausted { needed } => {
+                return Err(anyhow!(
+                    "budget exhausted ({needed} rollouts needed) during baseline validation evaluation"
+                ));
+            }
+        };
+        // Keep a small, train-only evidence set separate from validation scoring.
+        let baseline_observations = baseline_train
+            .rollouts
+            .iter()
+            .filter_map(|rollout| {
+                rollout.trace.as_ref().map(|trace| {
+                    Ok(serde_json::json!({
+                        "score": rollout.eval.score,
+                        "feedback": rollout.eval.feedback.as_deref(),
+                        "trace": trace.to_jsonl()?,
+                    }))
+                })
+            })
+            .take(8)
+            .collect::<Result<Vec<_>>>()?;
+        let baseline_observations = serde_json::to_string(&baseline_observations)?;
+        let baseline_observations = crate::utils::truncate(&baseline_observations, 24000);
+        let mut best_validation = baseline_validation;
+        let mut winner = current.clone();
+        let mut history: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
         let mut current_instructions: BTreeMap<String, String> = leaves
             .iter()
             .map(|leaf| (leaf.name.clone(), leaf.instruction.clone()))
@@ -157,14 +214,22 @@ impl Optimizer for COPRO {
         for depth in 0..self.depth {
             for leaf in &leaves {
                 let base_instruction = current_instructions[&leaf.name].clone();
-                let instructions = self.candidate_instructions(&base_instruction, leaf, depth);
+                let observations = format!(
+                    "Round {}. Training traces with metric scores and feedback: {}\nPreviously evaluated instructions and training scores: {}",
+                    depth + 1,
+                    baseline_observations,
+                    serde_json::to_string(history.entry(leaf.name.clone()).or_default())?
+                );
+                let instructions = self
+                    .candidate_instructions(&base_instruction, leaf, observations, engine)
+                    .await?;
 
                 let mut best: Option<(f64, String)> = None;
                 for instruction in instructions {
                     let mut candidate = current.clone();
-                    candidate.set_instruction(&leaf.name, &instruction);
+                    set_instruction_if_changed(&mut candidate, leaf, &instruction);
                     let row = engine.register(candidate);
-                    let eval = match engine.evaluate(target, row, None).await? {
+                    let eval = match engine.evaluate(target, row, Some(&train)).await? {
                         EvalOutcome::Complete(eval) => eval,
                         EvalOutcome::BudgetExhausted { needed } => {
                             return Err(anyhow!(
@@ -173,6 +238,10 @@ impl Optimizer for COPRO {
                         }
                     };
                     let score = eval.mean();
+                    history
+                        .entry(leaf.name.clone())
+                        .or_default()
+                        .push((instruction.clone(), score));
                     if best.as_ref().is_none_or(|(top, _)| score > *top) {
                         best = Some((score, instruction));
                     }
@@ -180,13 +249,26 @@ impl Optimizer for COPRO {
 
                 let (_, best_instruction) =
                     best.expect("breadth > 1 guarantees at least one candidate");
-                current.set_instruction(&leaf.name, &best_instruction);
+                set_instruction_if_changed(&mut current, leaf, &best_instruction);
                 current_instructions.insert(leaf.name.clone(), best_instruction);
+            }
+            let row = engine.register(current.clone());
+            let validation_score = match engine.evaluate(target, row, Some(&validation)).await? {
+                EvalOutcome::Complete(eval) => eval.mean(),
+                EvalOutcome::BudgetExhausted { needed } => {
+                    return Err(anyhow!(
+                        "budget exhausted ({needed} rollouts needed) during COPRO validation"
+                    ));
+                }
+            };
+            if validation_score > best_validation {
+                best_validation = validation_score;
+                winner = current.clone();
             }
         }
 
         // The one mutation of the run: install the accumulated winner.
-        target.install(&current)?;
+        target.install(&winner)?;
 
         Ok(Report::None)
     }
