@@ -1054,6 +1054,7 @@ dependencies = [
  "clap",
  "dspy-rs",
  "dsrs-tools",
+ "getrandom 0.3.3",
  "reqwest 0.13.2",
  "rig-core",
  "serde_json",
