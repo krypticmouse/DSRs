@@ -6,6 +6,8 @@
 //! JSONL (see [`Trace::to_jsonl`]); the in-memory form always speaks interned ids.
 
 use std::collections::BTreeMap;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -169,17 +171,28 @@ impl SpanErrorKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub config: LMConfig,
-    /// Stable hash of the redacted config; part of `request_hash`'s preimage.
+    /// Identity hash of the redacted config and endpoint; part of `request_hash`.
+    /// Endpoints with private path, query, or userinfo use a process-local key,
+    /// so their strict replay identity cannot survive a process restart.
     pub config_hash: u64,
 }
 
 impl ModelEntry {
     /// Builds the redacted, hashable entry from a live config.
     pub fn from_config(config: &LMConfig) -> Self {
-        // The serialized config keeps only origin, while the identity hash also
-        // includes the exact custom endpoint so distinct API paths do not replay
-        // each other's completions. The raw endpoint never enters the trace.
-        let endpoint_identity = config.base_url.clone();
+        // A process-local key keeps URL credentials out of the exported hash
+        // while still distinguishing custom endpoints during live replay.
+        static ENDPOINT_HASHER: LazyLock<std::collections::hash_map::RandomState> =
+            LazyLock::new(std::collections::hash_map::RandomState::new);
+        let endpoint_identity = config.base_url.as_ref().map(|url| {
+            let origin = url_origin(url);
+            if *url == origin || *url == format!("{origin}/v1") || *url == format!("{origin}/v1/") {
+                return url.clone();
+            }
+            let mut hasher = ENDPOINT_HASHER.build_hasher();
+            url.hash(&mut hasher);
+            format!("private:{}", hasher.finish())
+        });
         let mut config = config.clone();
         config.temperature = crate::core::sampling::effective_temperature(config.temperature);
         config.api_key = None;
@@ -456,6 +469,10 @@ mod tests {
         let entry = ModelEntry::from_config(&config);
         assert_eq!(entry.config.api_key, None);
         assert_eq!(entry.config.base_url.as_deref(), Some("https://host"));
+        assert_ne!(
+            entry.config_hash,
+            stable_hash_debug(&(entry.config.clone(), config.base_url))
+        );
     }
 
     #[test]
@@ -497,9 +514,25 @@ mod tests {
         };
         let left_entry = ModelEntry::from_config(&left);
         let right_entry = ModelEntry::from_config(&right);
+        assert_eq!(
+            left_entry.config_hash,
+            ModelEntry::from_config(&left).config_hash
+        );
         assert_eq!(left_entry.config.base_url, right_entry.config.base_url);
         assert_ne!(left_entry.config_hash, right_entry.config_hash);
         assert!(!format!("{:?}", left_entry.config).contains("/v1/first"));
+        let public_guess = stable_hash_debug(&(left_entry.config.clone(), left.base_url));
+        assert_ne!(left_entry.config_hash, public_guess);
+
+        let common = LMConfig {
+            base_url: Some("http://localhost/v1".into()),
+            ..LMConfig::default()
+        };
+        let common_entry = ModelEntry::from_config(&common);
+        assert_eq!(
+            common_entry.config_hash,
+            stable_hash_debug(&(common_entry.config.clone(), common.base_url))
+        );
     }
 
     #[tokio::test]
