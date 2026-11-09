@@ -10,6 +10,8 @@ on:
 jobs:
   sync:
     name: Sync docs to Mixedbread store
+    # The named stores belong to upstream; fork pushes have no store credential.
+    if: ${{ github.repository == 'krypticmouse/DSRs' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
