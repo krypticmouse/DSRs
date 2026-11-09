@@ -155,7 +155,7 @@ for entry in history {
 }
 ```
 
-> `inspect_history` requires caching to be enabled (`.cache(true)`); it panics on an LM built without caching. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
+> Enable caching with `.cache(true)` before making calls to record history. `inspect_history` returns an empty vector when caching is disabled or no entries have been recorded. It returns up to `n` recent cache insertions, newest first, from a window of 100 entries. Cache hits do not add history entries. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
 
 ## Configuration options
 

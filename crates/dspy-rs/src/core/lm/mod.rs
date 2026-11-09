@@ -963,9 +963,10 @@ impl LM {
         })
     }
 
-    /// Returns the `n` most recent cached calls.
+    /// Returns up to `n` recent cache insertions, newest first.
     ///
-    /// Panics if caching is disabled for this `LM`.
+    /// Returns an empty vector when caching is disabled or no entries have been
+    /// recorded. Cache hits and calls with tools do not add history entries.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
         level = "trace",
@@ -973,7 +974,10 @@ impl LM {
         fields(n)
     )]
     pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler.as_ref().unwrap().get_history(n)
+        self.cache_handler
+            .as_ref()
+            .map(|cache| cache.get_history(n))
+            .unwrap_or_default()
     }
 }
 

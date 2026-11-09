@@ -1,4 +1,4 @@
-use dspy_rs::{LM, LMConfig, LmUsage};
+use dspy_rs::{Chat, LM, LMClient, LMConfig, LmUsage, Message, TestCompletionModel};
 use rstest::*;
 
 #[rstest]
@@ -102,6 +102,46 @@ async fn test_lm_with_cache_disabled() {
 
     // Verify cache handler is NOT initialized when cache is disabled
     assert!(lm.cache_handler.is_none());
+}
+
+#[rstest]
+#[case::default(None)]
+#[case::disabled(Some(false))]
+#[case::enabled(Some(true))]
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn inspect_history_after_completion(#[case] cache: Option<bool>) {
+    let mut config = LMConfig {
+        base_url: Some("http://localhost:11434/v1".to_string()),
+        model: "llama3.2".to_string(),
+        ..Default::default()
+    };
+    if let Some(cache) = cache {
+        config.cache = cache;
+    }
+    let client = TestCompletionModel::new([rig::completion::AssistantContent::text("Paris")]);
+    let lm = LM::from_config(config)
+        .await
+        .unwrap()
+        .with_client(LMClient::Test(client))
+        .await
+        .unwrap();
+
+    assert!(lm.inspect_history(1).await.is_empty());
+    let chat = Chat::new(vec![Message::user("What is the capital of France?")]);
+    let prompt = chat.to_json().to_string();
+    let response = lm.call(chat, vec![]).await.unwrap();
+    assert_eq!(response.output.content(), "Paris");
+
+    assert!(lm.inspect_history(0).await.is_empty());
+    let history = lm.inspect_history(10).await;
+    if cache == Some(true) {
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].prompt, prompt);
+        assert_eq!(history[0].raw_output.as_deref(), Some("Paris"));
+    } else {
+        assert!(history.is_empty());
+    }
 }
 
 #[tokio::test]
@@ -245,8 +285,9 @@ async fn test_cache_preserves_usage_and_history() {
     };
     cache.insert_entry(43, later.clone());
 
-    let history = cache.get_history(2);
+    let history = lm.inspect_history(2).await;
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].prompt, later.prompt);
     assert_eq!(history[1].prompt, entry.prompt);
+    assert_eq!(lm.inspect_history(1).await[0].prompt, later.prompt);
 }
