@@ -1021,6 +1021,7 @@ dependencies = [
  "dsrs-syntax",
  "dsrs-tools",
  "dsrs_macros",
+ "encoding_rs",
  "enum_dispatch",
  "facet",
  "foyer",

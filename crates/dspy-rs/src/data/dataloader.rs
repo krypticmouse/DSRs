@@ -13,11 +13,15 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use reqwest;
 use std::any::TypeId;
 use std::collections::{HashMap, HashSet};
+use std::cell::Cell;
 use std::fs;
 #[cfg(feature = "data")]
 use std::io::Cursor;
+use std::io::Read;
 #[cfg(feature = "data")]
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+use serde::de::{DeserializeSeed, Error as _, IgnoredAny, SeqAccess, Visitor};
 use tracing::debug;
 
 use crate::data::utils::is_url;
@@ -55,6 +59,24 @@ impl Default for TypedLoadOptions {
         Self {
             field_map: HashMap::new(),
             unknown_fields: UnknownFieldPolicy::Ignore,
+        }
+    }
+}
+
+/// Limits applied to HTTP JSON and CSV dataset loads. Local files are unaffected.
+#[derive(Debug, Clone, Copy)]
+pub struct RemoteLoadLimits {
+    pub max_bytes: usize,
+    pub max_rows: usize,
+    pub timeout: Duration,
+}
+
+impl Default for RemoteLoadLimits {
+    fn default() -> Self {
+        Self {
+            max_bytes: 16 * 1024 * 1024,
+            max_rows: 50_000,
+            timeout: Duration::from_secs(30),
         }
     }
 }
@@ -174,7 +196,7 @@ impl DataLoader {
     #[tracing::instrument(
         name = "dsrs.data.load_json",
         level = "debug",
-        skip(opts),
+        skip(path, opts),
         fields(
             is_url = is_url(path),
             lines,
@@ -189,15 +211,24 @@ impl DataLoader {
     /// # Errors
     /// Returns [`DataLoadError`] wrapped in `anyhow::Error` for parse, schema,
     /// mapping, and conversion failures.
-    pub fn load_json<E>(
+    pub fn load_json<E>(path: &str, lines: bool, opts: TypedLoadOptions) -> Result<Vec<E>>
+    where
+        E: DeserializeOwned + for<'f> Facet<'f>,
+    {
+        Self::load_json_with_limits(path, lines, opts, RemoteLoadLimits::default())
+    }
+
+    /// Load JSON with custom limits for HTTP sources.
+    pub fn load_json_with_limits<E>(
         path: &str,
         lines: bool,
         opts: TypedLoadOptions,
+        limits: RemoteLoadLimits,
     ) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_json_rows(path, lines)?;
+        let rows = Self::load_json_rows(path, lines, limits)?;
         let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed json examples loaded");
         Ok(examples)
@@ -206,7 +237,7 @@ impl DataLoader {
     #[tracing::instrument(
         name = "dsrs.data.load_json_with",
         level = "debug",
-        skip(opts, mapper),
+        skip(path, opts, mapper),
         fields(
             is_url = is_url(path),
             lines,
@@ -227,8 +258,21 @@ impl DataLoader {
     where
         F: Fn(&RowRecord) -> Result<E>,
     {
-        let _ = opts;
-        let rows = Self::load_json_rows(path, lines)?;
+        Self::load_json_with_mapper_limits(path, lines, opts, RemoteLoadLimits::default(), mapper)
+    }
+
+    /// Map JSON rows with custom limits for HTTP sources.
+    pub fn load_json_with_mapper_limits<E, F>(
+        path: &str,
+        lines: bool,
+        _opts: TypedLoadOptions,
+        limits: RemoteLoadLimits,
+        mapper: F,
+    ) -> Result<Vec<E>>
+    where
+        F: Fn(&RowRecord) -> Result<E>,
+    {
+        let rows = Self::load_json_rows(path, lines, limits)?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
         debug!(
             examples = examples.len(),
@@ -241,7 +285,7 @@ impl DataLoader {
     #[tracing::instrument(
         name = "dsrs.data.load_csv",
         level = "debug",
-        skip(opts),
+        skip(path, opts),
         fields(
             is_url = is_url(path),
             delimiter,
@@ -263,7 +307,28 @@ impl DataLoader {
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
-        let rows = Self::load_csv_rows(path, delimiter, has_headers)?;
+        Self::load_csv_with_limits(
+            path,
+            delimiter,
+            has_headers,
+            opts,
+            RemoteLoadLimits::default(),
+        )
+    }
+
+    /// Load CSV with custom limits for HTTP sources.
+    #[cfg(feature = "data")]
+    pub fn load_csv_with_limits<E>(
+        path: &str,
+        delimiter: char,
+        has_headers: bool,
+        opts: TypedLoadOptions,
+        limits: RemoteLoadLimits,
+    ) -> Result<Vec<E>>
+    where
+        E: DeserializeOwned + for<'f> Facet<'f>,
+    {
+        let rows = Self::load_csv_rows(path, delimiter, has_headers, limits)?;
         let examples = Self::rows_to_typed::<E>(rows, &opts)?;
         debug!(examples = examples.len(), "typed csv examples loaded");
         Ok(examples)
@@ -273,7 +338,7 @@ impl DataLoader {
     #[tracing::instrument(
         name = "dsrs.data.load_csv_with",
         level = "debug",
-        skip(opts, mapper),
+        skip(path, opts, mapper),
         fields(
             is_url = is_url(path),
             delimiter,
@@ -296,8 +361,30 @@ impl DataLoader {
     where
         F: Fn(&RowRecord) -> Result<E>,
     {
-        let _ = opts;
-        let rows = Self::load_csv_rows(path, delimiter, has_headers)?;
+        Self::load_csv_with_mapper_limits(
+            path,
+            delimiter,
+            has_headers,
+            opts,
+            RemoteLoadLimits::default(),
+            mapper,
+        )
+    }
+
+    /// Map CSV rows with custom limits for HTTP sources.
+    #[cfg(feature = "data")]
+    pub fn load_csv_with_mapper_limits<E, F>(
+        path: &str,
+        delimiter: char,
+        has_headers: bool,
+        _opts: TypedLoadOptions,
+        limits: RemoteLoadLimits,
+        mapper: F,
+    ) -> Result<Vec<E>>
+    where
+        F: Fn(&RowRecord) -> Result<E>,
+    {
+        let rows = Self::load_csv_rows(path, delimiter, has_headers, limits)?;
         let examples = Self::rows_with_mapper(rows, mapper)?;
         debug!(
             examples = examples.len(),
@@ -491,12 +578,74 @@ impl DataLoader {
             .collect()
     }
 
-    fn fetch_text(path: &str) -> std::result::Result<String, DataLoadError> {
+    fn fetch_remote_bytes(
+        path: &str,
+        limits: RemoteLoadLimits,
+    ) -> std::result::Result<(Vec<u8>, Option<String>), DataLoadError> {
+        let started = Instant::now();
+        let client = reqwest::blocking::Client::builder()
+            .timeout(limits.timeout)
+            .build()
+            .map_err(|err| DataLoadError::Io(err.into()))?;
+        let mut response = client
+            .get(path)
+            .send()
+            .context("failed to fetch remote dataset")
+            .map_err(DataLoadError::Io)?;
+        if started.elapsed() >= limits.timeout {
+            return Err(remote_timeout(limits.timeout));
+        }
+        let charset = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| {
+                value.split(';').skip(1).find_map(|part| {
+                    let (key, value) = part.trim().split_once('=')?;
+                    key.trim().eq_ignore_ascii_case("charset").then(|| value.trim().trim_matches('"').to_owned())
+                })
+            });
+        let max_bytes = u64::try_from(limits.max_bytes).unwrap_or(u64::MAX);
+        if response.content_length().is_some_and(|len| len > max_bytes) {
+            return Err(remote_limit("bytes", limits.max_bytes));
+        }
+        let mut bytes = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            if started.elapsed() >= limits.timeout {
+                return Err(remote_timeout(limits.timeout));
+            }
+            let remaining = limits.max_bytes.saturating_sub(bytes.len());
+            let read_len = remaining.saturating_add(1).min(chunk.len());
+            let count = response
+                .read(&mut chunk[..read_len])
+                .map_err(|err| DataLoadError::Io(err.into()))?;
+            if started.elapsed() >= limits.timeout {
+                return Err(remote_timeout(limits.timeout));
+            }
+            if count == 0 {
+                break;
+            }
+            if count > remaining {
+                return Err(remote_limit("bytes", limits.max_bytes));
+            }
+            bytes.extend_from_slice(&chunk[..count]);
+        }
+        Ok((bytes, charset))
+    }
+
+    fn fetch_text(
+        path: &str,
+        limits: RemoteLoadLimits,
+    ) -> std::result::Result<String, DataLoadError> {
         if is_url(path) {
-            let response = reqwest::blocking::get(path)
-                .with_context(|| format!("failed to GET `{path}`"))
-                .map_err(DataLoadError::Io)?;
-            response.text().map_err(|err| DataLoadError::Io(err.into()))
+            let (bytes, charset) = Self::fetch_remote_bytes(path, limits)?;
+            let encoding = charset
+                .as_deref()
+                .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
+                .unwrap_or(encoding_rs::UTF_8);
+            let (text, _, _) = encoding.decode(&bytes);
+            Ok(text.into_owned())
         } else {
             fs::read_to_string(path).map_err(|err| DataLoadError::Io(err.into()))
         }
@@ -505,14 +654,19 @@ impl DataLoader {
     fn load_json_rows(
         path: &str,
         lines: bool,
+        limits: RemoteLoadLimits,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
-        let data = Self::fetch_text(path)?;
+        let data = Self::fetch_text(path, limits)?;
+        let remote = is_url(path);
 
         if lines {
             let mut rows = Vec::new();
             for (idx, line) in data.lines().enumerate() {
                 if line.trim().is_empty() {
                     continue;
+                }
+                if remote && rows.len() >= limits.max_rows {
+                    return Err(remote_limit("rows", limits.max_rows));
                 }
                 let value: serde_json::Value =
                     serde_json::from_str(line).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
@@ -522,16 +676,45 @@ impl DataLoader {
             return Ok(rows);
         }
 
-        let value: serde_json::Value =
-            serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
-
-        let rows = match value {
-            serde_json::Value::Array(items) => items
+        let rows = if remote && data.trim_start().starts_with('[') {
+            let limit_hit = Cell::new(false);
+            let mut deserializer = serde_json::Deserializer::from_str(&data);
+            let items = LimitedJsonArray {
+                max_rows: limits.max_rows,
+                limit_hit: &limit_hit,
+            }
+            .deserialize(&mut deserializer)
+            .map_err(|err| {
+                if limit_hit.get() {
+                    remote_limit("rows", limits.max_rows)
+                } else {
+                    DataLoadError::Json(anyhow!(err))
+                }
+            })?;
+            deserializer.end().map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+            items
                 .into_iter()
                 .enumerate()
                 .map(|(idx, item)| row_from_json_value(item, idx + 1))
-                .collect::<std::result::Result<Vec<_>, _>>()?,
-            other => vec![row_from_json_value(other, 1)?],
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        } else {
+            let value: serde_json::Value =
+                serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+            match value {
+                serde_json::Value::Array(items) => {
+                items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(idx, item)| row_from_json_value(item, idx + 1))
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                }
+                other => {
+                    if remote && limits.max_rows == 0 {
+                        return Err(remote_limit("rows", limits.max_rows));
+                    }
+                    vec![row_from_json_value(other, 1)?]
+                }
+            }
         };
 
         debug!(rows = rows.len(), "json rows loaded");
@@ -543,21 +726,20 @@ impl DataLoader {
         path: &str,
         delimiter: char,
         has_headers: bool,
+        limits: RemoteLoadLimits,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         if is_url(path) {
-            let bytes = reqwest::blocking::get(path)
-                .with_context(|| format!("failed to GET `{path}`"))
-                .map_err(DataLoadError::Csv)?
-                .bytes()
-                .map_err(|err| DataLoadError::Csv(err.into()))?
-                .to_vec();
+            let (bytes, _) = Self::fetch_remote_bytes(path, limits).map_err(|err| match err {
+                DataLoadError::Io(source) => DataLoadError::Csv(source),
+                other => other,
+            })?;
 
             let cursor = Cursor::new(bytes);
             let mut reader = ReaderBuilder::new()
                 .delimiter(delimiter as u8)
                 .has_headers(has_headers)
                 .from_reader(cursor);
-            return Self::collect_csv_rows(&mut reader, has_headers);
+            return Self::collect_csv_rows(&mut reader, has_headers, Some(limits.max_rows));
         }
 
         let mut reader = ReaderBuilder::new()
@@ -565,13 +747,14 @@ impl DataLoader {
             .has_headers(has_headers)
             .from_path(path)
             .map_err(|err| DataLoadError::Csv(err.into()))?;
-        Self::collect_csv_rows(&mut reader, has_headers)
+        Self::collect_csv_rows(&mut reader, has_headers, None)
     }
 
     #[cfg(feature = "data")]
     fn collect_csv_rows<R: std::io::Read>(
         reader: &mut csv::Reader<R>,
         has_headers: bool,
+        max_rows: Option<usize>,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         let header_names = if has_headers {
             Some(
@@ -586,18 +769,20 @@ impl DataLoader {
             None
         };
 
-        let rows = reader
-            .records()
-            .enumerate()
-            .map(|(idx, record)| {
-                let record = record.map_err(|err| DataLoadError::Csv(err.into()))?;
-                Ok(csv_record_to_row_record(
-                    &record,
-                    idx + 1,
-                    header_names.as_deref(),
-                ))
-            })
-            .collect::<std::result::Result<Vec<_>, DataLoadError>>()?;
+        let mut rows = Vec::new();
+        for (idx, record) in reader.records().enumerate() {
+            if let Some(limit) = max_rows
+                && rows.len() >= limit
+            {
+                return Err(remote_limit("rows", limit));
+            }
+            let record = record.map_err(|err| DataLoadError::Csv(err.into()))?;
+            rows.push(csv_record_to_row_record(
+                &record,
+                idx + 1,
+                header_names.as_deref(),
+            ));
+        }
 
         debug!(rows = rows.len(), "csv rows loaded");
         Ok(rows)
@@ -706,9 +891,13 @@ impl DataLoader {
             let mut file_rows = if file.ends_with(".parquet") {
                 Self::load_parquet_rows(&file_path)?
             } else if file.ends_with(".json") || file.ends_with(".jsonl") {
-                Self::load_json_rows(path_str, file.ends_with(".jsonl"))?
+                Self::load_json_rows(
+                    path_str,
+                    file.ends_with(".jsonl"),
+                    RemoteLoadLimits::default(),
+                )?
             } else {
-                Self::load_csv_rows(path_str, ',', true)?
+                Self::load_csv_rows(path_str, ',', true, RemoteLoadLimits::default())?
             };
 
             for row in &mut file_rows {
@@ -840,6 +1029,56 @@ fn coerce_row_value(value: &Value, field_type: &FieldType) -> Value {
             _ => value.clone(),
         },
         _ => value.clone(),
+    }
+}
+
+fn remote_limit(resource: &str, limit: usize) -> DataLoadError {
+    DataLoadError::Io(anyhow!("remote dataset exceeded {resource} limit ({limit})"))
+}
+
+fn remote_timeout(timeout: Duration) -> DataLoadError {
+    DataLoadError::Io(anyhow!("remote dataset timed out after {timeout:?}"))
+}
+
+struct LimitedJsonArray<'a> {
+    max_rows: usize,
+    limit_hit: &'a Cell<bool>,
+}
+
+impl<'de> DeserializeSeed<'de> for LimitedJsonArray<'_> {
+    type Value = Vec<serde_json::Value>;
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(self)
+    }
+}
+
+impl<'de> Visitor<'de> for LimitedJsonArray<'_> {
+    type Value = Vec<serde_json::Value>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON array")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut items = Vec::new();
+        while items.len() < self.max_rows {
+            match seq.next_element()? {
+                Some(item) => items.push(item),
+                None => return Ok(items),
+            }
+        }
+        if seq.next_element::<IgnoredAny>()?.is_some() {
+            self.limit_hit.set(true);
+            return Err(A::Error::custom("remote row limit exceeded"));
+        }
+        Ok(items)
     }
 }
 

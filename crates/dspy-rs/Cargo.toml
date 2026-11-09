@@ -36,6 +36,7 @@ parquet = { version = "56.1.0", optional = true }
 arrow = { version = "56.1.0", optional = true }
 regex = "1.11.2"
 reqwest = { workspace = true, features = ["blocking"] }
+encoding_rs = "0.8.35"
 rand = "0.8.5"
 foyer = { version = "0.20.0", features = ["serde"]}
 # Runtime dep (not dev-only): utils/cache.rs owns a TempDir for the disk cache tier.
