@@ -90,6 +90,9 @@ pub(crate) fn select_demos(
     candidates: HashMap<String, Vec<DemoCandidate>>,
     max_per_predictor: usize,
 ) -> HashMap<String, Vec<JsonMap>> {
+    if max_per_predictor == 0 {
+        return HashMap::new();
+    }
     let mut selected = HashMap::with_capacity(candidates.len());
     for (path, mut scored) in candidates {
         scored.sort_by(|left, right| {
@@ -233,5 +236,12 @@ mod tests {
             1,
         );
         assert_eq!(harvested_prompts(&demos, "draft"), vec!["q2"]);
+    }
+
+    #[test]
+    fn zero_demo_limit_selects_no_demos() {
+        let trace = trace(&["draft"], vec![span(0, 0, "q1", "a1", None)]);
+        let candidates = collect_demo_candidates([(1.0, &trace)], 0.0);
+        assert!(select_demos(candidates, 0).is_empty());
     }
 }
