@@ -127,6 +127,31 @@ impl ToolDyn for NamedTool {
     }
 }
 
+struct LargeOutputTool;
+
+impl ToolDyn for LargeOutputTool {
+    fn name(&self) -> String {
+        "large".to_string()
+    }
+
+    fn definition(&self, _prompt: String) -> rig::wasm_compat::WasmBoxedFuture<'_, ToolDefinition> {
+        Box::pin(async {
+            ToolDefinition {
+                name: "large".to_string(),
+                description: "large output".to_string(),
+                parameters: json!({"type": "object"}),
+            }
+        })
+    }
+
+    fn call(
+        &self,
+        _args: String,
+    ) -> rig::wasm_compat::WasmBoxedFuture<'_, Result<String, rig::tool::ToolError>> {
+        Box::pin(async { Ok("x".repeat(1048577)) })
+    }
+}
+
 fn schemaless(name: &str, js: &str) -> ToolSource {
     ToolSource::new(name, "test tool", json!({"type": "object"}), js)
 }
@@ -283,6 +308,47 @@ async fn run_script_returns_and_chains_capabilities() {
     .expect("script");
     assert_eq!(result, json!({"temps": [21, 21]}));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn run_script_limits_result_bytes_and_values() {
+    let config = SandboxConfig {
+        deadline: Duration::from_secs(5),
+        ..SandboxConfig::default()
+    };
+    for source in [
+        "return 'x'.repeat(1048577);",
+        "return Array.from({length: 10001}, () => 0);",
+    ] {
+        let err = run_script(source, Vec::new(), config).await.unwrap_err();
+        assert!(matches!(err, ExecError::OutputLimit { .. }), "{err:?}");
+    }
+}
+
+#[tokio::test]
+async fn capability_result_is_limited_before_bridge_serialization() {
+    let huge = Capability::new("huge", "large result", |_| async {
+        Ok(json!("x".repeat(1048577)))
+    });
+    let config = SandboxConfig {
+        deadline: Duration::from_secs(5),
+        ..SandboxConfig::default()
+    };
+    let err = run_script("return huge(null);", vec![huge], config)
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, ExecError::Capability { .. }), "{err:?}");
+    assert!(err.to_string().contains("output limit"));
+}
+
+#[tokio::test]
+async fn wrapped_tool_result_is_limited_before_json_parse() {
+    let cap = Capability::from_tool(Arc::new(LargeOutputTool)).await;
+    let err = run_script("return large({});", vec![cap], SandboxConfig::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(&err, ExecError::Capability { .. }), "{err:?}");
+    assert!(err.to_string().contains("output byte limit"));
 }
 
 #[tokio::test]

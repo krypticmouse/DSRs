@@ -848,6 +848,72 @@ async fn hole_executes_in_the_sandbox() {
 }
 
 #[tokio::test]
+async fn sandbox_capabilities_are_scoped_to_each_hole() {
+    let mut b = ProgramBuilder::new("scoped_holes");
+    b.cap("secrets:read");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("allowed", T::String)
+            .output("denied", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let hole_sig = b.sig(
+        SignatureDef::build("Hole")
+            .input("question", T::String)
+            .output("shout", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let allowed = ir::hole(
+        "allowed_hole",
+        hole_sig,
+        "(a) => ({shout: secret(null)})",
+        &["secrets:read"],
+    )
+    .bind("question", ir::input("question"));
+    let denied = ir::hole(
+        "denied_hole",
+        hole_sig,
+        "(() => { if (typeof secret !== 'undefined') throw new Error('leak'); return (a) => ({shout: typeof secret}); })()",
+        &[],
+    )
+    .bind("question", ir::input("question"));
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([allowed, denied])
+                .out("allowed", ir::out("allowed_hole", "shout"))
+                .out("denied", ir::out("denied_hole", "shout")),
+        )
+        .unwrap();
+
+    let sandbox = Arc::new(dsrs_tools::QuickJsExecutor::new());
+    sandbox
+        .add_capability(
+            dsrs_tools::Capability::new("secret", "host secret", |_| async {
+                Ok(json!("visible"))
+            })
+            .requiring("secrets:read"),
+        )
+        .unwrap();
+    let (lm, _) = canned_lm(vec![]).await;
+    let env = RuntimeEnv::new()
+        .bind_model("m", lm)
+        .with_sandbox(sandbox)
+        .grant("secrets:read");
+    let interp = Interpreter::load(program, env).await.unwrap();
+    let output = interp
+        .run(obj(&[("question", json!("q"))]), None, Budget::unlimited())
+        .await
+        .unwrap();
+    assert_eq!(output["allowed"], "visible");
+    assert_eq!(output["denied"], "undefined");
+}
+
+#[tokio::test]
 async fn hole_that_does_not_compile_fails_the_load() {
     let (lm, _client) = canned_lm(vec![]).await;
     let sandbox = Arc::new(dsrs_tools::QuickJsExecutor::new());
