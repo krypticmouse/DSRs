@@ -1,7 +1,7 @@
 use anyhow::Result;
+mod support;
 use dspy_rs::{
-    COPRO, CallMetadata, Eval, Module, Predict, PredictError, Predicted, Signature,
-    TypedMetric,
+    COPRO, CallMetadata, Eval, Module, Predict, PredictError, Predicted, Signature, TypedMetric,
 };
 
 #[derive(Signature, Clone, Debug)]
@@ -81,7 +81,11 @@ async fn optimizer_compile_succeeds_without_public_named_parameter_access() {
             .build(),
     };
 
-    let optimizer = COPRO::builder().breadth(4).depth(1).build();
+    let optimizer = COPRO::builder()
+        .breadth(4)
+        .depth(1)
+        .prompt_model(support::proposal_lm().await)
+        .build();
     optimizer
         .compile_module(&mut module, &trainset(), &InstructionLengthMetric)
         .await

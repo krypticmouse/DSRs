@@ -48,6 +48,8 @@ pub mod engine;
 pub mod gepa;
 pub(crate) mod harvest;
 pub mod mipro;
+mod observation;
+mod propose;
 pub mod simba;
 pub mod structural;
 pub mod target;

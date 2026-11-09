@@ -1,30 +1,61 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Result, anyhow};
 use bon::Builder;
-use rand::seq::SliceRandom;
+use rand::{Rng, seq::SliceRandom};
 use tracing::debug;
 
 use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
-use crate::optimizer::engine::{Candidate, Engine, EngineConfig, EvalOutcome};
+use crate::optimizer::engine::{BatchEvalOutcome, Candidate, Engine, EngineConfig, EvalOutcome};
 use crate::optimizer::harvest::{collect_demo_candidates, select_demos};
-use crate::optimizer::target::LeafInfo;
 use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::trace::Trace;
 use crate::{Module, Predictors};
 
-/// The whole-program score recorded on a rollout trace, if a metric ran.
-fn trace_score(trace: &Trace) -> Option<f64> {
-    trace
-        .outcome
-        .as_ref()
-        .and_then(|outcome| outcome.eval.as_ref())
-        .map(|eval| eval.score)
+fn set_instruction_if_changed(
+    candidate: &mut Candidate,
+    leaf: &crate::optimizer::target::LeafInfo,
+    instruction: &str,
+) {
+    if instruction == leaf.instruction {
+        let remove = if let Some(slot) = candidate.slots.get_mut(&leaf.name) {
+            slot.instruction = None;
+            slot.demos.is_none() && !slot.clear_instruction
+        } else {
+            false
+        };
+        if remove {
+            candidate.slots.remove(&leaf.name);
+        }
+    } else {
+        candidate.set_instruction(&leaf.name, instruction);
+    }
+}
+
+fn set_demos_if_changed(
+    candidate: &mut Candidate,
+    leaf: &crate::optimizer::target::LeafInfo,
+    demos: Vec<crate::trace::JsonMap>,
+) {
+    if demos == leaf.demos {
+        let remove = if let Some(slot) = candidate.slots.get_mut(&leaf.name) {
+            slot.demos = None;
+            slot.instruction.is_none() && !slot.clear_instruction
+        } else {
+            false
+        };
+        if remove {
+            candidate.slots.remove(&leaf.name);
+        }
+    } else {
+        candidate.set_demos(&leaf.name, demos);
+    }
 }
 
 /// Library of general prompting best practices used to seed candidate generation.
 ///
-/// These tips are appended to candidate instructions during [`MIPROv2`] optimization
-/// to introduce diversity. Each candidate gets a different tip from the rotation.
+/// Available to applications composing their own proposal prompts.
 pub struct PromptingTips {
     pub tips: Vec<String>,
 }
@@ -62,25 +93,6 @@ impl PromptingTips {
     }
 }
 
-/// Renders a leaf's field contract in MIPRO's program-description format.
-fn format_leaf_fields(leaf: &LeafInfo) -> String {
-    let mut result = String::new();
-
-    result.push_str("Input Fields:\n");
-    for (name, docs) in &leaf.input_fields {
-        let desc = if docs.is_empty() { "No description" } else { docs };
-        result.push_str(&format!("  - {name}: {desc}\n"));
-    }
-
-    result.push_str("\nOutput Fields:\n");
-    for (name, docs) in &leaf.output_fields {
-        let desc = if docs.is_empty() { "No description" } else { docs };
-        result.push_str(&format!("  - {name}: {desc}\n"));
-    }
-
-    result
-}
-
 /// Trace-guided instruction and demo optimizer.
 ///
 /// MIPROv2 (Multi-prompt Instruction PRoposal Optimizer v2) is a thin strategy
@@ -93,30 +105,41 @@ fn format_leaf_fields(leaf: &LeafInfo) -> String {
 ///    `min_demo_score` (their own span eval when the metric attached one,
 ///    the rollout score otherwise) become few-shot demos on the predictor
 ///    that produced them via the trace name-join (top
-///    `max_bootstrapped_demos` by score, deduplicated on inputs), folded
-///    into the accumulating winner candidate
-/// 3. **Candidate generation** — uses the traces and prompting tips to generate
-///    `num_candidates` instruction variants per predictor
-/// 4. **Trial evaluation** — evaluates up to `num_trials` candidates on a sampled
-///    minibatch through the engine (cached, budget-metered fan-out), keeps the best
+///    `max_bootstrapped_demos` by score, deduplicated on inputs). They are
+///    sampled alongside incumbent and empty demo sets during joint trials.
+/// 3. **Candidate generation** — a proposal LM reads the configured rollout
+///    summaries, task contract, and incumbent instruction; the incumbent remains
+///    a candidate.
+/// 4. **Joint search** — seeded random trials combine instruction and demo
+///    choices across all predictors. The best minibatch trial per interval
+///    competes against the baseline on the full validation set. This search
+///    does not implement upstream's Optuna/TPE sampler.
 ///
 /// The accumulated winner (demos + best instructions) is installed once at
 /// the end through [`OptimizeTarget::install`].
 ///
 /// Unlike [`GEPA`](crate::GEPA), MIPROv2 does not require feedback — only numerical scores.
-/// Unlike [`COPRO`](crate::COPRO), it uses execution traces to inform candidate generation
-/// rather than blind search.
+/// Unlike [`COPRO`](crate::COPRO), it uses safe rollout summaries to inform
+/// candidate generation rather than blind search.
+/// By default, rollout evidence contains only component names and numerical
+/// scores. Set `share_training_examples(true)` to also send parsed training
+/// inputs, outputs, and metric feedback to the proposal LM. Raw prompts, tool
+/// events, and unparsed model output are always excluded unless
+/// `share_full_training_traces(true)` is set, which sends the complete raw trace
+/// including tool arguments, results, and model outputs.
 ///
 /// # Hyperparameters
 ///
 /// - **`num_candidates`** (default: 10) — instruction variants generated per predictor.
-/// - **`num_trials`** (default: 20) — maximum candidates evaluated per predictor.
-///   If `num_trials` < `num_candidates`, only the first `num_trials` are evaluated.
+/// - **`num_trials`** (default: 20) — joint instruction/demo combinations evaluated.
 /// - **`minibatch_size`** (default: 25) — examples per candidate evaluation.
 /// - **`max_bootstrapped_demos`** (default: 4) — demos installed per predictor.
 /// - **`min_demo_score`** (default: 0.0) — score gate for demo-eligible spans
 ///   (span eval when present, rollout score otherwise).
 /// - **`eval_concurrency`** (default: 16) — LM calls in flight during evaluation.
+/// - **`candidate_batch_size`** (default: 1) — upper bound on joint trials
+///   evaluated together within each validation interval when no budget cap is
+///   configured. The engine also limits batch size to its available rollout slots.
 /// - **`seed`** — fixes minibatch sampling for reproducible runs.
 ///
 /// # Errors
@@ -143,7 +166,7 @@ pub struct MIPROv2 {
     #[builder(default = 10)]
     pub num_candidates: usize,
 
-    /// Maximum candidates evaluated per predictor.
+    /// Joint instruction/demo combinations evaluated.
     #[builder(default = 20)]
     pub num_trials: usize,
 
@@ -166,8 +189,30 @@ pub struct MIPROv2 {
     #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
     pub eval_concurrency: usize,
 
+    /// Upper bound on joint trials evaluated together within a validation interval. The
+    /// default retains sequential trial evaluation; capped-budget engines
+    /// retain sequential evaluation and stopping behavior.
+    #[builder(default = 1)]
+    pub candidate_batch_size: usize,
+
     /// Seed for minibatch sampling. `None` uses a nondeterministic seed.
     pub seed: Option<u64>,
+    /// LM used for grounded proposals; defaults to the configured global LM.
+    pub prompt_model: Option<crate::LM>,
+    /// Share parsed training inputs, outputs, and metric feedback with the
+    /// proposal LM. Raw trace content remains excluded.
+    #[builder(default = false)]
+    pub share_training_examples: bool,
+    /// Send complete raw training traces, including tool arguments/results
+    /// and unparsed model output, to the proposal LM. Takes precedence over
+    /// `share_training_examples`.
+    #[builder(default = false)]
+    pub share_full_training_traces: bool,
+    #[builder(default = 1.0)]
+    pub temperature: f32,
+    /// Re-evaluate the best minibatch candidate on all validation examples.
+    #[builder(default = 5)]
+    pub full_eval_steps: usize,
 }
 
 impl MIPROv2 {
@@ -177,28 +222,6 @@ impl MIPROv2 {
             seed: self.seed,
             ..OptimizerCommon::default()
         }
-    }
-
-    fn generate_candidate_instructions(
-        &self,
-        program_description: &str,
-        traces: &[Trace],
-        num_candidates: usize,
-    ) -> Vec<String> {
-        let tips = PromptingTips::default_tips();
-        let score_hint = traces.iter().filter_map(trace_score).fold(0.0f64, f64::max);
-
-        (0..num_candidates)
-            .map(|idx| {
-                let tip = &tips.tips[idx % tips.tips.len()];
-                format!(
-                    "{program_description}\n\nOptimization candidate {}:\n- {}\n- Target score >= {:.3}",
-                    idx + 1,
-                    tip,
-                    score_hint
-                )
-            })
-            .collect()
     }
 
     /// Convenience: optimizes a typed module over a trainset with this
@@ -238,13 +261,26 @@ impl Optimizer for MIPROv2 {
         }
 
         let mut rng = self.common().rng();
+        anyhow::ensure!(
+            self.num_candidates > 0
+                && self.num_trials > 0
+                && self.full_eval_steps > 0
+                && self.candidate_batch_size > 0,
+            "candidate, trial, full evaluation, and batch counts must be positive"
+        );
+        let train = target.train_columns();
+        let validation = target.val_columns();
+        anyhow::ensure!(
+            !train.is_empty() && !validation.is_empty(),
+            "training and validation sets must be nonempty"
+        );
 
         // Phase 1: one traced teacher pass over the trainset — the engine's
         // baseline candidate. Whole-program traces feed candidate generation;
         // per-predictor spans feed demo bootstrapping via the trace name-join
         // (spans record the names stamped by the target's naming pass).
         let baseline = engine.register(Candidate::new());
-        let baseline_eval = match engine.evaluate(target, baseline, None).await? {
+        let baseline_eval = match engine.evaluate(target, baseline, Some(&train)).await? {
             EvalOutcome::Complete(eval) => eval,
             EvalOutcome::BudgetExhausted { needed } => {
                 return Err(anyhow!(
@@ -263,70 +299,166 @@ impl Optimizer for MIPROv2 {
             })
             .collect();
 
-        // Phase 2: bootstrap demos from successful spans of well-scored
-        // rollouts. They fold into the accumulating winner so instruction
-        // candidates are scored against the demos they will ship with.
-        let mut current = Candidate::new();
+        // Phase 2: bootstrap demo options from successful spans of well-scored
+        // training rollouts. Joint trials sample these alongside incumbent and
+        // empty demo sets; only a validation improvement can install them.
         let bootstrapped_demos = select_demos(
             collect_demo_candidates(scored_traces, self.min_demo_score),
             self.max_bootstrapped_demos,
         );
-        for (predictor_name, demos) in bootstrapped_demos {
-            debug!(
-                predictor = %predictor_name,
-                demo_count = demos.len(),
-                "bootstrapping demos into the candidate"
-            );
-            current.set_demos(predictor_name, demos);
-        }
-
-        let traces: Vec<Trace> = baseline_eval
-            .rollouts
-            .into_iter()
-            .filter_map(|rollout| rollout.trace)
-            .collect();
-
-        // Phase 3: per-predictor instruction search on a sampled minibatch —
-        // one minibatch per predictor round so all candidates score on the
-        // same examples and remain comparable.
-        let all_indices: Vec<usize> = (0..target.num_examples()).collect();
+        // Only training traces enter the proposal prompt or demo pool.
+        let observations = if self.share_full_training_traces {
+            baseline_eval
+                .rollouts
+                .iter()
+                .filter_map(|r| r.trace.as_ref().map(Trace::to_jsonl))
+                .take(8)
+                .collect::<Result<Vec<_>>>()?
+                .join("\n")
+        } else {
+            let observations = baseline_eval
+                .rollouts
+                .iter()
+                .filter_map(|r| {
+                    r.trace.as_ref().map(|trace| {
+                        super::observation::proposal_observation(
+                            trace,
+                            &r.eval,
+                            self.share_training_examples,
+                            false,
+                        )
+                    })
+                })
+                .take(8)
+                .collect::<Result<Vec<_>>>()?;
+            serde_json::to_string(&observations)?
+        };
+        let observations = crate::utils::truncate(&observations, 24000);
+        let mut instruction_sets = Vec::new();
         for leaf in &leaves {
-            let signature_desc = format_leaf_fields(leaf);
-            let instructions =
-                self.generate_candidate_instructions(&signature_desc, &traces, self.num_candidates);
-
-            let minibatch_size = all_indices.len().min(self.minibatch_size.max(1));
-            let minibatch: Vec<usize> = all_indices
-                .choose_multiple(&mut rng, minibatch_size)
-                .copied()
-                .collect();
-
-            let mut best: Option<(f64, String)> = None;
-            for instruction in instructions.into_iter().take(self.num_trials.max(1)) {
-                let mut candidate = current.clone();
-                candidate.set_instruction(&leaf.name, &instruction);
-                let row = engine.register(candidate);
-                let eval = match engine.evaluate(target, row, Some(&minibatch)).await? {
-                    EvalOutcome::Complete(eval) => eval,
-                    EvalOutcome::BudgetExhausted { needed } => {
-                        return Err(anyhow!(
-                            "budget exhausted ({needed} rollouts needed) during trial evaluation"
-                        ));
+            let mut instructions = vec![leaf.instruction.clone()];
+            instructions.extend(
+                super::propose::propose(
+                    self.prompt_model.as_ref(),
+                    self.temperature,
+                    leaf,
+                    &leaf.instruction,
+                    observations.to_string(),
+                    self.num_candidates.saturating_sub(1),
+                    engine,
+                )
+                .await?,
+            );
+            instruction_sets.push(instructions);
+        }
+        let score = |outcome: EvalOutcome| -> Result<f64> {
+            match outcome {
+                EvalOutcome::Complete(eval) => Ok(eval.mean()),
+                EvalOutcome::BudgetExhausted { needed } => {
+                    Err(anyhow!("budget exhausted ({needed} rollouts needed)"))
+                }
+            }
+        };
+        let mut best_score = score(engine.evaluate(target, baseline, Some(&validation)).await?)?;
+        let mut winner = Candidate::new();
+        // Use one fixed minibatch so trial scores are directly comparable.
+        let minibatch: Vec<_> = validation
+            .choose_multiple(&mut rng, validation.len().min(self.minibatch_size.max(1)))
+            .copied()
+            .collect();
+        let mut pending: Option<(f64, usize, Candidate)> = None;
+        let budget = &engine.config().budget;
+        let batch_size = if budget.max_metric_calls.is_some()
+            || budget.max_lm_calls.is_some()
+            || budget.max_tokens.is_some()
+        {
+            1
+        } else {
+            self.candidate_batch_size
+                .min((engine.config().concurrency / minibatch.len()).max(1))
+        };
+        let mut trial = 0;
+        while trial < self.num_trials {
+            let interval_remaining = self.full_eval_steps - trial % self.full_eval_steps;
+            let batch_len = batch_size
+                .min(interval_remaining)
+                .min(self.num_trials - trial);
+            let mut trials = Vec::with_capacity(batch_len);
+            for _ in 0..batch_len {
+                let mut candidate = Candidate::new();
+                for (leaf, instructions) in leaves.iter().zip(&instruction_sets) {
+                    let instruction = &instructions[rng.gen_range(0..instructions.len())];
+                    set_instruction_if_changed(&mut candidate, leaf, instruction);
+                    if let Some(demos) = bootstrapped_demos.get(&leaf.name) {
+                        // Jointly search incumbent demos, no demos, and sampled
+                        // bootstrap subsets instead of fixing demos for every trial.
+                        match rng.gen_range(0..3) {
+                            0 => {}
+                            1 => {
+                                set_demos_if_changed(&mut candidate, leaf, Vec::new());
+                            }
+                            _ => {
+                                let count = rng.gen_range(1..=demos.len());
+                                set_demos_if_changed(
+                                    &mut candidate,
+                                    leaf,
+                                    demos.choose_multiple(&mut rng, count).cloned().collect(),
+                                );
+                            }
+                        }
                     }
-                };
-                let score = eval.mean();
-                if best.as_ref().is_none_or(|(top, _)| score > *top) {
-                    best = Some((score, instruction));
+                }
+                let row = engine.register(candidate.clone());
+                trials.push((row, candidate));
+            }
+
+            let mut seen = HashSet::with_capacity(trials.len());
+            let rows = trials
+                .iter()
+                .map(|(row, _)| *row)
+                .filter(|row| seen.insert(*row))
+                .collect::<Vec<_>>();
+            let evaluations = match engine
+                .evaluate_many(target, &rows, Some(&minibatch))
+                .await?
+            {
+                BatchEvalOutcome::Complete(evals) => evals,
+                BatchEvalOutcome::BudgetExhausted { needed } => {
+                    return Err(anyhow!("budget exhausted ({needed} rollouts needed)"));
+                }
+            };
+            let scores = rows
+                .into_iter()
+                .zip(evaluations)
+                .map(|(row, eval)| (row, eval.mean()))
+                .collect::<HashMap<_, _>>();
+            for (row, candidate) in trials {
+                let minibatch_score = scores[&row];
+                if pending
+                    .as_ref()
+                    .is_none_or(|(s, _, _)| minibatch_score > *s)
+                {
+                    pending = Some((minibatch_score, row, candidate));
                 }
             }
 
-            let (_, best_instruction) =
-                best.ok_or_else(|| anyhow!("no candidates to evaluate"))?;
-            current.set_instruction(&leaf.name, best_instruction);
+            trial += batch_len;
+            if trial % self.full_eval_steps == 0 || trial == self.num_trials {
+                let (_, row, candidate) = pending.take().expect("at least one trial per interval");
+                let full_score = score(engine.evaluate(target, row, Some(&validation)).await?)?;
+                debug!(
+                    trial = trial - 1,
+                    full_score, best_score, "MIPRO validation"
+                );
+                if full_score > best_score {
+                    best_score = full_score;
+                    winner = candidate;
+                }
+            }
         }
 
         // The one mutation of the run: install demos + winning instructions.
-        target.install(&current)?;
+        target.install(&winner)?;
 
         Ok(Report::None)
     }
@@ -338,7 +470,11 @@ mod tests {
 
     use super::*;
     use crate::evaluate::{Eval, TypedMetric};
-    use crate::{CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature};
+    use crate::{
+        CallMetadata, LM, LMClient, LMConfig, Predict, PredictError, Predicted, PredictorInfo,
+        Signature, TestCompletionModel,
+    };
+    use rig::completion::AssistantContent;
 
     #[derive(Signature, Clone, Debug)]
     struct MiproStateSig {
@@ -373,6 +509,7 @@ mod tests {
     }
 
     struct AlwaysFailMetric;
+    struct ConstantMetric;
 
     type MiproRow = (MiproStateSigInput, MiproStateSigOutput);
 
@@ -384,6 +521,17 @@ mod tests {
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
+        }
+    }
+
+    impl TypedMetric<MiproRow, MiproStateModule> for ConstantMetric {
+        async fn evaluate(
+            &self,
+            _example: &MiproRow,
+            _prediction: &Predicted<MiproStateSigOutput>,
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
+            Ok(Eval::score(1.0))
         }
     }
 
@@ -421,5 +569,61 @@ mod tests {
             PredictorInfo::instruction(&module.predictor),
             "seed-instruction"
         );
+    }
+
+    #[tokio::test]
+    async fn capped_budget_keeps_sequential_stopping_with_batch_option() {
+        async fn run(batch_size: usize) -> (String, usize, usize, String) {
+            let proposal = TestCompletionModel::new([AssistantContent::text(
+                "[[ ## instructions ## ]]\n[\"one\",\"two\",\"three\",\"four\"]\n[[ ## completed ## ]]",
+            )]);
+            let lm = LM::from_config(LMConfig {
+                base_url: Some("http://localhost/v1".into()),
+                ..LMConfig::default()
+            })
+            .await
+            .unwrap()
+            .with_client(LMClient::Test(proposal))
+            .await
+            .unwrap();
+            let mut module = MiproStateModule {
+                predictor: Predict::<MiproStateSig>::builder()
+                    .instruction("seed-instruction")
+                    .build(),
+            };
+            let optimizer = MIPROv2::builder()
+                .num_candidates(5)
+                .num_trials(20)
+                .full_eval_steps(5)
+                .minibatch_size(1)
+                .seed(42)
+                .candidate_batch_size(batch_size)
+                .prompt_model(lm)
+                .build();
+            let train = trainset();
+            let mut target = OptimizeTarget::module(&mut module, &train, &ConstantMetric);
+            let mut engine = Engine::new(EngineConfig {
+                budget: crate::optimizer::engine::Budget {
+                    max_metric_calls: Some(2),
+                    ..Default::default()
+                },
+                ..EngineConfig::default()
+            });
+            let error = optimizer
+                .compile(&mut target, &mut engine)
+                .await
+                .expect_err("later fresh trials must exceed the budget");
+            drop(target);
+            (
+                error.to_string(),
+                engine.num_candidates(),
+                engine.spend().metric_calls,
+                PredictorInfo::instruction(&module.predictor).to_string(),
+            )
+        }
+
+        let sequential = run(1).await;
+        assert!(sequential.0.contains("budget exhausted"));
+        assert_eq!(sequential, run(5).await);
     }
 }

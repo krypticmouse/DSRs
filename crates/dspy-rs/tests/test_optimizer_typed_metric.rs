@@ -1,7 +1,8 @@
 use anyhow::{Result, anyhow};
+mod support;
 use dspy_rs::{
-    COPRO, CallMetadata, MIPROv2, Eval, Module, Predict, PredictError, Predicted,
-    Signature, TypedMetric,
+    COPRO, CallMetadata, Eval, MIPROv2, Module, Predict, PredictError, Predicted, Signature,
+    TypedMetric,
 };
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -64,9 +65,7 @@ impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
 
 struct FailingMetric;
 
-impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule>
-    for FailingMetric
-{
+impl TypedMetric<(OptimizerSigInput, OptimizerSigOutput), InstructionEchoModule> for FailingMetric {
     async fn evaluate(
         &self,
         _example: &(OptimizerSigInput, OptimizerSigOutput),
@@ -111,7 +110,11 @@ async fn copro_compile_uses_typed_metric_predictions() {
             .build(),
     };
 
-    let optimizer = COPRO::builder().breadth(3).depth(1).build();
+    let optimizer = COPRO::builder()
+        .breadth(3)
+        .depth(1)
+        .prompt_model(support::proposal_lm().await)
+        .build();
     optimizer
         .compile_module(&mut module, &trainset(), &metric)
         .await
@@ -141,6 +144,7 @@ async fn mipro_compile_uses_typed_metric_predictions() {
     };
 
     let optimizer = MIPROv2::builder()
+        .prompt_model(support::proposal_lm().await)
         .num_candidates(4)
         .num_trials(2)
         .minibatch_size(2)
