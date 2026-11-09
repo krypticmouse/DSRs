@@ -188,8 +188,8 @@
     ".beam{display:none!important}}" +
     "</style>" +
     '<div class="wrap">' +
-    '<button class="fab">✦ Ask AI</button>' +
-    '<div class="panel">' +
+    '<button class="fab" aria-controls="toast-chat-panel" aria-expanded="false">✦ Ask AI</button>' +
+    '<div class="panel" id="toast-chat-panel" inert>' +
     '<div class="head"><div class="mark"><img src="' + DSRS_LOGO + '" alt="DSRs"></div>' +
     "<b>Ask DSRs</b>" +
     '<a class="pill" href="https://www.mixedbread.com/blog/toast-1" target="_blank" ' +
@@ -299,23 +299,32 @@
   }
   input.addEventListener("input", syncInput);
 
-  function setOpen(open) {
+  function setOpen(open, restoreFocus) {
+    var wasOpen = panel.classList.contains("open");
+    var focused = root.activeElement;
+    var focusWasInPanel = panel.contains(focused);
+    if (!open && focusWasInPanel) focused.blur();
     panel.classList.toggle("open", open);
     wrap.classList.toggle("open", open);
+    panel.inert = !open;
+    fab.inert = open;
+    fab.setAttribute("aria-expanded", String(open));
     if (open) {
       input.focus();
       glintTick(); // light a chip right away instead of waiting for a tick
+    } else if (restoreFocus && wasOpen) {
+      fab.focus();
     }
   }
   fab.addEventListener("click", function () {
     setOpen(true);
   });
   root.querySelector(".x.close").addEventListener("click", function () {
-    setOpen(false);
+    setOpen(false, true);
   });
   root.querySelector(".x.new").addEventListener("click", newChat);
   document.addEventListener("keydown", function (e) {
-    if (e.key === "Escape") setOpen(false);
+    if (e.key === "Escape") setOpen(false, true);
   });
   document.addEventListener("click", function (e) {
     if (wrap.classList.contains("open") && e.composedPath().indexOf(host) === -1) {
