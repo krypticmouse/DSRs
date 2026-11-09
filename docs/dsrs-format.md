@@ -14,6 +14,9 @@ model <name> = "<provider:model>" { temperature 0.2 max_tokens 1024 }
 // opts (all optional): base_url "…" temperature N max_tokens N
 //   max_tool_iterations N max_retries N retry_base_delay_ms N cache true|false
 
+// A serving host must explicitly approve an artifact base_url. For the CLI,
+// pass --allow-model-base-url with the exact URL used above.
+
 class <Name> {                                  // struct type, referenced by name
   "optional class docs"
   <field>: <type> "optional docs" check("<expr>", "<label>")

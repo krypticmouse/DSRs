@@ -14,7 +14,7 @@
 //!   `AgentLoop` is one span with N `Exchange`/`ToolRun` events; a `Hole` is
 //!   one span whose model is the reserved `sandbox:quickjs` config.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
@@ -287,6 +287,8 @@ pub enum LoadError {
     CapsExceedGrants { missing: Vec<String> },
     #[error("model `{name}` could not be bound: {message}")]
     Model { name: String, message: String },
+    #[error("model `{name}` uses an artifact URL not approved by the host")]
+    ModelEndpointDenied { name: String },
     #[error("host tool `{name}` is not bound in the runtime environment")]
     HostToolUnbound { name: String },
     #[error("host (extern) hole `{name}` is not bound in the runtime environment")]
@@ -383,6 +385,9 @@ pub struct RuntimeEnv {
     /// Pre-bound live models by declared model name (`"fast"`). Models not
     /// bound here are constructed from their `ModelDef.config` at load.
     pub models: HashMap<String, Arc<LM>>,
+    /// Exact artifact `base_url` values permitted when no host model is bound.
+    /// Empty by default; the artifact cannot grant itself network destinations.
+    pub allowed_model_base_urls: HashSet<String>,
     /// Host tool bindings by tool name, consulted once at load.
     pub host_tools: HashMap<String, Arc<dyn rig::tool::ToolDyn>>,
     /// Host (extern) hole bindings by leaf name, consulted once at load
@@ -415,6 +420,11 @@ impl RuntimeEnv {
 
     pub fn bind_model(mut self, name: &str, lm: Arc<LM>) -> Self {
         self.models.insert(name.to_string(), lm);
+        self
+    }
+
+    pub fn allow_model_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.allowed_model_base_urls.insert(base_url.into());
         self
     }
 
@@ -515,12 +525,24 @@ impl Interpreter {
         for (id, def) in program.models.iter() {
             let lm = match env.models.get(&*def.name) {
                 Some(lm) => Arc::clone(lm),
-                None => Arc::new(LM::from_config(def.config.clone()).await.map_err(|err| {
-                    LoadError::Model {
-                        name: def.name.to_string(),
-                        message: err.to_string(),
+                None => {
+                    if def
+                        .config
+                        .base_url
+                        .as_ref()
+                        .is_some_and(|url| !env.allowed_model_base_urls.contains(url))
+                    {
+                        return Err(LoadError::ModelEndpointDenied {
+                            name: def.name.to_string(),
+                        });
                     }
-                })?),
+                    Arc::new(LM::from_config(def.config.clone()).await.map_err(|err| {
+                        LoadError::Model {
+                            name: def.name.to_string(),
+                            message: err.to_string(),
+                        }
+                    })?)
+                }
             };
             models[id] = Some(lm);
         }

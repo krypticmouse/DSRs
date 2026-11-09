@@ -35,8 +35,8 @@ enum Cmd {
         #[arg(long)]
         write: bool,
     },
-    /// Serve a .dsrs program over HTTP (POST /run, GET /schema, GET /program,
-    /// GET /healthz).
+    /// Serve a .dsrs program over HTTP. Set DSRS_AUTH_TOKEN for a stable
+    /// bearer token; a random token is printed for loopback use.
     Serve {
         /// Path to the .dsrs artifact.
         program: PathBuf,
@@ -50,6 +50,9 @@ enum Cmd {
         /// Capability grant (repeatable): --allow net:search --allow fs:read.
         #[arg(long = "allow", value_name = "CAP")]
         allow: Vec<String>,
+        /// Permit an exact model base_url from the artifact (repeatable).
+        #[arg(long = "allow-model-base-url", value_name = "URL")]
+        allow_model_base_urls: Vec<String>,
     },
 }
 
@@ -89,11 +92,14 @@ fn main() -> ExitCode {
             port,
             overlay,
             allow,
+            allow_model_base_urls,
         } => {
             let config = ServeConfig {
                 program,
                 overlay,
                 allow,
+                allowed_model_base_urls: allow_model_base_urls,
+                auth_token: std::env::var("DSRS_AUTH_TOKEN").ok(),
             };
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(runtime) => runtime,

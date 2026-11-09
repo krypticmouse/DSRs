@@ -119,6 +119,42 @@ main: Main = seq {
 }
 "#;
 
+#[tokio::test]
+async fn serve_requires_operator_approval_for_artifact_model_url() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = "http://127.0.0.1:9999/v1";
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        &format!("model m = \"openai:gpt-4o-mini\" {{ base_url \"{url}\" }}"),
+    );
+    let program = write_program(&dir, "model-url.dsrs", &source);
+    let mut config = ServeConfig {
+        program,
+        ..ServeConfig::default()
+    };
+    let err = serve::load(&config, RuntimeEnv::new()).await.unwrap_err();
+    assert!(err.to_string().contains("not approved by the host"));
+
+    config.allowed_model_base_urls.push(url.to_string());
+    serve::load(&config, RuntimeEnv::new())
+        .await
+        .expect("approved artifact URL should load");
+}
+
+const TEST_TOKEN: &str = "0123456789abcdef0123456789abcdef";
+
+fn authorized_client() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {TEST_TOKEN}").parse().unwrap(),
+    );
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .unwrap()
+}
+
 fn canned_text(fields: &[(&str, &str)]) -> AssistantContent {
     let mut out = String::new();
     for (name, value) in fields {
@@ -158,7 +194,9 @@ async fn spawn_server(app: Arc<serve::App>) -> SocketAddr {
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
-        axum::serve(listener, serve::router(app)).await.expect("serve");
+        axum::serve(listener, serve::router(app))
+            .await
+            .expect("serve");
     });
     addr
 }
@@ -177,13 +215,39 @@ async fn serve_end_to_end_on_an_ephemeral_port() {
         program,
         overlay: None,
         allow: vec![],
+        allowed_model_base_urls: vec![],
+        auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
         .expect("load");
     let addr = spawn_server(app).await;
-    let http = reqwest::Client::new();
+    let http = authorized_client();
     let base = format!("http://{addr}");
+
+    let unauthenticated = reqwest::Client::new();
+    for path in ["/schema", "/program"] {
+        assert_eq!(
+            unauthenticated
+                .get(format!("{base}{path}"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            401
+        );
+    }
+    assert_eq!(
+        unauthenticated
+            .post(format!("{base}/run?trace=1"))
+            .json(&json!({"question": "private"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+    assert!(client.last_request().is_none());
 
     // GET /healthz
     let health: Value = http
@@ -282,6 +346,48 @@ async fn serve_end_to_end_on_an_ephemeral_port() {
 }
 
 #[tokio::test]
+async fn serve_limits_authenticated_request_rate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let program = write_program(&dir, "echo.dsrs", ECHO);
+    let (lm, client) = canned_lm(vec![]).await;
+    let config = ServeConfig {
+        program,
+        auth_token: Some(TEST_TOKEN.to_string()),
+        ..ServeConfig::default()
+    };
+    let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let addr = spawn_server(app).await;
+    let http = authorized_client();
+    for _ in 0..30 {
+        let response = http
+            .post(format!("http://{addr}/run"))
+            .json(&json!([]))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 400);
+    }
+    let response = http
+        .post(format!("http://{addr}/run"))
+        .json(&json!([]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 429);
+    assert!(client.last_request().is_none());
+}
+
+#[tokio::test]
+async fn non_loopback_bind_requires_operator_token() {
+    let err = serve::serve(&ServeConfig::default(), "0.0.0.0", 0)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("DSRS_AUTH_TOKEN"));
+}
+
+#[tokio::test]
 async fn serve_applies_a_named_overlay() {
     let dir = tempfile::tempdir().expect("tempdir");
     let program = write_program(&dir, "echo.dsrs", ECHO);
@@ -300,13 +406,15 @@ async fn serve_applies_a_named_overlay() {
         program,
         overlay: Some(overlay_path),
         allow: vec![],
+        allowed_model_base_urls: vec![],
+        auth_token: Some(TEST_TOKEN.to_string()),
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
         .expect("load with overlay");
     let addr = spawn_server(app).await;
 
-    let run: Value = reqwest::Client::new()
+    let run: Value = authorized_client()
         .post(format!("http://{addr}/run"))
         .json(&json!({"question": "q"}))
         .send()
@@ -354,6 +462,8 @@ main: Main = seq {
         program: program.clone(),
         overlay: None,
         allow: vec![],
+        allowed_model_base_urls: vec![],
+        auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -366,6 +476,8 @@ main: Main = seq {
         program,
         overlay: None,
         allow: vec!["net:probe".to_string()],
+        allowed_model_base_urls: vec![],
+        auth_token: Some(TEST_TOKEN.to_string()),
     };
     serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -391,6 +503,8 @@ async fn serve_rejects_stale_overlays() {
         program,
         overlay: Some(overlay_path),
         allow: vec![],
+        allowed_model_base_urls: vec![],
+        auth_token: Some(TEST_TOKEN.to_string()),
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
