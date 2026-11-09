@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    LM, LMClient, Eval, Module, Predicted, Signature, TestCompletionModel, TypedMetric, configure,
-    fx,
+    LM, LMClient, Eval, Module, PredictState, Predicted, Signature, TestCompletionModel,
+    TypedMetric, configure, fx,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -96,6 +96,42 @@ async fn with_params_injects_instruction_ambiently() {
         preamble.contains("MARKER-INSTRUCTION"),
         "ambient params should override the system instruction"
     );
+}
+
+#[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
+#[tokio::test]
+async fn predictor_cache_distinguishes_absent_and_empty_instruction() {
+    async fn preamble(name: &str, empty: bool, client: &TestCompletionModel) -> String {
+        let mut params = fx::Params::new();
+        if empty {
+            params.set_instruction(name, "");
+        } else {
+            params.set(name, PredictState::default());
+        }
+        fx::with_params(
+            params,
+            fx::predict::<FxQA>(
+                name,
+                FxQAInput {
+                    question: "q".to_string(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        client.last_request().unwrap().preamble.unwrap_or_default()
+    }
+
+    let _lock = SETTINGS_LOCK.lock().await;
+    let (lm, client) = make_test_lm(vec![response_with_fields(&[("answer", "ok")]); 4]).await;
+    configure(lm);
+
+    for (name, first_empty) in [("none_first", false), ("empty_first", true)] {
+        let first = preamble(name, first_empty, &client).await;
+        let second = preamble(name, !first_empty, &client).await;
+        assert_eq!(first.contains("Answer the question."), !first_empty);
+        assert_eq!(second.contains("Answer the question."), first_empty);
+    }
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
