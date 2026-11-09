@@ -36,7 +36,7 @@
 
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::hash::{DefaultHasher, Hasher};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
@@ -199,16 +199,14 @@ impl Params {
 
 fn hash_entry(entry: &ParamsEntry) -> u64 {
     let mut hasher = DefaultHasher::new();
-    if let Some(instruction) = &entry.state.instruction_override {
-        hasher.write(instruction.as_bytes());
-    }
+    entry.state.instruction_override.hash(&mut hasher);
     for demo in &entry.state.demos {
         let serialized = serde_json::to_string(demo).unwrap_or_default();
-        hasher.write(serialized.as_bytes());
+        serialized.hash(&mut hasher);
     }
-    hasher.write_usize(entry.state.demos.len());
-    hasher.write_u8(entry.clear_instruction as u8);
-    hasher.write_u8(entry.explicit_demos as u8);
+    entry.state.demos.len().hash(&mut hasher);
+    entry.clear_instruction.hash(&mut hasher);
+    entry.explicit_demos.hash(&mut hasher);
     hasher.finish()
 }
 
