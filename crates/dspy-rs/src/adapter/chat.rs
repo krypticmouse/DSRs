@@ -13,9 +13,7 @@ use crate::typesys::coerce::coerce;
 use crate::typesys::constraint::evaluate_expression;
 use crate::typesys::render::{schema_block, type_name};
 use crate::typesys::{FieldType, TypeTable};
-use crate::{
-    ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError,
-};
+use crate::{ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError};
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
 ///
@@ -46,9 +44,12 @@ fn sum_filter(value: Vec<MiniJinjaValue>) -> Result<MiniJinjaValue, minijinja::E
         .map(|value| <i64>::try_from(value.clone()).ok())
         .collect();
     if let Some(ints) = ints {
-        let sum = ints.into_iter().try_fold(0_i64, i64::checked_add).ok_or_else(|| {
-            minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, "sum overflow")
-        })?;
+        let sum = ints
+            .into_iter()
+            .try_fold(0_i64, i64::checked_add)
+            .ok_or_else(|| {
+                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, "sum overflow")
+            })?;
         return Ok(MiniJinjaValue::from(sum));
     }
     let float_sum: Option<f64> = value
@@ -325,12 +326,22 @@ impl ChatAdapter {
     /// Fallible input formatting for runtime callers that must reject bad templates.
     pub fn try_format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
         let mut result = String::new();
+        let mut input_context = None;
         for field in def.inputs.iter() {
             let Some(value) = input.get(&*field.name) else {
                 continue;
             };
             result.push_str(&format!("[[ ## {} ## ]]\n", field.lm_name));
-            result.push_str(&render_input_field_def(def, field, value, input)?);
+            if matches!(&field.render, RenderSpec::Jinja(_)) {
+                input_context.get_or_insert_with(|| {
+                    MiniJinjaValue::from_serialize(build_input_context_def(def, input))
+                });
+            }
+            result.push_str(&render_input_field_def(
+                field,
+                value,
+                input_context.as_ref(),
+            )?);
             result.push_str("\n\n");
         }
 
@@ -546,10 +557,9 @@ fn format_json_value_for_prompt(value: &Value) -> String {
 /// The Jinja arm compiles the template per call: templates are owned strings on
 /// a runtime [`SignatureDef`], so there is no `&'static str` key to cache on.
 fn render_input_field_def(
-    def: &SignatureDef,
     field: &crate::ir::FieldDef,
     value: &Value,
-    input: &JsonMap,
+    input_context: Option<&MiniJinjaValue>,
 ) -> Result<String> {
     match &field.render {
         RenderSpec::Default => Ok(match value {
@@ -558,26 +568,36 @@ fn render_input_field_def(
         }),
         RenderSpec::Format(format) => Ok(crate::typesys::format_value(value, format)),
         RenderSpec::Jinja(template) => {
+            let input_context = input_context
+                .ok_or_else(|| anyhow::anyhow!("missing input render context for `{}`", field.name))?;
             let mut env = build_input_render_environment();
             env.add_template(INPUT_RENDER_TEMPLATE_NAME, template)
-                .with_context(|| format!("failed to compile input render template for `{}`", field.name))?;
+                .with_context(|| {
+                    format!(
+                        "failed to compile input render template for `{}`",
+                        field.name
+                    )
+                })?;
             let compiled = env
                 .get_template(INPUT_RENDER_TEMPLATE_NAME)
-                .with_context(|| format!("failed to load input render template for `{}`", field.name))?;
+                .with_context(|| {
+                    format!("failed to load input render template for `{}`", field.name)
+                })?;
 
-            let context = json!({
-                "this": value,
-                "input": build_input_context_def(def, input),
-                "field": {
+            let field_context = json!({
                     "name": field.lm_name,
                     "rust_name": field.name,
                     "type": type_name(&field.ty, None),
-                },
-                "vars": Value::Object(Map::new()),
             });
+            let context = minijinja::context! {
+                this => value,
+                input => input_context,
+                field => field_context,
+                vars => Value::Object(Map::new()),
+            };
 
             compiled
-                .render(minijinja::Value::from_serialize(context))
+                .render(context)
                 .with_context(|| format!("failed to render input field `{}`", field.name))
         }
     }
@@ -598,4 +618,3 @@ fn build_input_context_def(def: &SignatureDef, input: &JsonMap) -> Value {
     }
     Value::Object(root)
 }
-
