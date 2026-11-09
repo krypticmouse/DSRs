@@ -1254,6 +1254,13 @@ where
         Ok(())
     }
 
+    fn validate_state(&self, state: &PredictState) -> Result<()> {
+        for demo in &state.demos {
+            demo_from_json::<S>(demo)?;
+        }
+        Ok(())
+    }
+
     fn set_trace_name(&mut self, name: &str) {
         Predict::assign_trace_name(self, name);
     }
