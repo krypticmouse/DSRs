@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::core::ToInput;
 use crate::evaluate::TypedMetric;
-use crate::optimizer::engine::{Candidate, Engine, EngineConfig, EvalOutcome};
+use crate::optimizer::engine::{BatchEvalOutcome, Candidate, Engine, EngineConfig, EvalOutcome};
 use crate::optimizer::target::LeafInfo;
 use crate::optimizer::{OptimizeTarget, Optimizer, OptimizerCommon, Report};
 use crate::{Module, Predictors};
@@ -98,6 +98,12 @@ pub struct COPRO {
     /// Concurrent LM calls in flight during candidate evaluation.
     #[builder(default = crate::evaluate::DEFAULT_EVAL_CONCURRENCY)]
     pub eval_concurrency: usize,
+    /// Candidates evaluated together per predictor and round. The default
+    /// retains sequential candidate evaluation; larger values share the
+    /// engine's bounded rollout concurrency across candidates. Capped-budget
+    /// engines retain sequential evaluation and stopping behavior.
+    #[builder(default = 1)]
+    pub candidate_batch_size: usize,
 }
 
 impl COPRO {
@@ -166,6 +172,9 @@ impl Optimizer for COPRO {
     ) -> Result<Report> {
         if self.breadth <= 1 {
             return Err(anyhow!("breadth must be greater than 1"));
+        }
+        if self.candidate_batch_size == 0 {
+            return Err(anyhow!("candidate_batch_size must be greater than zero"));
         }
 
         let leaves = target.leaves().to_vec();
@@ -240,25 +249,42 @@ impl Optimizer for COPRO {
                     .await?;
 
                 let mut best: Option<(f64, String)> = None;
-                for instruction in instructions {
-                    let mut candidate = current.clone();
-                    set_instruction_if_changed(&mut candidate, leaf, &instruction);
-                    let row = engine.register(candidate);
-                    let eval = match engine.evaluate(target, row, Some(&train)).await? {
-                        EvalOutcome::Complete(eval) => eval,
-                        EvalOutcome::BudgetExhausted { needed } => {
-                            return Err(anyhow!(
-                                "budget exhausted ({needed} rollouts needed) during COPRO round"
-                            ));
+                let budget = &engine.config().budget;
+                let batch_size = if budget.max_metric_calls.is_some()
+                    || budget.max_lm_calls.is_some()
+                    || budget.max_tokens.is_some()
+                {
+                    1
+                } else {
+                    self.candidate_batch_size
+                };
+                for batch in instructions.chunks(batch_size) {
+                    let rows = batch
+                        .iter()
+                        .map(|instruction| {
+                            let mut candidate = current.clone();
+                            set_instruction_if_changed(&mut candidate, leaf, instruction);
+                            engine.register(candidate)
+                        })
+                        .collect::<Vec<_>>();
+                    let evaluations =
+                        match engine.evaluate_many(target, &rows, Some(&train)).await? {
+                            BatchEvalOutcome::Complete(evals) => evals,
+                            BatchEvalOutcome::BudgetExhausted { needed } => {
+                                return Err(anyhow!(
+                                    "budget exhausted ({needed} rollouts needed) during COPRO round"
+                                ));
+                            }
+                        };
+                    for (instruction, eval) in batch.iter().zip(evaluations) {
+                        let score = eval.mean();
+                        history
+                            .entry(leaf.name.clone())
+                            .or_default()
+                            .push((instruction.clone(), score));
+                        if best.as_ref().is_none_or(|(top, _)| score > *top) {
+                            best = Some((score, instruction.clone()));
                         }
-                    };
-                    let score = eval.mean();
-                    history
-                        .entry(leaf.name.clone())
-                        .or_default()
-                        .push((instruction.clone(), score));
-                    if best.as_ref().is_none_or(|(top, _)| score > *top) {
-                        best = Some((score, instruction));
                     }
                 }
 
@@ -296,7 +322,11 @@ mod tests {
     use super::*;
     use crate::evaluate::{Eval, TypedMetric};
     use crate::trace::Trace;
-    use crate::{CallMetadata, Predict, PredictError, Predicted, PredictorInfo, Signature};
+    use crate::{
+        CallMetadata, LM, LMClient, LMConfig, Predict, PredictError, Predicted, PredictorInfo,
+        Signature, TestCompletionModel,
+    };
+    use rig::completion::AssistantContent;
 
     #[derive(Signature, Clone, Debug)]
     struct CoproStateSig {
@@ -331,6 +361,7 @@ mod tests {
     }
 
     struct AlwaysFailMetric;
+    struct ConstantMetric;
 
     type CoproRow = (CoproStateSigInput, CoproStateSigOutput);
 
@@ -342,6 +373,17 @@ mod tests {
             _trace: Option<&Trace>,
         ) -> Result<Eval> {
             Err(anyhow!("metric failure"))
+        }
+    }
+
+    impl TypedMetric<CoproRow, CoproStateModule> for ConstantMetric {
+        async fn evaluate(
+            &self,
+            _example: &CoproRow,
+            _prediction: &Predicted<CoproStateSigOutput>,
+            _trace: Option<&Trace>,
+        ) -> Result<Eval> {
+            Ok(Eval::score(1.0))
         }
     }
 
@@ -376,5 +418,60 @@ mod tests {
             PredictorInfo::instruction(&module.predictor),
             "seed-instruction"
         );
+    }
+
+    #[tokio::test]
+    async fn capped_budget_keeps_sequential_stopping_with_batch_option() {
+        async fn run(batch_size: usize) -> (usize, usize, String) {
+            let proposal = TestCompletionModel::new([AssistantContent::text(
+                "[[ ## instructions ## ]]\n[\"one\",\"two\",\"three\",\"four\"]\n[[ ## completed ## ]]",
+            )]);
+            let lm = LM::from_config(LMConfig {
+                base_url: Some("http://localhost/v1".into()),
+                ..LMConfig::default()
+            })
+            .await
+            .unwrap()
+            .with_client(LMClient::Test(proposal))
+            .await
+            .unwrap();
+            let mut module = CoproStateModule {
+                predictor: Predict::<CoproStateSig>::builder()
+                    .instruction("seed-instruction")
+                    .build(),
+            };
+            let optimizer = COPRO::builder()
+                .breadth(5)
+                .depth(1)
+                .prompt_model(lm)
+                .candidate_batch_size(batch_size)
+                .build();
+            let train = trainset();
+            let mut target = OptimizeTarget::module(&mut module, &train, &ConstantMetric);
+            let mut engine = Engine::new(EngineConfig {
+                budget: crate::optimizer::engine::Budget {
+                    max_metric_calls: Some(2),
+                    ..Default::default()
+                },
+                ..EngineConfig::default()
+            });
+            let error = optimizer
+                .compile(&mut target, &mut engine)
+                .await
+                .expect_err("the third fresh rollout must exceed the budget");
+            drop(target);
+            assert!(
+                error
+                    .to_string()
+                    .contains("budget exhausted (1 rollouts needed)")
+            );
+            (
+                engine.num_candidates(),
+                engine.spend().metric_calls,
+                PredictorInfo::instruction(&module.predictor).to_string(),
+            )
+        }
+
+        assert_eq!(run(1).await, run(5).await);
     }
 }
