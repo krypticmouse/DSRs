@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
   - `base_url` - API endpoint URL (optional, inferred from model provider)
   - `temperature` - Sampling temperature (default: 0.7)
   - `max_tokens` - Maximum completion tokens (default: 512)
-  - `max_tool_iterations` - Upper bound on tool-loop round trips (default: 10)
+  - `max_tool_iterations` - Maximum automatic tool-execution rounds, including the initial round (default: 10)
   - `max_retries` - Additional attempts after a transient failure (default: 2)
   - `retry_base_delay_ms` - Base delay for exponential retry backoff (default: 250)
   - `cache` - Enable response caching (default: false)
@@ -168,10 +168,14 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
 | `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
 | `max_tokens` | `u32`           | `512`                | Upper bound on completion tokens                                               |
-| `max_tool_iterations` | `u32`  | `10`                 | Upper bound on tool-loop round trips per call                                  |
+| `max_tool_iterations` | `u32`  | `10`                 | Maximum automatic tool-execution rounds, including the initial round; `0` disables automatic tool execution |
 | `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
 | `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
 | `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
+
+### Automatic tool-loop limits
+
+For the automatic `LM::call` tool loop, `max_tool_iterations(1)` permits one round of tool execution followed by a completion that can return the final answer. If that completion requests more tools, the call fails before executing them. Parallel tool calls in one model response count as one round. A zero limit still allows a text response, but a tool request fails before any tools execute. `ToolLoopMode::CallerManaged` leaves execution limits to the caller; IR agents use their own `StopSpec` and budgets.
 
 ### Example with custom settings
 

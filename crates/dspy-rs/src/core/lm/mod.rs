@@ -134,6 +134,11 @@ pub struct LMConfig {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
+    /// Maximum tool-execution rounds in the automatic LM loop, including the
+    /// initial round. Parallel tool calls in one response count as one round.
+    /// A final completion is allowed after the last round; further tool requests
+    /// fail before execution. `0` disables automatic tool execution.
+    /// Caller-managed loops and IR agent limits are controlled separately.
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
     /// Additional attempts after a transient failure (429/5xx/network/timeout).
@@ -616,6 +621,9 @@ impl LM {
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
+        if max_iterations == 0 {
+            anyhow::bail!("Max tool iterations reached");
+        }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
         let mut events = vec![SpanEvent::Exchange {
@@ -642,7 +650,7 @@ impl LM {
         Self::push_tool_results(&mut chat_history, &results);
 
         // Now loop until we get a text response
-        for iteration in 1..max_iterations {
+        for iteration in 1..=max_iterations {
             let response = self
                 .completion_with_retry(|| {
                     self.build_completion_request(
@@ -689,6 +697,10 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    if iteration == max_iterations {
+                        warn!(max_iterations, "max tool iterations reached");
+                        anyhow::bail!("Max tool iterations reached");
+                    }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
                         usage: round_usage,
