@@ -42,6 +42,12 @@ main: <MainSig> = seq { … }                      // the program body; always a
 
 **Types**: `string` `int` `float` `bool` · `Name` (class/enum) · `"lit"` (literal) · `T[]` (list) · `T?` (optional) · `map<T>` (string-keyed map) · `A | B` (union) · `(A | B)[]` (group). 
 
+Constraint expressions are limited to 1024 bytes and predicate operations:
+comparisons, logical operators, field/item lookup, and the `length`, `int`,
+and `float` filters. Binary arithmetic, concatenation, collection construction,
+and function calls are rejected before evaluation. Recursive class references
+and class nesting beyond 64 levels are rejected during program validation.
+
 ## Nodes (inside `seq { … }`)
 
 Every step is `name = <expr>`; names are program-unique. A node may only reference nodes named **earlier**. The seq exports fields with a final `out { … }` step, and `main`'s seq must export every `out` field of `<MainSig>`.

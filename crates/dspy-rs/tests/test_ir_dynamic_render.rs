@@ -16,6 +16,29 @@ use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SignatureDef, 
 use dspy_rs::typesys::{ClassDef, EnumDef, EnumValueDef, FieldDef as TypeFieldDef};
 use dspy_rs::{Schema, Message, ParseError, Signature};
 
+#[test]
+fn directly_rendered_recursive_class_uses_a_named_reference() {
+    let mut types = TypeTable::default();
+    types.classes.insert(
+        "Node".to_string(),
+        ClassDef {
+            internal_name: "Node".to_string(),
+            rendered_name: "Node".to_string(),
+            docs: None,
+            fields: vec![TypeFieldDef {
+                name: "next".to_string(),
+                rendered_name: "next".to_string(),
+                field_type: FieldType::Class("Node".to_string()),
+                docs: None,
+                constraints: Vec::new(),
+            }],
+            constraints: Vec::new(),
+        },
+    );
+    let rendered = dspy_rs::typesys::schema_block(&FieldType::Class("Node".to_string()), &types);
+    assert_eq!(rendered, "{\n  next: Node,\n}");
+}
+
 #[derive(Signature, Clone, Debug)]
 /// Grade an answer against a question.
 struct Graded {

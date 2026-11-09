@@ -46,6 +46,10 @@ pub enum ValidateError {
     RootNotSeq,
     #[error("signature `{sig}` references unknown type `{token}`")]
     UnknownTypeToken { sig: String, token: String },
+    #[error("signature `{sig}` contains recursive class `{token}`")]
+    RecursiveType { sig: String, token: String },
+    #[error("signature `{sig}` exceeds the class nesting limit")]
+    TypeNestingExceeded { sig: String },
     #[error("input `{field}` of `{at}` is not bound")]
     UnboundInput { at: String, field: String },
     #[error("input `{field}` of `{at}` is bound more than once")]
@@ -957,8 +961,30 @@ pub(crate) fn compat(src: &FieldType, dst: &FieldType) -> bool {
 }
 
 fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), ValidateError> {
+    check_tokens_inner(sig, ty, types, &mut Vec::new())
+}
+
+const MAX_CLASS_DEPTH: usize = 64;
+
+fn check_tokens_inner(
+    sig: &str,
+    ty: &FieldType,
+    types: &TypeTable,
+    stack: &mut Vec<String>,
+) -> Result<(), ValidateError> {
     match ty {
         FieldType::Class(token) => {
+            if stack.contains(token) {
+                return Err(ValidateError::RecursiveType {
+                    sig: sig.to_string(),
+                    token: token.clone(),
+                });
+            }
+            if stack.len() >= MAX_CLASS_DEPTH {
+                return Err(ValidateError::TypeNestingExceeded {
+                    sig: sig.to_string(),
+                });
+            }
             let def = types
                 .classes
                 .get(token)
@@ -966,9 +992,11 @@ fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), Vali
                     sig: sig.to_string(),
                     token: token.clone(),
                 })?;
+            stack.push(token.clone());
             for field in &def.fields {
-                check_tokens(sig, &field.field_type, types)?;
+                check_tokens_inner(sig, &field.field_type, types, stack)?;
             }
+            stack.pop();
             Ok(())
         }
         FieldType::Enum(token) => {
@@ -981,12 +1009,16 @@ fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), Vali
                     token: token.clone(),
                 })
         }
-        FieldType::List(inner) | FieldType::Optional(inner) => check_tokens(sig, inner, types),
-        FieldType::Map(key, value) => {
-            check_tokens(sig, key, types)?;
-            check_tokens(sig, value, types)
+        FieldType::List(inner) | FieldType::Optional(inner) => {
+            check_tokens_inner(sig, inner, types, stack)
         }
-        FieldType::Union(items) => items.iter().try_for_each(|i| check_tokens(sig, i, types)),
+        FieldType::Map(key, value) => {
+            check_tokens_inner(sig, key, types, stack)?;
+            check_tokens_inner(sig, value, types, stack)
+        }
+        FieldType::Union(items) => items
+            .iter()
+            .try_for_each(|i| check_tokens_inner(sig, i, types, stack)),
         _ => Ok(()),
     }
 }

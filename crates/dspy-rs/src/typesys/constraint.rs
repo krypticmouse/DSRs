@@ -7,13 +7,69 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, RwLock};
 
+use minijinja::machinery::ast::{BinOpKind, Expr, UnaryOpKind};
+use minijinja::machinery::parse_expr;
 use minijinja::{Environment, Expression};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Shared environment for constraint expressions — building an `Environment` per
 /// evaluation is measurable waste on the parse hot path.
-static CONSTRAINT_ENV: LazyLock<Environment<'static>> = LazyLock::new(Environment::new);
+static CONSTRAINT_ENV: LazyLock<Environment<'static>> = LazyLock::new(|| {
+    let mut env = Environment::new();
+    env.set_fuel(Some(10_000));
+    env
+});
+
+/// Constraint expressions are predicates, not a general template language.
+/// Inspect the parsed tree before MiniJinja can fold a costly constant.
+pub(crate) fn validate_constraint_expression(expression: &str) -> Result<(), &'static str> {
+    if expression.len() > 1024 {
+        return Err("constraint expression exceeds 1024 bytes");
+    }
+    let parsed = parse_expr(expression).map_err(|_| "invalid constraint expression")?;
+    let mut pending = vec![&parsed];
+    while let Some(expr) = pending.pop() {
+        match expr {
+            Expr::Var(var) if var.id == "this" => {}
+            Expr::Const(_) => {}
+            Expr::UnaryOp(op) if matches!(&op.op, UnaryOpKind::Not | UnaryOpKind::Neg) => {
+                pending.push(&op.expr);
+            }
+            Expr::BinOp(op)
+                if matches!(
+                    &op.op,
+                    BinOpKind::Eq
+                        | BinOpKind::Ne
+                        | BinOpKind::Lt
+                        | BinOpKind::Lte
+                        | BinOpKind::Gt
+                        | BinOpKind::Gte
+                        | BinOpKind::ScAnd
+                        | BinOpKind::ScOr
+                        | BinOpKind::In
+                ) =>
+            {
+                pending.push(&op.left);
+                pending.push(&op.right);
+            }
+            Expr::Filter(filter)
+                if matches!(filter.name, "length" | "int" | "float")
+                    && filter.args.is_empty()
+                    && filter.expr.is_some() =>
+            {
+                pending.push(filter.expr.as_ref().unwrap());
+            }
+            Expr::GetAttr(attr) => pending.push(&attr.expr),
+            Expr::GetItem(item) => {
+                pending.push(&item.expr);
+                pending.push(&item.subscript_expr);
+            }
+            _ => return Err("constraint expression uses an unsupported operation"),
+        }
+    }
+    Ok(())
+}
 
 /// Compiled constraint expressions, keyed by the `&'static str` the signature macro
 /// emitted. `None` marks an expression that failed to compile (cached so a bad
@@ -47,6 +103,9 @@ pub struct Constraint {
 /// that RFC 0002 IR-1 removed. Failed evaluations (bad expression, wrong type)
 /// return `false`.
 pub fn evaluate_expression(expression: &str, value: &Value) -> bool {
+    if validate_constraint_expression(expression).is_err() {
+        return false;
+    }
     eval_expression(expression, value).unwrap_or(false)
 }
 
@@ -77,7 +136,9 @@ pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -
         }
     }
 
-    let compiled = CONSTRAINT_ENV.compile_expression(expression).ok();
+    let compiled = validate_constraint_expression(expression)
+        .ok()
+        .and_then(|_| CONSTRAINT_ENV.compile_expression(expression).ok());
     let passed = compiled
         .as_ref()
         .map(|expr| eval_compiled(expr, value))
