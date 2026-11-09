@@ -192,6 +192,35 @@ fn remote_json_preserves_charset_and_bom_decoding() {
     .unwrap();
     assert_eq!(rows[0].answer, "A");
     server.join().unwrap();
+
+    let body = b"{\"question\":\"caf\xe9\",\"answer\":\"yes\"}".to_vec();
+    let (url, server) = serve_bytes(body, "application/json");
+    let rows = DataLoader::load_json_with_limits::<Row>(
+        &url,
+        false,
+        TypedLoadOptions::default(),
+        RemoteLoadLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(rows[0].question, "caf\u{fffd}");
+    server.join().unwrap();
+}
+
+#[test]
+fn remote_json_array_reports_invalid_row() {
+    let (url, server) = serve(r#"[{"question":"Q","answer":"A"},null]"#, Duration::ZERO);
+    let err = DataLoader::load_json_with_limits::<Row>(
+        &url,
+        false,
+        TypedLoadOptions::default(),
+        RemoteLoadLimits::default(),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("row 2: expected JSON object"),
+        "{err}"
+    );
+    server.join().unwrap();
 }
 
 #[test]
@@ -221,7 +250,9 @@ fn remote_json_rejects_slow_trickle_after_total_deadline() {
         let mut request = [0; 1024];
         stream.read(&mut request).unwrap();
         stream
-            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n",
+            )
             .unwrap();
         for _ in 0..8 {
             if stream.write_all(b"1\r\n{\r\n").is_err() {

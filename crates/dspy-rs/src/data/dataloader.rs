@@ -11,9 +11,10 @@ use hf_hub::api::sync::Api;
 #[cfg(feature = "data")]
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use reqwest;
+use serde::de::{DeserializeSeed, Error as _, IgnoredAny, SeqAccess, Visitor};
 use std::any::TypeId;
-use std::collections::{HashMap, HashSet};
 use std::cell::Cell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 #[cfg(feature = "data")]
 use std::io::Cursor;
@@ -21,12 +22,11 @@ use std::io::Read;
 #[cfg(feature = "data")]
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use serde::de::{DeserializeSeed, Error as _, IgnoredAny, SeqAccess, Visitor};
 use tracing::debug;
 
+use crate::FieldType;
 use crate::data::utils::is_url;
 use crate::typesys::schema::field_type_from_shape;
-use crate::FieldType;
 use facet::{Facet, Type, UserType};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -404,10 +404,7 @@ impl DataLoader {
         )
     )]
     /// Load typed rows from a local Parquet file.
-    pub fn load_parquet<E>(
-        path: &str,
-        opts: TypedLoadOptions,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet<E>(path: &str, opts: TypedLoadOptions) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
@@ -431,11 +428,7 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_parquet_with<E, F>(
-        path: &str,
-        opts: TypedLoadOptions,
-        mapper: F,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet_with<E, F>(path: &str, opts: TypedLoadOptions, mapper: F) -> Result<Vec<E>>
     where
         F: Fn(&RowRecord) -> Result<E>,
     {
@@ -602,7 +595,9 @@ impl DataLoader {
             .and_then(|value| {
                 value.split(';').skip(1).find_map(|part| {
                     let (key, value) = part.trim().split_once('=')?;
-                    key.trim().eq_ignore_ascii_case("charset").then(|| value.trim().trim_matches('"').to_owned())
+                    key.trim()
+                        .eq_ignore_ascii_case("charset")
+                        .then(|| value.trim().trim_matches('"').to_owned())
                 })
             });
         let max_bytes = u64::try_from(limits.max_bytes).unwrap_or(u64::MAX);
@@ -644,6 +639,14 @@ impl DataLoader {
                 .as_deref()
                 .and_then(|label| encoding_rs::Encoding::for_label(label.as_bytes()))
                 .unwrap_or(encoding_rs::UTF_8);
+            let bytes = if encoding == encoding_rs::UTF_8 && !bytes.starts_with(b"\xef\xbb\xbf") {
+                match String::from_utf8(bytes) {
+                    Ok(text) => return Ok(text),
+                    Err(err) => err.into_bytes(),
+                }
+            } else {
+                bytes
+            };
             let (text, _, _) = encoding.decode(&bytes);
             Ok(text.into_owned())
         } else {
@@ -691,23 +694,19 @@ impl DataLoader {
                     DataLoadError::Json(anyhow!(err))
                 }
             })?;
-            deserializer.end().map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+            deserializer
+                .end()
+                .map_err(|err| DataLoadError::Json(anyhow!(err)))?;
             items
-                .into_iter()
-                .enumerate()
-                .map(|(idx, item)| row_from_json_value(item, idx + 1))
-                .collect::<std::result::Result<Vec<_>, _>>()?
         } else {
             let value: serde_json::Value =
                 serde_json::from_str(&data).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
             match value {
-                serde_json::Value::Array(items) => {
-                items
+                serde_json::Value::Array(items) => items
                     .into_iter()
                     .enumerate()
                     .map(|(idx, item)| row_from_json_value(item, idx + 1))
-                    .collect::<std::result::Result<Vec<_>, _>>()?
-                }
+                    .collect::<std::result::Result<Vec<_>, _>>()?,
                 other => {
                     if remote && limits.max_rows == 0 {
                         return Err(remote_limit("rows", limits.max_rows));
@@ -1033,7 +1032,9 @@ fn coerce_row_value(value: &Value, field_type: &FieldType) -> Value {
 }
 
 fn remote_limit(resource: &str, limit: usize) -> DataLoadError {
-    DataLoadError::Io(anyhow!("remote dataset exceeded {resource} limit ({limit})"))
+    DataLoadError::Io(anyhow!(
+        "remote dataset exceeded {resource} limit ({limit})"
+    ))
 }
 
 fn remote_timeout(timeout: Duration) -> DataLoadError {
@@ -1046,7 +1047,7 @@ struct LimitedJsonArray<'a> {
 }
 
 impl<'de> DeserializeSeed<'de> for LimitedJsonArray<'_> {
-    type Value = Vec<serde_json::Value>;
+    type Value = Vec<RowRecord>;
 
     fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
     where
@@ -1057,7 +1058,7 @@ impl<'de> DeserializeSeed<'de> for LimitedJsonArray<'_> {
 }
 
 impl<'de> Visitor<'de> for LimitedJsonArray<'_> {
-    type Value = Vec<serde_json::Value>;
+    type Value = Vec<RowRecord>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a JSON array")
@@ -1070,7 +1071,10 @@ impl<'de> Visitor<'de> for LimitedJsonArray<'_> {
         let mut items = Vec::new();
         while items.len() < self.max_rows {
             match seq.next_element()? {
-                Some(item) => items.push(item),
+                Some(item) => {
+                    let row_index = items.len() + 1;
+                    items.push(row_from_json_value(item, row_index).map_err(A::Error::custom)?);
+                }
                 None => return Ok(items),
             }
         }
@@ -1086,16 +1090,15 @@ fn row_from_json_value(
     value: serde_json::Value,
     row_index: usize,
 ) -> std::result::Result<RowRecord, DataLoadError> {
-    let object = value.as_object().ok_or_else(|| {
-        DataLoadError::Json(anyhow!(
-            "row {row_index}: expected JSON object, got {}",
-            value
-        ))
-    })?;
+    let serde_json::Value::Object(object) = value else {
+        return Err(DataLoadError::Json(anyhow!(
+            "row {row_index}: expected JSON object, got {value}"
+        )));
+    };
 
     Ok(RowRecord {
         row_index,
-        values: object.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+        values: object.into_iter().collect(),
     })
 }
 
