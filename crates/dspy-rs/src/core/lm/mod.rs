@@ -376,6 +376,18 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
     ChoiceAction::Text(display)
 }
 
+/// Keep provider URLs, credentials, and response bodies out of logs and run errors.
+fn safe_completion_error_kind(err: &CompletionError) -> &'static str {
+    match err {
+        CompletionError::HttpError(_) => "HTTP transport error",
+        CompletionError::JsonError(_) => "provider JSON error",
+        CompletionError::UrlError(_) => "invalid provider URL",
+        CompletionError::RequestError(_) => "request construction error",
+        CompletionError::ResponseError(_) => "provider response error",
+        CompletionError::ProviderError(_) => "provider error",
+    }
+}
+
 /// Whether a rig completion error is worth retrying.
 ///
 /// HTTP-layer failures (connect, timeout) always are. Provider errors are string-typed
@@ -502,13 +514,18 @@ impl LM {
                         attempt = attempt + 1,
                         max_retries = self.config.max_retries,
                         delay_ms = delay.as_millis() as u64,
-                        error = %err,
+                        error_kind = safe_completion_error_kind(&err),
                         "retrying transient lm completion failure"
                     );
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => {
+                    return Err(anyhow::anyhow!(
+                        "LM completion failed: {}",
+                        safe_completion_error_kind(&err)
+                    ));
+                }
             }
         }
     }
