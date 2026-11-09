@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+use crate::ResponseCache;
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -148,6 +148,24 @@ pub struct LMConfig {
     pub cache: bool,
 }
 
+/// Per-call structured output request. Unsupported clients ignore the schema and
+/// callers retain their delimiter prompt/parser path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LMCallOptions {
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub json_mode: bool,
+    /// Explicit capability override for custom OpenAI-compatible endpoints.
+    #[serde(default)]
+    pub force_output_schema: bool,
+}
+
+impl LMCallOptions {
+    pub fn is_json(&self) -> bool {
+        self.output_schema.is_some() || self.json_mode
+    }
+}
+
 impl Default for LMConfig {
     fn default() -> Self {
         LMConfig::builder().__internal_build()
@@ -161,6 +179,7 @@ pub struct LM {
     pub config: LMConfig,
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
+    custom_output_schema: bool,
 }
 
 impl Default for LM {
@@ -170,6 +189,38 @@ impl Default for LM {
 }
 
 impl LM {
+    /// Enables native output formatting for an explicitly verified custom OpenAI-compatible endpoint.
+    pub fn with_custom_output_schema(mut self, enabled: bool) -> Self {
+        self.custom_output_schema = enabled;
+        self
+    }
+    /// Reports schema support based on the initialized provider client.
+    pub fn supports_output_schema(&self) -> bool {
+        if self.config.base_url.is_some() {
+            self.custom_output_schema
+                && matches!(
+                    self.client.as_deref(),
+                    Some(LMClient::OpenAI(_) | LMClient::Test(_))
+                )
+        } else {
+            self.client
+                .as_deref()
+                .is_some_and(LMClient::supports_output_schema)
+        }
+    }
+    pub fn supports_json_mode(&self) -> bool {
+        if self.config.base_url.is_some() {
+            self.custom_output_schema
+                && matches!(
+                    self.client.as_deref(),
+                    Some(LMClient::OpenAI(_) | LMClient::Test(_))
+                )
+        } else {
+            self.client
+                .as_deref()
+                .is_some_and(LMClient::supports_json_mode)
+        }
+    }
     /// Entry point for fluent construction: `LM::builder().model(...).build().await`.
     /// The builder collects an [`LMConfig`]; `build()` initializes the live client.
     pub fn builder() -> LMConfigBuilder {
@@ -249,6 +300,7 @@ impl LM {
             config,
             cache_handler,
             client: Some(client),
+            custom_output_schema: false,
         })
     }
 
@@ -415,14 +467,24 @@ impl LM {
     /// automatically. Hashing streams through the `Debug` representation — no
     /// intermediate JSON tree or string is materialized. Uses the same stable
     /// hasher as the trace format's `request_hash`.
-    fn cache_key_for(&self, messages: &Chat) -> u64 {
+    fn cache_key_for(&self, messages: &Chat, options: &LMCallOptions) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
 
         let mut hasher = StableHasher::new();
         hasher.write(self.config.model.as_bytes());
+        if let Some(base_url) = &self.config.base_url {
+            hasher.write(base_url.as_bytes());
+        }
+        hasher.write(&[
+            self.supports_output_schema() as u8,
+            self.supports_json_mode() as u8,
+        ]);
         hasher.write(&self.config.temperature.to_bits().to_le_bytes());
         hasher.write(&self.config.max_tokens.to_le_bytes());
+        if let Ok(options) = serde_json::to_vec(options) {
+            hasher.write(&options);
+        }
         use std::fmt::Write as _;
         let _ = write!(HashWriter(&mut hasher), "{messages:?}");
         hasher.finish()
@@ -450,6 +512,7 @@ impl LM {
         chat_history: &[rig::message::Message],
         tool_definitions: &[rig::completion::ToolDefinition],
         tool_choice: Option<ToolChoice>,
+        options: &LMCallOptions,
     ) -> CompletionRequest {
         use rig::OneOrMany;
         CompletionRequest {
@@ -465,8 +528,22 @@ impl LM {
             temperature: Some(self.config.temperature as f64),
             max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
-            additional_params: None,
-            output_schema: None,
+            additional_params: if options.json_mode
+                && (self.supports_json_mode() || options.force_output_schema)
+            {
+                match self.client.as_deref() {
+                    Some(LMClient::Gemini(_)) => Some(
+                        serde_json::json!({"generationConfig":{"responseMimeType":"application/json"}}),
+                    ),
+                    _ => Some(serde_json::json!({"response_format":{"type":"json_object"}})),
+                }
+            } else {
+                None
+            },
+            output_schema: (self.supports_output_schema() || options.force_output_schema)
+                .then(|| options.output_schema.clone())
+                .flatten()
+                .map(|value| serde_json::from_value(value).expect("schema validated before call")),
         }
     }
 
@@ -478,16 +555,17 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+        let client = self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+        })?;
 
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err)
+                    if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
+                {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -526,17 +604,17 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed ({}): {:?}",
-                                    tc.function.name,
-                                    context,
-                                    err
-                                )
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| {
+                                    anyhow::anyhow!(
+                                        "tool `{}` execution failed ({}): {:?}",
+                                        tc.function.name,
+                                        context,
+                                        err
+                                    )
+                                })?;
                         (result, None)
                     }
                     None => {
@@ -613,6 +691,7 @@ impl LM {
         tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
+        options: &LMCallOptions,
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
@@ -650,6 +729,7 @@ impl LM {
                         &chat_history,
                         tools.definitions(),
                         Some(ToolChoice::Auto),
+                        options,
                     )
                 })
                 .await?;
@@ -695,7 +775,8 @@ impl LM {
                     });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
+                    let results =
+                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
@@ -717,7 +798,29 @@ impl LM {
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
-        self.call_with_tool_loop_mode(messages, tools, ToolLoopMode::Auto)
+        self.call_with_options(
+            messages,
+            tools,
+            ToolLoopMode::Auto,
+            LMCallOptions::default(),
+        )
+        .await
+    }
+
+    /// Calls the model with additive per-request options; legacy calls use defaults.
+    pub async fn call_with_options(
+        &self,
+        messages: Chat,
+        tools: Vec<Arc<dyn ToolDyn>>,
+        mode: ToolLoopMode,
+        options: LMCallOptions,
+    ) -> Result<LMResponse> {
+        let toolset = if tools.is_empty() {
+            ToolSet::default()
+        } else {
+            ToolSet::build(&tools).await
+        };
+        self.call_with_toolset_and_options(messages, &toolset, mode, options)
             .await
     }
 
@@ -757,13 +860,40 @@ impl LM {
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
     ) -> Result<LMResponse> {
+        self.call_with_toolset_and_options(
+            messages,
+            tools,
+            tool_loop_mode,
+            LMCallOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn call_with_toolset_and_options(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+        options: LMCallOptions,
+    ) -> Result<LMResponse> {
+        if (self.supports_output_schema() || options.force_output_schema)
+            && let Some(schema) = options.output_schema.clone()
+        {
+            let _: schemars::Schema = serde_json::from_value(schema)
+                .map_err(|err| anyhow::anyhow!("invalid output schema: {err}"))?;
+        }
+        if options.json_mode && !(self.supports_json_mode() || options.force_output_schema) {
+            return Err(anyhow::anyhow!(
+                "JSON mode is unsupported by this LM client"
+            ));
+        }
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
 
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
         let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
-            Some(self.cache_key_for(&messages))
+            Some(self.cache_key_for(&messages, &options))
         } else {
             None
         };
@@ -810,6 +940,7 @@ impl LM {
                     &chat_history,
                     tool_definitions,
                     tool_choice.clone(),
+                    &options,
                 )
             })
             .await?;
@@ -854,6 +985,7 @@ impl LM {
                         tools,
                         chat_history,
                         system_prompt.clone(),
+                        &options,
                         &mut accumulated_usage,
                     )
                     .await?;
@@ -1001,6 +1133,102 @@ mod tests {
 
     fn make_text(text: &str) -> AssistantContent {
         AssistantContent::text(text)
+    }
+
+    #[tokio::test]
+    async fn per_call_options_reach_mock_completion_request() {
+        let model = TestCompletionModel::new([make_text("{}")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(
+                serde_json::json!({"type":"object", "properties":{}, "required":[], "additionalProperties":false}),
+            ),
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        lm.call_with_options(
+            Chat::new(vec![Message::user("answer")]),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options,
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert!(request.output_schema.is_some());
+        assert!(request.additional_params.is_none());
+    }
+
+    #[tokio::test]
+    async fn json_mode_sets_additional_params_and_cache_keys_separate_formats() {
+        let model = TestCompletionModel::new([make_text("{}")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            json_mode: true,
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        let chat = Chat::new(vec![Message::user("answer")]);
+        lm.call_with_options(
+            chat.clone(),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert_eq!(
+            request.additional_params.unwrap()["response_format"]["type"],
+            "json_object"
+        );
+        assert!(request.output_schema.is_none());
+        assert_ne!(
+            lm.cache_key_for(&chat, &LMCallOptions::default()),
+            lm.cache_key_for(&chat, &options)
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_client_omits_structured_request_options() {
+        let model = TestCompletionModel::new([make_text("plain")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(serde_json::json!({"type":"object"})),
+            ..LMCallOptions::default()
+        };
+        lm.call_with_options(
+            Chat::new(vec![Message::user("answer")]),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options,
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert!(request.output_schema.is_none());
+        assert!(request.additional_params.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_error_does_not_trigger_format_fallback_call() {
+        let model = TestCompletionModel::default();
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(serde_json::json!({"type":"object"})),
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        let result = lm
+            .call_with_options(
+                Chat::new(vec![Message::user("answer")]),
+                Vec::new(),
+                ToolLoopMode::CallerManaged,
+                options,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(model.last_request().unwrap().output_schema.is_some());
     }
 
     #[test]
@@ -1205,6 +1433,7 @@ mod tests {
             },
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
+            custom_output_schema: false,
         }
     }
 

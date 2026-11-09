@@ -221,6 +221,18 @@ impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
 }
 
 impl LMClient {
+    /// Rig's pinned provider adapters that serialize `CompletionRequest.output_schema`.
+    pub fn supports_output_schema(&self) -> bool {
+        matches!(
+            self,
+            LMClient::OpenAI(_) | LMClient::Gemini(_) | LMClient::Anthropic(_)
+        )
+    }
+
+    pub fn supports_json_mode(&self) -> bool {
+        matches!(self, LMClient::OpenAI(_) | LMClient::Gemini(_))
+    }
+
     #[tracing::instrument(
         name = "dsrs.lm.client.get_api_key",
         level = "trace",

@@ -176,10 +176,14 @@ pub struct ModelEntry {
 impl ModelEntry {
     /// Builds the redacted, hashable entry from a live config.
     pub fn from_config(config: &LMConfig) -> Self {
+        // The serialized config keeps only origin, while the identity hash also
+        // includes the exact custom endpoint so distinct API paths do not replay
+        // each other's completions. The raw endpoint never enters the trace.
+        let endpoint_identity = config.base_url.clone();
         let mut config = config.clone();
         config.api_key = None;
         config.base_url = config.base_url.as_deref().map(url_origin);
-        let config_hash = stable_hash_debug(&config);
+        let config_hash = stable_hash_debug(&(config.clone(), endpoint_identity));
         Self {
             config,
             config_hash,
@@ -194,10 +198,7 @@ fn url_origin(url: &str) -> String {
         Some((scheme, rest)) => (scheme, rest),
         None => ("", url),
     };
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     // Strip userinfo (`user:pass@host`).
     let host = authority.rsplit('@').next().unwrap_or(authority);
     if scheme.is_empty() {
@@ -360,7 +361,6 @@ impl Trace {
             .map(|name| by_leaf.get(name.as_str()).cloned())
             .collect();
     }
-
 }
 
 impl Span {
@@ -461,5 +461,39 @@ mod tests {
         assert_eq!(base, request_hash(1, &prefix, &suffix));
         assert_ne!(base, request_hash(2, &prefix, &suffix));
         assert_ne!(base, request_hash(1, &prefix, &[Message::user("bye")]));
+    }
+
+    #[test]
+    fn output_format_changes_strict_replay_request_hash() {
+        let def = crate::ir::SignatureDef::build("ReplayFormat")
+            .input("question", crate::typesys::FieldType::String)
+            .output("answer", crate::typesys::FieldType::String)
+            .finish()
+            .unwrap();
+        let types = crate::typesys::TypeTable::default();
+        let adapter = crate::ChatAdapter;
+        let schema_prompt = adapter.build_system_json_def(&def, &types, None, true);
+        let json_mode_prompt = adapter.build_system_json_def(&def, &types, None, false);
+        let model_hash = ModelEntry::from_config(&LMConfig::default()).config_hash;
+        let schema_hash = request_hash(model_hash, &[Message::system(schema_prompt)], &[]);
+        let json_mode_hash = request_hash(model_hash, &[Message::system(json_mode_prompt)], &[]);
+        assert_ne!(schema_hash, json_mode_hash);
+    }
+
+    #[test]
+    fn exact_custom_endpoint_changes_trace_identity_without_serializing_path() {
+        let left = LMConfig {
+            base_url: Some("https://api.example/v1/first".into()),
+            ..LMConfig::default()
+        };
+        let right = LMConfig {
+            base_url: Some("https://api.example/v1/second".into()),
+            ..LMConfig::default()
+        };
+        let left_entry = ModelEntry::from_config(&left);
+        let right_entry = ModelEntry::from_config(&right);
+        assert_eq!(left_entry.config.base_url, right_entry.config.base_url);
+        assert_ne!(left_entry.config_hash, right_entry.config_hash);
+        assert!(!format!("{:?}", left_entry.config).contains("/v1/first"));
     }
 }
