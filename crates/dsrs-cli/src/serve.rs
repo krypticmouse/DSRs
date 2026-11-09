@@ -51,6 +51,8 @@ pub struct ServeConfig {
     /// Capability grants (`--allow net:search`), checked against the
     /// program's `caps` ceiling at load.
     pub allow: Vec<String>,
+    /// Exact artifact model URLs the operator permits at load.
+    pub allowed_model_base_urls: Vec<String>,
 }
 
 /// A loaded serving app: shared interpreter + precomputed responses.
@@ -122,6 +124,9 @@ pub async fn load(config: &ServeConfig, env: dspy_rs::ir::RuntimeEnv) -> anyhow:
     let mut env = env;
     for cap in &config.allow {
         env = env.grant(cap);
+    }
+    for url in &config.allowed_model_base_urls {
+        env = env.allow_model_base_url(url.clone());
     }
     if env.sandbox.is_none() {
         env = env.with_sandbox(Arc::new(dsrs_tools::QuickJsExecutor::new()));

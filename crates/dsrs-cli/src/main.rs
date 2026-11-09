@@ -50,6 +50,9 @@ enum Cmd {
         /// Capability grant (repeatable): --allow net:search --allow fs:read.
         #[arg(long = "allow", value_name = "CAP")]
         allow: Vec<String>,
+        /// Permit an exact model base_url from the artifact (repeatable).
+        #[arg(long = "allow-model-base-url", value_name = "URL")]
+        allow_model_base_urls: Vec<String>,
     },
 }
 
@@ -89,11 +92,13 @@ fn main() -> ExitCode {
             port,
             overlay,
             allow,
+            allow_model_base_urls,
         } => {
             let config = ServeConfig {
                 program,
                 overlay,
                 allow,
+                allowed_model_base_urls: allow_model_base_urls,
             };
             let runtime = match tokio::runtime::Runtime::new() {
                 Ok(runtime) => runtime,

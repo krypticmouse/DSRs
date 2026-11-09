@@ -119,6 +119,28 @@ main: Main = seq {
 }
 "#;
 
+#[tokio::test]
+async fn serve_requires_operator_approval_for_artifact_model_url() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let url = "http://127.0.0.1:9999/v1";
+    let source = ECHO.replace(
+        "model m = \"openai:gpt-4o-mini\"",
+        &format!("model m = \"openai:gpt-4o-mini\" {{ base_url \"{url}\" }}"),
+    );
+    let program = write_program(&dir, "model-url.dsrs", &source);
+    let mut config = ServeConfig {
+        program,
+        ..ServeConfig::default()
+    };
+    let err = serve::load(&config, RuntimeEnv::new()).await.unwrap_err();
+    assert!(err.to_string().contains("not approved by the host"));
+
+    config.allowed_model_base_urls.push(url.to_string());
+    serve::load(&config, RuntimeEnv::new())
+        .await
+        .expect("approved artifact URL should load");
+}
+
 fn canned_text(fields: &[(&str, &str)]) -> AssistantContent {
     let mut out = String::new();
     for (name, value) in fields {
@@ -158,7 +180,9 @@ async fn spawn_server(app: Arc<serve::App>) -> SocketAddr {
         .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local addr");
     tokio::spawn(async move {
-        axum::serve(listener, serve::router(app)).await.expect("serve");
+        axum::serve(listener, serve::router(app))
+            .await
+            .expect("serve");
     });
     addr
 }
@@ -177,6 +201,7 @@ async fn serve_end_to_end_on_an_ephemeral_port() {
         program,
         overlay: None,
         allow: vec![],
+        allowed_model_base_urls: vec![],
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -300,6 +325,7 @@ async fn serve_applies_a_named_overlay() {
         program,
         overlay: Some(overlay_path),
         allow: vec![],
+        allowed_model_base_urls: vec![],
     };
     let app = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -354,6 +380,7 @@ main: Main = seq {
         program: program.clone(),
         overlay: None,
         allow: vec![],
+        allowed_model_base_urls: vec![],
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -366,6 +393,7 @@ main: Main = seq {
         program,
         overlay: None,
         allow: vec!["net:probe".to_string()],
+        allowed_model_base_urls: vec![],
     };
     serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await
@@ -391,6 +419,7 @@ async fn serve_rejects_stale_overlays() {
         program,
         overlay: Some(overlay_path),
         allow: vec![],
+        allowed_model_base_urls: vec![],
     };
     let err = serve::load(&config, RuntimeEnv::new().bind_model("m", lm))
         .await

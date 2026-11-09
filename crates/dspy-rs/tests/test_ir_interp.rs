@@ -1055,6 +1055,82 @@ async fn unbound_host_tool_refuses_the_load() {
     assert!(matches!(err, LoadError::HostToolUnbound { ref name } if name == "search"));
 }
 
+fn model_url_program(url: &str, extra_url: Option<&str>) -> Program {
+    let mut b = ProgramBuilder::new("model_url");
+    let model = b.model(
+        "m",
+        LMConfig {
+            base_url: Some(url.to_string()),
+            ..config()
+        },
+    );
+    if let Some(extra_url) = extra_url {
+        b.model(
+            "unused",
+            LMConfig {
+                base_url: Some(extra_url.to_string()),
+                ..config()
+            },
+        );
+    }
+    let sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let node = ir::predict("answerer", sig)
+        .model(model)
+        .bind("question", ir::input("question"));
+    b.main(
+        sig,
+        ir::seq([node]).out("answer", ir::out("answerer", "answer")),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn artifact_model_url_requires_host_approval() {
+    let url = "http://127.0.0.1:9999/v1";
+    for env in [
+        RuntimeEnv::new(),
+        RuntimeEnv::new().allow_model_base_url("http://127.0.0.1:9998/v1"),
+    ] {
+        let err = Interpreter::load(model_url_program(url, None), env)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LoadError::ModelEndpointDenied { ref name } if name == "m"));
+    }
+
+    Interpreter::load(
+        model_url_program(url, None),
+        RuntimeEnv::new().allow_model_base_url(url),
+    )
+    .await
+    .expect("host-approved URL should load");
+
+    let (lm, _) = canned_lm(vec![]).await;
+    Interpreter::load(
+        model_url_program(url, None),
+        RuntimeEnv::new().bind_model("m", lm),
+    )
+    .await
+    .expect("host-prebound model should override artifact URL");
+}
+
+#[tokio::test]
+async fn unreferenced_artifact_model_url_is_checked_at_load() {
+    let (lm, _) = canned_lm(vec![]).await;
+    let err = Interpreter::load(
+        model_url_program("http://127.0.0.1:9999/v1", Some("http://127.0.0.1:9998/v1")),
+        RuntimeEnv::new().bind_model("m", lm),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, LoadError::ModelEndpointDenied { ref name } if name == "unused"));
+}
+
 // ---------------------------------------------------------------------------
 // Overlay model swap
 // ---------------------------------------------------------------------------
