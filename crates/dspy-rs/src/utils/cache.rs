@@ -143,6 +143,19 @@ impl ResponseCache {
         Ok(value)
     }
 
+    /// Replays only the response, without copying the stored prompt and usage.
+    #[tracing::instrument(name = "dsrs.cache.get_response", level = "trace", skip(self))]
+    pub(crate) async fn get_response(&self, key: CacheKey) -> Result<Option<String>> {
+        let response = self
+            .handler
+            .get(&key)
+            .await
+            .map_err(|error| CacheError::backend("read", error))?
+            .and_then(|entry| entry.value().raw_output.clone());
+        trace!(hit = response.is_some(), "cache lookup complete");
+        Ok(response)
+    }
+
     /// Inserts an entry synchronously — the direct path used by [`LM::call`](crate::LM).
     #[tracing::instrument(name = "dsrs.cache.insert_entry", level = "trace", skip(self, entry))]
     pub fn insert_entry(&self, key: CacheKey, entry: CacheEntry) {

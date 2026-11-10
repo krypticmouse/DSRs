@@ -325,3 +325,32 @@ async fn concurrent_scopes_do_not_mix_module_histories() {
     assert_eq!(b.inspect(1)[0].module_path, ["b"]);
     assert_eq!(lm.inspect_history(5).await.len(), 2);
 }
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn disabled_history_skips_records_but_an_enabled_caller_still_captures() {
+    let _serial = SERIAL.lock().await;
+    dspy_rs::clear_history();
+    dspy_rs::set_history_capacity(0);
+    let lm = lm("disabled", false, vec![text("Paris"), text("Berlin")]).await;
+    lm.history.set_capacity(0);
+    let response = lm.call(chat(), vec![]).await.unwrap();
+    assert!(response.history.is_none());
+    assert!(lm.inspect_history(1).await.is_empty());
+    assert!(dspy_rs::inspect_history(1).is_empty());
+
+    let caller = dspy_rs::HistoryBuffer::new(1);
+    let response = caller
+        .scope("caller", lm.call(chat(), vec![]))
+        .await
+        .unwrap();
+    assert!(response.history.is_some());
+    assert_eq!(caller.inspect(1)[0].module_path, ["caller"]);
+    assert_eq!(
+        caller.inspect(1)[0].raw_output.as_deref(),
+        Some(response.output.content().as_str())
+    );
+    assert!(lm.inspect_history(1).await.is_empty());
+    assert!(dspy_rs::inspect_history(1).is_empty());
+    dspy_rs::set_history_capacity(100);
+}

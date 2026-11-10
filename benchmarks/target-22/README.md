@@ -1,0 +1,62 @@
+# Assessment of issue #22
+
+This is a bounded assessment for the performance fix. It does not change
+the issue's 2x target into a narrower CPU-only claim. The user requested all three
+baselines: live end-to-end latency, repeated requests with caching and offline
+framework CPU overhead.
+
+Both programs predict the capital of France from the same question, task and
+field descriptions. Every prediction must equal `Paris`. Both use native
+JSON Schema formatting, temperature 0, max_tokens 64, no transport retries and no
+tracing subscriber. Both explicitly opt into schema support for the tested custom
+endpoint. DSPy's adapter may fall back on an error; the HTTP-count gate rejects
+any extra requests. Startup, imports, LM construction and warmups are outside each timing.
+Framework-specific prompts and their token counts can differ; this is a complete
+typed-prediction workload rather than identical HTTP payloads.
+
+Live mode disables response caching, warms the model once and times one request
+per independent sample. It includes real HTTP, model inference, formatting and
+parsing. This is warm-model latency, not model-loading latency. Cached mode warms
+one response, then makes 1,100 matching calls (100 warmup and 1,000 measured);
+the server log must show exactly one HTTP request. DSRs uses foyer's warm memory
+tier and DSPy uses its memory cache with disk caching disabled. Backend setup is
+excluded. Offline mode uses each project's normal mock provider with 100 warmup
+and 1,000 measured calls; the server log must show zero HTTP requests. Mock-provider
+implementation differences are included and this does not isolate adapter CPU.
+DSPy history is disabled; DSRs global, LM and predictor history capacities are
+zero. The cost of each framework's disabling mechanism remains included.
+This follow-up contains the integrated native-output, configuration and history
+fixes. It is a new frozen experiment, not directly comparable to the earlier
+delimiter-only revision. Earlier invalid live/cache runs and valid offline
+results remain diagnostic evidence for that earlier protocol only.
+
+Eight samples per framework per mode run in balanced order:
+baseline DSRs, candidate DSRs, DSPy, DSPy, candidate DSRs, baseline DSRs, repeated
+four times. The baseline and candidate use the same Rust workload source and
+Rust 1.98.1 release/cache build flags; the runner verifies the archived baseline
+binary and workload hashes. Report before/after DSRs ratios separately from the
+DSRs-versus-DSPy target. Preserve all samples,
+outliers, stderr, source and binary hashes, model identity and package versions.
+Compare medians of per-run mean nanoseconds. Report a 2x success only if all three
+speedup ratios reach 2; otherwise leave #22 unresolved. These descriptive ranges
+are not confidence intervals. A failure of outputs, request counts or any command
+invalidates that run, rather than being treated as an optimization result.
+
+The initial all-mode execution stopped at the first live correctness failure;
+its diagnostic artifacts are retained separately. The follow-up controller stops
+the remaining samples of a failed mode and continues to the next mode, preserving
+the same Rust binary, task, model settings and success criterion. A mode needs all
+eight valid samples from both frameworks before it receives a comparison ratio.
+An invalid live or cached mode cannot be replaced by a successful offline result.
+
+This single question establishes no general task-quality threshold or production
+latency guarantee. It is not the HotpotQA reflection pipeline requested by #23,
+and does not establish hardware-independent speedups.
+
+Build the committed clean Rust source with Rust 1.98.1 using
+`cargo +1.98.1 build -p dspy-rs --release --no-default-features --features cache --locked --example bench-target-22 -j1`.
+Use a Python 3.12 environment with DSPy 3.2.1 and retain all resolved packages.
+Point `OLLAMA_BASE_URL` at the same local Ollama/llama3.2 server for both programs.
+The runner takes `--rust EXE --baseline BASELINE_EXE --baseline-record MANIFEST
+--python PYTHON --base-url URL --ollama-log WSL_PATH
+--out OUTSIDE_CHECKOUT`. Run without concurrent builds or model requests.

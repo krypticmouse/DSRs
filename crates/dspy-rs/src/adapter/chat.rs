@@ -308,7 +308,9 @@ impl ChatAdapter {
         )
     }
 
-    /// System prompt for a provider-native JSON response.
+    /// System prompt for a provider-native JSON response. Primitive native outputs
+    /// use the schema supplied through the API; complex outputs retain its prompt
+    /// copy so nested descriptions remain visible to grammar-only providers.
     pub fn build_system_json_def(
         &self,
         def: &SignatureDef,
@@ -319,6 +321,27 @@ impl ChatAdapter {
         let inputs = def_views(&def.inputs);
         let outputs = def_views(&def.outputs);
         let mut parts = vec![format_field_descriptions_view(&inputs, &outputs, types)];
+        if schema_mode
+            && outputs.iter().all(|field| {
+                matches!(
+                    field.ty,
+                    FieldType::String
+                        | FieldType::Int
+                        | FieldType::Float
+                        | FieldType::Bool
+                        | FieldType::Literal(_)
+                )
+            })
+        {
+            parts.push(
+                "Return compact JSON matching the supplied output schema. No markdown.".to_string(),
+            );
+            let instruction = instruction_override.unwrap_or(&def.instruction);
+            if !instruction.is_empty() {
+                parts.push(instruction.to_string());
+            }
+            return parts.join("\n\n");
+        }
         parts.push("Return one JSON object containing every output field, using the field names shown above. Do not include markdown or text outside the JSON object.".to_string());
         parts.push(format!(
             "Effective output format: {}.",

@@ -1017,7 +1017,9 @@ impl LM {
         let mut result = self
             .call_with_toolset_inner(messages, tools, tool_loop_mode, options)
             .await;
-        history.finish(&mut result);
+        if let Some(history) = history {
+            history.finish(&mut result);
+        }
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
         }
@@ -1044,9 +1046,6 @@ impl LM {
             }
             .into());
         }
-        let system_prompt = messages.system_prompt();
-        let chat_history = messages.to_rig_chat_history();
-
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
         #[cfg(feature = "cache")]
@@ -1057,8 +1056,7 @@ impl LM {
         };
         #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
-            && let Some(entry) = cache.get_entry(key).await?
-            && let Some(raw_output) = entry.raw_output
+            && let Some(raw_output) = cache.get_response(key).await?
         {
             debug!("lm response served from cache");
             let output = Message::assistant(&raw_output);
@@ -1079,6 +1077,8 @@ impl LM {
             });
         }
 
+        let system_prompt = messages.system_prompt();
+        let chat_history = messages.to_rig_chat_history();
         let tool_definitions = tools.definitions();
         trace!(
             conversation_messages = chat_history.len(),

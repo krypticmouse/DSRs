@@ -284,6 +284,8 @@ for entry in history {
 
 History is independent of response caching. Each logical LM invocation records a `HistoryEntry`, including cache hits, calls with tools, provider failures, and cancelled calls. The interpreter attaches parsed output or a parse error to that same record after the LM returns. Direct `LM::call` calls have no signature parser, so their `output` stays `None`.
 
+When the global, LM and all enclosing predictor/module stores have zero capacity at the start of a call, history recording is skipped entirely. Enabling a store affects subsequent calls; an enabled enclosing module still captures calls whose LM and predictor stores are disabled. Trace capture remains independent.
+
 LMs and predictors retain the 100 most recently completed calls by default, newest first. Use `lm.history.set_capacity(n)`, `predictor.set_history_capacity(n)`, or `dspy_rs::set_history_capacity(n)` to configure their independent limits. Zero disables retention in that store. Clear stores with `lm.history.clear()`, `predictor.clear_history()`, or `dspy_rs::clear_history()`. LM clones share their history; constructing an LM or replacing its client starts a new store.
 
 ```rust

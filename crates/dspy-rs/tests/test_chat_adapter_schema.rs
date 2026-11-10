@@ -30,6 +30,69 @@ struct AliasSig {
     answer: String,
 }
 
+#[dspy_rs::Schema]
+#[derive(Clone, Debug)]
+struct City {
+    /// The official city name.
+    name: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+struct NestedSig {
+    #[input]
+    question: String,
+    #[output]
+    city: City,
+}
+
+#[test]
+fn complex_native_outputs_keep_nested_schema_descriptions_in_the_prompt() {
+    let prompt = ChatAdapter.build_system_json_def(
+        SignatureDef::of::<NestedSig>(),
+        SignatureDef::types_of::<NestedSig>(),
+        None,
+        true,
+    );
+    assert!(prompt.contains("The official city name."));
+    assert!(prompt.contains("additionalProperties"));
+}
+
+#[test]
+fn native_schema_prompt_keeps_semantics_without_repeating_the_api_schema() {
+    let def = SignatureDef::build("Prompt")
+        .instruction("Compare cities.")
+        .input_full(
+            IrFieldDef::new("question", FieldType::String)
+                .aliased("query")
+                .with_docs("The question."),
+        )
+        .output_full(
+            IrFieldDef::new("answer", FieldType::String)
+                .aliased("answer.value")
+                .with_docs("City name."),
+        )
+        .finish()
+        .unwrap();
+    let types = TypeTable::default();
+    let native =
+        ChatAdapter.build_system_json_def(&def, &types, Some("Use current capitals."), true);
+    for text in [
+        "query",
+        "answer.value",
+        "The question.",
+        "City name.",
+        "Use current capitals.",
+    ] {
+        assert!(native.contains(text), "missing {text}");
+    }
+    assert!(!native.contains("Compare cities."));
+    assert!(!native.contains("additionalProperties"));
+    let json_mode = ChatAdapter.build_system_json_def(&def, &types, None, false);
+    assert!(json_mode.contains("Compare cities."));
+    assert!(json_mode.contains("additionalProperties"));
+    assert!(json_mode.contains("answer.value"));
+}
+
 #[test]
 fn parse_output_def_uses_canonical_field_names() {
     let adapter = ChatAdapter;
