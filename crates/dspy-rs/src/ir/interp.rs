@@ -505,8 +505,11 @@ impl Interpreter {
     /// 5. every sandboxed tool and hole registered through the dsrs-tools
     ///    lifecycle (parse → compile → register). A hole that doesn't compile
     ///    fails the LOAD, not the call.
-    pub async fn load(program: Program, env: RuntimeEnv) -> Result<Self, LoadError> {
-        Self::load_shared(Arc::new(program), env).await
+    pub fn load(
+        program: Program,
+        env: RuntimeEnv,
+    ) -> impl std::future::Future<Output = Result<Self, LoadError>> {
+        Self::load_shared(Arc::new(program), env)
     }
 
     /// Loads independent runtime bindings over an existing immutable program.
