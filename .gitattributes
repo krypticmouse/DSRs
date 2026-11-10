@@ -1,0 +1,2 @@
+# Canonical DSRs text and embedded JavaScript must use identical bytes on every host.
+*.dsrs text eol=lf

@@ -1,0 +1,170 @@
+[
+  {
+    "case": "default-1",
+    "baseline_ns_median": 73069.15,
+    "candidate_ns_median": 72193.975,
+    "latency_ratio": 0.988022647040509,
+    "allocated_byte_ratio": 1.0,
+    "baseline_samples_ns": [
+      76602.85,
+      80165.4,
+      80099.1,
+      89556.35,
+      69535.45,
+      65906.8,
+      67445.45,
+      69036.7
+    ],
+    "candidate_samples_ns": [
+      100621.6,
+      74069.7,
+      69339.75,
+      73446.45,
+      74205.2,
+      68921.1,
+      70941.5,
+      61347.15
+    ],
+    "accepted": true
+  },
+  {
+    "case": "default-8",
+    "baseline_ns_median": 10984.575,
+    "candidate_ns_median": 9941.05,
+    "latency_ratio": 0.9050008762287115,
+    "allocated_byte_ratio": 1.0,
+    "baseline_samples_ns": [
+      15158.4,
+      11567.9,
+      13471.7,
+      12267.4,
+      9544.85,
+      10401.25,
+      9612.35,
+      9076.0
+    ],
+    "candidate_samples_ns": [
+      18011.55,
+      10936.15,
+      10105.85,
+      9407.45,
+      9432.8,
+      9776.25,
+      9506.75,
+      16182.75
+    ],
+    "accepted": true
+  },
+  {
+    "case": "default-16",
+    "baseline_ns_median": 9503.425,
+    "candidate_ns_median": 8885.9,
+    "latency_ratio": 0.9350207951343857,
+    "allocated_byte_ratio": 1.0,
+    "baseline_samples_ns": [
+      8807.0,
+      9993.65,
+      9178.1,
+      13042.15,
+      8358.0,
+      8156.5,
+      10889.05,
+      9828.75
+    ],
+    "candidate_samples_ns": [
+      12120.7,
+      9168.95,
+      8638.0,
+      9133.8,
+      8324.55,
+      8466.9,
+      7594.8,
+      9271.8
+    ],
+    "accepted": true
+  },
+  {
+    "case": "jinja-1",
+    "baseline_ns_median": 74363.575,
+    "candidate_ns_median": 68217.4,
+    "latency_ratio": 0.9173496567371862,
+    "allocated_byte_ratio": 0.8668511936123005,
+    "baseline_samples_ns": [
+      82548.95,
+      77829.05,
+      79021.35,
+      77267.45,
+      69019.85,
+      71459.7,
+      67588.0,
+      66440.3
+    ],
+    "candidate_samples_ns": [
+      95470.4,
+      66782.2,
+      67142.65,
+      66297.15,
+      72545.0,
+      69292.15,
+      59936.9,
+      72113.55
+    ],
+    "accepted": null
+  },
+  {
+    "case": "jinja-8",
+    "baseline_ns_median": 591811.5249999999,
+    "candidate_ns_median": 419107.85,
+    "latency_ratio": 0.7081779118782793,
+    "allocated_byte_ratio": 0.35611498450146634,
+    "baseline_samples_ns": [
+      589793.35,
+      611485.1,
+      600518.65,
+      584781.65,
+      593829.7,
+      602214.85,
+      542260.85,
+      539084.9
+    ],
+    "candidate_samples_ns": [
+      552363.5,
+      431604.2,
+      421494.65,
+      443194.45,
+      414115.95,
+      416721.05,
+      391862.0,
+      384743.45
+    ],
+    "accepted": true
+  },
+  {
+    "case": "jinja-16",
+    "baseline_ns_median": 1264561.05,
+    "candidate_ns_median": 851782.525,
+    "latency_ratio": 0.6735795990237087,
+    "allocated_byte_ratio": 0.26946677944230124,
+    "baseline_samples_ns": [
+      1362568.1,
+      1360347.8,
+      1254385.6,
+      1249794.35,
+      1274736.5,
+      1278484.25,
+      1175276.6,
+      1145751.0
+    ],
+    "candidate_samples_ns": [
+      928744.05,
+      902669.1,
+      820875.95,
+      1142973.95,
+      852392.4,
+      786657.45,
+      851172.65,
+      720234.55
+    ],
+    "accepted": true
+  }
+]

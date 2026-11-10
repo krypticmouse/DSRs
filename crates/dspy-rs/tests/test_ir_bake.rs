@@ -3,7 +3,9 @@
 //! of base+overlay vs. baked on canned LMs.
 
 use std::sync::Arc;
+use std::collections::BTreeMap;
 
+use cranelift_entity::EntityRef;
 use dspy_rs::ir::{
     self, BakeError, Budget, CodeLang, FieldType as T, Interpreter, Lineage, Overlay, ParamValue,
     Program, ProgramBuilder, RuntimeEnv, SignatureDef,
@@ -50,6 +52,24 @@ fn config() -> LMConfig {
         model: "openai:gpt-4o-mini".to_string(),
         ..LMConfig::default()
     }
+}
+
+#[test]
+fn builder_rejects_deep_specs_before_recursive_lowering() {
+    let mut builder = ProgramBuilder::new("deep");
+    let sig = builder.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let mut child = ir::predict("answerer", sig);
+    for _ in 0..2_000 {
+        child = ir::retry(child, 1);
+    }
+    let err = builder.main(sig, ir::seq([child])).unwrap_err();
+    assert!(err.to_string().contains("nesting limit"), "{err}");
 }
 
 fn obj(pairs: &[(&str, serde_json::Value)]) -> serde_json::Map<String, serde_json::Value> {
@@ -346,6 +366,25 @@ fn baking_an_empty_overlay_still_restamps_identity() {
     // promotion.
     assert_eq!(baked.meta.program_hash, base.meta.program_hash);
     assert!(baked.meta.lineage.is_some());
+}
+
+#[test]
+fn overlay_rejects_unknown_model_before_bake() {
+    let program = pipeline_program();
+    let slot = program.param_id("drafter.model").unwrap();
+    let unknown = ir::ModelId::new(program.models.len());
+    let value = ParamValue::ModelRef { model: unknown };
+
+    let mut overlay = Overlay::new(&program);
+    let err = overlay.set(&program, slot, value.clone()).unwrap_err();
+    assert!(matches!(err, ir::OverlayError::ModelRefUnknown { .. }));
+    assert!(overlay.is_empty());
+
+    let named = BTreeMap::from([("drafter.model".to_string(), value)]);
+    let err = Overlay::from_named(&program, named).unwrap_err();
+    assert!(matches!(err, ir::OverlayError::ModelRefUnknown { .. }));
+
+    program.bake(&overlay, note()).unwrap();
 }
 
 #[test]
