@@ -1,0 +1,15 @@
+{
+  "binary_sha256": "120224F195769B208120AC6ECD0203433C9E9DDC3FAB4F99DB6F5DF90C8C76C5",
+  "revision": "af0247d010f707ede284be4669270cd321213efd",
+  "clean": true,
+  "command": "cargo +1.98.1 build -p dspy-rs --release --no-default-features --example bench-system-prompts --locked -j1",
+  "rustc": [
+    "rustc 1.98.1 (48a229cea 2026-09-01)",
+    "binary: rustc",
+    "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+    "commit-date: 2026-09-01",
+    "host: x86_64-pc-windows-msvc",
+    "release: 1.98.1",
+    "LLVM version: 22.1.8"
+  ]
+}

@@ -237,6 +237,8 @@ pub enum OverlayError {
     /// program's grants were never checked against.
     #[error("tool set for `{path}` includes `{tool}`, which the owning agent does not declare")]
     ToolSetUndeclared { path: String, tool: String },
+    #[error("model reference for `{path}` names unknown model {model}")]
+    ModelRefUnknown { path: String, model: ModelId },
     /// A flat demo row (fx/`ModuleState` form) carries a field the owning
     /// leaf's signature does not declare, so it cannot be split into a
     /// [`DemoRow`]'s input/output maps.
@@ -279,6 +281,14 @@ impl Overlay {
                 expected: slot.kind,
                 got: v.kind(),
             });
+        }
+        if let ParamValue::ModelRef { model } = &v {
+            if p.models.get(*model).is_none() {
+                return Err(OverlayError::ModelRefUnknown {
+                    path: slot.path.to_string(),
+                    model: *model,
+                });
+            }
         }
         // The ToolSet alphabet is the owning agent node's declared table
         // (RFC 0004 §5): a candidate can drop declared tools, never add
