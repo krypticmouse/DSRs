@@ -26,6 +26,7 @@ async fn main() -> Result<()> {
 
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
         .build()
         .await?;
     configure(lm);

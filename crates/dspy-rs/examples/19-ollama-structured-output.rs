@@ -3,6 +3,7 @@
 //! First run `ollama pull llama3.2`, then:
 //! `cargo run -p dspy-rs --no-default-features --example 19-ollama-structured-output`
 //! Override OLLAMA_BASE_URL or OLLAMA_MODEL to use another local configuration.
+//! Pass `--inspect-only` to print the prompt without sending a request.
 
 use anyhow::Result;
 use dspy_rs::{LM, Predict, Signature, init_tracing};
@@ -37,6 +38,9 @@ async fn main() -> Result<()> {
     };
     let chat = predictor.build_chat(&input).await?;
     println!("Prompt: {}", serde_json::to_string_pretty(&chat.to_json())?);
+    if std::env::args().any(|arg| arg == "--inspect-only") {
+        return Ok(());
+    }
     let (prediction, conversation) = predictor.call_and_parse(chat).await.map_err(|error| {
         eprintln!("Prediction failed: {error:#?}");
         error
