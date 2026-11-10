@@ -92,6 +92,30 @@ let lm = LM::builder()
 
 - **Clone semantics:** `LM` implements `Clone`; clones share the underlying client and cache via `Arc`, so they see the same history while carrying their own config copy.
 
+## Provider injection and typed failures
+
+Built-in providers, `TestCompletionModel`, and application providers implement
+`core::lm::CompletionProvider`. An external implementation can be injected with
+`lm.with_client(LMClient::custom(provider)).await?`; it follows the same LM
+configuration, scoped `with_lm`, call overrides, retry and tool pipeline. The
+trait's completion future must be `Send`, so the provider works in concurrent
+module calls. `LMClient::from_custom` remains the conversion constructor for
+existing enum variants.
+
+Direct LM calls retain a `LmCallError` in their error chain. Use
+`error.downcast_ref::<LmCallError>()` to inspect `kind()`, `http_status()` and
+`is_retryable()`. Predictor calls expose the same cause through
+`PredictError::Lm { source }` and `source.call_error()`. The original provider
+error, including its response detail, remains available via `Error::source`.
+HTTP 429 and server failures are transient; authentication, policy and other
+request errors do not consume the retry budget. Providers that expose only
+string errors retain their source and use the documented transient-marker
+fallback. Retry headers are unavailable through Rig's completion error type.
+
+`PredictError::is_retryable()` describes a possible new attempt after the LM's
+own configured retries have finished; applications should choose an outer
+retry budget explicitly.
+
 ## API Reference
 
 You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-rs/latest/dspy_rs/core/lm/index.html).

@@ -415,7 +415,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
 /// Retry transport failures and HTTP 429/5xx. Permanent HTTP errors and
 /// request-construction errors fail immediately. Provider errors are string-typed
 /// in rig, so transient markers are matched textually only for that variant.
-fn is_retryable_completion_error(err: &CompletionError) -> bool {
+pub(crate) fn is_retryable_completion_error(err: &CompletionError) -> bool {
     match err {
         CompletionError::HttpError(error) => match error {
             rig::http_client::Error::InvalidStatusCode(status)
@@ -523,9 +523,7 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self.client.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
-        })?;
+        let client = self.client.as_ref().ok_or(crate::LmCallError::NotInitialized)?;
 
         let mut attempt = 0u32;
         loop {
@@ -554,7 +552,7 @@ impl LM {
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(crate::LmCallError::from(err).into()),
             }
         }
     }

@@ -275,7 +275,7 @@ impl<S: Signature> Predict<S> {
                 source: LmError::Provider {
                     provider: "configuration".into(),
                     message: "failed to initialize LM override".into(),
-                    source: Some(err.into()),
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                 },
             })?;
         self.call_with_lm(input, lm).await
