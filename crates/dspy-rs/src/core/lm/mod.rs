@@ -274,9 +274,17 @@ impl LM {
         })
     }
 
+    /// Replaces the provider client and starts a fresh response cache and history
+    /// when caching is enabled. Existing clones retain their client and cache.
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        let cache_handler = if self.config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
         Ok(LM {
             client: Some(Arc::new(client)),
+            cache_handler,
             ..self
         })
     }
@@ -1003,9 +1011,10 @@ impl LM {
         })
     }
 
-    /// Returns the `n` most recent cached calls.
+    /// Returns up to `n` recent cache insertions, newest first.
     ///
-    /// Panics if caching is disabled for this `LM`.
+    /// Returns an empty vector when caching is disabled or no entries have been
+    /// recorded. Cache hits and calls with tools do not add history entries.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
         level = "trace",
@@ -1013,7 +1022,10 @@ impl LM {
         fields(n)
     )]
     pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler.as_ref().unwrap().get_history(n)
+        self.cache_handler
+            .as_ref()
+            .map(|cache| cache.get_history(n))
+            .unwrap_or_default()
     }
 }
 
