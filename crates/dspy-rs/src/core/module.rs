@@ -218,8 +218,9 @@ pub trait Module: Send + Sync {
 
     /// Runs the module. This is what you call.
     ///
-    /// Delegates to [`forward`](Module::forward). The split exists for future
-    /// hooks/tracing/middleware.
+    /// Delegates to [`forward`](Module::forward), inside a module tracing span.
+    #[tracing::instrument(name = "dsrs.module.call", level = "debug", skip_all,
+        fields(module = std::any::type_name::<Self>()))]
     async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         self.forward(input).await
     }
