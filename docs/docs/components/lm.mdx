@@ -68,15 +68,20 @@ The `LM::builder()` must be awaited with `.build().await` because client initial
 
 ### Local server usage
 
-For local OpenAI-compatible servers (vLLM, Ollama, etc.), provide `base_url` without an `api_key`:
+For native Ollama, select the provider explicitly:
 
 ```rust
 let lm = LM::builder()
-    .base_url("http://localhost:11434".to_string())
-    .model("llama3".to_string())
+    .model("ollama:llama3.2".to_string())
     .build()
     .await?;
 ```
+
+For an OpenAI-compatible endpoint, supply its API base, including `/v1` when
+required by that server. For example, Ollama's compatibility endpoint is
+`http://localhost:11434/v1`; the model string is then the server's model name,
+such as `llama3.2`. Without an explicit `base_url`, the `ollama:` prefix selects
+the native client. Download and serve the model separately before making calls.
 
 ### Custom OpenAI-compatible endpoints
 
@@ -100,7 +105,8 @@ You can browse the full `LM` module reference on [docs.rs](https://docs.rs/dspy-
 ## Global vs explicit usage
 
 - **Global:** `configure(lm)` sets the process-wide default LM used by predictors.
-- **Per-instance override:** Attach an LM to a specific predictor with `PredictBuilder::lm(...)`, which bypasses the global; or build a second `LM` and call `configure(lm)` before the specific call.
+- **Per-instance override:** Attach an LM to a specific predictor with `Predict::builder().lm(lm).build()`.
+- **Per-call or scoped selection:** Use `call_with_lm` or `with_lm` as described below. Replacing the global default affects concurrent callers; a scope applies only to its future.
 
 ## Async execution and sync entry
 
@@ -207,6 +213,20 @@ This starts from the predictor's resolved LM, applies the closure, and uses the 
 Retries wait for `retry_base_delay_ms * 2^attempt`, with up to 50% random jitter and saturated arithmetic. The base delay defaults to 250 ms; the exponent is capped at 16. Retries do not switch the selected LM or response format.
 
 ## Inspecting history
+
+### Inspect a prompt before sending
+
+```rust
+let input = QAInput { question: "What is the capital of France?".into() };
+let chat = predict.build_chat(&input).await?;
+println!("{}", serde_json::to_string_pretty(&chat.to_json())?);
+// This is the first point where the provider is called.
+let (prediction, conversation) = predict.call_and_parse(chat).await?;
+```
+
+This fragment assumes the `QA` signature and `predict` from the [quickstart](/docs/getting-started/quickstart). `build_chat` resolves the LM and renders the prompt without a provider request or history entry. `call_and_parse` sends the inspected chat, parses the typed response and returns the updated conversation. To use an explicit override, pair `build_chat_with_lm` with `call_and_parse_with_lm` and pass the same LM to both.
+
+### Inspect executed calls
 
 ```rust
 let history = lm.inspect_history(3).await;
@@ -348,7 +368,7 @@ All provider integrations are powered by [Rig](https://github.com/0xPlaygrounds/
 |---|---|---|
 | `ToolSet::build` | `async fn build(tools: &[Arc<dyn ToolDyn>]) -> ToolSet` | Fetches every tool definition once and indexes executors by name; duplicate names keep the first tool |
 | `ToolSet::from_definitions` | `fn from_definitions(definitions: Vec<ToolDefinition>) -> ToolSet` | Definitions only, no executors; for caller-managed loops that execute tools themselves |
-| `ToolSet::code_mode` | `async fn code_mode(tools: Vec<Arc<dyn ToolDyn>>, config: SandboxConfig) -> Result<ToolSet>` | Collapses the tools into a single sandboxed `run_js` tool; requires the `code-mode` feature |
+| `ToolSet::code_mode` | `async fn code_mode(tools: Vec<Arc<dyn ToolDyn>>, config: SandboxConfig) -> Result<ToolSet>` | Collapses the tools into a single sandboxed `run_js` tool |
 
 With `ToolSet::code_mode`, instead of emitting one JSON tool call per step, the model writes JavaScript against the tools as a JS API and composes their results in one execution. The returned set drops into any tool loop (`LM::call_with_toolset`, `Predict`) exactly like a normal `ToolSet`. It errors if two tool names mangle to the same JS identifier. See [Code Mode](/docs/components/code-mode) for the full sandbox surface.
 

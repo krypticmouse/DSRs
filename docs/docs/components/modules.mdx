@@ -6,6 +6,16 @@ icon: 'circle-nodes'
 
 A module is a prompting strategy over a signature. Everything callable in dsrs implements `Module`: the bare LM call ([`Predict<S>`](/docs/components/predict)), `ChainOfThought<S>`, and any struct you compose from them. Swapping `Predict<QA>` for `ChainOfThought<QA>` changes the output type, and the compiler surfaces every downstream site that must change.
 
+## Predictor or module?
+
+| Type | Responsibility | Output |
+|---|---|---|
+| `Predict<S>` | One signature, formatted prompt and LM call (or a tool loop when tools are attached) | `Predicted<S::Output>` |
+| `ChainOfThought<S>` | The same task with a reasoning augmentation | `Predicted<WithReasoning<S::Output>>` |
+| Custom `Module` | Compose tasks using ordinary Rust control flow | `Predicted<Self::Output>` |
+
+A predictor is already a module. Implement a custom module when you need multiple stages or application control flow. `Module::call` is the caller entry point; `forward` is the implementation hook. Optimizer discovery is a separate `Predictors` contract, usually declared with `predictors!`.
+
 ## Usage
 
 Given the QA signature from [Signatures](/docs/components/signatures), the strategy is the only thing that changes between these two calls:

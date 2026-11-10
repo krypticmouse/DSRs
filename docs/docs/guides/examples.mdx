@@ -16,6 +16,7 @@ The HotpotQA examples (03, 04 and 08) require `data`; the cache microbenchmark (
 
 | Example | What it shows | Key APIs |
 |---------|---------------|----------|
+| [00-quickstart.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/00-quickstart.rs) | Typed QA, prompt inspection without a request using `--inspect-only`, and parsed invocation history | `Predict::build_chat`, `call_and_parse`, `LM::inspect_history` |
 | [01-simple.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs) | Typed signatures, chain-of-thought via a `reasoning` field, and module composition | `Signature`, `Predict`, `Module` |
 | [02-module-iteration-and-updation.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs) | Optimizing a module end to end with the typed optimizer API | `COPRO`, `compile_module`, `TypedMetric` |
 | [03-evaluate-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs) | Evaluating a typed QA predictor on a HotpotQA sample | `DataLoader`, `evaluate_trainset`, `Eval` |

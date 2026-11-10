@@ -77,7 +77,7 @@ let predict = Predict::<QA>::builder()
 `Predict<S>` executes as a 1-node IR [Program](/docs/components/program-and-nodes): a `predict` leaf named after the component, over `SignatureDef::of::<S>()` — or an `agent` leaf when tools are attached (the IR says `Predict` carries no tools; a tooled predictor *is* an agent loop). Each `call` executes this pipeline:
 
 1. Build (once, then cache) the 1-node program. The leaf name is the component name, so span identity and capture/replay keying are unchanged.
-2. Resolve the LM — the per-instance `.lm(...)` if set, otherwise the global `configure()` LM — and load the [Interpreter](/docs/components/runtime) against it (cached; reloaded when the resolved LM changes).
+2. Resolve the LM — explicit call override, per-instance setting, scoped default, then global configuration — and load the [Interpreter](/docs/components/runtime) against it (cached; reloaded when the resolved LM changes). See [LM selection](/docs/components/lm#selecting-an-lm-for-a-call-or-module).
 3. Compose the effective `ir::Overlay`: instance state (instruction override + demos, minted once as an overlay against the cached program) plus any ambient optimizer candidate (`fx::with_params` / `fx::with_overlay`), ambient values winning per slot.
 4. Run the interpreter (`run_collecting`), which renders the prompt, consults any active replay scope, calls the LM (for an `agent` leaf: the tool loop, with the default `StopSpec` — `until_parse`, `max_turns = 8`), and parses the response through the `[[ ## field ## ]]` protocol, evaluating `#[check]` and `#[assert]` constraints.
 5. Reassemble the run's per-leaf metadata (`LeafOutcome`) into `CallMetadata`, and record a trace span when inside a `capture()` scope.

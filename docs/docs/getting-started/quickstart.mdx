@@ -7,7 +7,7 @@ icon: "rocket"
 DSRs lets you call language models with typed Rust structs. Define your inputs and outputs as a struct, and the library handles prompt formatting and response parsing.
 
 This guide walks you through building your first typed LM pipeline.
-Call `init_tracing()` once at startup in your app examples.
+Call `init_tracing()` once at startup if you want tracing-subscriber logging.
 
 <Steps>
 <Step title="Install DSRs">
@@ -16,16 +16,21 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-dspy-rs = "0.7"
-tokio = { version = "1", features = ["full"] }
+dspy-rs = "0.7.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
+serde_json = "1"
 ```
 
 Or via cargo:
 
 ```bash
-cargo add dspy-rs tokio anyhow
+cargo add dspy-rs
+cargo add tokio --features macros,rt-multi-thread
+cargo add anyhow serde_json
 ```
+
+These guides describe the repository checkout; a published release may not yet include every documented API. To use a local checkout, replace the version dependency with `dspy-rs = { path = "../DSRs/crates/dspy-rs" }`.
 
 DSRs enables the `data` and `cache` Cargo features by default:
 
@@ -65,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 <Note>
-Set `OPENAI_API_KEY` in your environment. For other providers, use the appropriate prefix (e.g., `anthropic:claude-3-haiku`).
+Set `OPENAI_API_KEY` in your environment. Other providers use their `provider:model` prefix and credentials. For native Ollama, use a model string such as `ollama:llama3.2` after downloading and serving that model.
 </Note>
 
 </Step>
@@ -113,48 +118,71 @@ let output = predict.call(QAInput {
 println!("Answer: {}", output.answer);
 ```
 
-The `#[derive(Signature)]` macro generates `QAInput` from your `#[input]` fields. You get back a `QA` struct with both input and output fields filled in - `output.answer` is a typed `String`.
+The `#[derive(Signature)]` macro generates `QAInput` and `QAOutput`. A call returns `Predicted<QAOutput>`: `output.answer` is a typed `String` accessed through `Deref`, and `.metadata()` holds the raw response, usage and field metadata. Use `.into_inner()` to take ownership of the output.
 
 </Step>
 </Steps>
 
 ## Complete example
 
+Save this as `src/main.rs` and run it with `OPENAI_API_KEY` configured. For an offline prompt preview, run `cargo run -- --inspect-only`; it sends no provider request and requires no key.
+
 ```rust
-use dspy_rs::{configure, init_tracing, LM, Predict, Signature};
+use dspy_rs::{LM, Predict, Signature};
 
 /// Answer questions accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
     question: String,
-
     #[output]
     answer: String,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing()?;
-
-    configure(
-        LM::builder()
-            .model("openai:gpt-4o-mini".to_string())
-            .build()
-            .await?,
-    );
-
-    let predict = Predict::<QA>::new();
-
-    let output = predict.call(QAInput {
+    let inspect_only = std::env::args().any(|arg| arg == "--inspect-only");
+    let api_key = if inspect_only {
+        "unused-for-prompt-inspection".to_string()
+    } else {
+        std::env::var("OPENAI_API_KEY")?
+    };
+    let lm = LM::builder()
+        .model("openai:gpt-4o-mini".to_string())
+        .api_key(api_key)
+        .build()
+        .await?;
+    let predict = Predict::<QA>::builder().lm(lm.clone()).build();
+    let input = QAInput {
         question: "What is the capital of France?".into(),
-    }).await?;
+    };
 
-    println!("Answer: {}", output.answer);
+    // Building a chat formats the prompt without sending a provider request.
+    let chat = predict.build_chat(&input).await?;
+    println!("{}", serde_json::to_string_pretty(&chat.to_json())?);
+    if inspect_only {
+        return Ok(());
+    }
 
+    let (prediction, _conversation) = predict.call_and_parse(chat).await?;
+    println!("Answer: {}", prediction.answer);
+    for entry in lm.inspect_history(1).await {
+        println!("Raw output: {:?}", entry.raw_output);
+        println!("Parsed output: {:?}", entry.output);
+    }
     Ok(())
 }
 ```
+
+The same source is maintained as [00-quickstart.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/00-quickstart.rs). From this repository, run `cargo run -p dspy-rs --no-default-features --example 00-quickstart -- --inspect-only`.
+
+`build_chat` formats the prompt without a provider request or history entry. Pass that chat to `call_and_parse` to send exactly what you inspected and receive an updated conversation. The returned prediction contains `QAOutput`, rather than the complete `QA` signature.
+
+History records executed calls, raw responses and parsed outputs independently of response caching. It is bounded and is not persistent storage. See [LM history](/docs/components/lm#inspecting-history) for capacities and module scopes. Avoid logging private prompts or responses in production.
+
+## Predictors and modules
+
+A `Predict<QA>` is already a module with one typed LM task. A `ChainOfThought<QA>` adds a reasoning field. Compose tasks by implementing `Module::forward`, call the pipeline with `Module::call`, and declare optimizer-visible leaves with `predictors!`. See [Modules](/docs/components/modules) for a complete implementation.
 
 ## Next steps
 
@@ -245,6 +273,25 @@ struct Rating {
 Chain [predictors](/docs/components/predict) for complex workflows:
 
 ```rust
+#[derive(Signature, Clone, Debug)]
+/// Summarize the supplied text.
+struct Summarize {
+    #[input]
+    text: String,
+    #[output]
+    summary: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Rate the summary from one to five.
+struct Rate {
+    #[input]
+    summary: String,
+    #[output]
+    #[assert("this >= 1 && this <= 5")]
+    score: i32,
+}
+
 struct SummarizeAndRate {
     summarizer: Predict<Summarize>,
     rater: Predict<Rate>,
@@ -252,7 +299,7 @@ struct SummarizeAndRate {
 
 impl SummarizeAndRate {
     async fn run(&self, text: String) -> anyhow::Result<RateOutput> {
-        let summary = self.summarizer.call(SummarizeInput { text }).await?;
+        let summary = self.summarizer.call(SummarizeInput { text }).await?.into_inner();
         let rating = self.rater.call(RateInput {
             summary: summary.summary,
         }).await?;
