@@ -545,7 +545,10 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self.client.as_ref().ok_or(crate::LmCallError::NotInitialized)?;
+        let client = self
+            .client
+            .as_ref()
+            .ok_or(crate::LmCallError::NotInitialized)?;
 
         let mut attempt = 0u32;
         loop {
@@ -592,21 +595,22 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| ToolLoopError::Execution {
-                                name: tc.function.name.clone(),
-                                context: context.to_owned(),
-                                source: Box::new(err),
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| ToolLoopError::Execution {
+                                    name: tc.function.name.clone(),
+                                    context: context.to_owned(),
+                                    source: Box::new(err),
+                                })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
                         let message = ToolLoopError::UnknownTool {
                             name: tc.function.name.clone(),
-                        }.to_string();
+                        }
+                        .to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -682,7 +686,10 @@ impl LM {
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
         if max_iterations == 0 {
-            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+            return Err(ToolLoopError::IterationLimit {
+                limit: max_iterations,
+            }
+            .into());
         }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
@@ -759,7 +766,10 @@ impl LM {
                 } => {
                     if iteration == max_iterations {
                         warn!(max_iterations, "max tool iterations reached");
-                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+                        return Err(ToolLoopError::IterationLimit {
+                            limit: max_iterations,
+                        }
+                        .into());
                     }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
@@ -786,7 +796,10 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
+        Err(ToolLoopError::IterationLimit {
+            limit: max_iterations,
+        }
+        .into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {

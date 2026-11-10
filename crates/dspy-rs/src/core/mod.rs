@@ -29,12 +29,15 @@ pub mod settings;
 pub mod signature;
 mod state;
 
-pub use errors::{ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError, PredictError};
+pub use errors::{
+    ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
+    PredictError,
+};
 pub use example::{ToInput, ToOutput};
-pub use state::{ModuleState, PredictState};
 pub use lm::*;
 pub use module::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;
+pub use state::{ModuleState, PredictState};
