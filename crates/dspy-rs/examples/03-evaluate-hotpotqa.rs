@@ -10,10 +10,9 @@ cargo run --example 03-evaluate-hotpotqa --features data
 use anyhow::Result;
 use dspy_rs::prelude::*;
 
+/// Concisely answer the question, but be accurate.
 #[derive(Signature, Clone, Debug)]
 struct QA {
-    /// Concisely answer the question, but be accurate.
-
     #[input]
     question: String,
 

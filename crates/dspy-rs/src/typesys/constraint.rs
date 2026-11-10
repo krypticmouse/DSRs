@@ -46,6 +46,7 @@ pub struct Constraint {
 /// strings, and caching them process-wide would reintroduce the leak-per-load
 /// that RFC 0002 IR-1 removed. Failed evaluations (bad expression, wrong type)
 /// return `false`.
+#[tracing::instrument(name = "dsrs.constraint.dynamic", level = "trace", skip_all, ret)]
 pub fn evaluate_expression(expression: &str, value: &Value) -> bool {
     eval_expression(expression, value).unwrap_or(false)
 }
@@ -64,6 +65,7 @@ fn eval_expression(expression: &str, value: &Value) -> Result<bool, minijinja::E
 /// from the derive macro, so the compiled expression is cached by pointer-stable
 /// key. Failed evaluations (bad expression, wrong type) return `false`, matching
 /// [`evaluate_expression`].
+#[tracing::instrument(name = "dsrs.constraint.typed", level = "trace", skip_all, ret)]
 pub fn evaluate_constraint_expression(expression: &'static str, value: &Value) -> bool {
     {
         let cache = COMPILED_EXPRESSIONS

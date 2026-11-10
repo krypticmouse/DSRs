@@ -1,5 +1,4 @@
 use anyhow::Result;
-use enum_dispatch::enum_dispatch;
 use reqwest;
 use rig::{
     OneOrMany,
@@ -10,17 +9,48 @@ use rig::{
 use std::{
     borrow::Cow,
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 use tracing::{debug, trace, warn};
 
-#[enum_dispatch]
-#[allow(async_fn_in_trait)]
-pub trait CompletionProvider {
+pub trait CompletionProvider: Send + Sync {
+    fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> impl std::future::Future<Output = Result<CompletionResponse<()>, CompletionError>> + Send;
+}
+
+trait ErasedCompletionProvider: Send + Sync {
+    fn completion_boxed(
+        &self,
+        request: CompletionRequest,
+    ) -> futures::future::BoxFuture<'_, Result<CompletionResponse<()>, CompletionError>>;
+}
+
+impl<T: CompletionProvider> ErasedCompletionProvider for T {
+    fn completion_boxed(
+        &self,
+        request: CompletionRequest,
+    ) -> futures::future::BoxFuture<'_, Result<CompletionResponse<()>, CompletionError>> {
+        Box::pin(self.completion(request))
+    }
+}
+
+/// A third-party completion provider sharing the normal LM configuration,
+/// retries, tools, caching and history pipeline.
+#[derive(Clone)]
+pub struct CustomCompletionModel(Arc<dyn ErasedCompletionProvider>);
+
+impl CompletionProvider for CustomCompletionModel {
     async fn completion(
         &self,
         request: CompletionRequest,
-    ) -> Result<CompletionResponse<()>, CompletionError>;
+    ) -> Result<CompletionResponse<()>, CompletionError> {
+        self.0.completion_boxed(request).await
+    }
 }
 
 fn to_unit_completion_response<T>(response: CompletionResponse<T>) -> CompletionResponse<()> {
@@ -37,6 +67,7 @@ pub struct TestCompletionModel {
     responses: Arc<Mutex<VecDeque<AssistantContent>>>,
     last_request: Arc<Mutex<Option<CompletionRequest>>>,
     usage: Arc<Mutex<Usage>>,
+    calls: Arc<AtomicUsize>,
 }
 
 impl TestCompletionModel {
@@ -45,6 +76,7 @@ impl TestCompletionModel {
             responses: Arc::new(Mutex::new(responses.into_iter().collect())),
             last_request: Arc::new(Mutex::new(None)),
             usage: Arc::new(Mutex::new(Usage::new())),
+            calls: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -61,6 +93,11 @@ impl TestCompletionModel {
     pub fn set_usage(&self, usage: Usage) {
         *self.usage.lock().unwrap() = usage;
     }
+
+    /// Number of provider requests received by this test model.
+    pub fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
 }
 
 impl CompletionProvider for TestCompletionModel {
@@ -68,6 +105,7 @@ impl CompletionProvider for TestCompletionModel {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
         *self.last_request.lock().unwrap() = Some(request);
         let response = self.responses.lock().unwrap().pop_front().ok_or_else(|| {
             CompletionError::ResponseError("test response queue is empty".to_string())
@@ -81,9 +119,31 @@ impl CompletionProvider for TestCompletionModel {
     }
 }
 
-#[enum_dispatch(CompletionProvider)]
-#[derive(Clone)]
-pub enum LMClient {
+macro_rules! completion_clients {
+    ($($variant:ident($model:ty)),* $(,)?) => {
+        #[derive(Clone)]
+        pub enum LMClient {
+            $($variant($model)),*
+        }
+
+        impl CompletionProvider for LMClient {
+            async fn completion(
+                &self,
+                request: CompletionRequest,
+            ) -> Result<CompletionResponse<()>, CompletionError> {
+                match self {
+                    $(Self::$variant(model) => CompletionProvider::completion(model, request).await),*
+                }
+            }
+        }
+
+        $(impl From<$model> for LMClient {
+            fn from(model: $model) -> Self { Self::$variant(model) }
+        })*
+    };
+}
+
+completion_clients! {
     OpenAI(openai::completion::CompletionModel),
     Gemini(gemini::completion::CompletionModel),
     Anthropic(anthropic::completion::CompletionModel),
@@ -97,6 +157,7 @@ pub enum LMClient {
     Together(together::completion::CompletionModel),
     Deepseek(deepseek::CompletionModel<reqwest::Client>),
     Test(TestCompletionModel),
+    Custom(CustomCompletionModel),
 }
 
 // Implement the trait for each concrete provider type using the CompletionModel trait from rig
@@ -221,6 +282,24 @@ impl CompletionProvider for deepseek::CompletionModel<reqwest::Client> {
 }
 
 impl LMClient {
+    /// Rig's pinned provider adapters that serialize `CompletionRequest.output_schema`.
+    pub fn supports_output_schema(&self) -> bool {
+        matches!(
+            self,
+            LMClient::OpenAI(_) | LMClient::Gemini(_) | LMClient::Anthropic(_)
+        )
+    }
+
+    pub fn supports_json_mode(&self) -> bool {
+        matches!(self, LMClient::OpenAI(_) | LMClient::Gemini(_))
+    }
+
+    /// Injects any implementation of the same trait used by built-in providers.
+    /// Implementations may use `async fn completion`; its future must be `Send`.
+    pub fn custom(provider: impl CompletionProvider + 'static) -> Self {
+        Self::Custom(CustomCompletionModel(Arc::new(provider)))
+    }
+
     #[tracing::instrument(
         name = "dsrs.lm.client.get_api_key",
         level = "trace",
@@ -358,8 +437,8 @@ impl LMClient {
     /// Convert a concrete completion model to LMClient
     ///
     /// This function accepts concrete types that can be converted to LMClient.
-    /// The enum_dispatch macro automatically generates From implementations for
-    /// each variant type, so you can use this with any concrete completion model.
+    /// Every built-in variant has a From implementation. Use `custom` for an
+    /// application provider implementing `CompletionProvider`.
     pub fn from_custom<T: Into<LMClient>>(client: T) -> Self {
         client.into()
     }

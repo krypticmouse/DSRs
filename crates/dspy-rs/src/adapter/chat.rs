@@ -9,13 +9,13 @@ use tracing::{debug, trace};
 
 use crate::ir::{RenderSpec, SignatureDef};
 use crate::trace::JsonMap;
-use crate::typesys::coerce::coerce;
+use crate::typesys::coerce::{coerce, coerce_value};
 use crate::typesys::constraint::evaluate_expression;
 use crate::typesys::render::{schema_block, type_name};
-use crate::typesys::{FieldType, TypeTable};
-use crate::{
-    ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError,
+use crate::typesys::{
+    FieldType, TypeTable, alias_output_fields, canonicalize_output_aliases, json_schema_for_outputs,
 };
+use crate::{ConstraintKind, ConstraintResult, FieldMeta, JsonishError, Message, ParseError};
 
 /// Builds prompts and parses responses using the `[[ ## field ## ]]` delimiter protocol.
 ///
@@ -303,6 +303,38 @@ impl ChatAdapter {
         )
     }
 
+    /// System prompt for a provider-native JSON response.
+    pub fn build_system_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        instruction_override: Option<&str>,
+        schema_mode: bool,
+    ) -> String {
+        let inputs = def_views(&def.inputs);
+        let outputs = def_views(&def.outputs);
+        let mut parts = vec![format_field_descriptions_view(&inputs, &outputs, types)];
+        parts.push("Return one JSON object containing every output field, using the field names shown above. Do not include markdown or text outside the JSON object.".to_string());
+        parts.push(format!(
+            "Effective output format: {}.",
+            if schema_mode {
+                "provider JSON Schema"
+            } else {
+                "provider JSON mode"
+            }
+        ));
+        let schema =
+            serde_json::to_string(&json_schema_for_outputs(def, types)).unwrap_or_default();
+        parts.push(format!("The exact output schema is: {schema}"));
+        parts.push(format_task_description_view(
+            &inputs,
+            &outputs,
+            &def.instruction,
+            instruction_override,
+        ));
+        parts.join("\n\n")
+    }
+
     /// Formats a value-level input from an owned [`SignatureDef`] as a user
     /// message with `[[ ## field ## ]]` delimiters, with no `'static`
     /// requirement anywhere. Appends the response instructions telling the LM
@@ -328,6 +360,21 @@ impl ChatAdapter {
         result
     }
 
+    /// Delimited inputs with a JSON-object response instruction.
+    pub fn format_input_json_def(&self, def: &SignatureDef, input: &JsonMap) -> String {
+        let mut result = String::new();
+        for field in def.inputs.iter() {
+            let Some(value) = input.get(&*field.name) else {
+                continue;
+            };
+            result.push_str(&format!("[[ ## {} ## ]]\n", field.lm_name));
+            result.push_str(&render_input_field_def(def, field, value, input));
+            result.push_str("\n\n");
+        }
+        result.push_str("Return a JSON object with every output field.");
+        result
+    }
+
     /// Formats a value-level output map as an assistant message for few-shot
     /// demos: each output field delimited with `[[ ## field ## ]]` markers,
     /// ending with `[[ ## completed ## ]]`.
@@ -350,6 +397,16 @@ impl ChatAdapter {
         result
     }
 
+    pub fn format_output_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        output: &JsonMap,
+    ) -> String {
+        let value = alias_output_fields(Value::Object(output.clone()), def, types);
+        serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+    }
+
     #[allow(clippy::result_large_err)]
     /// Parses an LM response against an owned [`SignatureDef`] into a value-level
     /// output map, with no `'static` requirement anywhere.
@@ -358,6 +415,8 @@ impl ChatAdapter {
     /// (`FieldDef::name`); `types` resolves class/enum references during
     /// coercion. Constraint expressions are compiled per call (owned strings —
     /// no global cache, no leak).
+    #[tracing::instrument(name = "dsrs.adapter.parse", level = "debug", skip_all,
+        fields(signature = %def.name, fields = def.outputs.len()))]
     pub fn parse_output_def(
         &self,
         def: &SignatureDef,
@@ -404,30 +463,7 @@ impl ChatAdapter {
                 }
             };
 
-            let mut checks = Vec::new();
-            for constraint in field.constraints.iter() {
-                let passed = evaluate_expression(&constraint.expr, &coerced.value);
-                match constraint.kind {
-                    ConstraintKind::Assert => {
-                        if !passed {
-                            debug!(field = %field.name, label = %constraint.label, "value-level assert constraint failed");
-                            errors.push(ParseError::AssertFailed {
-                                field: field.name.to_string(),
-                                label: constraint.label.to_string(),
-                                expression: constraint.expr.to_string(),
-                                value: coerced.value.clone(),
-                            });
-                        }
-                    }
-                    ConstraintKind::Check => {
-                        checks.push(ConstraintResult {
-                            label: constraint.label.to_string(),
-                            expression: constraint.expr.to_string(),
-                            passed,
-                        });
-                    }
-                }
-            }
+            let checks = evaluate_field_constraints(field, &coerced.value, &mut errors);
 
             metas.insert(
                 field.name.to_string(),
@@ -453,6 +489,73 @@ impl ChatAdapter {
         Ok((output, metas))
     }
 
+    /// Parses provider-native JSON output through the same coercion and constraint stage
+    /// as delimiter responses. JSON object keys may use LM-facing aliases.
+    pub fn parse_output_json_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        response: &Message,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.text_content_cow();
+        let parsed: Value =
+            serde_json::from_str(&content).map_err(|err| ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON object".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!(err)),
+            })?;
+        let normalized = canonicalize_output_aliases(parsed, def, types);
+        let Some(values) = normalized.as_object() else {
+            return Err(ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON object".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!("expected JSON object")),
+            });
+        };
+        let mut output = JsonMap::new();
+        let mut metas = IndexMap::new();
+        let mut errors = Vec::new();
+        for field in def.outputs.iter() {
+            let Some(value) = values.get(field.name.as_ref()).cloned() else {
+                errors.push(ParseError::MissingField {
+                    field: field.name.to_string(),
+                    raw_response: content.to_string(),
+                });
+                continue;
+            };
+            let value_text = value.to_string();
+            let coerced = match coerce_value(value, &field.ty, types) {
+                Ok(value) => value,
+                Err(err) => {
+                    errors.push(ParseError::CoercionFailed {
+                        field: field.name.to_string(),
+                        expected_type: type_name(&field.ty, Some(types)),
+                        raw_text: value_text,
+                        source: JsonishError::from(err),
+                    });
+                    continue;
+                }
+            };
+            let checks = evaluate_field_constraints(field, &coerced.value, &mut errors);
+            metas.insert(
+                field.name.to_string(),
+                FieldMeta {
+                    raw_text: value_text,
+                    flags: coerced.flags,
+                    checks,
+                },
+            );
+            output.insert(field.name.to_string(), coerced.value);
+        }
+        if !errors.is_empty() {
+            let partial = (!output.is_empty()).then(|| Value::Object(output));
+            return Err(ParseError::Multiple { errors, partial });
+        }
+        Ok((output, metas))
+    }
+
     /// Splits raw LM response text into named sections by `[[ ## field ## ]]` delimiters.
     ///
     /// Returns an ordered map of field_name → section_content. The `completed` marker
@@ -461,6 +564,35 @@ impl ChatAdapter {
     pub fn parse_sections(content: &str) -> IndexMap<String, String> {
         crate::adapter::chat::parse_sections(content)
     }
+}
+
+fn evaluate_field_constraints(
+    field: &crate::ir::FieldDef,
+    value: &Value,
+    errors: &mut Vec<ParseError>,
+) -> Vec<ConstraintResult> {
+    let mut checks = Vec::new();
+    for constraint in field.constraints.iter() {
+        let passed = evaluate_expression(&constraint.expr, value);
+        match constraint.kind {
+            ConstraintKind::Assert if !passed => {
+                debug!(field = %field.name, label = %constraint.label, "value-level assert constraint failed");
+                errors.push(ParseError::AssertFailed {
+                    field: field.name.to_string(),
+                    label: constraint.label.to_string(),
+                    expression: constraint.expr.to_string(),
+                    value: value.clone(),
+                });
+            }
+            ConstraintKind::Check => checks.push(ConstraintResult {
+                label: constraint.label.to_string(),
+                expression: constraint.expr.to_string(),
+                passed,
+            }),
+            ConstraintKind::Assert => {}
+        }
+    }
+    checks
 }
 
 fn parse_sections(content: &str) -> IndexMap<String, String> {
@@ -598,4 +730,3 @@ fn build_input_context_def(def: &SignatureDef, input: &JsonMap) -> Value {
     }
     Value::Object(root)
 }
-

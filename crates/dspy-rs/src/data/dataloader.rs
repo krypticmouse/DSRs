@@ -124,19 +124,19 @@ impl RowRecord {
 pub enum DataLoadError {
     /// Source read/download failure.
     #[error("I/O error: {0}")]
-    Io(anyhow::Error),
+    Io(#[source] anyhow::Error),
     /// CSV parser failure.
     #[error("CSV error: {0}")]
-    Csv(anyhow::Error),
+    Csv(#[source] anyhow::Error),
     /// JSON/JSONL parser failure.
     #[error("JSON error: {0}")]
-    Json(anyhow::Error),
+    Json(#[source] anyhow::Error),
     /// Parquet parser failure.
     #[error("Parquet error: {0}")]
-    Parquet(anyhow::Error),
+    Parquet(#[source] anyhow::Error),
     /// HuggingFace Hub listing or file retrieval failure.
     #[error("HuggingFace error: {0}")]
-    Hf(anyhow::Error),
+    Hf(#[source] anyhow::Error),
     /// Required row-struct field was missing from a row.
     #[error("missing field `{field}` at row {row}")]
     MissingField { row: usize, field: String },
@@ -151,8 +151,8 @@ pub enum DataLoadError {
         message: String,
     },
     /// Custom mapper closure returned an error.
-    #[error("mapper error at row {row}: {message}")]
-    Mapper { row: usize, message: String },
+    #[error("mapper error at row {row}: {source}")]
+    Mapper { row: usize, #[source] source: anyhow::Error },
 }
 
 /// Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources.
@@ -484,7 +484,7 @@ impl DataLoader {
             .map(|row| {
                 mapper(&row).map_err(|err| DataLoadError::Mapper {
                     row: row.row_index,
-                    message: err.to_string(),
+                    source: err,
                 })
             })
             .map(|result| result.map_err(anyhow::Error::from))

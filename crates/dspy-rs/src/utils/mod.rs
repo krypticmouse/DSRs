@@ -13,5 +13,5 @@ pub mod hash;
 pub mod telemetry;
 
 #[cfg(feature = "cache")]
-pub use cache::{CacheEntry, CacheKey, ResponseCache};
+pub use cache::{CacheEntry, CacheError, CacheKey, ResponseCache};
 pub use telemetry::{TelemetryInitError, init_tracing, truncate};

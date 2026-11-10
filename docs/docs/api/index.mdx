@@ -46,7 +46,26 @@ Lower-level types use their public module paths:
 
 The defining modules remain public. Response-cache types still require the `cache` feature. These changes intentionally remove automatic root exports, including generated builders and implementation-module aliases.
 
-## Regenerating
+## Legacy typed-API migration
+
+The former BAML/schemars surface is replaced by the current typed API:
+
+| Former API | Current API |
+|---|---|
+| `BamlType` / `BamlSchema` | `#[Schema]`, which supplies Facet and serde support for nested user types |
+| Untyped `Example` / `Prediction` / `MetaSignature` | Generated `SInput`/`SOutput`, `Predicted<SOutput>`, typed dataset rows and `Demo<S>` |
+| `field!` | `ir::FieldDef` and the validated `ir::SignatureDef::build` for runtime-owned definitions |
+| `sign!` | `#[derive(Signature)]` plus `Predict<S>`, or typed `#[predict]` steps in a module |
+| `hashmap!` | `HashMap::from` |
+
+Generated signature inputs/outputs and `#[Schema]` types serialize and deserialize
+without adding serde derives manually. Typed augmentations add fields through
+new output types; for example, `ChainOfThought<S>` adds reasoning while preserving
+the base signature. Runtime-loaded programs keep owned definitions rather than
+reviving the removed untyped predictor interface. Dataset `#[derive(Example)]`
+is a row-projection macro, not the former untyped map container.
+
+## Regenerating API pages
 
 The pages are rebuilt from the working tree, not fetched from a registry, so they track your branch. From the repository root:
 

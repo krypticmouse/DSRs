@@ -122,6 +122,34 @@ Each `FieldMeta` records `raw_text` (the text the LM produced for that field), `
 
 `PredictError::class()` buckets into `ErrorClass` (`BadRequest`, `Temporary`, `BadResponse`, `Internal`); `is_retryable()` drives retry logic. `Parse` errors include the raw response and the token usage: failed parses still consume tokens.
 
+## Debugging example output formats
+
+Task instructions belong on the signature struct, before `struct QA`; a doc
+comment inside the braces documents the following field. Use `build_chat` to
+inspect the exact prompt without sending a provider request:
+
+```rust
+let chat = predictor.build_chat(&input).await?;
+println!("{}", serde_json::to_string_pretty(&chat.to_json())?);
+let output = predictor.call_and_parse(chat).await?;
+```
+
+The system message contains the task instruction and requested output format.
+Delimiter mode requests `[[ ## field ## ]]` sections and a completion marker.
+For compatible providers, `lm.with_custom_output_schema(true)` requests native
+JSON schema output; providers without schema support retain delimiter parsing.
+If parsing fails, inspect `PredictError::Parse { raw_response, .. }` to see the
+original response. A prompt instruction cannot guarantee that every model will
+follow a format.
+
+The offline `test_example_protocols` matrix compiles the real examples and
+checks both protocols through a local HTTP server. Its ignored
+`live_ollama_example_matrix` runs those signatures and the composed/batch
+workflows against a local llama3.2 model. The
+`19-ollama-structured-output` example also supports `--inspect-only` for prompt
+inspection before a live request. Dataset downloads and complete optimizer
+searches are separate from these output-format checks.
+
 ## `ToolSet`
 
 `ToolSet` is pre-fetched tool definitions plus name-indexed executors, built once and reused across calls.
