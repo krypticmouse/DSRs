@@ -68,6 +68,16 @@ Build the committed clean Rust source with Rust 1.98.1 using
 `cargo +1.98.1 build -p dspy-rs --release --no-default-features --features cache --locked --example bench-target-22 -j1`.
 Use a Python 3.12 environment with DSPy 3.2.1 and retain all resolved packages.
 Point `OLLAMA_BASE_URL` at the same local Ollama/llama3.2 server for both programs.
-The runner takes `--rust EXE --baseline BASELINE_EXE --baseline-record MANIFEST
+The runner takes `--rust EXE --candidate-record CANDIDATE_BUILD --baseline BASELINE_EXE --baseline-record MANIFEST
 --python PYTHON --base-url URL --ollama-log WSL_PATH
 --out OUTSIDE_CHECKOUT`. Run without concurrent builds or model requests.
+
+`--modes cached offline` can collect independent mode groups after a completed
+live group. Each mode still needs all eight samples from all three programs.
+The controller waits for compiler-idle windows and retains attempts rejected
+for Cargo/rustc activity at either sample boundary, retrying the same position
+in the fixed order. This exclusion is independent of measured speed; all valid
+slow samples remain included. Correctness failures are never retried. Partial
+groups cannot supply a ratio. Progress is saved after every attempt, and build
+revisions are recorded separately from the controller revision. The default
+total deadline for waiting/retrying compiler interference is 30 minutes.
