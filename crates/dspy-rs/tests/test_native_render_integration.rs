@@ -165,6 +165,7 @@ fn native_json_enforces_nested_assertions_and_retains_nested_soft_checks() {
         },
     );
     let def = SignatureDef::build("Scored")
+        .input("question", FieldType::String)
         .output("score", FieldType::Class("Score".into()))
         .finish()
         .unwrap();
