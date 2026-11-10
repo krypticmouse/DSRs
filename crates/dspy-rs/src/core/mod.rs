@@ -41,8 +41,9 @@ pub use history::{
     set_history_capacity,
 };
 pub use lm::{
-    Chat, ContentBlock, LM, LMClient, LMConfig, LMResponse, LmUsage, Message, Role,
-    TestCompletionModel, ToolLoopMode, ToolSet,
+    Chat, CompletionProvider, ContentBlock, CustomCompletionModel, LM, LMCallOptions, LMClient,
+    LMConfig, LMResponse, LmUsage, Message, Role, TestCompletionModel, ToolLoopError, ToolLoopMode,
+    ToolSet,
 };
 pub use module::{HistoryModule, Module, PredictorInfo, Predictors, WithLM, forward_all};
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
