@@ -2,9 +2,9 @@ pub mod chat;
 pub mod client_registry;
 pub mod usage;
 
-pub use chat::*;
-pub use client_registry::*;
-pub use usage::*;
+pub use chat::{Chat, ContentBlock, Message, Role};
+pub use client_registry::{CompletionProvider, LMClient, TestCompletionModel};
+pub use usage::LmUsage;
 
 use anyhow::Result;
 use rig::{

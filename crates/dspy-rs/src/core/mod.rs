@@ -36,10 +36,13 @@ pub use history::{
     HistoryBuffer, HistoryEntry, HistoryRecord, clear_history, inspect_history,
     set_history_capacity,
 };
-pub use lm::*;
-pub use module::*;
+pub use lm::{
+    Chat, ContentBlock, LM, LMClient, LMConfig, LMResponse, LmUsage, Message, Role,
+    TestCompletionModel, ToolLoopMode, ToolSet,
+};
+pub use module::{HistoryModule, Module, PredictorInfo, Predictors, WithLM, forward_all};
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
-pub use settings::*;
-pub use signature::*;
+pub use settings::{Settings, configure, get_lm, try_get_lm, with_lm};
+pub use signature::{ConstraintKind, ConstraintSpec, Signature};
 pub use state::{ModuleState, PredictState};

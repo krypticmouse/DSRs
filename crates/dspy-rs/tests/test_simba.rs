@@ -3,9 +3,10 @@
 //! reflection LM canned through its own TestCompletionModel.
 
 use anyhow::Result;
+use dspy_rs::optimizer::simba::SimbaMove;
 use dspy_rs::{
     Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA,
-    Signature, SimbaMove, TestCompletionModel, TypedMetric,
+    Signature, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;

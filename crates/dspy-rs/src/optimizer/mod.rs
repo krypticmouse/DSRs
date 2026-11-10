@@ -52,13 +52,17 @@ pub mod simba;
 pub mod structural;
 pub mod target;
 
-pub use bootstrap::*;
-pub use copro::*;
-pub use engine::*;
-pub use gepa::*;
-pub use mipro::*;
-pub use simba::*;
-pub use structural::*;
+pub use bootstrap::{BootstrapFewShot, BootstrapReport};
+pub use copro::COPRO;
+pub use engine::{
+    BatchEvalOutcome, Budget, Candidate, CandidateEval, CandidateSlot, Engine, EngineConfig,
+    EvalOutcome, GateOutcome, ParetoStatistics, ParetoView, RolloutCache, RolloutOutcome,
+    ScoreMatrix, Spend,
+};
+pub use gepa::{GEPA, GEPACandidate, GEPAResult};
+pub use mipro::{MIPROv2, PromptingTips};
+pub use simba::{SIMBA, SimbaMove, SimbaReport, SimbaStep};
+pub use structural::{Structural, StructuralReport, StructuralStep};
 pub use target::{LeafInfo, OptimizeTarget, ProgramMetric};
 
 use anyhow::Result;

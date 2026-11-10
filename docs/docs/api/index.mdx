@@ -25,6 +25,27 @@ The shared .dsrs lexer and structural grammar both frontends read from
 
 For explanations and usage, the [component pages](/docs/components/signatures) are the right place; this tab answers "what exists and where does it live."
 
+## Public imports and migration
+
+Use `dspy_rs::prelude::*` or explicit root imports for the common signature, LM, module, evaluation, optimizer and trace APIs. The root and module facades use named re-exports, so adding a helper to an implementation module does not expand the root API.
+
+Lower-level types use their public module paths:
+
+| Previous root import | Explicit path |
+|---|---|
+| `RolloutCache`, `ScoreMatrix`, `CandidateSlot`, `CandidateEval`, `EvalOutcome`, `BatchEvalOutcome`, `GateOutcome`, `ParetoView`, `ParetoStatistics`, `Spend` | `dspy_rs::optimizer::engine` |
+| `PromptingTips` | `dspy_rs::optimizer::mipro::PromptingTips` |
+| `SimbaMove`, `SimbaStep` | `dspy_rs::optimizer::simba` |
+| `StructuralStep` | `dspy_rs::optimizer::structural::StructuralStep` |
+| `PredictBuilder` | `dspy_rs::predictors::predict::PredictBuilder` |
+| `LMConfigBuilder` and generated builder state modules | Their defining module, such as `dspy_rs::core::lm` |
+| `CompletionProvider` | `dspy_rs::core::lm::CompletionProvider` |
+| `GLOBAL_SETTINGS` | `dspy_rs::core::settings::GLOBAL_SETTINGS`; prefer `configure`, `get_lm` and scoped `with_lm` |
+| `DEFAULT_EVAL_CONCURRENCY`, `Rollout` | `dspy_rs::evaluate` |
+| `is_url` | `dspy_rs::data::utils::is_url` |
+
+The defining modules remain public. Response-cache types still require the `cache` feature. These changes intentionally remove automatic root exports, including generated builders and implementation-module aliases.
+
 ## Regenerating
 
 The pages are rebuilt from the working tree, not fetched from a registry, so they track your branch. From the repository root:

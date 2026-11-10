@@ -25,8 +25,16 @@
 //!
 //! # Quick start
 //!
-//! The recommended import is [`prelude`] — the curated core surface. (The
-//! crate root also glob re-exports everything for backwards compatibility.)
+//! The recommended import is [`prelude`]. The crate root exports a named core
+//! surface; lower-level APIs remain available through their public modules.
+//!
+//! Optimizer engine internals use their module path:
+//! ```
+//! use dspy_rs::optimizer::engine::{RolloutCache, ScoreMatrix};
+//! ```
+//! ```compile_fail
+//! use dspy_rs::RolloutCache;
+//! ```
 //!
 //! ```no_run
 //! use dspy_rs::prelude::*;
@@ -109,15 +117,31 @@ pub mod predictors;
 pub mod trace;
 pub mod utils;
 
-pub use adapter::chat::*;
-pub use augmentation::*;
-pub use core::*;
-pub use data::dataloader::*;
-pub use data::utils::*;
-pub use evaluate::*;
-pub use modules::*;
-pub use optimizer::*;
-pub use predictors::*;
+pub use adapter::chat::ChatAdapter;
+pub use augmentation::{Augmentation, Augmented, AugmentedOutput};
+pub use core::{
+    CallMetadata, Chat, ConstraintKind, ConstraintResult, ConstraintSpec, ContentBlock,
+    ConversionError, ErrorClass, FieldMeta, FieldMetadataSpec, FieldPath, FieldSchema,
+    HistoryBuffer, HistoryEntry, HistoryModule, HistoryRecord, InputRenderSpec, JsonishError, LM,
+    LMClient, LMConfig, LMResponse, LmError, LmUsage, Message, Module, ModuleState, ParseError,
+    PredictError, PredictState, Predicted, PredictorInfo, Predictors, Role, Settings, Signature,
+    SignatureSchema, TestCompletionModel, ToInput, ToOutput, ToolLoopMode, ToolSet, WithLM,
+    clear_history, configure, forward_all, get_lm, inspect_history, set_history_capacity,
+    try_get_lm, with_lm,
+};
+pub use data::dataloader::{
+    DataLoadError, DataLoader, RowRecord, TypedLoadOptions, UnknownFieldPolicy,
+};
+pub use evaluate::{
+    TypedMetric, average_score, evaluate_trainset, evaluate_trainset_with_concurrency,
+};
+pub use modules::{ChainOfThought, ChainOfThoughtOutput, Reasoning, WithReasoning};
+pub use optimizer::{
+    BootstrapFewShot, BootstrapReport, Budget, COPRO, Candidate, Engine, EngineConfig, GEPA,
+    GEPACandidate, GEPAResult, LeafInfo, MIPROv2, OptimizeTarget, Optimizer, OptimizerCommon,
+    ProgramMetric, Report, SIMBA, SimbaReport, Structural, StructuralReport,
+};
+pub use predictors::{AgentLoopSpec, Demo, Predict};
 // The unified trace format (RFC 0001).
 pub use trace::{
     CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, ReplayError, ReplayMode,
@@ -125,14 +149,18 @@ pub use trace::{
     SpanRequest, Trace, TraceMeta, TraceOutcome, begin_span, capture, capture_with_meta,
     is_capturing, is_replaying, replay,
 };
-pub use utils::*;
+#[cfg(feature = "cache")]
+pub use utils::{CacheEntry, CacheKey, ResponseCache};
+pub use utils::{TelemetryInitError, init_tracing, truncate};
 
 // Code Mode (vision report §5.5): tools as a sandboxed JS API. See
 // `ToolSet::code_mode` for the module lane and `RuntimeEnv` for the IR lane.
 pub use dsrs_tools::{Capability, CodeModeTool, RUN_JS_TOOL_NAME, SandboxConfig};
 
 pub mod typesys;
-pub use dsrs_macros::*;
+pub use dsrs_macros::{
+    Augmentation, Example, Schema, Signature, agent, cot, include_program, module, predict, tool,
+};
 pub use facet::{Facet, Shape};
 pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Schema};
 
@@ -145,8 +173,8 @@ pub use typesys::{Constraint, ConstraintLevel, FieldType, Flag, OutputSchema, Sc
 /// Covers the basic path end to end: declare a [`Signature`], pick a module
 /// ([`Predict`], [`ChainOfThought`]), [`configure`] an [`LM`], load data,
 /// evaluate with a [`TypedMetric`], optimize with any [`Optimizer`], and
-/// capture/replay traces. The crate root's glob re-exports remain for the
-/// long tail (adapters, schema internals, fx, the full [`ir`] surface).
+/// capture/replay traces. Lower-level adapters, optimizer engine internals,
+/// and the full [`ir`] surface use their public module paths.
 pub mod prelude {
     // Signatures: the trait and the derive share a name across namespaces.
     pub use crate::core::signature::Signature;
