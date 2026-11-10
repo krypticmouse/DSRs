@@ -504,7 +504,7 @@ impl<S: Signature> Predict<S> {
             return Ok(Arc::clone(interpreter));
         }
         let env = self.runtime_env(lm);
-        let interpreter = Interpreter::load((**program).clone(), env)
+        let interpreter = Interpreter::load_shared(Arc::clone(program), env)
             .await
             .map_err(|err| internal_error(format!("failed to load predict program: {err}")))?;
         let interpreter = Arc::new(interpreter);

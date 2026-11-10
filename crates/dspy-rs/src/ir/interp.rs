@@ -15,7 +15,7 @@
 //!   one span whose model is the reserved `sandbox:quickjs` config.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -28,7 +28,7 @@ use crate::adapter::chat::ChatAdapter;
 use crate::core::FieldMeta;
 use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
-    PortRef, PredictNode, Program, ToolId, ToolKind,
+    PortRef, PredictNode, Program, SigId, ToolId, ToolKind,
 };
 use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
@@ -472,6 +472,9 @@ pub type HostHoleFn =
 /// registered sandbox code. Cheap to share; run state never lives here.
 pub struct Interpreter {
     program: Arc<Program>,
+    /// One last-used instruction/system pair per signature. Dynamic candidates
+    /// replace entries rather than growing an unbounded process-wide cache.
+    system_prompts: RwLock<HashMap<SigId, (String, String)>>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -503,6 +506,13 @@ impl Interpreter {
     ///    lifecycle (parse → compile → register). A hole that doesn't compile
     ///    fails the LOAD, not the call.
     pub async fn load(program: Program, env: RuntimeEnv) -> Result<Self, LoadError> {
+        Self::load_shared(Arc::new(program), env).await
+    }
+
+    /// Loads independent runtime bindings over an existing immutable program.
+    /// Every validation and capability check is identical to `load`; only the
+    /// graph allocation is shared. Per-run state remains local to each call.
+    pub async fn load_shared(program: Arc<Program>, env: RuntimeEnv) -> Result<Self, LoadError> {
         program.validate()?;
 
         if !program.caps.is_subset(&env.grants) {
@@ -617,7 +627,8 @@ impl Interpreter {
         }
 
         Ok(Self {
-            program: Arc::new(program),
+            program,
+            system_prompts: RwLock::new(HashMap::new()),
             models,
             tool_exec,
             host_holes,
@@ -629,6 +640,19 @@ impl Interpreter {
 
     pub fn program(&self) -> &Arc<Program> {
         &self.program
+    }
+
+    fn system_prompt(&self, sig: SigId, instruction: &str) -> String {
+        if let Some((cached_instruction, prompt)) = self.system_prompts.read()
+            .expect("system prompt cache poisoned").get(&sig)
+            && cached_instruction == instruction
+        {
+            return prompt.clone();
+        }
+        let prompt = ChatAdapter.build_system_def(&self.program.sigs[sig], &self.program.types, Some(instruction));
+        self.system_prompts.write().expect("system prompt cache poisoned")
+            .insert(sig, (instruction.to_owned(), prompt.clone()));
+        prompt
     }
 
     /// Evaluates the program on `input`, reading parameters through `overlay`
@@ -1311,7 +1335,7 @@ impl Interpreter {
             Node::Predict(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
-                render_prompt(&p.sigs[n.sig], &p.types, &instruction, &demos, input, None)
+                render_prompt(&p.sigs[n.sig], self.system_prompt(n.sig, &instruction), &demos, input, None)
             }
             Node::AgentLoop(n) => {
                 let instruction = self.p_text(cx, n.instruction);
@@ -1319,8 +1343,7 @@ impl Interpreter {
                 let policy = self.p_context(cx, n.context_policy);
                 render_prompt(
                     &p.sigs[n.sig],
-                    &p.types,
-                    &instruction,
+                    self.system_prompt(n.sig, &instruction),
                     &demos,
                     input,
                     policy.playbook.as_deref(),
@@ -1609,7 +1632,7 @@ impl Interpreter {
 
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
-        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None)
+        let (prefix, mut suffix) = render_prompt(def, self.system_prompt(n.sig, &instruction), &demos, &input, None)
             .map_err(|err| RunError::Input {
                 at: at.clone().into(),
                 message: format!("{err:#}"),
@@ -1974,8 +1997,7 @@ impl Interpreter {
         let policy = self.p_context(cx, n.context_policy);
         let (prefix, mut suffix) = render_prompt(
             def,
-            &p.types,
-            &instruction,
+            self.system_prompt(n.sig, &instruction),
             &demos,
             &input,
             policy.playbook.as_deref(),
@@ -2827,14 +2849,12 @@ async fn lm_call_toolset(
 /// arrive overlay-resolved.
 fn render_prompt(
     def: &SignatureDef,
-    types: &TypeTable,
-    instruction: &str,
+    mut system: String,
     demos: &[DemoRow],
     input: &JsonMap,
     playbook: Option<&str>,
 ) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     let adapter = ChatAdapter;
-    let mut system = adapter.build_system_def(def, types, Some(instruction));
     if let Some(playbook) = playbook {
         system.push_str("\n\n");
         system.push_str(playbook);
