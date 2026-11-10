@@ -47,6 +47,23 @@ pub enum ToolLoopMode {
     CallerManaged,
 }
 
+/// Failures of the automatic tool loop. Missing tools are sent back to the
+/// model as recoverable feedback; limit and execution failures stop the call.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolLoopError {
+    #[error("Max tool iterations reached (limit {limit})")]
+    IterationLimit { limit: usize },
+    #[error("Tool '{name}' not found")]
+    UnknownTool { name: String },
+    #[error("tool `{name}` execution failed ({context}): {source}")]
+    Execution {
+        name: String,
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 /// Pre-fetched tool definitions plus name-indexed executors.
 ///
 /// Fetching a rig `ToolDyn` definition costs a boxed-future allocation and a
@@ -134,6 +151,11 @@ pub struct LMConfig {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
+    /// Maximum tool-execution rounds in the automatic LM loop, including the
+    /// initial round. Parallel tool calls in one response count as one round.
+    /// A final completion is allowed after the last round; further tool requests
+    /// fail before execution. `0` disables automatic tool execution.
+    /// Caller-managed loops and IR agent limits are controlled separately.
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
     /// Additional attempts after a transient failure (429/5xx/network/timeout).
@@ -570,22 +592,21 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result =
-                            tool.call(tc.function.arguments.to_string())
-                                .await
-                                .map_err(|err| {
-                                    anyhow::anyhow!(
-                                        "tool `{}` execution failed ({}): {:?}",
-                                        tc.function.name,
-                                        context,
-                                        err
-                                    )
-                                })?;
+                        let result = tool
+                            .call(tc.function.arguments.to_string())
+                            .await
+                            .map_err(|err| ToolLoopError::Execution {
+                                name: tc.function.name.clone(),
+                                context: context.to_owned(),
+                                source: Box::new(err),
+                            })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        let message = format!("Tool '{}' not found", tc.function.name);
+                        let message = ToolLoopError::UnknownTool {
+                            name: tc.function.name.clone(),
+                        }.to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -660,6 +681,9 @@ impl LM {
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
+        if max_iterations == 0 {
+            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+        }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
         let mut events = vec![SpanEvent::Exchange {
@@ -686,7 +710,7 @@ impl LM {
         Self::push_tool_results(&mut chat_history, &results);
 
         // Now loop until we get a text response
-        for iteration in 1..max_iterations {
+        for iteration in 1..=max_iterations {
             let response = self
                 .completion_with_retry(|| {
                     self.build_completion_request(
@@ -733,6 +757,10 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    if iteration == max_iterations {
+                        warn!(max_iterations, "max tool iterations reached");
+                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+                    }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
                         usage: round_usage,
@@ -758,7 +786,7 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(anyhow::anyhow!("Max tool iterations reached"))
+        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
