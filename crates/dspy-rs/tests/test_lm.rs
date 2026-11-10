@@ -1,4 +1,4 @@
-use dspy_rs::{LM, LMConfig, LmUsage};
+use dspy_rs::{Chat, LM, LMClient, LMConfig, LmUsage, Message, TestCompletionModel};
 use rstest::*;
 
 #[tokio::test]
@@ -142,6 +142,99 @@ async fn test_lm_with_cache_disabled() {
     #[cfg(feature = "cache")]
     assert!(lm.cache_handler.is_none());
     assert!(lm.inspect_history(1).await.is_empty());
+}
+
+#[rstest]
+#[case::default(None)]
+#[case::disabled(Some(false))]
+#[cfg_attr(feature = "cache", case::enabled(Some(true)))]
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn inspect_history_after_completion(#[case] cache: Option<bool>) {
+    let mut config = LMConfig {
+        base_url: Some("http://localhost:11434/v1".to_string()),
+        model: "llama3.2".to_string(),
+        ..Default::default()
+    };
+    if let Some(cache) = cache {
+        config.cache = cache;
+    }
+    let client = TestCompletionModel::new([rig::completion::AssistantContent::text("Paris")]);
+    let lm = LM::from_config(config)
+        .await
+        .unwrap()
+        .with_client(LMClient::Test(client))
+        .await
+        .unwrap();
+
+    #[cfg(feature = "cache")]
+    assert_eq!(lm.cache_handler.is_some(), cache == Some(true));
+    assert!(lm.inspect_history(1).await.is_empty());
+    let chat = Chat::new(vec![Message::user("What is the capital of France?")]);
+    let prompt = chat.to_json().to_string();
+    let response = lm.call(chat, vec![]).await.unwrap();
+    assert_eq!(response.output.content(), "Paris");
+
+    assert!(lm.inspect_history(0).await.is_empty());
+    let history = lm.inspect_history(10).await;
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].prompt, prompt);
+    assert_eq!(history[0].raw_output.as_deref(), Some("Paris"));
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
+async fn replacing_client_isolates_cached_responses_and_history() {
+    use rig::completion::AssistantContent;
+
+    let original_client = TestCompletionModel::new([AssistantContent::text("old backend")]);
+    let original = LM::builder()
+        .base_url("http://localhost:11434/v1".to_string())
+        .model("llama3.2".to_string())
+        .cache(true)
+        .build()
+        .await
+        .unwrap()
+        .with_client(LMClient::Test(original_client))
+        .await
+        .unwrap();
+    let chat = Chat::new(vec![Message::user("hello")]);
+    let first = original.call(chat.clone(), vec![]).await.unwrap();
+    assert_eq!(first.output.content(), "old backend");
+
+    let replacement_client = TestCompletionModel::new([AssistantContent::text("new backend")]);
+    let replacement = original
+        .clone()
+        .with_client(LMClient::Test(replacement_client.clone()))
+        .await
+        .unwrap();
+    assert!(replacement.inspect_history(1).await.is_empty());
+
+    let fresh = replacement.call(chat.clone(), vec![]).await.unwrap();
+    assert_eq!(fresh.output.content(), "new backend");
+    assert!(replacement_client.last_request().is_some());
+
+    // Each client had only one response: both repeat calls must hit their own cache.
+    let original_hit = original.call(chat.clone(), vec![]).await.unwrap();
+    let replacement_hit = replacement.call(chat, vec![]).await.unwrap();
+    assert_eq!(original_hit.output.content(), "old backend");
+    assert_eq!(replacement_hit.output.content(), "new backend");
+
+    let original_history = original.inspect_history(10).await;
+    let replacement_history = replacement.inspect_history(10).await;
+    assert_eq!(original_history.len(), 2);
+    assert_eq!(replacement_history.len(), 2);
+    assert!(original_history[0].cache_hit);
+    assert!(replacement_history[0].cache_hit);
+    assert_eq!(
+        original_history[0].raw_output.as_deref(),
+        Some("old backend")
+    );
+    assert_eq!(
+        replacement_history[0].raw_output.as_deref(),
+        Some("new backend")
+    );
 }
 
 #[tokio::test]
