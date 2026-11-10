@@ -58,7 +58,7 @@ pub(crate) const SCORE_EPS: f64 = 1e-6;
 /// A failed optimizer rollout, with stable candidate/example context and its
 /// original typed error preserved in the source chain.
 #[derive(Debug, thiserror::Error)]
-#[error("optimizer candidate {candidate}, example {example} failed")]
+#[error("optimizer candidate {candidate}, example {example} failed: {source}")]
 pub struct RolloutError {
     pub candidate: usize,
     pub example: usize,
