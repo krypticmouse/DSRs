@@ -175,6 +175,10 @@ pub enum ParseError {
         value: serde_json::Value,
     },
 
+    /// Parsed output was rejected by an application validator or required soft check.
+    #[error("output validation failed: {feedback}")]
+    ValidationFailed { feedback: String },
+
     /// Multiple fields failed to parse. Contains all individual errors.
     #[error("{} field(s) failed to parse", errors.len())]
     Multiple {
@@ -191,7 +195,7 @@ impl ParseError {
             Self::ExtractionFailed { field, .. } => Some(field),
             Self::CoercionFailed { field, .. } => Some(field),
             Self::AssertFailed { field, .. } => Some(field),
-            Self::Multiple { .. } => None,
+            Self::Multiple { .. } | Self::ValidationFailed { .. } => None,
         }
     }
 

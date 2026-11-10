@@ -142,6 +142,34 @@ let predict = Predict::<QA>::builder()
 
 A `ToolSet::code_mode(...)` set drops into `LM::call_with_toolset` directly. See [Code Mode](/docs/components/code-mode).
 
+## Validation with feedback
+
+Use `predictor.validated()` to add Rust validation callbacks to the typed prediction pipeline. A callback receives the typed input and complete typed output, so it can validate a field, a relationship between fields, or a rule that depends on the input. Return `Err(String)` with a corrective instruction when the output is invalid.
+
+```rust
+use dspy_rs::Module;
+use std::num::NonZeroU32;
+
+let validated = predictor.validated()
+    .max_attempts(NonZeroU32::new(3).unwrap())
+    .validator(|input, output| {
+        if output.answer.trim().is_empty() {
+            Err("Give a nonempty answer to the question.".into())
+        } else {
+            Ok(())
+        }
+    });
+let result = validated.call(input).await?;
+```
+
+The limit includes the first attempt and defaults to one. Every rejected response is followed by a user message explaining the failures; the original input, prior response and required output format stay in the conversation. Parse failures and hard assertions also supply corrective feedback. Provider, configuration, conversion and strict-replay errors return immediately rather than entering this validation loop. Transport retries remain the LM's responsibility.
+
+Soft `#[check]` failures remain informational by default. Enable `.retry_failed_checks(true)` to require them to pass; exhaustion returns `PredictError::Parse` with `ParseError::ValidationFailed`. Custom validator failures use the same structured error and retain the last raw response. Successful results and exhausted parse/validation errors account for the token usage reported by all attempts; a cache hit contributes zero newly consumed tokens.
+
+Callbacks run after the predictor has parsed each response. History and trace spans record those underlying predictor calls; custom validation does not rewrite a successful parser span. The returned raw response, field metadata and span ID describe the final accepted attempt. Validators are host-owned code and are not serialized with optimized instructions/demos. Optimizer leaf discovery and scoped/explicit LM overrides still delegate to the wrapped predictor, available as `.predictor`.
+
+Multiple attempts are rejected before execution when the predictor has attached native tools. This prevents a validation retry from repeating tool side effects. A single attempt can still validate the final typed output; agent-loop repair uses its own explicit policy. A typed output describing tool calls can be checked by ordinary validators without attaching executable tools.
+
 ## See also
 
 - [Signatures](/docs/components/signatures)

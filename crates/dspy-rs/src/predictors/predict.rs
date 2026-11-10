@@ -181,6 +181,15 @@ impl<S: Signature> Predict<S> {
         PredictBuilder::new()
     }
 
+    /// Adds application validation and bounded corrective conversations.
+    pub fn validated(self) -> crate::modules::ValidatedPredict<S> {
+        crate::modules::ValidatedPredict::new(self)
+    }
+
+    pub(crate) fn has_tools(&self) -> bool {
+        !self.tools.is_empty()
+    }
+
     /// The typed write path for optimizable state (instruction override + demos).
     ///
     /// This is the only place that assigns those fields and invalidates the
@@ -1157,6 +1166,7 @@ fn translate_parse_error<S: Signature>(err: ParseError) -> ParseError {
             errors: errors.into_iter().map(translate_parse_error::<S>).collect(),
             partial,
         },
+        other @ ParseError::ValidationFailed { .. } => other,
     }
 }
 
