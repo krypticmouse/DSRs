@@ -237,7 +237,7 @@ async fn test_cache_preserves_usage_and_history() {
     assert_eq!(cached.usage.completion_tokens, 30);
     assert_eq!(cached.usage.total_tokens, 80);
 
-    // Insertions land in the sliding history window, newest first.
+    // Storage bookkeeping must not become execution history.
     let later = CacheEntry {
         prompt: "second prompt".to_string(),
         usage: LmUsage::default(),
@@ -245,8 +245,6 @@ async fn test_cache_preserves_usage_and_history() {
     };
     cache.insert_entry(43, later.clone());
 
-    let history = cache.get_history(2);
-    assert_eq!(history.len(), 2);
-    assert_eq!(history[0].prompt, later.prompt);
-    assert_eq!(history[1].prompt, entry.prompt);
+    // Cache insertion alone is not an LM invocation.
+    assert!(lm.inspect_history(2).await.is_empty());
 }

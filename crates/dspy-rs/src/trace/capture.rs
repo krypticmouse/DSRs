@@ -29,7 +29,7 @@ pub(crate) fn now_us() -> u64 {
         .unwrap_or(0)
 }
 
-fn mint_trace_id() -> String {
+pub(crate) fn mint_trace_id() -> String {
     use rand::Rng;
     let random: u64 = rand::thread_rng().r#gen();
     format!("{:016x}{:016x}", now_us(), random)

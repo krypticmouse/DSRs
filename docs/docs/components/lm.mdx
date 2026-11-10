@@ -152,10 +152,33 @@ let history = lm.inspect_history(3).await;
 for entry in history {
     println!("Prompt: {}", entry.prompt);
     println!("Raw output: {:?}", entry.raw_output);
+    println!("Parsed output: {:?}", entry.output);
+    println!("Error: {:?}", entry.error);
 }
 ```
 
-> `inspect_history` requires caching to be enabled (`.cache(true)`); it panics on an LM built without caching. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
+History is independent of response caching. Each logical LM invocation records a `HistoryEntry`, including cache hits, calls with tools, provider failures, and cancelled calls. The interpreter attaches parsed output or a parse error to that same record after the LM returns. Direct `LM::call` calls have no signature parser, so their `output` stays `None`.
+
+LMs and predictors retain the 100 most recently completed calls by default, newest first. Use `lm.history.set_capacity(n)`, `predictor.set_history_capacity(n)`, or `dspy_rs::set_history_capacity(n)` to configure their independent limits. Zero disables retention in that store. Clear stores with `lm.history.clear()`, `predictor.clear_history()`, or `dspy_rs::clear_history()`. LM clones share their history; constructing an LM or replacing its client starts a new store.
+
+```rust
+let global = dspy_rs::inspect_history(3);
+let predictor_calls = predictor.inspect_history(3).await;
+
+// Collect a parent module's calls while retaining optimizer leaf discovery.
+use dspy_rs::Module;
+let tracked = module.with_history("pipeline", 100);
+let result = tracked.call(input).await?;
+let module_calls = tracked.inspect_history(3).await;
+```
+
+Each entry contains a call ID, timestamp and duration in microseconds, model and redacted configuration, input messages, raw assistant response, optional parsed output, token usage, cache-hit flag, caller path, trace-format events, and an optional typed error. API keys are removed and endpoint URLs are reduced to their origin. Pricing is unavailable at this layer, so `cost` is `None`. Usage is `None` when a failed or cancelled call cannot report it; cache hits record zero newly consumed tokens.
+
+Nested module scopes collect their descendant LM calls; each predictor also keeps its own history. For manual scopes, use `HistoryBuffer::scope(name, future)`. Spawned tasks do not inherit the caller stack; establish a history scope inside each spawned task when needed. History records logical LM calls rather than individual retry attempts. Pure trace replay bypasses the LM and does not add execution-history entries.
+
+The trace system remains the source of full rollout graphs and replay. History reuses its event and error types and shares the interpreter's parsed results without requiring an active trace capture.
+
+Migration: `LM::inspect_history` now returns `Vec<HistoryEntry>` rather than `Vec<CacheEntry>`. The cache's `get_history` API has been removed; use the LM, predictor, tracked module, or global history APIs instead.
 
 ## Configuration options
 
@@ -171,7 +194,7 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `max_tool_iterations` | `u32`  | `10`                 | Upper bound on tool-loop round trips per call                                  |
 | `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
 | `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
-| `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
+| `cache`      | `bool`          | `false`              | Enables response caching; history is recorded independently                    |
 
 ### Example with custom settings
 

@@ -19,12 +19,16 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+use crate::ResponseCache;
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
+    /// True when this response was served from the response cache.
+    pub cache_hit: bool,
+    /// Shared history record, enriched with parsed output by the interpreter.
+    pub history: Option<crate::HistoryRecord>,
     /// Assistant message chosen by the provider.
     pub output: Message,
     /// Token usage reported by the provider for this call (aggregate).
@@ -158,6 +162,7 @@ impl Default for LMConfig {
 /// response cache. Constructed via [`LM::builder()`] or [`LM::from_config`].
 #[derive(Clone)]
 pub struct LM {
+    pub history: crate::HistoryBuffer,
     pub config: LMConfig,
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
@@ -246,6 +251,7 @@ impl LM {
 
         debug!("lm client initialized");
         Ok(LM {
+            history: crate::HistoryBuffer::default(),
             config,
             cache_handler,
             client: Some(client),
@@ -253,7 +259,14 @@ impl LM {
     }
 
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        let cache_handler = if self.config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
         Ok(LM {
+            history: crate::HistoryBuffer::default(),
+            cache_handler,
             client: Some(Arc::new(client)),
             ..self
         })
@@ -478,16 +491,17 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+        let client = self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+        })?;
 
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err)
+                    if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
+                {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -526,17 +540,17 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed ({}): {:?}",
-                                    tc.function.name,
-                                    context,
-                                    err
-                                )
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| {
+                                    anyhow::anyhow!(
+                                        "tool `{}` execution failed ({}): {:?}",
+                                        tc.function.name,
+                                        context,
+                                        err
+                                    )
+                                })?;
                         (result, None)
                     }
                     None => {
@@ -695,7 +709,8 @@ impl LM {
                     });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
+                    let results =
+                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
@@ -757,6 +772,21 @@ impl LM {
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
     ) -> Result<LMResponse> {
+        let history =
+            crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        let mut result = self
+            .call_with_toolset_inner(messages, tools, tool_loop_mode)
+            .await;
+        history.finish(&mut result);
+        result
+    }
+
+    async fn call_with_toolset_inner(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+    ) -> Result<LMResponse> {
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
 
@@ -776,14 +806,16 @@ impl LM {
             let mut chat = messages;
             chat.push_message(output.clone());
             return Ok(LMResponse {
+                cache_hit: true,
+                history: None,
                 output: output.clone(),
-                usage: entry.usage,
+                usage: LmUsage::default(),
                 chat,
                 tool_calls: Vec::new(),
                 tool_executions: Vec::new(),
                 events: vec![SpanEvent::Exchange {
                     message: output,
-                    usage: entry.usage,
+                    usage: LmUsage::default(),
                 }],
             });
         }
@@ -946,6 +978,8 @@ impl LM {
         );
 
         Ok(LMResponse {
+            cache_hit: false,
+            history: None,
             output: first_choice,
             usage: accumulated_usage,
             chat: full_chat,
@@ -963,17 +997,15 @@ impl LM {
         })
     }
 
-    /// Returns the `n` most recent cached calls.
-    ///
-    /// Panics if caching is disabled for this `LM`.
+    /// Returns up to `n` LM invocations, newest first, independent of caching.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
         level = "trace",
         skip(self),
         fields(n)
     )]
-    pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler.as_ref().unwrap().get_history(n)
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
     }
 }
 
@@ -1192,6 +1224,7 @@ mod tests {
 
     fn test_lm_with_model(model: TestCompletionModel) -> LM {
         LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig {
                 base_url: None,
                 api_key: None,

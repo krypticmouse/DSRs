@@ -1,8 +1,8 @@
 //! LM response caching.
 //!
 //! The [`ResponseCache`] provides a hybrid memory + disk cache backed by
-//! [foyer](https://docs.rs/foyer). It also maintains a sliding window of recent
-//! entries for [`LM::inspect_history`](crate::LM::inspect_history).
+//! [foyer](https://docs.rs/foyer). Execution history lives independently in
+//! [`core::history`](crate::core::history).
 //!
 //! Caching is per-LM-instance and keyed on the full prompt content. Cache entries
 //! are not shared across LM instances.

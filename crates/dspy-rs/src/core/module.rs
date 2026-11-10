@@ -223,6 +223,49 @@ pub trait Module: Send + Sync {
     async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         self.forward(input).await
     }
+
+    /// Collects this module's nested LM calls in a bounded, independent history.
+    fn with_history(self, name: impl Into<String>, capacity: usize) -> HistoryModule<Self>
+    where
+        Self: Sized,
+    {
+        HistoryModule {
+            module: self,
+            name: name.into(),
+            history: crate::HistoryBuffer::new(capacity),
+        }
+    }
+}
+
+pub struct HistoryModule<M> {
+    pub module: M,
+    pub history: crate::HistoryBuffer,
+    name: String,
+}
+
+impl<M> HistoryModule<M> {
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
+    }
+}
+
+impl<M: Module> Module for HistoryModule<M> {
+    type Input = M::Input;
+    type Output = M::Output;
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        self.history
+            .scope(self.name.clone(), self.module.call(input))
+            .await
+    }
+}
+
+impl<M: Predictors> Predictors for HistoryModule<M> {
+    fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)> {
+        self.module.predictors()
+    }
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)> {
+        self.module.predictors_mut()
+    }
 }
 
 /// Runs a module on many inputs concurrently.

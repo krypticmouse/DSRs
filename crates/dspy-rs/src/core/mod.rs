@@ -21,6 +21,7 @@
 
 mod errors;
 pub mod example;
+pub mod history;
 pub mod lm;
 pub mod module;
 mod predicted;
@@ -31,10 +32,14 @@ mod state;
 
 pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
 pub use example::{ToInput, ToOutput};
-pub use state::{ModuleState, PredictState};
+pub use history::{
+    HistoryBuffer, HistoryEntry, HistoryRecord, clear_history, inspect_history,
+    set_history_capacity,
+};
 pub use lm::*;
 pub use module::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;
+pub use state::{ModuleState, PredictState};

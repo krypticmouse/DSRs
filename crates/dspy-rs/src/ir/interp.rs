@@ -1056,7 +1056,11 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &self.program.types, &response.output) {
+        let parsed = ChatAdapter.parse_output_def(def, &self.program.types, &response.output);
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
+        match parsed {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
@@ -1712,7 +1716,11 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &p.types, &response.output) {
+        let parsed = ChatAdapter.parse_output_def(def, &p.types, &response.output);
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
+        match parsed {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
                     leaves.push(LeafOutcome {
@@ -2210,7 +2218,11 @@ impl Interpreter {
             // Text turn.
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
-                match ChatAdapter.parse_output_def(lc.def, types, &response.output) {
+                let parsed = ChatAdapter.parse_output_def(lc.def, types, &response.output);
+                if let Some(history) = &response.history {
+                    history.parsed(&parsed);
+                }
+                match parsed {
                     Ok((output, metas)) => {
                         return Ok(LoopOutcome::Done {
                             output,
@@ -2276,14 +2288,16 @@ impl Interpreter {
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
         let raw = response.output.content();
-        let (output, metas) = ChatAdapter
-            .parse_output_def(lc.def, &self.program.types, &response.output)
-            .map_err(|err| RunError::Parse {
-                at: lc.at.into(),
-                raw: raw.clone(),
-                source: Some(Box::new(err)),
-                usage: run.usage,
-            })?;
+        let parsed = ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output);
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
+        let (output, metas) = parsed.map_err(|err| RunError::Parse {
+            at: lc.at.into(),
+            raw: raw.clone(),
+            source: Some(Box::new(err)),
+            usage: run.usage,
+        })?;
         Ok(LoopOutcome::Done {
             output,
             raw,

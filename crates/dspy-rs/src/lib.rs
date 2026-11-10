@@ -162,6 +162,9 @@ pub mod prelude {
     pub use crate::predictors;
 
     // LM configuration.
+    pub use crate::core::history::{
+        HistoryBuffer, HistoryEntry, clear_history, inspect_history, set_history_capacity,
+    };
     pub use crate::core::lm::{LM, LMConfig};
     pub use crate::core::settings::configure;
 
@@ -217,5 +220,3 @@ pub mod __macro_support {
     pub use serde_json;
     pub use tokio;
 }
-
-
