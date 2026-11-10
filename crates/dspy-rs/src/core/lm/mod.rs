@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+use crate::ResponseCache;
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -45,6 +45,23 @@ pub struct LMResponse {
 pub enum ToolLoopMode {
     Auto,
     CallerManaged,
+}
+
+/// Failures of the automatic tool loop. Missing tools are sent back to the
+/// model as recoverable feedback; limit and execution failures stop the call.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolLoopError {
+    #[error("Max tool iterations reached (limit {limit})")]
+    IterationLimit { limit: usize },
+    #[error("Tool '{name}' not found")]
+    UnknownTool { name: String },
+    #[error("tool `{name}` execution failed ({context}): {source}")]
+    Execution {
+        name: String,
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 }
 
 /// Pre-fetched tool definitions plus name-indexed executors.
@@ -134,6 +151,11 @@ pub struct LMConfig {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
+    /// Maximum tool-execution rounds in the automatic LM loop, including the
+    /// initial round. Parallel tool calls in one response count as one round.
+    /// A final completion is allowed after the last round; further tool requests
+    /// fail before execution. `0` disables automatic tool execution.
+    /// Caller-managed loops and IR agent limits are controlled separately.
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
     /// Additional attempts after a transient failure (429/5xx/network/timeout).
@@ -252,9 +274,17 @@ impl LM {
         })
     }
 
+    /// Replaces the provider client and starts a fresh response cache and history
+    /// when caching is enabled. Existing clones retain their client and cache.
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        let cache_handler = if self.config.cache {
+            Some(Arc::new(ResponseCache::new().await))
+        } else {
+            None
+        };
         Ok(LM {
             client: Some(Arc::new(client)),
+            cache_handler,
             ..self
         })
     }
@@ -478,16 +508,17 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+        let client = self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+        })?;
 
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err)
+                    if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
+                {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -526,22 +557,22 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed ({}): {:?}",
-                                    tc.function.name,
-                                    context,
-                                    err
-                                )
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| ToolLoopError::Execution {
+                                    name: tc.function.name.clone(),
+                                    context: context.to_owned(),
+                                    source: Box::new(err),
+                                })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        let message = format!("Tool '{}' not found", tc.function.name);
+                        let message = ToolLoopError::UnknownTool {
+                            name: tc.function.name.clone(),
+                        }
+                        .to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -616,6 +647,12 @@ impl LM {
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
+        if max_iterations == 0 {
+            return Err(ToolLoopError::IterationLimit {
+                limit: max_iterations,
+            }
+            .into());
+        }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
         let mut events = vec![SpanEvent::Exchange {
@@ -642,7 +679,7 @@ impl LM {
         Self::push_tool_results(&mut chat_history, &results);
 
         // Now loop until we get a text response
-        for iteration in 1..max_iterations {
+        for iteration in 1..=max_iterations {
             let response = self
                 .completion_with_retry(|| {
                     self.build_completion_request(
@@ -689,13 +726,21 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    if iteration == max_iterations {
+                        warn!(max_iterations, "max tool iterations reached");
+                        return Err(ToolLoopError::IterationLimit {
+                            limit: max_iterations,
+                        }
+                        .into());
+                    }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
                         usage: round_usage,
                     });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
+                    let results =
+                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
@@ -713,7 +758,10 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(anyhow::anyhow!("Max tool iterations reached"))
+        Err(ToolLoopError::IterationLimit {
+            limit: max_iterations,
+        }
+        .into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
@@ -963,9 +1011,10 @@ impl LM {
         })
     }
 
-    /// Returns the `n` most recent cached calls.
+    /// Returns up to `n` recent cache insertions, newest first.
     ///
-    /// Panics if caching is disabled for this `LM`.
+    /// Returns an empty vector when caching is disabled or no entries have been
+    /// recorded. Cache hits and calls with tools do not add history entries.
     #[tracing::instrument(
         name = "dsrs.lm.inspect_history",
         level = "trace",
@@ -973,7 +1022,10 @@ impl LM {
         fields(n)
     )]
     pub async fn inspect_history(&self, n: usize) -> Vec<CacheEntry> {
-        self.cache_handler.as_ref().unwrap().get_history(n)
+        self.cache_handler
+            .as_ref()
+            .map(|cache| cache.get_history(n))
+            .unwrap_or_default()
     }
 }
 
