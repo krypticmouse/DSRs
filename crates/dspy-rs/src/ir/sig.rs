@@ -369,6 +369,15 @@ fn validate_field(field: &FieldDef) -> Result<(), SigError> {
                 field: field.name.to_string(),
             });
         }
+        if let Err(message) =
+            crate::typesys::constraint::validate_constraint_expression(&constraint.expr)
+        {
+            return Err(SigError::InvalidConstraintExpr {
+                field: field.name.to_string(),
+                expr: constraint.expr.to_string(),
+                message: message.to_string(),
+            });
+        }
         let env = minijinja::Environment::new();
         if let Err(err) = env.compile_expression(&constraint.expr) {
             return Err(SigError::InvalidConstraintExpr {
