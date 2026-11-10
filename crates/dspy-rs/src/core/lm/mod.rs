@@ -560,7 +560,10 @@ impl LM {
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
-                Ok(response) => return Ok(response),
+                Ok(response) => {
+                    debug!(target: "dsrs::content", choice = ?response.choice, "provider response");
+                    return Ok(response);
+                }
                 Err(err)
                     if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
                 {
@@ -836,10 +839,14 @@ impl LM {
     ) -> Result<LMResponse> {
         let history =
             crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        debug!(target: "dsrs::content", prompt = %messages.to_json(), "formatted LM prompt");
         let mut result = self
             .call_with_toolset_inner(messages, tools, tool_loop_mode)
             .await;
         history.finish(&mut result);
+        if let Ok(response) = &result {
+            debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
+        }
         result
     }
 

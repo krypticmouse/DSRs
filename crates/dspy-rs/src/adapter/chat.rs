@@ -358,6 +358,8 @@ impl ChatAdapter {
     /// (`FieldDef::name`); `types` resolves class/enum references during
     /// coercion. Constraint expressions are compiled per call (owned strings —
     /// no global cache, no leak).
+    #[tracing::instrument(name = "dsrs.adapter.parse", level = "debug", skip_all,
+        fields(signature = %def.name, fields = def.outputs.len()))]
     pub fn parse_output_def(
         &self,
         def: &SignatureDef,

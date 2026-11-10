@@ -43,6 +43,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
+use tracing::Instrument;
 
 use crate::evaluate::{DEFAULT_EVAL_CONCURRENCY, Eval};
 use crate::optimizer::target::OptimizeTarget;
@@ -53,6 +54,17 @@ use crate::LmUsage;
 /// Score tolerance for Pareto win/tie comparisons (matches the historical
 /// `ParetoFrontier` tolerance).
 pub(crate) const SCORE_EPS: f64 = 1e-6;
+
+/// A failed optimizer rollout, with stable candidate/example context and its
+/// original typed error preserved in the source chain.
+#[derive(Debug, thiserror::Error)]
+#[error("optimizer candidate {candidate}, example {example} failed")]
+pub struct RolloutError {
+    pub candidate: usize,
+    pub example: usize,
+    #[source]
+    pub source: anyhow::Error,
+}
 
 // ---------------------------------------------------------------------------
 // Canonical hashing
@@ -802,6 +814,8 @@ impl Engine {
     /// Cached rollouts return their `Eval` with `trace: None` and consume no
     /// budget. If the uncached portion doesn't fit the remaining budget the
     /// engine runs nothing and returns [`BatchEvalOutcome::BudgetExhausted`].
+    #[tracing::instrument(name = "dsrs.optimizer.batch", level = "info", skip_all,
+        fields(candidates = candidates.len(), examples = target.num_examples()))]
     pub async fn evaluate_many(
         &mut self,
         target: &OptimizeTarget<'_>,
@@ -850,6 +864,7 @@ impl Engine {
         }
 
         if !self.budget_allows(pending.len()) {
+            tracing::info!(needed = pending.len(), "optimizer budget exhausted");
             return Ok(BatchEvalOutcome::BudgetExhausted {
                 needed: pending.len(),
             });
@@ -858,6 +873,8 @@ impl Engine {
         // Bind each requested candidate against the target once.
         let mut bound: HashMap<usize, BoundCandidate> = HashMap::new();
         for &candidate in candidates {
+            tracing::debug!(target: "dsrs::content", candidate,
+                params = ?self.candidate(candidate), "optimizer candidate parameters");
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
         }
 
@@ -893,7 +910,7 @@ impl Engine {
             self.matrix.record(candidate, idx, eval.score);
         }
 
-        let evals = candidates
+        let evals: Vec<CandidateEval> = candidates
             .iter()
             .map(|&candidate| CandidateEval {
                 candidate,
@@ -922,6 +939,15 @@ impl Engine {
             })
             .collect();
 
+        let best = self.matrix.best_by_mean();
+        let score_count: usize = evals.iter().map(|eval| eval.rollouts.len()).sum();
+        let score_sum: f64 = evals.iter().flat_map(|eval| &eval.rollouts).map(|rollout| rollout.eval.score).sum();
+        tracing::info!(fresh = pending.len(), cached = cached.len(),
+            best_candidate = ?best, best_score = ?best.and_then(|id| self.matrix.mean(id)),
+            average_score = ?(score_count > 0).then(|| score_sum / score_count as f64),
+            completed = self.spend.metric_calls, requested = pending.len() + cached.len(),
+            metric_calls = self.spend.metric_calls, lm_calls = self.spend.lm_calls,
+            "optimizer batch completed");
         Ok(BatchEvalOutcome::Complete(evals))
     }
 
@@ -985,15 +1011,19 @@ impl Engine {
         let gauge = Gauge::default();
 
         let fresh: Vec<(usize, usize, Eval, Trace)> =
-            stream::iter(pending.iter().map(|&(candidate, idx)| {
+            stream::iter(pending.iter().enumerate().map(|(rollout, &(candidate, idx))| {
                 let bound = bound[&candidate].clone();
                 let candidate_hash = self.candidates[candidate].0;
                 let gauge = &gauge;
                 async move {
                     let _in_flight = gauge.enter(candidate);
-                    let (eval, trace) = target.run(idx, bound, candidate_hash).await?;
+                    let (eval, trace) = target.run(idx, bound, candidate_hash).await
+                        .map_err(|source| RolloutError { candidate, example: idx, source })?;
+                    tracing::info!(score = eval.score, "optimizer rollout completed");
                     Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
                 }
+                .instrument(tracing::info_span!("dsrs.optimizer.rollout", candidate,
+                    example = idx, candidate_hash, rollout = rollout + 1, total = pending.len()))
             }))
             .buffer_unordered(self.config.concurrency.max(1))
             .try_collect()

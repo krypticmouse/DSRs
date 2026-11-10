@@ -6,6 +6,34 @@ icon: "wave-pulse"
 
 A trace records what a run did: one span per `Predict` call, carrying the rendered prompt, the parsed output, and a request fingerprint. Replay serves a later run back from that recording instead of a live provider. The `dsrs` CLI that checks, formats, and serves `.dsrs` artifacts has its own page: [CLI](/docs/components/cli).
 
+## Logging and captured traces
+
+Call `init_tracing()` once to install the environment-filtered subscriber. Standard
+`tracing` spans describe module calls, dataset/evaluation work and optimizer
+candidate batches/rollouts. Optimizer events include candidate/example indices,
+scores, cache-hit counts, budget exhaustion and the best score seen by the engine.
+Chain-of-thought is a typed `Predict<Augmented<...>>` alias, so its predictor span
+records the augmented signature rather than inventing a separate execution stage.
+
+Full prompt/response and candidate-parameter logging is opt-in through the separate
+`dsrs::content` target. For example, in PowerShell:
+
+```powershell
+$env:RUST_LOG = 'dspy_rs=info,dsrs::content=debug'
+```
+
+The default `dspy_rs=debug` filter does not enable that content target. Content logs
+can contain application data; use metadata-only logging when those payloads should
+not be written to logs. Provider responses include intermediate tool-loop rounds;
+LM response logs also cover cached results. Use `capture` for structured per-call
+inputs/outputs, tool events, prompt reconstruction and replay.
+
+Runtime capture and program structure serve different purposes. A `Program` is the
+declared graph; a `Trace` records the predictor invocations that actually executed.
+Typed modules and the IR interpreter use the same capture/replay surface. Invocation
+history complements it: the same parsed values/events are retained by LM and module
+history, while strict replay serves recorded spans without creating fresh LM history.
+
 ## Recording and replaying a run
 
 Wrap any call in `capture` to get the run back as a value, then persist it as JSONL:
