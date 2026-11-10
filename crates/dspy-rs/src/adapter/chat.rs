@@ -334,7 +334,7 @@ impl ChatAdapter {
             })
         {
             parts.push(
-                "Return compact JSON matching the supplied output schema. No markdown.".to_string(),
+                "Return compact JSON matching the provider JSON Schema. No markdown.".to_string(),
             );
             let instruction = instruction_override.unwrap_or(&def.instruction);
             if !instruction.is_empty() {

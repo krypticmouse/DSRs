@@ -4,6 +4,7 @@
 //! `cargo run -p dspy-rs --no-default-features --example 19-ollama-structured-output`
 //! Override OLLAMA_BASE_URL or OLLAMA_MODEL to use another local configuration.
 //! Pass `--inspect-only` to print the prompt without sending a request.
+//! Pass `--scalar-output` to opt into the verified root-string schema optimization.
 
 use anyhow::Result;
 use dspy_rs::{LM, Predict, Signature, init_tracing};
@@ -31,7 +32,8 @@ async fn main() -> Result<()> {
         .temperature(0.0)
         .build()
         .await?
-        .with_custom_output_schema(true);
+        .with_custom_output_schema(true)
+        .with_scalar_output_schema(std::env::args().any(|arg| arg == "--scalar-output"));
     let predictor = Predict::<QA>::builder().lm(lm).build();
     let input = QAInput {
         question: "What is the capital of France?".into(),
