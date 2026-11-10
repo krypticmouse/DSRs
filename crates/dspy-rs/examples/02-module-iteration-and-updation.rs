@@ -82,10 +82,12 @@ fn trainset() -> Vec<(QAInput, QAOutput)> {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let metric = ExactMatch;
     let mut module = QAModule::builder().build();

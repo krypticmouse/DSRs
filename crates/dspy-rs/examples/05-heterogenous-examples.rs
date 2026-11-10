@@ -33,10 +33,12 @@ struct NumberSignature {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     // A heterogeneous source row: only `number` is part of the signature.
     let row = json!({
