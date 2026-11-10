@@ -59,6 +59,9 @@ entity_impl!(ModelId, "m");
 pub struct ToolId(u32);
 entity_impl!(ToolId, "t");
 
+/// Maximum container/leaf depth accepted by both text and serialized programs.
+pub(crate) const MAX_NODE_DEPTH: usize = 64;
+
 // ---------------------------------------------------------------------------
 // Interner
 // ---------------------------------------------------------------------------
@@ -605,8 +608,8 @@ impl Program {
             overlay: Some(format!("{:016x}", overlay.hash()).into()),
             ..note
         });
-        baked.seal();
         baked.validate()?;
+        baked.seal();
         Ok(baked)
     }
 }

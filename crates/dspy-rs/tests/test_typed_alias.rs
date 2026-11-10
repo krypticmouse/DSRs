@@ -40,7 +40,7 @@ fn typed_alias_is_used_in_prompt_and_user_message() {
     let input = AliasSignatureInput {
         question: "Hello".to_string(),
     };
-    let user = adapter.format_input_def(SignatureDef::of::<AliasSignature>(), &json_map(&input));
+    let user = adapter.try_format_input_def(SignatureDef::of::<AliasSignature>(), &json_map(&input)).unwrap();
     assert!(user.contains("[[ ## question_text ## ]]"));
     assert!(user.contains("Hello"));
     assert!(!user.contains("[[ ## question ## ]]"));
