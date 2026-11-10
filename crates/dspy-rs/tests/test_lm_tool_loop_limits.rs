@@ -1,5 +1,5 @@
-use dspy_rs::{Chat, LM, LMClient, Message, TestCompletionModel, ToolLoopMode};
 use dspy_rs::core::lm::ToolLoopError;
+use dspy_rs::{Chat, LM, LMClient, Message, TestCompletionModel, ToolLoopMode};
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::tool::{Tool, ToolDyn};
 use std::sync::Arc;
