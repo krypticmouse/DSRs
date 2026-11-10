@@ -1345,6 +1345,7 @@ mod tests {
             "json_object"
         );
         assert!(request.output_schema.is_none());
+        #[cfg(feature = "cache")]
         assert_ne!(
             lm.cache_key_for(&chat, &LMCallOptions::default()),
             lm.cache_key_for(&chat, &options)
@@ -1412,9 +1413,11 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_key_uses_sample_identity_and_effective_temperature() {
         let lm = LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig::default(),
             cache_handler: None,
             client: None,
@@ -1458,10 +1461,12 @@ mod tests {
         assert_ne!(first, temperature);
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_hit_reports_zero_usage_and_keeps_original_entry() {
         let cache = Arc::new(ResponseCache::new().await);
         let lm = LM {
+            history: crate::HistoryBuffer::default(),
             config: LMConfig {
                 cache: true,
                 ..LMConfig::default()
@@ -1498,6 +1503,7 @@ mod tests {
         assert_eq!(entry.usage.total_tokens, original.total_tokens);
     }
 
+    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn equal_sample_identity_reuses_cache_but_distinct_identity_reaches_provider() {
         let model =
