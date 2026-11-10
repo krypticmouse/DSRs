@@ -213,6 +213,7 @@ pub struct LM {
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
     custom_output_schema: bool,
+    scalar_output_schema: bool,
 }
 
 impl Default for LM {
@@ -226,6 +227,19 @@ impl LM {
     pub fn with_custom_output_schema(mut self, enabled: bool) -> Self {
         self.custom_output_schema = enabled;
         self
+    }
+
+    /// Opts into root JSON scalars on a verified schema-capable endpoint.
+    /// Tool-free signatures with one string output may omit its object wrapper.
+    /// Leave disabled for providers whose schema subset requires an object root.
+    pub fn with_scalar_output_schema(mut self, enabled: bool) -> Self {
+        self.scalar_output_schema = enabled;
+        self
+    }
+
+    /// Reports an explicitly enabled scalar capability on a schema-capable client.
+    pub fn supports_scalar_output_schema(&self) -> bool {
+        self.scalar_output_schema && self.supports_output_schema()
     }
     /// Reports schema support based on the initialized provider client.
     pub fn supports_output_schema(&self) -> bool {
@@ -338,6 +352,7 @@ impl LM {
             cache_handler,
             client: Some(client),
             custom_output_schema: false,
+            scalar_output_schema: false,
         })
     }
 
@@ -1422,6 +1437,7 @@ mod tests {
             cache_handler: None,
             client: None,
             custom_output_schema: false,
+            scalar_output_schema: false,
         };
         let chat = Chat::new(vec![Message::user("same prompt")]);
         let first = crate::with_sampling_options(
@@ -1474,6 +1490,7 @@ mod tests {
             cache_handler: Some(cache.clone()),
             client: None,
             custom_output_schema: false,
+            scalar_output_schema: false,
         };
         let messages = Chat::new(vec![Message::user("cached prompt")]);
         let key = lm.cache_key_for(&messages, &LMCallOptions::default());
@@ -1762,6 +1779,7 @@ mod tests {
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
             custom_output_schema: false,
+            scalar_output_schema: false,
         }
     }
 

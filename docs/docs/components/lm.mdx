@@ -286,6 +286,8 @@ History is independent of response caching. Each logical LM invocation records a
 
 When the global, LM and all enclosing predictor/module stores have zero capacity at the start of a call, history recording is skipped entirely. Enabling a store affects subsequent calls; an enabled enclosing module still captures calls whose LM and predictor stores are disabled. Trace capture remains independent.
 
+For a verified endpoint that accepts root JSON scalars, such as the tested local Ollama endpoint, `lm.with_scalar_output_schema(true)` lets a tool-free signature with one string output request only that value. The typed result, aliases, constraints and history output map are preserved; raw responses contain the actual scalar. Custom endpoints still need `with_custom_output_schema(true)`. This capability is disabled by default: providers that require object-root schemas must leave it off. Numeric/boolean outputs, multiple/complex outputs and tool agents retain object schemas. Validate the model's task quality when opting in, as with any prompt-format change.
+
 LMs and predictors retain the 100 most recently completed calls by default, newest first. Use `lm.history.set_capacity(n)`, `predictor.set_history_capacity(n)`, or `dspy_rs::set_history_capacity(n)` to configure their independent limits. Zero disables retention in that store. Clear stores with `lm.history.clear()`, `predictor.clear_history()`, or `dspy_rs::clear_history()`. LM clones share their history; constructing an LM or replacing its client starts a new store.
 
 ```rust

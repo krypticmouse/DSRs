@@ -14,6 +14,17 @@ any extra requests. Startup, imports, LM construction and warmups are outside ea
 Framework-specific prompts and their token counts can differ; this is a complete
 typed-prediction workload rather than identical HTTP payloads.
 
+The final experiment opts into root JSON string schemas for the candidate's
+single-string output. The pre-scalar baseline retains its object schema, and
+DSPy uses JSONAdapter's object schema. These are wire representations of the
+same typed result (`answer == "Paris"`); no fields, task instructions or
+validation are removed. Startup verifies that the task and both field
+descriptions reach the Rust prompt. The baseline compatibility trait is a
+documented no-op for the old API; the candidate's inherent methods take
+precedence. The exact same Rust workload bytes compile against both revisions.
+The optimization is explicitly enabled only on a verified endpoint; numeric,
+boolean, multiple and complex outputs and tool agents retain object schemas.
+
 Live mode disables response caching, warms the model once and times one request
 per independent sample. It includes real HTTP, model inference, formatting and
 parsing. This is warm-model latency, not model-loading latency. Cached mode warms

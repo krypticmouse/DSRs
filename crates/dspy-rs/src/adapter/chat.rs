@@ -434,6 +434,34 @@ impl ChatAdapter {
         )
     }
 
+    pub(crate) fn build_system_scalar_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        instruction: &str,
+    ) -> String {
+        format!(
+            "{}\n\nReturn only the output field's JSON value, without an object wrapper, markdown or explanation.\n\n{}",
+            format_field_descriptions_view(
+                &def_views(&def.inputs),
+                &def_views(&def.outputs),
+                types
+            ),
+            instruction
+        )
+    }
+
+    pub(crate) fn try_format_input_scalar_def(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+    ) -> Result<String> {
+        self.try_format_input_with_response(def, input, &format!(
+            "Compute `{}` from the inputs and return only its JSON value, without an object wrapper.",
+            def.outputs[0].lm_name,
+        ))
+    }
+
     /// Formats a value-level output map as an assistant message for few-shot
     /// demos: each output field delimited with `[[ ## field ## ]]` markers,
     /// ending with `[[ ## completed ## ]]`.
@@ -576,6 +604,43 @@ impl ChatAdapter {
                 raw_text: content.to_string(),
                 source: JsonishError::from(anyhow::anyhow!(err)),
             })?;
+        self.coerce_json_output(def, types, parsed, &content)
+    }
+
+    pub(crate) fn parse_output_scalar_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        response: &Message,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
+        let content = response.text_content_cow();
+        let parsed: Value =
+            serde_json::from_str(&content).map_err(|err| ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON scalar".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!(err)),
+            })?;
+        if parsed.is_object() || parsed.is_array() {
+            return Err(ParseError::CoercionFailed {
+                field: "<response>".into(),
+                expected_type: "JSON scalar".into(),
+                raw_text: content.to_string(),
+                source: JsonishError::from(anyhow::anyhow!("expected JSON scalar")),
+            });
+        }
+        let field = &def.outputs[0];
+        let values = JsonMap::from_iter([(field.lm_name.to_string(), parsed)]);
+        self.coerce_json_output(def, types, Value::Object(values), &content)
+    }
+
+    fn coerce_json_output(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        parsed: Value,
+        content: &str,
+    ) -> std::result::Result<(JsonMap, IndexMap<String, FieldMeta>), ParseError> {
         let normalized = canonicalize_output_aliases(parsed, def, types);
         let Some(values) = normalized.as_object() else {
             return Err(ParseError::CoercionFailed {

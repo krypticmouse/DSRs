@@ -4,8 +4,22 @@ use rig::completion::AssistantContent;
 use serde_json::json;
 use std::time::Instant;
 
-#[derive(Signature, Clone, Debug)]
+// Compatibility shim for pre-scalar revisions. Candidate inherent methods take
+// precedence; the baseline keeps its existing object schema. This lets both
+// revisions compile the byte-identical typed-prediction workload below.
+#[allow(dead_code)]
+trait ScalarSchemaBaseline: Sized {
+    fn with_scalar_output_schema(self, _: bool) -> Self {
+        self
+    }
+    fn supports_scalar_output_schema(&self) -> bool {
+        false
+    }
+}
+impl ScalarSchemaBaseline for LM {}
+
 /// Answer the geography question with only the city name in the answer field.
+#[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
     /// The geography question.
@@ -33,11 +47,17 @@ async fn main() -> anyhow::Result<()> {
         .cache(mode == "cached")
         .build()
         .await?
-        .with_custom_output_schema(true);
+        .with_custom_output_schema(true)
+        .with_scalar_output_schema(true);
     if mode == "offline" {
+        let response = if lm.supports_scalar_output_schema() {
+            r#""Paris""#
+        } else {
+            r#"{"answer":"Paris"}"#
+        };
         lm = lm
             .with_client(LMClient::Test(TestCompletionModel::new(
-                (0..iterations + warmup).map(|_| AssistantContent::text(r#"{"answer":"Paris"}"#)),
+                (0..iterations + warmup).map(|_| AssistantContent::text(response)),
             )))
             .await?;
     }
@@ -48,6 +68,17 @@ async fn main() -> anyhow::Result<()> {
     let input = || QAInput {
         question: "What is the capital of France?".into(),
     };
+    let prompt = predictor.build_chat(&input()).await?.to_json().to_string();
+    for expected in [
+        "Answer the geography question with only the city name in the answer field.",
+        "The geography question.",
+        "The city name, without extra commentary.",
+    ] {
+        anyhow::ensure!(
+            prompt.contains(expected),
+            "missing benchmark instruction: {expected}"
+        );
+    }
     for _ in 0..warmup {
         assert_eq!(predictor.call(input()).await?.answer, "Paris");
     }
