@@ -47,6 +47,23 @@ pub enum ToolLoopMode {
     CallerManaged,
 }
 
+/// Failures of the automatic tool loop. Missing tools are sent back to the
+/// model as recoverable feedback; limit and execution failures stop the call.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolLoopError {
+    #[error("Max tool iterations reached (limit {limit})")]
+    IterationLimit { limit: usize },
+    #[error("Tool '{name}' not found")]
+    UnknownTool { name: String },
+    #[error("tool `{name}` execution failed ({context}): {source}")]
+    Execution {
+        name: String,
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 /// Pre-fetched tool definitions plus name-indexed executors.
 ///
 /// Fetching a rig `ToolDyn` definition costs a boxed-future allocation and a
@@ -535,18 +552,19 @@ impl LM {
                             .call(tc.function.arguments.to_string())
                             .await
                             .map_err(|err| {
-                                anyhow::anyhow!(
-                                    "tool `{}` execution failed ({}): {:?}",
-                                    tc.function.name,
-                                    context,
-                                    err
-                                )
+                                    ToolLoopError::Execution {
+                                        name: tc.function.name.clone(),
+                                        context: context.to_owned(),
+                                        source: Box::new(err),
+                                    }
                             })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        let message = format!("Tool '{}' not found", tc.function.name);
+                        let message = ToolLoopError::UnknownTool {
+                            name: tc.function.name.clone(),
+                        }.to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -622,7 +640,7 @@ impl LM {
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
         if max_iterations == 0 {
-            anyhow::bail!("Max tool iterations reached");
+            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
         }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
@@ -699,7 +717,7 @@ impl LM {
                 } => {
                     if iteration == max_iterations {
                         warn!(max_iterations, "max tool iterations reached");
-                        anyhow::bail!("Max tool iterations reached");
+                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
                     }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
@@ -725,7 +743,7 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(anyhow::anyhow!("Max tool iterations reached"))
+        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {

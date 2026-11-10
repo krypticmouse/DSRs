@@ -1,4 +1,5 @@
 use dspy_rs::{Chat, LM, LMClient, Message, TestCompletionModel, ToolLoopMode};
+use dspy_rs::core::lm::ToolLoopError;
 use rig::completion::{AssistantContent, ToolDefinition};
 use rig::tool::{Tool, ToolDyn};
 use std::sync::Arc;
@@ -84,6 +85,8 @@ async fn exhausted_limit_prevents_additional_tool_side_effects(#[case] limit: u3
     let count = Arc::new(AtomicUsize::new(0));
     let error = lm.call(chat(), tools(&count)).await.unwrap_err();
     assert!(error.to_string().contains("Max tool iterations reached"));
+    assert!(matches!(error.downcast_ref::<ToolLoopError>(),
+        Some(ToolLoopError::IterationLimit { limit: actual }) if *actual == limit as usize));
     assert_eq!(count.load(Ordering::SeqCst), limit as usize);
     assert_eq!(
         client.last_request().unwrap().chat_history.iter().count(),
