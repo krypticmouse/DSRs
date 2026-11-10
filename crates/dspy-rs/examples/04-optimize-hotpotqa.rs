@@ -3,7 +3,7 @@ Script to optimize a typed QA module for a HotpotQA subset with COPRO.
 
 Run with:
 ```
-cargo run --example 04-optimize-hotpotqa --features dataloaders
+cargo run --example 04-optimize-hotpotqa --features data
 ```
 */
 

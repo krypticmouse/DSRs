@@ -3,7 +3,7 @@ Example: optimize a typed QA module using MIPROv2.
 
 Run with:
 ```
-cargo run --example 08-optimize-mipro --features dataloaders
+cargo run --example 08-optimize-mipro --features data
 ```
 */
 

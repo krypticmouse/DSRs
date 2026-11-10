@@ -3,7 +3,7 @@ Script to evaluate a typed QA predictor on a HotpotQA sample.
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa --features dataloaders
+cargo run --example 03-evaluate-hotpotqa --features data
 ```
 */
 
