@@ -45,7 +45,7 @@ rig-core = { workspace = true }
 enum_dispatch = "0.3.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-minijinja = { workspace = true, features = ["builtins", "serde", "debug"] }
+minijinja = { workspace = true, features = ["builtins", "serde", "debug", "fuel", "unstable_machinery"] }
 # IR graph core (RFC 0002 §2): entity arenas + the sandboxed hole executor.
 # Unconditional since phase 2β: Predict runs through the IR Interpreter, so
 # the graph core (and Code Mode via dsrs-tools) is load-bearing, not optional.

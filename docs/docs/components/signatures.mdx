@@ -174,7 +174,7 @@ Constraints attach rules to output fields. Use `#[assert]` for rules whose viola
 
 ### Expression language
 
-Expressions are minijinja expressions evaluated with the parsed field value bound as `this`. Derive-emitted expressions compile once per process.
+Expressions use a bounded subset of minijinja with the parsed field value bound as `this`. Derive-emitted expressions compile once per process.
 
 | Works | Example |
 |---|---|
@@ -183,7 +183,8 @@ Expressions are minijinja expressions evaluated with the parsed field value boun
 | Length | `this\|length > 0` |
 | Membership and substring | `"https://" in this`, `"a" in this` |
 | Indexing | `this[0] == "first"` |
-| Filters and tests | `this\|lower == "positive"`, `this\|trim\|length > 0`, `this is defined` |
+| Numeric arithmetic | `this + 1 > 2`, `this * 2 < 10` |
+| Filters | `this\|length`, `this\|int`, `this\|float` |
 
 <Warning>
 Python-style method calls do not evaluate: `this.len()`, `this.startswith(...)`, and `this.contains(...)` always come out false. A failed evaluation counts as not passing, so an assert written that way fails every call. Use `this|length` and `in` instead.

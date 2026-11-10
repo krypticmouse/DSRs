@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::LMConfig;
 use crate::ir::builder::{self, BuildError, NodeSpec, Port, ProgramBuilder};
-use crate::ir::graph::{ModelId, NodeBudget, Program, SigId, ToolId};
+use crate::ir::graph::{MAX_NODE_DEPTH, ModelId, NodeBudget, Program, SigId, ToolId};
 use crate::ir::params::{ContextPolicy, DemoRow};
 use crate::ir::sig::{ConstraintDef, FieldDef, RenderSpec, SignatureDef};
 use crate::ir::validate::ValidateError;
@@ -131,6 +131,29 @@ enum SigItem {
     },
 }
 
+const MAX_TYPE_DEPTH: usize = 64;
+
+fn type_nesting_depth(ty: &FieldType) -> usize {
+    let mut max_depth = 0;
+    let mut pending = vec![(ty, 1usize)];
+    while let Some((ty, depth)) = pending.pop() {
+        max_depth = max_depth.max(depth);
+        if max_depth > MAX_TYPE_DEPTH {
+            break;
+        }
+        match ty {
+            FieldType::Optional(inner) | FieldType::List(inner) => pending.push((inner, depth + 1)),
+            FieldType::Map(key, value) => {
+                pending.push((key, depth + 1));
+                pending.push((value, depth + 1));
+            }
+            FieldType::Union(items) => pending.extend(items.iter().map(|item| (item, depth + 1))),
+            _ => {}
+        }
+    }
+    max_depth
+}
+
 struct Parser<'a> {
     lx: Lexer<'a>,
     cur: Lexed,
@@ -153,6 +176,8 @@ struct Parser<'a> {
     type_spans: HashMap<String, Span>,
     /// First span at which each node name is referenced through a port.
     ref_spans: HashMap<String, Span>,
+    node_depth: usize,
+    type_depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -174,6 +199,8 @@ impl<'a> Parser<'a> {
             deferred_caps: Vec::new(),
             type_spans: HashMap::new(),
             ref_spans: HashMap::new(),
+            node_depth: 0,
+            type_depth: 0,
         })
     }
 
@@ -948,16 +975,28 @@ impl<'a> Parser<'a> {
     }
 
     fn type_expr(&mut self) -> Result<FieldType, ParseError> {
-        let mut units = vec![self.type_unit()?];
-        while self.cur.tok == Tok::Pipe {
-            self.bump()?;
-            units.push(self.type_unit()?);
+        if self.type_depth >= MAX_TYPE_DEPTH {
+            return Err(self.err(format!("type exceeds the {MAX_TYPE_DEPTH}-level nesting limit")));
         }
-        Ok(if units.len() == 1 {
-            units.pop().unwrap()
-        } else {
-            FieldType::Union(units)
-        })
+        self.type_depth += 1;
+        let result = (|| {
+            let mut units = vec![self.type_unit()?];
+            while self.cur.tok == Tok::Pipe {
+                self.bump()?;
+                units.push(self.type_unit()?);
+            }
+            let ty = if units.len() == 1 {
+                units.pop().unwrap()
+            } else {
+                FieldType::Union(units)
+            };
+            if type_nesting_depth(&ty) > MAX_TYPE_DEPTH {
+                return Err(self.err(format!("type exceeds the {MAX_TYPE_DEPTH}-level nesting limit")));
+            }
+            Ok(ty)
+        })();
+        self.type_depth -= 1;
+        result
     }
 
     fn type_unit(&mut self) -> Result<FieldType, ParseError> {
@@ -965,11 +1004,17 @@ impl<'a> Parser<'a> {
         loop {
             match &self.cur.tok {
                 Tok::LBracket => {
+                    if type_nesting_depth(&ty) >= MAX_TYPE_DEPTH {
+                        return Err(self.err(format!("type exceeds the {MAX_TYPE_DEPTH}-level nesting limit")));
+                    }
                     self.bump()?;
                     self.expect_tok(Tok::RBracket, "to close `[]`")?;
                     ty = FieldType::List(Box::new(ty));
                 }
                 Tok::Question => {
+                    if type_nesting_depth(&ty) >= MAX_TYPE_DEPTH {
+                        return Err(self.err(format!("type exceeds the {MAX_TYPE_DEPTH}-level nesting limit")));
+                    }
                     self.bump()?;
                     ty = FieldType::optional(ty);
                 }
@@ -1041,6 +1086,13 @@ impl<'a> Parser<'a> {
         name: Option<(String, Span)>,
         kw_span: Span,
     ) -> Result<(NodeSpec, Shadow), ParseError> {
+        if self.node_depth >= MAX_NODE_DEPTH {
+            return Err(ParseError::at(
+                kw_span,
+                format!("program exceeds the {MAX_NODE_DEPTH}-node nesting limit"),
+            ));
+        }
+        self.node_depth += 1;
         let keyword = match &self.cur.tok {
             Tok::Ident(word) => word.clone(),
             other => {
@@ -1051,7 +1103,7 @@ impl<'a> Parser<'a> {
                 )));
             }
         };
-        match keyword.as_str() {
+        let result = match keyword.as_str() {
             "predict" | "cot" | "agent" => self.lm_leaf(&keyword, name),
             "hole" => self.hole(name),
             "seq" => self.seq(name, kw_span),
@@ -1064,7 +1116,9 @@ impl<'a> Parser<'a> {
                 "unknown expression keyword `{other}`: expected one of {}",
                 EXPR_KEYWORDS.join(", ")
             ))),
-        }
+        };
+        self.node_depth -= 1;
+        result
     }
 
     /// A step or target position: `name = expr` (leaves and named containers)
@@ -1875,6 +1929,7 @@ fn validate_error_handles(v: &ValidateError) -> (Option<&str>, Option<(&str, &st
     match v {
         E::UnboundInput { at, .. }
         | E::IdOutOfRange { at, .. }
+        | E::NodeNestingExceeded { at, .. }
         | E::NodeReused { at }
         | E::UnknownOutField { at, .. }
         | E::NodeNotVisible { at, .. }

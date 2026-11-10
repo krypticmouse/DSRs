@@ -527,7 +527,7 @@ impl<S: Signature> Predict<S> {
             return Ok(Arc::clone(interpreter));
         }
         let env = self.runtime_env(lm);
-        let interpreter = Interpreter::load((**program).clone(), env)
+        let interpreter = Interpreter::load_shared(Arc::clone(program), env)
             .await
             .map_err(|err| internal_source("failed to load predict program", err))?;
         let interpreter = Arc::new(interpreter);
@@ -1131,8 +1131,8 @@ fn translate_parse_error<S: Signature>(err: ParseError) -> ParseError {
 }
 
 /// Maps an interpreter [`RunError`] onto the historical [`PredictError`]
-/// variants: `Lm`/`Parse`/`Replay` map structurally; everything else (input
-/// validation, internal invariants) surfaces as an internal LM error.
+/// variants: `Lm`/`Parse`/`Replay` map structurally; input validation uses the
+/// non-retryable `Params` variant, while interpreter invariants remain internal.
 fn map_run_error<S: Signature>(err: RunError) -> PredictError {
     match err {
         RunError::Lm { source, .. } => PredictError::Lm { source },
@@ -1151,6 +1151,10 @@ fn map_run_error<S: Signature>(err: RunError) -> PredictError {
             lm_usage: usage,
         },
         RunError::Replay { source, .. } => PredictError::Replay { source },
+        input @ RunError::Input { .. } => PredictError::Params {
+            name: std::any::type_name::<S>().to_string(),
+            source: Box::new(input),
+        },
         other => internal_source("interpreter call failed", other),
     }
 }
@@ -1341,6 +1345,16 @@ where
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn input_render_failure_is_non_retryable_predict_error() {
+        let err = map_run_error::<PredictConversionSig>(RunError::Input {
+            at: "self".into(),
+            message: "failed to render input".into(),
+        });
+        assert!(matches!(err, PredictError::Params { .. }));
+        assert!(!err.is_retryable());
+    }
 
     #[derive(crate::Signature, Clone, Debug)]
     struct PredictConversionSig {
