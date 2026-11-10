@@ -1019,12 +1019,10 @@ impl LM {
             && let Some(schema) = options.output_schema.clone()
         {
             let _: schemars::Schema = serde_json::from_value(schema)
-                .map_err(|err| anyhow::anyhow!("invalid output schema: {err}"))?;
+                .map_err(|source| crate::LmCallError::InvalidOutputSchema {source})?;
         }
         if options.json_mode && !(self.supports_json_mode() || options.force_output_schema) {
-            return Err(anyhow::anyhow!(
-                "JSON mode is unsupported by this LM client"
-            ));
+            return Err(crate::LmCallError::UnsupportedOption {option: "JSON mode"}.into());
         }
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
