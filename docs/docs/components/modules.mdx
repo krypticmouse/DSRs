@@ -164,6 +164,25 @@ pub async fn forward_all<M: Module + ?Sized>(
 | Ordering | Results preserve input order regardless of completion order. |
 | Tracing | Instrumented as `dsrs.forward_all` at debug level. |
 
+## Function helper: `#[cot]`
+
+For a function-shaped predictor, `#[dspy_rs::cot]` generates the same typed
+reasoning augmentation used by `ChainOfThought<S>`:
+
+```rust
+/// Answer the question and explain the calculation.
+#[dspy_rs::cot]
+fn explain(question: String) -> String;
+
+// Within an async scope with a configured LM:
+let output = explain("2+2?".into()).await?;
+println!("{}: {}", output.reasoning, output.explain);
+```
+
+The answer field takes the function's name (`explain` here). Struct-based modules
+use a `ChainOfThought<YourSignature>` field; `#[cot]` decorates a function
+declaration. Both request reasoning before the answer and return typed fields.
+
 ## `ChainOfThought<S>`
 
 `ChainOfThought` is pure sugar, a type alias rather than a distinct struct:
