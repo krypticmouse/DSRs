@@ -16,7 +16,6 @@ exclude = [
 [dependencies]
 futures = { workspace = true }
 indexmap = { version = "2.10.0", features = ["serde"] }
-rayon = "1.10.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -37,9 +36,9 @@ arrow = { version = "56.1.0", optional = true }
 regex = "1.11.2"
 reqwest = { workspace = true, features = ["blocking"] }
 rand = "0.8.5"
-foyer = { version = "0.20.0", features = ["serde"]}
-# Runtime dep (not dev-only): utils/cache.rs owns a TempDir for the disk cache tier.
-tempfile = { workspace = true }
+foyer = { version = "0.20.0", features = ["serde"], optional = true }
+# The optional disk cache owns a TempDir; tests also use tempfile below.
+tempfile = { workspace = true, optional = true }
 rig-core = { workspace = true }
 enum_dispatch = "0.3.13"
 tracing = "0.1.44"
@@ -55,12 +54,15 @@ dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
 ignored = ["rig-core"]
 
 [features]
-default = ["data"]
+default = ["data", "cache"]
 # CSV/Parquet/HuggingFace dataset ingestion (the arrow stack). JSON/JSONL
 # loading is always available. Build with --no-default-features for a
 # meaningfully lighter dependency tree.
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
+# Optional response-cache storage; execution history is always available.
+cache = ["dep:foyer", "dep:tempfile"]
 
 [dev-dependencies]
+tempfile = { workspace = true }
 rstest = "0.25.0"
 temp-env = { version = "0.3.6", features = ["async_closure"] }

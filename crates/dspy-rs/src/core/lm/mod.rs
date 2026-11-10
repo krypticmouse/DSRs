@@ -19,8 +19,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+#[cfg(feature = "cache")]
 use crate::ResponseCache;
 use crate::trace::SpanEvent;
+#[cfg(feature = "cache")]
 use crate::utils::cache::CacheEntry;
 
 #[derive(Clone, Debug)]
@@ -164,6 +166,8 @@ impl Default for LMConfig {
 pub struct LM {
     pub history: crate::HistoryBuffer,
     pub config: LMConfig,
+    /// Response cache storage, available only with the `cache` Cargo feature.
+    #[cfg(feature = "cache")]
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
 }
@@ -206,6 +210,7 @@ impl LM {
         )
     )]
     pub async fn from_config(config: LMConfig) -> Result<Self> {
+        validate_cache_setting(config.cache)?;
         // Determine which build case based on what's provided
         let client = match (&config.base_url, &config.api_key, &config.model) {
             // Case 1: OpenAI-compatible with authentication (base_url + api_key)
@@ -242,6 +247,7 @@ impl LM {
             }
         };
 
+        #[cfg(feature = "cache")]
         let cache_handler = if config.cache {
             debug!("initializing response cache");
             Some(Arc::new(ResponseCache::new().await))
@@ -253,12 +259,15 @@ impl LM {
         Ok(LM {
             history: crate::HistoryBuffer::default(),
             config,
+            #[cfg(feature = "cache")]
             cache_handler,
             client: Some(client),
         })
     }
 
     pub async fn with_client(self, client: LMClient) -> Result<Self> {
+        validate_cache_setting(self.config.cache)?;
+        #[cfg(feature = "cache")]
         let cache_handler = if self.config.cache {
             Some(Arc::new(ResponseCache::new().await))
         } else {
@@ -266,6 +275,7 @@ impl LM {
         };
         Ok(LM {
             history: crate::HistoryBuffer::default(),
+            #[cfg(feature = "cache")]
             cache_handler,
             client: Some(Arc::new(client)),
             ..self
@@ -343,6 +353,14 @@ enum ChoiceAction {
         full_content: Box<rig::OneOrMany<AssistantContent>>,
         assistant_text: Option<String>,
     },
+}
+
+fn validate_cache_setting(enabled: bool) -> Result<()> {
+    anyhow::ensure!(
+        !enabled || cfg!(feature = "cache"),
+        "response caching requires the `cache` Cargo feature"
+    );
+    Ok(())
 }
 
 /// Scan all content blocks in a response to find actionable items.
@@ -428,6 +446,7 @@ impl LM {
     /// automatically. Hashing streams through the `Debug` representation — no
     /// intermediate JSON tree or string is materialized. Uses the same stable
     /// hasher as the trace format's `request_hash`.
+    #[cfg(feature = "cache")]
     fn cache_key_for(&self, messages: &Chat) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
@@ -787,16 +806,19 @@ impl LM {
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
     ) -> Result<LMResponse> {
+        validate_cache_setting(self.config.cache)?;
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
 
         // Response cache: only tool-free calls are cached — tool loops execute
         // side-effectful user code and must not be replayed from cache.
+        #[cfg(feature = "cache")]
         let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
             Some(self.cache_key_for(&messages))
         } else {
             None
         };
+        #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
             && let Some(entry) = cache.get_entry(key).await?
             && let Some(raw_output) = entry.raw_output
@@ -933,6 +955,7 @@ impl LM {
         // covers the tool-loop and "no tools available" fallbacks, and
         // `returned_tool_calls` covers caller-managed tool responses. This runs
         // before `messages` is moved into the returned chat below.
+        #[cfg(feature = "cache")]
         if let (Some(key), Some(cache)) = (cache_key, self.cache_handler.as_ref())
             && returned_tool_calls.is_empty()
             && !append_output_after_history
@@ -1236,6 +1259,7 @@ mod tests {
                 retry_base_delay_ms: 1,
                 cache: false,
             },
+            #[cfg(feature = "cache")]
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
         }

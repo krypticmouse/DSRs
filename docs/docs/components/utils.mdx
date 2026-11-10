@@ -16,6 +16,8 @@ let id: u64 = stable_hash_debug(&value);
 
 ## `ResponseCache`
 
+Available with the `cache` Cargo feature, which is enabled by default. This feature also enables the `CacheEntry`, `CacheKey`, and `LM::cache_handler` APIs. Without it, `.cache(true).build().await` returns an error explaining the missing feature; ordinary LM calls and execution history remain available.
+
 A hybrid memory plus disk LM response cache built on [foyer](https://docs.rs/foyer): 256MB in memory and 1GB on disk in a per-process temp directory (if the disk tier cannot be initialized, the cache degrades to memory-only with a warning instead of panicking). The cache is created automatically by `LM`; you do not construct it directly. Its internally synchronized storage is independent of [execution history](/docs/components/lm#inspecting-history).
 
 | Method | Signature | Behavior |

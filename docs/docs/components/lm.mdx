@@ -57,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
 
 The live `LM` adds:
   - `client` - Internal provider client (initialized during build)
-  - `cache_handler` - Optional response cache (initialized during build if enabled)
+  - `cache_handler` - Optional response cache (available with the `cache` Cargo feature, initialized during build if enabled)
+  - `history` - Bounded invocation history, available with every feature configuration
 
 Cloning an `LM` is cheap - clones share the same HTTP client and cache via `Arc`, making them ideal for concurrent use.
 

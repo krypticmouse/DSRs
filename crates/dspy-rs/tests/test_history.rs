@@ -52,7 +52,7 @@ fn chat() -> Chat {
 
 #[rstest::rstest]
 #[case(false)]
-#[case(true)]
+#[cfg_attr(feature = "cache", case(true))]
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
 async fn calls_are_recorded_with_and_without_caching(#[case] cache: bool) {

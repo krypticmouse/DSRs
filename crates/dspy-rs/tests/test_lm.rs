@@ -1,6 +1,42 @@
 use dspy_rs::{LM, LMConfig, LmUsage};
 use rstest::*;
 
+#[tokio::test]
+#[cfg(not(feature = "cache"))]
+async fn requesting_cache_without_feature_fails_before_provider_initialization() {
+    let error = LM::builder().cache(true).build().await.err().unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the `cache` Cargo feature")
+    );
+}
+
+#[tokio::test]
+#[cfg(not(feature = "cache"))]
+async fn changing_cache_flag_after_build_does_not_silently_ignore_missing_feature() {
+    let mut lm = LM::builder()
+        .base_url("http://localhost:1/v1".into())
+        .model("test".into())
+        .build()
+        .await
+        .unwrap();
+    lm.config.cache = true;
+    let error = lm
+        .call(
+            dspy_rs::Chat::new(vec![dspy_rs::Message::user("hello")]),
+            vec![],
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("requires the `cache` Cargo feature")
+    );
+    assert!(lm.inspect_history(1).await[0].error.is_some());
+}
+
 #[rstest]
 fn lm_config_serializes_without_secrets() {
     let config = LMConfig {
@@ -22,6 +58,7 @@ fn lm_config_serializes_without_secrets() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn lm_from_config_builds_live_client() {
     let config = LMConfig {
         model: "openai:gpt-4o-mini".to_string(),
@@ -72,6 +109,7 @@ fn test_lm_usage_add() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_with_cache_enabled() {
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -101,11 +139,14 @@ async fn test_lm_with_cache_disabled() {
     .unwrap();
 
     // Verify cache handler is NOT initialized when cache is disabled
+    #[cfg(feature = "cache")]
     assert!(lm.cache_handler.is_none());
+    assert!(lm.inspect_history(1).await.is_empty());
 }
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_initialization_on_first_call() {
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
@@ -123,6 +164,7 @@ async fn test_lm_cache_initialization_on_first_call() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_direct_operations() {
     use dspy_rs::utils::cache::{CacheEntry, CacheKey};
 
@@ -172,6 +214,7 @@ async fn test_lm_cache_direct_operations() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_lm_cache_with_different_models() {
     // Test that cache works with different model configurations
     let models = vec!["openai:gpt-3.5-turbo", "anthropic:claude-3-haiku-20240307"];
@@ -198,6 +241,7 @@ async fn test_lm_cache_with_different_models() {
 
 #[tokio::test]
 #[cfg_attr(miri, ignore)]
+#[cfg(feature = "cache")]
 async fn test_cache_preserves_usage_and_history() {
     use dspy_rs::utils::cache::{CacheEntry, CacheKey};
 
