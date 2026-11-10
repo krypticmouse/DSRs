@@ -14,7 +14,7 @@ impl std::fmt::Display for JsonishError {
 
 impl StdError for JsonishError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.0.source()
+        Some(self.0.as_ref())
     }
 }
 
@@ -298,7 +298,10 @@ pub enum LmCallError {
     #[error("Image responses without text or tool calls are not supported")]
     UnsupportedContent,
     #[error("invalid output schema: {source}")]
-    InvalidOutputSchema { #[source] source: serde_json::Error },
+    InvalidOutputSchema {
+        #[source]
+        source: serde_json::Error,
+    },
     #[error("{option} is unsupported by this LM client")]
     UnsupportedOption { option: &'static str },
     #[error("{feature} requires the `{feature}` Cargo feature")]
@@ -312,7 +315,9 @@ impl LmCallError {
             Self::NotInitialized => LmFailureKind::Configuration,
             Self::UnsupportedContent => LmFailureKind::UnsupportedContent,
             Self::InvalidOutputSchema { .. } => LmFailureKind::BadRequest,
-            Self::UnsupportedOption { .. } | Self::FeatureDisabled { .. } => LmFailureKind::Configuration,
+            Self::UnsupportedOption { .. } | Self::FeatureDisabled { .. } => {
+                LmFailureKind::Configuration
+            }
         }
     }
 

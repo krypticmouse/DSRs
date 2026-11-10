@@ -94,6 +94,17 @@ impl Module for Echo {
     }
 }
 struct Exact;
+
+struct Parent {
+    leaf: Predict<QA>,
+}
+impl Module for Parent {
+    type Input = QAInput;
+    type Output = QAOutput;
+    async fn forward(&self, input: QAInput) -> Result<Predicted<QAOutput>, PredictError> {
+        self.leaf.call(input).await
+    }
+}
 impl TypedMetric<(QAInput, QAOutput), Echo> for Exact {
     async fn evaluate(
         &self,
@@ -215,7 +226,9 @@ async fn full_prompt_and_response_logs_require_the_content_target() {
         .with_client(LMClient::Test(client))
         .await
         .unwrap();
-    let predictor = Predict::<QA>::builder().lm(lm).build();
+    let predictor = Parent {
+        leaf: Predict::<QA>::builder().lm(lm).build(),
+    };
     for enabled in [false, true] {
         let records = Records::default();
         let filter = if enabled {
@@ -234,6 +247,12 @@ async fn full_prompt_and_response_logs_require_the_content_target() {
             .await
             .unwrap();
         let records = records.lock().unwrap();
+        assert!(records.iter().any(|(name, fields)| {
+            name == "dsrs.module.call"
+                && fields
+                    .get("module")
+                    .is_some_and(|name| name.contains("Parent"))
+        }));
         let content = records.iter().any(|(_, fields)| {
             fields.contains_key("prompt")
                 || fields.contains_key("response")
