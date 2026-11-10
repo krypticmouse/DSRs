@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tracing::{debug, trace, warn};
 
+use crate::ResponseCache;
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
-use crate::ResponseCache;
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -500,16 +500,17 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self
-            .client
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder."))?;
+        let client = self.client.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
+        })?;
 
         let mut attempt = 0u32;
         loop {
             match client.completion(build_request()).await {
                 Ok(response) => return Ok(response),
-                Err(err) if attempt < self.config.max_retries && is_retryable_completion_error(&err) => {
+                Err(err)
+                    if attempt < self.config.max_retries && is_retryable_completion_error(&err) =>
+                {
                     let backoff = self
                         .config
                         .retry_base_delay_ms
@@ -548,23 +549,22 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| {
-                                    ToolLoopError::Execution {
-                                        name: tc.function.name.clone(),
-                                        context: context.to_owned(),
-                                        source: Box::new(err),
-                                    }
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| ToolLoopError::Execution {
+                                    name: tc.function.name.clone(),
+                                    context: context.to_owned(),
+                                    source: Box::new(err),
+                                })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
                         let message = ToolLoopError::UnknownTool {
                             name: tc.function.name.clone(),
-                        }.to_string();
+                        }
+                        .to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -640,7 +640,10 @@ impl LM {
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
         if max_iterations == 0 {
-            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+            return Err(ToolLoopError::IterationLimit {
+                limit: max_iterations,
+            }
+            .into());
         }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
@@ -717,7 +720,10 @@ impl LM {
                 } => {
                     if iteration == max_iterations {
                         warn!(max_iterations, "max tool iterations reached");
-                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+                        return Err(ToolLoopError::IterationLimit {
+                            limit: max_iterations,
+                        }
+                        .into());
                     }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
@@ -725,7 +731,8 @@ impl LM {
                     });
                     let context = format!("iteration {}", iteration);
                     debug!(iteration, count = calls.len(), "executing tool calls");
-                    let results = Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
+                    let results =
+                        Self::execute_tool_batch(&tools.by_name, &calls, &context).await?;
                     for record in &results {
                         all_tool_calls.push(record.call.clone());
                         all_tool_executions.push(record.result.clone());
@@ -743,7 +750,10 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
+        Err(ToolLoopError::IterationLimit {
+            limit: max_iterations,
+        }
+        .into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
