@@ -525,6 +525,7 @@ impl Optimizer for GEPA {
         self.common().engine_config()
     }
 
+    #[tracing::instrument(name = "dsrs.gepa.compile", skip_all, fields(iterations = self.num_iterations))]
     async fn compile(
         &self,
         target: &mut OptimizeTarget<'_>,

@@ -15,10 +15,9 @@ use dspy_rs::{
     configure, evaluate_trainset, init_tracing,
 };
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QuestionAnswering {
-    /// Answer the question accurately and concisely.
-
     #[input]
     question: String,
 

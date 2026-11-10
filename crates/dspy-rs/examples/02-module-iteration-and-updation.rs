@@ -11,6 +11,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::prelude::*;
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]

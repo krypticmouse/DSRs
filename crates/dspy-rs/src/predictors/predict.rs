@@ -266,7 +266,7 @@ impl<S: Signature> Predict<S> {
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
         let input_map = json_map_from_input::<S>(&input)
-            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+            .map_err(|err| internal_source("failed to serialize input", err))?;
         let run = interpreter
             .run_collecting(input_map, overlay, Budget::unlimited())
             .await
@@ -310,7 +310,7 @@ impl<S: Signature> Predict<S> {
                 source: LmError::Provider {
                     provider: "configuration".into(),
                     message: "failed to initialize LM override".into(),
-                    source: Some(err.into()),
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                 },
             })?;
         self.call_with_lm(input, lm).await
@@ -409,7 +409,7 @@ impl<S: Signature> Predict<S> {
             root = root.out(&field.name, ir::out(leaf, &field.name));
         }
         b.main(sid, root)
-            .map_err(|err| internal_error(format!("failed to build agent program: {err}")))
+            .map_err(|err| internal_source("failed to build agent program", err))
     }
 
     /// Builds the 1-node `predict` program: leaf name = the trace-name
@@ -438,7 +438,7 @@ impl<S: Signature> Predict<S> {
             root = root.out(&field.name, ir::out(leaf, &field.name));
         }
         b.main(sid, root)
-            .map_err(|err| internal_error(format!("failed to build predict program: {err}")))
+            .map_err(|err| internal_source("failed to build predict program", err))
     }
 
     /// The instance overlay: instruction override + demos as slot values
@@ -564,7 +564,7 @@ impl<S: Signature> Predict<S> {
         let env = self.runtime_env(lm);
         let interpreter = Interpreter::load((**program).clone(), env)
             .await
-            .map_err(|err| internal_error(format!("failed to load predict program: {err}")))?;
+            .map_err(|err| internal_source("failed to load predict program", err))?;
         let interpreter = Arc::new(interpreter);
         *slot = Some((Arc::clone(lm), Arc::clone(&interpreter)));
         Ok(interpreter)
@@ -600,7 +600,7 @@ impl<S: Signature> Predict<S> {
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
         let input_map = json_map_from_input::<S>(input)
-            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+            .map_err(|err| internal_source("failed to serialize input", err))?;
         let chat = interpreter
             .conversation_opening(&input_map, overlay)
             .map_err(map_run_error::<S>)?;
@@ -1066,6 +1066,17 @@ fn field_type_from_json_schema(
 
 /// Internal (non-provider, non-parse) failure surfaced through the historical
 /// `PredictError::Lm { provider: "internal" }` shape.
+fn internal_source(context: &str, error: impl Into<anyhow::Error>) -> PredictError {
+    let error = error.into();
+    PredictError::Lm {
+        source: LmError::Provider {
+            provider: "internal".into(),
+            message: format!("{context}: {error}"),
+            source: Some(error.reallocate_into_boxed_dyn_error_without_backtrace()),
+        },
+    }
+}
+
 fn internal_error(message: String) -> PredictError {
     PredictError::Lm {
         source: LmError::Provider {
@@ -1191,7 +1202,7 @@ fn map_run_error<S: Signature>(err: RunError) -> PredictError {
             lm_usage: usage,
         },
         RunError::Replay { source, .. } => PredictError::Replay { source },
-        other => internal_error(other.to_string()),
+        other => internal_source("interpreter call failed", other),
     }
 }
 
