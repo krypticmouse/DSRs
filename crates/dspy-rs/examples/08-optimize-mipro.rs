@@ -10,9 +10,9 @@ cargo run --example 08-optimize-mipro --features data
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    DataLoader, Example, LM, MIPROv2, Eval, Module, ModuleState, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedLoadOptions, TypedMetric, average_score,
-    configure, evaluate_trainset, init_tracing,
+    DataLoader, Eval, Example, LM, MIPROv2, Module, ModuleState, Optimizer, Predict, PredictError,
+    Predicted, Signature, TypedLoadOptions, TypedMetric, average_score, configure,
+    evaluate_trainset, init_tracing,
 };
 
 /// Answer the question accurately and concisely.
@@ -132,7 +132,10 @@ async fn main() -> Result<()> {
         println!(
             "Predictor `{predictor}`: {} bootstrapped demos, instruction override: {}",
             predictor_state.demos.len(),
-            predictor_state.instruction_override.as_deref().unwrap_or("<none>"),
+            predictor_state
+                .instruction_override
+                .as_deref()
+                .unwrap_or("<none>"),
         );
     }
     state.save("optimized-qa.json")?;

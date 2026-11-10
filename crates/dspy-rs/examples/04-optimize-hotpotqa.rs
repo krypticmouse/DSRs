@@ -67,10 +67,12 @@ impl TypedMetric<HotpotRow, QAModule> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let examples = DataLoader::load_hf::<HotpotRow>(
         "hotpotqa/hotpot_qa",

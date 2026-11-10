@@ -61,10 +61,12 @@ impl TypedMetric<HotpotRow, Predict<QA>> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     // Loaders are generic over the row struct: extra dataset columns land in
     // the row's metric-only fields instead of being thrown away.
