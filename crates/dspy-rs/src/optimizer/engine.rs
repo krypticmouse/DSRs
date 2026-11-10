@@ -972,7 +972,11 @@ impl Engine {
 
         let best = self.matrix.best_by_mean();
         let score_count: usize = evals.iter().map(|eval| eval.rollouts.len()).sum();
-        let score_sum: f64 = evals.iter().flat_map(|eval| &eval.rollouts).map(|rollout| rollout.eval.score).sum();
+        let score_sum: f64 = evals
+            .iter()
+            .flat_map(|eval| &eval.rollouts)
+            .map(|rollout| rollout.eval.score)
+            .sum();
         tracing::info!(fresh = pending.len(), cached = cached.len(),
             best_candidate = ?best, best_score = ?best.and_then(|id| self.matrix.mean(id)),
             average_score = ?(score_count > 0).then(|| score_sum / score_count as f64),
@@ -1171,8 +1175,8 @@ impl Engine {
     ) -> Result<(Vec<(usize, usize, Eval, Trace)>, usize)> {
         let gauge = Gauge::default();
 
-        let fresh: Vec<(usize, usize, Eval, Trace)> =
-            stream::iter(pending.iter().enumerate().map(|(rollout, &(candidate, idx))| {
+        let fresh: Vec<(usize, usize, Eval, Trace)> = stream::iter(pending.iter().enumerate().map(
+            |(rollout, &(candidate, idx))| {
                 let bound = bound[&candidate].clone();
                 let candidate_hash = self.candidates[candidate].0;
                 let incoming = crate::current_sampling_options();
@@ -1192,16 +1196,28 @@ impl Engine {
                         },
                         target.run(idx, bound, candidate_hash),
                     )
-                    .await.map_err(|source| RolloutError {candidate, example: idx, source})?;
+                    .await
+                    .map_err(|source| RolloutError {
+                        candidate,
+                        example: idx,
+                        source,
+                    })?;
                     tracing::info!(score = eval.score, "optimizer rollout completed");
                     Ok::<_, anyhow::Error>((candidate, idx, eval, trace))
                 }
-                .instrument(tracing::info_span!("dsrs.optimizer.rollout", candidate,
-                    example = idx, candidate_hash, rollout = rollout + 1, total = pending.len()))
-            }))
-            .buffer_unordered(self.config.concurrency.max(1))
-            .try_collect()
-            .await?;
+                .instrument(tracing::info_span!(
+                    "dsrs.optimizer.rollout",
+                    candidate,
+                    example = idx,
+                    candidate_hash,
+                    rollout = rollout + 1,
+                    total = pending.len()
+                ))
+            },
+        ))
+        .buffer_unordered(self.config.concurrency.max(1))
+        .try_collect()
+        .await?;
 
         Ok((fresh, gauge.peak()))
     }

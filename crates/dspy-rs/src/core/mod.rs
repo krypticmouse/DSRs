@@ -31,7 +31,10 @@ pub mod settings;
 pub mod signature;
 mod state;
 
-pub use errors::{ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError, PredictError};
+pub use errors::{
+    ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
+    PredictError,
+};
 pub use example::{ToInput, ToOutput};
 pub use history::{
     HistoryBuffer, HistoryEntry, HistoryRecord, clear_history, inspect_history,

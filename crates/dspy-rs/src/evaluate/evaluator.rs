@@ -1,9 +1,9 @@
 use anyhow::Result;
 use futures::stream::{self, StreamExt, TryStreamExt};
 
+use crate::Predicted;
 use crate::core::{Module, ToInput};
 use crate::trace::{SpanId, Trace, TraceMeta, TraceOutcome, capture_with_meta};
-use crate::Predicted;
 
 pub use crate::trace::Eval;
 
@@ -150,7 +150,9 @@ where
 /// produced it (with [`Trace::outcome`] filled in).
 pub type Rollout = (Eval, Trace);
 
-fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<crate::trace::JsonMap> {
+fn json_object(
+    value: Result<serde_json::Value, serde_json::Error>,
+) -> Option<crate::trace::JsonMap> {
     match value {
         Ok(serde_json::Value::Object(map)) => Some(map),
         _ => None,

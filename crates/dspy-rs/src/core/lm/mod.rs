@@ -463,7 +463,7 @@ enum ChoiceAction {
 
 fn validate_cache_setting(enabled: bool) -> Result<()> {
     if enabled && !cfg!(feature = "cache") {
-        return Err(crate::LmCallError::FeatureDisabled {feature: "cache"}.into());
+        return Err(crate::LmCallError::FeatureDisabled { feature: "cache" }.into());
     }
     Ok(())
 }
@@ -668,7 +668,10 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self.client.as_ref().ok_or(crate::LmCallError::NotInitialized)?;
+        let client = self
+            .client
+            .as_ref()
+            .ok_or(crate::LmCallError::NotInitialized)?;
 
         let mut attempt = 0u32;
         loop {
@@ -718,21 +721,22 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result = tool
-                            .call(tc.function.arguments.to_string())
-                            .await
-                            .map_err(|err| ToolLoopError::Execution {
-                                name: tc.function.name.clone(),
-                                context: context.to_owned(),
-                                source: Box::new(err),
-                            })?;
+                        let result =
+                            tool.call(tc.function.arguments.to_string())
+                                .await
+                                .map_err(|err| ToolLoopError::Execution {
+                                    name: tc.function.name.clone(),
+                                    context: context.to_owned(),
+                                    source: Box::new(err),
+                                })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
                         let message = ToolLoopError::UnknownTool {
                             name: tc.function.name.clone(),
-                        }.to_string();
+                        }
+                        .to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -809,7 +813,10 @@ impl LM {
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
         if max_iterations == 0 {
-            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+            return Err(ToolLoopError::IterationLimit {
+                limit: max_iterations,
+            }
+            .into());
         }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
@@ -887,7 +894,10 @@ impl LM {
                 } => {
                     if iteration == max_iterations {
                         warn!(max_iterations, "max tool iterations reached");
-                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+                        return Err(ToolLoopError::IterationLimit {
+                            limit: max_iterations,
+                        }
+                        .into());
                     }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
@@ -914,7 +924,10 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
+        Err(ToolLoopError::IterationLimit {
+            limit: max_iterations,
+        }
+        .into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
@@ -996,9 +1009,12 @@ impl LM {
         tool_loop_mode: ToolLoopMode,
         options: LMCallOptions,
     ) -> Result<LMResponse> {
-        let history = crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        let history =
+            crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
         debug!(target: "dsrs::content", prompt = %messages.to_json(), "formatted LM prompt");
-        let mut result = self.call_with_toolset_inner(messages, tools, tool_loop_mode, options).await;
+        let mut result = self
+            .call_with_toolset_inner(messages, tools, tool_loop_mode, options)
+            .await;
         history.finish(&mut result);
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
@@ -1018,10 +1034,13 @@ impl LM {
             && let Some(schema) = options.output_schema.clone()
         {
             let _: schemars::Schema = serde_json::from_value(schema)
-                .map_err(|source| crate::LmCallError::InvalidOutputSchema {source})?;
+                .map_err(|source| crate::LmCallError::InvalidOutputSchema { source })?;
         }
         if options.json_mode && !(self.supports_json_mode() || options.force_output_schema) {
-            return Err(crate::LmCallError::UnsupportedOption {option: "JSON mode"}.into());
+            return Err(crate::LmCallError::UnsupportedOption {
+                option: "JSON mode",
+            }
+            .into());
         }
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
@@ -1631,8 +1650,10 @@ mod tests {
             .err()
             .expect("image output must fail");
         assert!(error.to_string().contains("Image responses"));
-        assert!(matches!(error.downcast_ref::<crate::LmCallError>(),
-            Some(crate::LmCallError::UnsupportedContent)));
+        assert!(matches!(
+            error.downcast_ref::<crate::LmCallError>(),
+            Some(crate::LmCallError::UnsupportedContent)
+        ));
     }
 
     #[test]
