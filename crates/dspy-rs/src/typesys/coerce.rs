@@ -48,6 +48,13 @@ pub fn coerce(raw: &str, field_type: &FieldType, schema: &TypeTable) -> Result<C
     Ok(Coerced { value, flags })
 }
 
+/// Coerces a native JSON value without round-tripping string values through quoted JSON text.
+pub fn coerce_value(value: Value, field_type: &FieldType, schema: &TypeTable) -> Result<Coerced> {
+    let mut flags = Vec::new();
+    let value = coerce_json_value(value, field_type, schema, &mut flags)?;
+    Ok(Coerced { value, flags })
+}
+
 fn coerce_inner(
     raw: &str,
     field_type: &FieldType,
