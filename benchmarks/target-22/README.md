@@ -72,6 +72,20 @@ The runner takes `--rust EXE --candidate-record CANDIDATE_BUILD --baseline BASEL
 --python PYTHON --base-url URL --ollama-log WSL_PATH
 --out OUTSIDE_CHECKOUT`. Run without concurrent builds or model requests.
 
+On Windows, [build.ps1](build.ps1) builds a clean checkout and creates its binary
+and hash/command manifest. Use the current checkout for the candidate and a
+worktree at `fcf173173da7f2bf29cded39bbb97b35763c1820` for the object-schema baseline.
+Serialize both builds with the same target directory. For example, from this
+checkout, call `./benchmarks/target-22/build.ps1 -Worktree ../DSRs-perf-baseline
+-TargetDir C:/perf-target -OutputDir C:/perf-evidence -Kind baseline`, then repeat
+with `-Worktree . -Kind candidate`. Pass the resulting `baseline.exe/json` and
+`candidate.exe/json` paths to the runner. Git line-ending settings must preserve
+identical Rust workload bytes in both worktrees. Install Rust 1.98.1 and DSPy 3.2.1
+before building/running, and use the same Ollama endpoint/model for both programs.
+The exact original package versions and build records are in the result archive.
+
+See [RESULTS.md](RESULTS.md) for the completed comparison and its scope.
+
 `--modes cached offline` can collect independent mode groups after a completed
 live group. Each mode still needs all eight samples from all three programs.
 The controller waits for compiler-idle windows and retains attempts rejected
