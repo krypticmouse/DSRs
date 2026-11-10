@@ -462,10 +462,9 @@ enum ChoiceAction {
 }
 
 fn validate_cache_setting(enabled: bool) -> Result<()> {
-    anyhow::ensure!(
-        !enabled || cfg!(feature = "cache"),
-        "response caching requires the `cache` Cargo feature"
-    );
+    if enabled && !cfg!(feature = "cache") {
+        return Err(crate::LmCallError::FeatureDisabled {feature: "cache"}.into());
+    }
     Ok(())
 }
 
