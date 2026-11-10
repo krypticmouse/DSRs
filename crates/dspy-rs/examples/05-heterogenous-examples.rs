@@ -16,6 +16,7 @@ use anyhow::Result;
 use dspy_rs::prelude::*;
 use serde_json::json;
 
+/// Compute the square and cube of the supplied number.
 #[derive(Signature, Clone, Debug)]
 struct NumberSignature {
     #[input]

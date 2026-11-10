@@ -10,6 +10,7 @@ cargo run --example 06-other-providers-batch
 use anyhow::Result;
 use dspy_rs::{LM, Predict, Signature, configure, forward_all, init_tracing};
 
+/// Answer the question with concise factual reasoning and an answer.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
