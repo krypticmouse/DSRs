@@ -14,7 +14,7 @@ impl std::fmt::Display for JsonishError {
 
 impl StdError for JsonishError {
     fn source(&self) -> Option<&(dyn StdError + 'static)> {
-        self.0.source()
+        Some(self.0.as_ref())
     }
 }
 

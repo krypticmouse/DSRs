@@ -487,6 +487,7 @@ impl DataLoader {
     fn fetch_text(path: &str) -> std::result::Result<String, DataLoadError> {
         if is_url(path) {
             let response = reqwest::blocking::get(path)
+                .and_then(reqwest::blocking::Response::error_for_status)
                 .with_context(|| format!("failed to GET `{path}`"))
                 .map_err(DataLoadError::Io)?;
             response.text().map_err(|err| DataLoadError::Io(err.into()))
@@ -539,6 +540,7 @@ impl DataLoader {
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         if is_url(path) {
             let bytes = reqwest::blocking::get(path)
+                .and_then(reqwest::blocking::Response::error_for_status)
                 .with_context(|| format!("failed to GET `{path}`"))
                 .map_err(DataLoadError::Csv)?
                 .bytes()
