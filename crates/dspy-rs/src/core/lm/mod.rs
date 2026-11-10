@@ -475,7 +475,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> Result<ChoiceAct
     }
 
     if has_image {
-        anyhow::bail!("Image responses without text or tool calls are not supported");
+        return Err(crate::LmCallError::UnsupportedContent.into());
     }
 
     // Fallback: only reasoning blocks — extract display text
@@ -1582,6 +1582,8 @@ mod tests {
             .err()
             .expect("image output must fail");
         assert!(error.to_string().contains("Image responses"));
+        assert!(matches!(error.downcast_ref::<crate::LmCallError>(),
+            Some(crate::LmCallError::UnsupportedContent)));
     }
 
     #[test]

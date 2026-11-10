@@ -295,7 +295,7 @@ pub enum LmCallError {
     },
     #[error("LM client not initialized; construct the LM with its builder")]
     NotInitialized,
-    #[error("provider response contains no supported text or tool content")]
+    #[error("Image responses without text or tool calls are not supported")]
     UnsupportedContent,
 }
 
