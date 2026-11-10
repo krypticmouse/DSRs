@@ -56,6 +56,76 @@ fn chat() -> Chat {
     Chat::new(vec![Message::user("Use the counter, then finish")])
 }
 
+struct FailingTool;
+impl Tool for FailingTool {
+    const NAME: &'static str = "fails";
+    type Error = std::io::Error;
+    type Args = serde_json::Value;
+    type Output = String;
+    async fn definition(&self, _: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.into(),
+            description: "Fail for the error-chain test".into(),
+            parameters: serde_json::json!({"type":"object"}),
+        }
+    }
+    async fn call(&self, _: Self::Args) -> Result<String, Self::Error> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "fixture tool failed",
+        ))
+    }
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn tool_execution_failure_keeps_name_context_and_original_cause() {
+    let (lm, _) = lm(
+        1,
+        vec![AssistantContent::tool_call(
+            "call",
+            "fails",
+            serde_json::json!({}),
+        )],
+    )
+    .await;
+    let error = lm
+        .call(chat(), vec![Arc::new(FailingTool)])
+        .await
+        .unwrap_err();
+    let context = error.downcast_ref::<ToolLoopError>().unwrap();
+    assert!(
+        matches!(context, ToolLoopError::Execution {name, context, ..}
+        if name == "fails" && context == "initial")
+    );
+    assert!(error.chain().any(|source| {
+        source
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::InvalidInput)
+    }));
+    assert!(format!("{error:#}").contains("fixture tool failed"));
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore)]
+async fn missing_tool_feedback_remains_recoverable_without_executing_other_tools() {
+    let (lm, _) = lm(
+        1,
+        vec![
+            AssistantContent::tool_call("call", "missing", serde_json::json!({})),
+            AssistantContent::text("done"),
+        ],
+    )
+    .await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let response = lm.call(chat(), tools(&count)).await.unwrap();
+    assert_eq!(response.output.content(), "done");
+    assert_eq!(count.load(Ordering::SeqCst), 0);
+    assert!(response.events.iter().any(|event| matches!(event,
+        dspy_rs::SpanEvent::ToolRun {name, error: Some(error), ..}
+        if name == "missing" && error == "Tool 'missing' not found")));
+}
+
 #[rstest::rstest]
 #[case(1)]
 #[case(2)]
