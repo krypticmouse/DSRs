@@ -29,6 +29,28 @@ least 10% lower median Jinja latency and 50% fewer requested allocation bytes.
 Width 1 Jinja is descriptive. Raw ranges are not confidence intervals, and a
 failed control remains a failed/inconclusive result. Do not trim slow samples.
 
-These local rendering measurements support part of #24/#25; they do not establish
-the live inference/I/O speedup requested in #22 or a repository-wide ownership
-redesign. Functional error/fallback tests are separate from valid-input timings.
+## Warm system prompts
+
+`bench-system-prompts` measures `Interpreter::conversation_opening` over fixed
+signatures containing 1, 8 and 16 input fields. Model construction, load and its
+validation are excluded; no HTTP request is sent. The adapter's uncached system
+builder is the output oracle. Both executables use byte-identical harnesses and
+the same lockfile and release flags.
+
+`run_system.py` checks exact complete prompt bytes before timing eight samples
+per executable in ABBA order, with 100 warmups and 20,000 iterations per sample.
+Its predeclared gate is at least 10% lower median latency at each width. This
+measures repeated unchanged instructions. Scoped-instruction changes, concurrent
+bindings, fresh live inputs and graph lifetime have separate functional tests;
+cache-miss latency is not measured. The interpreter retains one last-used
+instruction/system pair per signature, and never retains live input values.
+
+Run `cargo +1.98.1 build -p dspy-rs --release --no-default-features --example bench-system-prompts --locked -j1`
+on each clean ref, then invoke `python benchmarks/rendering/run_system.py
+--baseline BASE_EXE --baseline-revision BASE_SHA --candidate PR_EXE --out OUT`.
+Retain the executable build provenance separately from the runner manifest.
+
+See [the retained results](RESULTS.md) and the
+[ownership decision](../../docs/adr/2026-11-10-runtime-ownership.md).
+These rendering measurements do not establish #22's live inference/I/O target.
+Functional error/fallback tests are separate from valid-input timings.

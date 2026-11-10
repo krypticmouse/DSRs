@@ -8,6 +8,7 @@ program to change its model.
 | --- | --- | --- |
 | Typed signature metadata | One immutable allocation per Rust signature type; adapters borrow its fields | Process, bounded by compiled types |
 | Dynamic signatures and program graph | `Arc<Program>` owned by the caller and loaded interpreters; no global dynamic-program cache | Last owner drops |
+| Compiled system prompt | Interpreter-owned cache, at most one instruction/prompt pair per signature; changing an instruction replaces the entry | Loaded interpreter |
 | Provider, HTTP client and prebuilt tool set | Shared handles; each interpreter resolves its own model/tool bindings | Owning LM/interpreter |
 | Predictor instruction, demos and overlay | Owned configuration or immutable scoped candidate; changing a candidate does not mutate another rollout | Predictor or evaluation scope |
 | Input, Jinja context, parse maps and output | Owned by one invocation; ordinary fields render by borrowing, one alias-aware Jinja value serves all templated fields | Formatting or invocation |
@@ -19,6 +20,12 @@ graph. Both run identical validation and capability checks. A predictor that
 rebinds its LM uses `load_shared`; rebinding no longer deep-clones the graph.
 Each run still owns its input/output map, overlay view, metering and trace state.
 Sharing a graph never shares a run's mutable state or replaces capability checks.
+
+System-prompt caching keys on the signature ID within this immutable program
+and compares the complete resolved instruction. A changed instruction rebuilds
+the prompt. Live inputs, demos, playbooks and feedback are rendered or appended
+per call and never retained by that cache. Concurrent instruction scopes may
+replace the last-used entry but cannot change one another's returned prompt.
 
 Typed signature metadata can be process-lived because the set of Rust types is
 fixed. Dynamic input strings and loaded graphs must not be leaked to obtain
