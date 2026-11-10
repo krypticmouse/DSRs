@@ -3,7 +3,7 @@ Example: optimize a typed QA module using MIPROv2.
 
 Run with:
 ```
-cargo run --example 08-optimize-mipro --features dataloaders
+cargo run --example 08-optimize-mipro --features data
 ```
 */
 
@@ -15,10 +15,9 @@ use dspy_rs::{
     configure, evaluate_trainset, init_tracing,
 };
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QuestionAnswering {
-    /// Answer the question accurately and concisely.
-
     #[input]
     question: String,
 

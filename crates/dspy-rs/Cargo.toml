@@ -18,6 +18,7 @@ futures = { workspace = true }
 indexmap = { version = "2.10.0", features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = "1.0.4"
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
@@ -61,6 +62,18 @@ default = ["data", "cache"]
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
 # Optional response-cache storage; execution history is always available.
 cache = ["dep:foyer", "dep:tempfile"]
+
+[[example]]
+name = "03-evaluate-hotpotqa"
+required-features = ["data"]
+
+[[example]]
+name = "04-optimize-hotpotqa"
+required-features = ["data"]
+
+[[example]]
+name = "08-optimize-mipro"
+required-features = ["data"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

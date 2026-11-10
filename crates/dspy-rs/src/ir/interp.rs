@@ -34,8 +34,10 @@ use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest, begin_span};
-use crate::typesys::{FieldType, TypeTable};
-use crate::{Chat, LM, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet};
+use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
+use crate::{
+    Chat, LM, LMCallOptions, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet,
+};
 
 // ---------------------------------------------------------------------------
 // Budgets
@@ -1031,7 +1033,12 @@ impl Interpreter {
             return Err(RunError::Budget { at: at.into() });
         }
 
-        let response = match lm.call(Chat::new(messages), Vec::new()).await {
+        let options = output_schema_options(lm, def, &self.program.types);
+        let structured = options.is_json();
+        let response = match lm
+            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 if let Some(guard) = guard {
@@ -1048,7 +1055,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -1056,10 +1063,12 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = ChatAdapter.parse_output_def(def, &self.program.types, &response.output);
-        if let Some(history) = &response.history {
-            history.parsed(&parsed);
-        }
+        let parsed = if structured {
+            ChatAdapter.parse_output_json_def(def, &self.program.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
+        };
+        if let Some(history) = &response.history { history.parsed(&parsed); }
         match parsed {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
@@ -1309,12 +1318,24 @@ impl Interpreter {
             Node::Predict(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
-                render_prompt(&p.sigs[n.sig], &p.types, &instruction, &demos, input, None)
+                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
+                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
+                render_prompt(
+                    &p.sigs[n.sig],
+                    &p.types,
+                    &instruction,
+                    &demos,
+                    input,
+                    None,
+                    format,
+                )
             }
             Node::AgentLoop(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
                 let policy = self.p_context(cx, n.context_policy);
+                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
+                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
                 render_prompt(
                     &p.sigs[n.sig],
                     &p.types,
@@ -1322,6 +1343,7 @@ impl Interpreter {
                     &demos,
                     input,
                     policy.playbook.as_deref(),
+                    format,
                 )
             }
             _ => unreachable!("conversation_leaf returns only leaves"),
@@ -1490,7 +1512,11 @@ impl Interpreter {
                 Node::Retry(n) => {
                     let mut attempt = 0u32;
                     loop {
-                        match self.eval(n.child, cx).await {
+                        let options = crate::current_sampling_options().child(
+                            format!("retry-{}", self.program.node_display(id)),
+                            attempt as usize,
+                        );
+                        match crate::with_sampling_options(options, self.eval(n.child, cx)).await {
                             Ok(out) => break out,
                             Err(err) if err.retryable() && attempt + 1 < n.max_attempts.get() => {
                                 attempt += 1;
@@ -1571,21 +1597,65 @@ impl Interpreter {
         n: &crate::ir::graph::RefineNode,
         cx: &mut Cx,
     ) -> Result<JsonMap, RunError> {
+        let mut best: Option<(f64, usize, JsonMap, SecondaryMap<NodeId, Option<JsonMap>>)> = None;
         for round in 0..n.max_rounds.get() {
-            let out = self.eval(n.child, cx).await?;
-            let judge_out = self.eval(n.judge, cx).await?;
+            let child_scope = crate::current_sampling_options().child(
+                format!("refine-{}", self.program.node_display(n.child)),
+                round as usize,
+            );
+            let out = crate::with_sampling_options(child_scope, self.eval(n.child, cx)).await?;
+            let judge_scope = crate::current_sampling_options().child(
+                format!("refine-judge-{}", self.program.node_display(n.judge)),
+                round as usize,
+            );
+            let judge_out =
+                crate::with_sampling_options(judge_scope, self.eval(n.judge, cx)).await?;
             let score = judge_out
                 .get("score")
                 .and_then(Value::as_f64)
                 .unwrap_or(f64::NEG_INFINITY);
-            if score >= n.threshold || round + 1 == n.max_rounds.get() {
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _, _, _)| score > *best_score)
+            {
+                best = Some((score, round as usize, out.clone(), cx.frames.clone()));
+            }
+            if score >= n.threshold {
+                let key = format!(
+                    "refine.{}.selected_round",
+                    self.program.node_display(n.child)
+                );
+                crate::trace::capture::set_trace_tag(key, (round + 1).to_string());
+                crate::trace::capture::set_trace_tag(
+                    format!(
+                        "refine.{}.selected_score",
+                        self.program.node_display(n.child)
+                    ),
+                    score.to_string(),
+                );
                 return Ok(out);
             }
             let feedback = judge_out.get("feedback").cloned().unwrap_or(Value::Null);
             let field = self.program.syms.get(n.feedback_field).to_string();
             cx.refine_feedback = Some((n.child, field, feedback));
         }
-        unreachable!("refine rounds are bounded and return inside the loop")
+        let (score, round, out, frames) = best.expect("refine has at least one bounded attempt");
+        cx.frames = frames;
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_round",
+                self.program.node_display(n.child)
+            ),
+            (round + 1).to_string(),
+        );
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_score",
+                self.program.node_display(n.child)
+            ),
+            score.to_string(),
+        );
+        Ok(out)
     }
 
     // -- leaves ---------------------------------------------------------------
@@ -1603,12 +1673,13 @@ impl Interpreter {
 
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
-        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None);
+        let lm = self.p_model(&at, cx, n.model)?;
+        let format = output_format(&output_schema_options(&lm, def, &p.types));
+        let (prefix, mut suffix) =
+            render_prompt(def, &p.types, &instruction, &demos, &input, None, format);
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let lm = self.p_model(&at, cx, n.model)?;
-
         let guard = begin_span(SpanRequest {
             component: &at,
             prefix: Some(&prefix),
@@ -1691,7 +1762,12 @@ impl Interpreter {
             });
         }
 
-        let response = match lm.call(Chat::new(messages), Vec::new()).await {
+        let options = output_schema_options(&lm, def, &p.types);
+        let structured = options.is_json();
+        let response = match lm
+            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 if let Some(guard) = guard {
@@ -1708,7 +1784,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -1716,10 +1792,12 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = ChatAdapter.parse_output_def(def, &p.types, &response.output);
-        if let Some(history) = &response.history {
-            history.parsed(&parsed);
-        }
+        let parsed = if structured {
+            ChatAdapter.parse_output_json_def(def, &p.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(def, &p.types, &response.output)
+        };
+        if let Some(history) = &response.history { history.parsed(&parsed); }
         match parsed {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
@@ -1966,6 +2044,8 @@ impl Interpreter {
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
         let policy = self.p_context(cx, n.context_policy);
+        let lm = self.p_model(&at, cx, n.model)?;
+        let format = output_format(&output_schema_options(&lm, def, &p.types));
         let (prefix, mut suffix) = render_prompt(
             def,
             &p.types,
@@ -1973,12 +2053,11 @@ impl Interpreter {
             &demos,
             &input,
             policy.playbook.as_deref(),
+            format,
         );
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let lm = self.p_model(&at, cx, n.model)?;
-
         let surface = self.build_agent_surface(&at, n, cx, true).await?;
 
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
@@ -2164,7 +2243,9 @@ impl Interpreter {
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
-            let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at).await?;
+            let options = output_schema_options(lc.lm, lc.def, types);
+            let structured = options.is_json();
+            let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events.clone());
@@ -2218,10 +2299,12 @@ impl Interpreter {
             // Text turn.
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
-                let parsed = ChatAdapter.parse_output_def(lc.def, types, &response.output);
-                if let Some(history) = &response.history {
-                    history.parsed(&parsed);
-                }
+                let parsed = if structured {
+                    ChatAdapter.parse_output_json_def(lc.def, types, &response.output)
+                } else {
+                    ChatAdapter.parse_output_def(lc.def, types, &response.output)
+                };
+                if let Some(history) = &response.history { history.parsed(&parsed); }
                 match parsed {
                     Ok((output, metas)) => {
                         return Ok(LoopOutcome::Done {
@@ -2235,7 +2318,7 @@ impl Interpreter {
                         chat.push_message(Message::user(format!(
                             "Your response could not be parsed: {err}. Respond again, \
                              producing every output field in the required \
-                             `[[ ## field ## ]]` format."
+                             required output format."
                         )));
                     }
                     Err(err) => {
@@ -2268,30 +2351,34 @@ impl Interpreter {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
+        let options = output_schema_options(lc.lm, lc.def, &self.program.types);
+        let structured = options.is_json();
         chat.push_message(Message::user(
             "Budget exhausted — wrap up now. Produce the final output fields in the required \
-             `[[ ## field ## ]]` format, without calling any tools.",
+             required output format, without calling any tools.",
         ));
         let response = lc
             .lm
-            .call(chat, Vec::new())
+            .call_with_options(chat, Vec::new(), ToolLoopMode::Auto, options)
             .await
             .map_err(|err| RunError::Lm {
                 at: lc.at.into(),
                 source: LmError::Provider {
                     provider: lc.lm.config.model.clone(),
                     message: err.to_string(),
-                    source: None,
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                 },
             })?;
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
         let raw = response.output.content();
-        let parsed = ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output);
-        if let Some(history) = &response.history {
-            history.parsed(&parsed);
-        }
+        let parsed = if structured {
+            ChatAdapter.parse_output_json_def(lc.def, &self.program.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output)
+        };
+        if let Some(history) = &response.history { history.parsed(&parsed); }
         let (output, metas) = parsed.map_err(|err| RunError::Parse {
             at: lc.at.into(),
             raw: raw.clone(),
@@ -2800,15 +2887,16 @@ async fn lm_call_toolset(
     chat: Chat,
     toolset: &ToolSet,
     at: &str,
+    options: LMCallOptions,
 ) -> Result<crate::core::lm::LMResponse, RunError> {
-    lm.call_with_toolset(chat, toolset, ToolLoopMode::CallerManaged)
+    lm.call_with_toolset_and_options(chat, toolset, ToolLoopMode::CallerManaged, options)
         .await
         .map_err(|err| RunError::Lm {
             at: at.into(),
             source: LmError::Provider {
                 provider: lm.config.model.clone(),
                 message: err.to_string(),
-                source: None,
+                source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
             },
         })
 }
@@ -2820,6 +2908,23 @@ async fn lm_call_toolset(
 /// Renders the (prefix, suffix) message split for a leaf call: prefix =
 /// system + demo turns, suffix = the live user turn. Instruction and demos
 /// arrive overlay-resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputFormat {
+    Delimited,
+    JsonSchema,
+    JsonMode,
+}
+
+fn output_format(options: &LMCallOptions) -> OutputFormat {
+    if options.output_schema.is_some() {
+        OutputFormat::JsonSchema
+    } else if options.json_mode {
+        OutputFormat::JsonMode
+    } else {
+        OutputFormat::Delimited
+    }
+}
+
 fn render_prompt(
     def: &SignatureDef,
     types: &TypeTable,
@@ -2827,9 +2932,20 @@ fn render_prompt(
     demos: &[DemoRow],
     input: &JsonMap,
     playbook: Option<&str>,
+    format: OutputFormat,
 ) -> (Vec<Message>, Vec<Message>) {
     let adapter = ChatAdapter;
-    let mut system = adapter.build_system_def(def, types, Some(instruction));
+    let structured = format != OutputFormat::Delimited;
+    let mut system = if structured {
+        adapter.build_system_json_def(
+            def,
+            types,
+            Some(instruction),
+            format == OutputFormat::JsonSchema,
+        )
+    } else {
+        adapter.build_system_def(def, types, Some(instruction))
+    };
     if let Some(playbook) = playbook {
         system.push_str("\n\n");
         system.push_str(playbook);
@@ -2837,13 +2953,39 @@ fn render_prompt(
     let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
     prefix.push(Message::system(system));
     for row in demos {
-        prefix.push(Message::user(adapter.format_input_def(def, &row.input)));
-        prefix.push(Message::assistant(
-            adapter.format_output_def(def, &row.output),
-        ));
+        prefix.push(Message::user(if structured {
+            adapter.format_input_json_def(def, &row.input)
+        } else {
+            adapter.format_input_def(def, &row.input)
+        }));
+        prefix.push(Message::assistant(if structured {
+            adapter.format_output_json_def(def, types, &row.output)
+        } else {
+            adapter.format_output_def(def, &row.output)
+        }));
     }
-    let suffix = vec![Message::user(adapter.format_input_def(def, input))];
+    let suffix = vec![Message::user(if structured {
+        adapter.format_input_json_def(def, input)
+    } else {
+        adapter.format_input_def(def, input)
+    })];
     (prefix, suffix)
+}
+
+fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCallOptions {
+    if lm.supports_output_schema() && json_schema_compatible(def, types) {
+        LMCallOptions {
+            output_schema: Some(json_schema_for_outputs(def, types)),
+            ..LMCallOptions::default()
+        }
+    } else if lm.supports_json_mode() {
+        LMCallOptions {
+            json_mode: true,
+            ..LMCallOptions::default()
+        }
+    } else {
+        LMCallOptions::default()
+    }
 }
 
 fn span_error(

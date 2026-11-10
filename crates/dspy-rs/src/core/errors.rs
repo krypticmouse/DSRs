@@ -45,8 +45,8 @@ pub enum ErrorClass {
 /// A call can fail at three stages, and which stage tells you what to do about it:
 ///
 /// 1. **[`Lm`](PredictError::Lm)** — couldn't reach the LM or it errored. Network,
-///    rate limit, timeout. Reported as a provider error; the rig client owns
-///    transport-level retries.
+///    rate limit, timeout. The LM applies its configured retry budget before
+///    returning the typed provider cause.
 /// 2. **[`Parse`](PredictError::Parse)** — the LM responded, but we couldn't extract
 ///    the expected fields from its output. Prompt-engineering problem. Retryable (the
 ///    LM might produce different output). Includes the raw response for debugging.
@@ -231,9 +231,8 @@ pub enum ConversionError {
 
 /// The LM provider failed before returning a usable response.
 ///
-/// Everything the provider stack reports arrives as [`Provider`](LmError::Provider):
-/// the provider name plus its error message and source. Not retryable — the
-/// underlying rig client owns transport-level retry behavior.
+/// The provider wrapper preserves its source chain. [`LmError::call_error`]
+/// exposes the transport classification after the LM's retry budget is exhausted.
 #[derive(Debug, thiserror::Error)]
 pub enum LmError {
     /// A provider-reported error.
@@ -247,11 +246,131 @@ pub enum LmError {
 }
 
 impl LmError {
+    pub fn call_error(&self) -> Option<&LmCallError> {
+        let mut cause = self.source();
+        while let Some(error) = cause {
+            if let Some(error) = error.downcast_ref::<LmCallError>() {
+                return Some(error);
+            }
+            cause = error.source();
+        }
+        None
+    }
+
     pub fn class(&self) -> ErrorClass {
-        ErrorClass::Internal
+        self.call_error()
+            .map_or(ErrorClass::Internal, LmCallError::class)
     }
 
     pub fn is_retryable(&self) -> bool {
-        false
+        self.class() == ErrorClass::Temporary
+    }
+}
+
+/// Stable categories for provider failures, independent of provider wording.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LmFailureKind {
+    RateLimited,
+    Authentication,
+    ContentPolicy,
+    BadRequest,
+    Server,
+    Network,
+    Temporary,
+    InvalidResponse,
+    Provider,
+    Configuration,
+    UnsupportedContent,
+}
+
+/// Typed causes retained by both direct LM calls and predictor error chains.
+#[derive(Debug, thiserror::Error)]
+pub enum LmCallError {
+    #[error("completion failed ({kind:?}, HTTP status {status:?}): {source}")]
+    Completion {
+        kind: LmFailureKind,
+        status: Option<u16>,
+        #[source]
+        source: rig::completion::CompletionError,
+    },
+    #[error("LM client not initialized; construct the LM with its builder")]
+    NotInitialized,
+    #[error("Image responses without text or tool calls are not supported")]
+    UnsupportedContent,
+}
+
+impl LmCallError {
+    pub fn kind(&self) -> LmFailureKind {
+        match self {
+            Self::Completion { kind, .. } => *kind,
+            Self::NotInitialized => LmFailureKind::Configuration,
+            Self::UnsupportedContent => LmFailureKind::UnsupportedContent,
+        }
+    }
+
+    pub fn http_status(&self) -> Option<u16> {
+        match self {
+            Self::Completion { status, .. } => *status,
+            _ => None,
+        }
+    }
+
+    pub fn class(&self) -> ErrorClass {
+        match self.kind() {
+            LmFailureKind::RateLimited
+            | LmFailureKind::Server
+            | LmFailureKind::Network
+            | LmFailureKind::Temporary => ErrorClass::Temporary,
+            LmFailureKind::Authentication
+            | LmFailureKind::ContentPolicy
+            | LmFailureKind::BadRequest
+            | LmFailureKind::Configuration => ErrorClass::BadRequest,
+            LmFailureKind::InvalidResponse | LmFailureKind::UnsupportedContent => {
+                ErrorClass::BadResponse
+            }
+            LmFailureKind::Provider => ErrorClass::Internal,
+        }
+    }
+
+    pub fn is_retryable(&self) -> bool {
+        self.class() == ErrorClass::Temporary
+    }
+}
+
+impl From<rig::completion::CompletionError> for LmCallError {
+    fn from(source: rig::completion::CompletionError) -> Self {
+        use rig::completion::CompletionError;
+        use rig::http_client::Error as HttpError;
+        let status = match &source {
+            CompletionError::HttpError(
+                HttpError::InvalidStatusCode(status)
+                | HttpError::InvalidStatusCodeWithMessage(status, _),
+            ) => Some(status.as_u16()),
+            _ => None,
+        };
+        let kind = match status {
+            Some(429) => LmFailureKind::RateLimited,
+            Some(401) => LmFailureKind::Authentication,
+            Some(403) => LmFailureKind::ContentPolicy,
+            Some(500..=599) => LmFailureKind::Server,
+            Some(400..=499) => LmFailureKind::BadRequest,
+            _ if crate::core::lm::is_retryable_completion_error(&source) => {
+                if matches!(source, CompletionError::HttpError(_)) {
+                    LmFailureKind::Network
+                } else {
+                    LmFailureKind::Temporary
+                }
+            }
+            _ => match &source {
+                CompletionError::RequestError(_) => LmFailureKind::BadRequest,
+                CompletionError::ResponseError(_) => LmFailureKind::InvalidResponse,
+                _ => LmFailureKind::Provider,
+            },
+        };
+        Self::Completion {
+            kind,
+            status,
+            source,
+        }
     }
 }

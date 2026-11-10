@@ -84,6 +84,10 @@ impl TraceSink {
         }
     }
 
+    fn tag(&self, key: String, value: String) {
+        self.0.lock().unwrap().trace.meta.tags.insert(key, value);
+    }
+
     fn begin(&self, req: SpanRequest<'_>) -> SpanGuard {
         let mut inner = self.0.lock().unwrap();
 
@@ -229,6 +233,13 @@ where
 /// Returns `true` if the current task is inside a [`capture`] scope.
 pub fn is_capturing() -> bool {
     ACTIVE.try_with(|_| ()).is_ok()
+}
+
+/// Adds or replaces a free-form tag on the active trace, if capture is active.
+pub(crate) fn set_trace_tag(key: impl Into<String>, value: impl Into<String>) -> bool {
+    ACTIVE
+        .try_with(|sink| sink.tag(key.into(), value.into()))
+        .is_ok()
 }
 
 /// Everything recorded eagerly at span open.

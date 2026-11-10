@@ -53,6 +53,23 @@ pub enum ToolLoopMode {
     CallerManaged,
 }
 
+/// Failures of the automatic tool loop. Missing tools are sent back to the
+/// model as recoverable feedback; limit and execution failures stop the call.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolLoopError {
+    #[error("Max tool iterations reached (limit {limit})")]
+    IterationLimit { limit: usize },
+    #[error("Tool '{name}' not found")]
+    UnknownTool { name: String },
+    #[error("tool `{name}` execution failed ({context}): {source}")]
+    Execution {
+        name: String,
+        context: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
 /// Pre-fetched tool definitions plus name-indexed executors.
 ///
 /// Fetching a rig `ToolDyn` definition costs a boxed-future allocation and a
@@ -140,6 +157,11 @@ pub struct LMConfig {
     pub temperature: f32,
     #[builder(default = 512)]
     pub max_tokens: u32,
+    /// Maximum tool-execution rounds in the automatic LM loop, including the
+    /// initial round. Parallel tool calls in one response count as one round.
+    /// A final completion is allowed after the last round; further tool requests
+    /// fail before execution. `0` disables automatic tool execution.
+    /// Caller-managed loops and IR agent limits are controlled separately.
     #[builder(default = 10)]
     pub max_tool_iterations: u32,
     /// Additional attempts after a transient failure (429/5xx/network/timeout).
@@ -152,6 +174,24 @@ pub struct LMConfig {
     pub retry_base_delay_ms: u64,
     #[builder(default = false)]
     pub cache: bool,
+}
+
+/// Per-call structured output request. Unsupported clients ignore the schema and
+/// callers retain their delimiter prompt/parser path.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LMCallOptions {
+    pub output_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub json_mode: bool,
+    /// Explicit capability override for custom OpenAI-compatible endpoints.
+    #[serde(default)]
+    pub force_output_schema: bool,
+}
+
+impl LMCallOptions {
+    pub fn is_json(&self) -> bool {
+        self.output_schema.is_some() || self.json_mode
+    }
 }
 
 impl Default for LMConfig {
@@ -170,6 +210,7 @@ pub struct LM {
     #[cfg(feature = "cache")]
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
+    custom_output_schema: bool,
 }
 
 impl Default for LM {
@@ -179,6 +220,38 @@ impl Default for LM {
 }
 
 impl LM {
+    /// Enables native output formatting for an explicitly verified custom OpenAI-compatible endpoint.
+    pub fn with_custom_output_schema(mut self, enabled: bool) -> Self {
+        self.custom_output_schema = enabled;
+        self
+    }
+    /// Reports schema support based on the initialized provider client.
+    pub fn supports_output_schema(&self) -> bool {
+        if self.config.base_url.is_some() {
+            self.custom_output_schema
+                && matches!(
+                    self.client.as_deref(),
+                    Some(LMClient::OpenAI(_) | LMClient::Test(_))
+                )
+        } else {
+            self.client
+                .as_deref()
+                .is_some_and(LMClient::supports_output_schema)
+        }
+    }
+    pub fn supports_json_mode(&self) -> bool {
+        if self.config.base_url.is_some() {
+            self.custom_output_schema
+                && matches!(
+                    self.client.as_deref(),
+                    Some(LMClient::OpenAI(_) | LMClient::Test(_))
+                )
+        } else {
+            self.client
+                .as_deref()
+                .is_some_and(LMClient::supports_json_mode)
+        }
+    }
     /// Entry point for fluent construction: `LM::builder().model(...).build().await`.
     /// The builder collects an [`LMConfig`]; `build()` initializes the live client.
     pub fn builder() -> LMConfigBuilder {
@@ -262,6 +335,7 @@ impl LM {
             #[cfg(feature = "cache")]
             cache_handler,
             client: Some(client),
+            custom_output_schema: false,
         })
     }
 
@@ -399,9 +473,10 @@ fn validate_cache_setting(enabled: bool) -> Result<()> {
 /// Anthropic returns `[Reasoning, ToolCall]` or `[Reasoning, Text]`;
 /// OpenAI Responses API returns `[Reasoning, FunctionCall]`.
 /// Multiple tool calls in one response are supported (parallel tool calling).
-fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
+fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> Result<ChoiceAction> {
     let mut text: Option<String> = None;
     let mut tool_calls: Vec<ToolCall> = Vec::new();
+    let mut has_image = false;
 
     for item in choice.iter() {
         match item {
@@ -411,20 +486,25 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
             AssistantContent::Text(t) => {
                 text = Some(t.text.clone());
             }
-            AssistantContent::Reasoning(_) | AssistantContent::Image(_) => {}
+            AssistantContent::Reasoning(_) => {}
+            AssistantContent::Image(_) => has_image = true,
         }
     }
 
     if !tool_calls.is_empty() {
-        return ChoiceAction::ToolCalls {
+        return Ok(ChoiceAction::ToolCalls {
             calls: tool_calls,
             full_content: Box::new(choice),
             assistant_text: text,
-        };
+        });
     }
 
     if let Some(t) = text {
-        return ChoiceAction::Text(t);
+        return Ok(ChoiceAction::Text(t));
+    }
+
+    if has_image {
+        return Err(crate::LmCallError::UnsupportedContent.into());
     }
 
     // Fallback: only reasoning blocks — extract display text
@@ -436,7 +516,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    ChoiceAction::Text(display)
+    Ok(ChoiceAction::Text(display))
 }
 
 /// Whether a rig completion error is worth retrying.
@@ -444,7 +524,7 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> ChoiceAction {
 /// Retry transport failures and HTTP 429/5xx. Permanent HTTP errors and
 /// request-construction errors fail immediately. Provider errors are string-typed
 /// in rig, so transient markers are matched textually only for that variant.
-fn is_retryable_completion_error(err: &CompletionError) -> bool {
+pub(crate) fn is_retryable_completion_error(err: &CompletionError) -> bool {
     match err {
         CompletionError::HttpError(error) => match error {
             rig::http_client::Error::InvalidStatusCode(status)
@@ -490,14 +570,33 @@ impl LM {
     /// intermediate JSON tree or string is materialized. Uses the same stable
     /// hasher as the trace format's `request_hash`.
     #[cfg(feature = "cache")]
-    fn cache_key_for(&self, messages: &Chat) -> u64 {
+    fn cache_key_for(&self, messages: &Chat, options: &LMCallOptions) -> u64 {
         use crate::utils::hash::{HashWriter, StableHasher};
         use std::hash::Hasher;
 
         let mut hasher = StableHasher::new();
         hasher.write(self.config.model.as_bytes());
-        hasher.write(&self.config.temperature.to_bits().to_le_bytes());
+        if let Some(base_url) = &self.config.base_url {
+            hasher.write(base_url.as_bytes());
+        }
+        hasher.write(&[
+            self.supports_output_schema() as u8,
+            self.supports_json_mode() as u8,
+        ]);
+        let sampling = crate::core::sampling::current_sampling_options();
+        hasher.write(
+            &crate::core::sampling::effective_temperature(self.config.temperature)
+                .to_bits()
+                .to_le_bytes(),
+        );
+        if let Some(id) = sampling.id {
+            hasher.write(&(id.len() as u64).to_le_bytes());
+            hasher.write(id.as_bytes());
+        }
         hasher.write(&self.config.max_tokens.to_le_bytes());
+        if let Ok(options) = serde_json::to_vec(options) {
+            hasher.write(&options);
+        }
         use std::fmt::Write as _;
         let _ = write!(HashWriter(&mut hasher), "{messages:?}");
         hasher.finish()
@@ -525,6 +624,7 @@ impl LM {
         chat_history: &[rig::message::Message],
         tool_definitions: &[rig::completion::ToolDefinition],
         tool_choice: Option<ToolChoice>,
+        options: &LMCallOptions,
     ) -> CompletionRequest {
         use rig::OneOrMany;
         CompletionRequest {
@@ -537,11 +637,27 @@ impl LM {
             },
             documents: Vec::new(),
             tools: tool_definitions.to_vec(),
-            temperature: Some(self.config.temperature as f64),
+            temperature: Some(
+                crate::core::sampling::effective_temperature(self.config.temperature) as f64,
+            ),
             max_tokens: Some(self.config.max_tokens as u64),
             tool_choice,
-            additional_params: None,
-            output_schema: None,
+            additional_params: if options.json_mode
+                && (self.supports_json_mode() || options.force_output_schema)
+            {
+                match self.client.as_deref() {
+                    Some(LMClient::Gemini(_)) => Some(
+                        serde_json::json!({"generationConfig":{"responseMimeType":"application/json"}}),
+                    ),
+                    _ => Some(serde_json::json!({"response_format":{"type":"json_object"}})),
+                }
+            } else {
+                None
+            },
+            output_schema: (self.supports_output_schema() || options.force_output_schema)
+                .then(|| options.output_schema.clone())
+                .flatten()
+                .map(|value| serde_json::from_value(value).expect("schema validated before call")),
         }
     }
 
@@ -553,9 +669,7 @@ impl LM {
     where
         F: Fn() -> CompletionRequest,
     {
-        let client = self.client.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("LM client not initialized. Call build() on LMBuilder.")
-        })?;
+        let client = self.client.as_ref().ok_or(crate::LmCallError::NotInitialized)?;
 
         let mut attempt = 0u32;
         loop {
@@ -587,7 +701,7 @@ impl LM {
                     tokio::time::sleep(delay).await;
                     attempt += 1;
                 }
-                Err(err) => return Err(err.into()),
+                Err(err) => return Err(crate::LmCallError::from(err).into()),
             }
         }
     }
@@ -605,22 +719,21 @@ impl LM {
                 let started = std::time::Instant::now();
                 let (result, error) = match tool {
                     Some(tool) => {
-                        let result =
-                            tool.call(tc.function.arguments.to_string())
-                                .await
-                                .map_err(|err| {
-                                    anyhow::anyhow!(
-                                        "tool `{}` execution failed ({}): {:?}",
-                                        tc.function.name,
-                                        context,
-                                        err
-                                    )
-                                })?;
+                        let result = tool
+                            .call(tc.function.arguments.to_string())
+                            .await
+                            .map_err(|err| ToolLoopError::Execution {
+                                name: tc.function.name.clone(),
+                                context: context.to_owned(),
+                                source: Box::new(err),
+                            })?;
                         (result, None)
                     }
                     None => {
                         warn!(tool = %tc.function.name, context, "tool not found");
-                        let message = format!("Tool '{}' not found", tc.function.name);
+                        let message = ToolLoopError::UnknownTool {
+                            name: tc.function.name.clone(),
+                        }.to_string();
                         (message.clone(), Some(message))
                     }
                 };
@@ -692,9 +805,13 @@ impl LM {
         tools: &ToolSet,
         mut chat_history: Vec<rig::message::Message>,
         system_prompt: String,
+        options: &LMCallOptions,
         accumulated_usage: &mut LmUsage,
     ) -> Result<ToolLoopResult> {
         let max_iterations = self.config.max_tool_iterations as usize;
+        if max_iterations == 0 {
+            return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+        }
         let mut all_tool_calls = Vec::new();
         let mut all_tool_executions = Vec::new();
         let mut events = vec![SpanEvent::Exchange {
@@ -721,7 +838,7 @@ impl LM {
         Self::push_tool_results(&mut chat_history, &results);
 
         // Now loop until we get a text response
-        for iteration in 1..max_iterations {
+        for iteration in 1..=max_iterations {
             let response = self
                 .completion_with_retry(|| {
                     self.build_completion_request(
@@ -729,6 +846,7 @@ impl LM {
                         &chat_history,
                         tools.definitions(),
                         Some(ToolChoice::Auto),
+                        options,
                     )
                 })
                 .await?;
@@ -747,7 +865,7 @@ impl LM {
 
             // Scan ALL content blocks — don't just look at .first(), since
             // responses can be [Reasoning, ToolCall] or [Reasoning, Text].
-            match classify_choice(response.choice) {
+            match classify_choice(response.choice)? {
                 ChoiceAction::Text(text) => {
                     debug!(iteration, "tool loop completed with text");
                     let message = Message::assistant(&text);
@@ -768,6 +886,10 @@ impl LM {
                     full_content,
                     ..
                 } => {
+                    if iteration == max_iterations {
+                        warn!(max_iterations, "max tool iterations reached");
+                        return Err(ToolLoopError::IterationLimit { limit: max_iterations }.into());
+                    }
                     events.push(SpanEvent::Exchange {
                         message: assistant_message_from_content(&full_content),
                         usage: round_usage,
@@ -793,11 +915,33 @@ impl LM {
         }
 
         warn!(max_iterations, "max tool iterations reached");
-        Err(anyhow::anyhow!("Max tool iterations reached"))
+        Err(ToolLoopError::IterationLimit { limit: max_iterations }.into())
     }
 
     pub async fn call(&self, messages: Chat, tools: Vec<Arc<dyn ToolDyn>>) -> Result<LMResponse> {
-        self.call_with_tool_loop_mode(messages, tools, ToolLoopMode::Auto)
+        self.call_with_options(
+            messages,
+            tools,
+            ToolLoopMode::Auto,
+            LMCallOptions::default(),
+        )
+        .await
+    }
+
+    /// Calls the model with additive per-request options; legacy calls use defaults.
+    pub async fn call_with_options(
+        &self,
+        messages: Chat,
+        tools: Vec<Arc<dyn ToolDyn>>,
+        mode: ToolLoopMode,
+        options: LMCallOptions,
+    ) -> Result<LMResponse> {
+        let toolset = if tools.is_empty() {
+            ToolSet::default()
+        } else {
+            ToolSet::build(&tools).await
+        };
+        self.call_with_toolset_and_options(messages, &toolset, mode, options)
             .await
     }
 
@@ -837,12 +981,25 @@ impl LM {
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
     ) -> Result<LMResponse> {
-        let history =
-            crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
+        self.call_with_toolset_and_options(
+            messages,
+            tools,
+            tool_loop_mode,
+            LMCallOptions::default(),
+        )
+        .await
+    }
+
+    pub async fn call_with_toolset_and_options(
+        &self,
+        messages: Chat,
+        tools: &ToolSet,
+        tool_loop_mode: ToolLoopMode,
+        options: LMCallOptions,
+    ) -> Result<LMResponse> {
+        let history = crate::core::history::HistoryCall::begin(&self.config, &messages, &self.history);
         debug!(target: "dsrs::content", prompt = %messages.to_json(), "formatted LM prompt");
-        let mut result = self
-            .call_with_toolset_inner(messages, tools, tool_loop_mode)
-            .await;
+        let mut result = self.call_with_toolset_inner(messages, tools, tool_loop_mode, options).await;
         history.finish(&mut result);
         if let Ok(response) = &result {
             debug!(target: "dsrs::content", response = %response.output.to_json(), "raw LM response");
@@ -855,8 +1012,20 @@ impl LM {
         messages: Chat,
         tools: &ToolSet,
         tool_loop_mode: ToolLoopMode,
+        options: LMCallOptions,
     ) -> Result<LMResponse> {
         validate_cache_setting(self.config.cache)?;
+        if (self.supports_output_schema() || options.force_output_schema)
+            && let Some(schema) = options.output_schema.clone()
+        {
+            let _: schemars::Schema = serde_json::from_value(schema)
+                .map_err(|err| anyhow::anyhow!("invalid output schema: {err}"))?;
+        }
+        if options.json_mode && !(self.supports_json_mode() || options.force_output_schema) {
+            return Err(anyhow::anyhow!(
+                "JSON mode is unsupported by this LM client"
+            ));
+        }
         let system_prompt = messages.system_prompt();
         let chat_history = messages.to_rig_chat_history();
 
@@ -864,7 +1033,7 @@ impl LM {
         // side-effectful user code and must not be replayed from cache.
         #[cfg(feature = "cache")]
         let cache_key = if self.config.cache && self.cache_handler.is_some() && tools.is_empty() {
-            Some(self.cache_key_for(&messages))
+            Some(self.cache_key_for(&messages, &options))
         } else {
             None
         };
@@ -914,6 +1083,7 @@ impl LM {
                     &chat_history,
                     tool_definitions,
                     tool_choice.clone(),
+                    &options,
                 )
             })
             .await?;
@@ -934,7 +1104,7 @@ impl LM {
         let mut assistant_content_for_history: Option<rig::OneOrMany<AssistantContent>> = None;
         let mut append_output_after_history = false;
         let mut events: Vec<SpanEvent> = Vec::new();
-        let classified = classify_choice(response.choice);
+        let classified = classify_choice(response.choice)?;
         let first_choice = match classified {
             ChoiceAction::Text(text) => {
                 let message = Message::assistant(&text);
@@ -958,6 +1128,7 @@ impl LM {
                         tools,
                         chat_history,
                         system_prompt.clone(),
+                        &options,
                         &mut accumulated_usage,
                     )
                     .await?;
@@ -1108,6 +1279,102 @@ mod tests {
         AssistantContent::text(text)
     }
 
+    #[tokio::test]
+    async fn per_call_options_reach_mock_completion_request() {
+        let model = TestCompletionModel::new([make_text("{}")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(
+                serde_json::json!({"type":"object", "properties":{}, "required":[], "additionalProperties":false}),
+            ),
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        lm.call_with_options(
+            Chat::new(vec![Message::user("answer")]),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options,
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert!(request.output_schema.is_some());
+        assert!(request.additional_params.is_none());
+    }
+
+    #[tokio::test]
+    async fn json_mode_sets_additional_params_and_cache_keys_separate_formats() {
+        let model = TestCompletionModel::new([make_text("{}")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            json_mode: true,
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        let chat = Chat::new(vec![Message::user("answer")]);
+        lm.call_with_options(
+            chat.clone(),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options.clone(),
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert_eq!(
+            request.additional_params.unwrap()["response_format"]["type"],
+            "json_object"
+        );
+        assert!(request.output_schema.is_none());
+        assert_ne!(
+            lm.cache_key_for(&chat, &LMCallOptions::default()),
+            lm.cache_key_for(&chat, &options)
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_client_omits_structured_request_options() {
+        let model = TestCompletionModel::new([make_text("plain")]);
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(serde_json::json!({"type":"object"})),
+            ..LMCallOptions::default()
+        };
+        lm.call_with_options(
+            Chat::new(vec![Message::user("answer")]),
+            Vec::new(),
+            ToolLoopMode::CallerManaged,
+            options,
+        )
+        .await
+        .unwrap();
+        let request = model.last_request().unwrap();
+        assert!(request.output_schema.is_none());
+        assert!(request.additional_params.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_error_does_not_trigger_format_fallback_call() {
+        let model = TestCompletionModel::default();
+        let lm = test_lm_with_model(model.clone());
+        let options = LMCallOptions {
+            output_schema: Some(serde_json::json!({"type":"object"})),
+            force_output_schema: true,
+            ..LMCallOptions::default()
+        };
+        let result = lm
+            .call_with_options(
+                Chat::new(vec![Message::user("answer")]),
+                Vec::new(),
+                ToolLoopMode::CallerManaged,
+                options,
+            )
+            .await;
+        assert!(result.is_err());
+        assert!(model.last_request().unwrap().output_schema.is_some());
+    }
+
     #[test]
     fn retry_classifier_matches_transient_errors_only() {
         assert!(is_retryable_completion_error(
@@ -1127,10 +1394,123 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn cache_key_uses_sample_identity_and_effective_temperature() {
+        let lm = LM {
+            config: LMConfig::default(),
+            cache_handler: None,
+            client: None,
+            custom_output_schema: false,
+        };
+        let chat = Chat::new(vec![Message::user("same prompt")]);
+        let first = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat, &LMCallOptions::default()) },
+        )
+        .await;
+        let same = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat, &LMCallOptions::default()) },
+        )
+        .await;
+        let distinct = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("second".into()),
+                temperature: Some(0.2),
+            },
+            async { lm.cache_key_for(&chat, &LMCallOptions::default()) },
+        )
+        .await;
+        let temperature = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("first".into()),
+                temperature: Some(0.8),
+            },
+            async { lm.cache_key_for(&chat, &LMCallOptions::default()) },
+        )
+        .await;
+        assert_eq!(first, same);
+        assert_ne!(first, distinct);
+        assert_ne!(first, temperature);
+    }
+
+    #[tokio::test]
+    async fn cache_hit_reports_zero_usage_and_keeps_original_entry() {
+        let cache = Arc::new(ResponseCache::new().await);
+        let lm = LM {
+            config: LMConfig {
+                cache: true,
+                ..LMConfig::default()
+            },
+            cache_handler: Some(cache.clone()),
+            client: None,
+            custom_output_schema: false,
+        };
+        let messages = Chat::new(vec![Message::user("cached prompt")]);
+        let key = lm.cache_key_for(&messages, &LMCallOptions::default());
+        let original = LmUsage {
+            prompt_tokens: 12,
+            completion_tokens: 3,
+            total_tokens: 15,
+        };
+        cache.insert_entry(
+            key,
+            CacheEntry {
+                prompt: messages.to_json().to_string(),
+                usage: original,
+                raw_output: Some("cached answer".into()),
+            },
+        );
+        let response = lm
+            .call_with_toolset(messages, &ToolSet::default(), ToolLoopMode::Auto)
+            .await
+            .unwrap();
+        assert_eq!(response.usage.total_tokens, 0);
+        assert!(response.events.iter().all(|event| match event {
+            SpanEvent::Exchange { usage, .. } => usage.total_tokens == 0,
+            SpanEvent::ToolRun { .. } | SpanEvent::Unknown => true,
+        }));
+        let entry = cache.get_entry(key).await.unwrap().unwrap();
+        assert_eq!(entry.usage.total_tokens, original.total_tokens);
+    }
+
+    #[tokio::test]
+    async fn equal_sample_identity_reuses_cache_but_distinct_identity_reaches_provider() {
+        let model =
+            TestCompletionModel::new([make_text("first answer"), make_text("second answer")]);
+        let mut lm = test_lm_with_model(model.clone());
+        lm.config.cache = true;
+        lm.cache_handler = Some(Arc::new(ResponseCache::new().await));
+        let messages = Chat::new(vec![Message::user("same prompt")]);
+        for (id, expected) in [
+            ("same", "first answer"),
+            ("same", "first answer"),
+            ("different", "second answer"),
+        ] {
+            let response = crate::with_sampling_options(
+                crate::SamplingOptions {
+                    id: Some(id.into()),
+                    temperature: None,
+                },
+                lm.call_with_toolset(messages.clone(), &ToolSet::default(), ToolLoopMode::Auto),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.output.text_content(), expected);
+        }
+        assert_eq!(model.call_count(), 2);
+    }
+
     #[test]
     fn classify_text_only() {
         let choice = OneOrMany::one(make_text("hello"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "hello"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1139,7 +1519,7 @@ mod tests {
     #[test]
     fn classify_single_tool_call() {
         let choice = OneOrMany::one(make_tool_call("search"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1162,7 +1542,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1186,7 +1566,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "the answer is 42"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1195,7 +1575,7 @@ mod tests {
     #[test]
     fn classify_reasoning_only_fallback() {
         let choice = OneOrMany::one(make_reasoning("just thinking"));
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::Text(t) => assert_eq!(t, "just thinking"),
             ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
         }
@@ -1206,7 +1586,7 @@ mod tests {
         let choice =
             OneOrMany::many(vec![make_text("some text"), make_tool_call("search")]).unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 assistant_text,
@@ -1229,7 +1609,7 @@ mod tests {
         ])
         .unwrap();
 
-        match classify_choice(choice) {
+        match classify_choice(choice).unwrap() {
             ChoiceAction::ToolCalls {
                 calls,
                 full_content,
@@ -1246,13 +1626,56 @@ mod tests {
     }
 
     #[test]
-    fn classify_image_only_fallback() {
+    fn classify_image_only_returns_error() {
         let choice = OneOrMany::one(AssistantContent::Image(
             rig::completion::message::Image::default(),
         ));
-        match classify_choice(choice) {
-            ChoiceAction::Text(t) => assert!(t.is_empty()),
-            ChoiceAction::ToolCalls { .. } => panic!("expected Text, got ToolCalls"),
+        let error = classify_choice(choice)
+            .err()
+            .expect("image output must fail");
+        assert!(error.to_string().contains("Image responses"));
+        assert!(matches!(error.downcast_ref::<crate::LmCallError>(),
+            Some(crate::LmCallError::UnsupportedContent)));
+    }
+
+    #[test]
+    fn classify_image_with_text_preserves_text() {
+        let choice = OneOrMany::many(vec![
+            AssistantContent::Image(rig::completion::message::Image::default()),
+            make_text("caption"),
+        ])
+        .unwrap();
+        match classify_choice(choice).unwrap() {
+            ChoiceAction::Text(text) => assert_eq!(text, "caption"),
+            _ => panic!("expected caption"),
+        }
+    }
+
+    #[tokio::test]
+    async fn image_response_errors_propagate_from_initial_and_tool_loop_completions() {
+        for after_tool in [false, true] {
+            let mut responses = Vec::new();
+            if after_tool {
+                responses.push(make_tool_call("counter"));
+            }
+            responses.push(AssistantContent::Image(
+                rig::completion::message::Image::default(),
+            ));
+            let lm = test_lm_with_model(TestCompletionModel::new(responses));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let tools: Vec<Arc<dyn ToolDyn>> = if after_tool {
+                vec![Arc::new(CountingTool {
+                    calls: Arc::clone(&calls),
+                })]
+            } else {
+                vec![]
+            };
+            let error = lm
+                .call(Chat::new(vec![Message::user("hello")]), tools)
+                .await
+                .expect_err("image response must fail");
+            assert!(error.to_string().contains("Image responses"));
+            assert_eq!(calls.load(Ordering::SeqCst), usize::from(after_tool));
         }
     }
 
@@ -1312,6 +1735,7 @@ mod tests {
             #[cfg(feature = "cache")]
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
+            custom_output_schema: false,
         }
     }
 
