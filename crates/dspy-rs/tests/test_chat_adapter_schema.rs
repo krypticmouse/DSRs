@@ -4,7 +4,8 @@
 //! canonical `FieldDef::name` (Predict translates to `rust_name` keying at
 //! its boundary).
 
-use dspy_rs::ir::SignatureDef;
+use dspy_rs::ir::{ConstraintDef, FieldDef as IrFieldDef, SignatureDef};
+use dspy_rs::typesys::{FieldType, TypeTable};
 use dspy_rs::{CallMetadata, ChatAdapter, Message, Predicted, Signature};
 use serde_json::Value;
 
@@ -88,4 +89,43 @@ fn parse_output_def_accepts_dotted_field_markers() {
             .trim(),
         "Paris"
     );
+}
+
+#[test]
+fn native_json_parser_preserves_string_values_and_field_metadata() {
+    let def = SignatureDef::build("Native")
+        .input("question", FieldType::String)
+        .output_full(
+            IrFieldDef::new("answer", FieldType::Optional(Box::new(FieldType::String)))
+                .aliased("answer.value"),
+        )
+        .output_full(
+            IrFieldDef::new("accepted", FieldType::Bool)
+                .with_constraint(ConstraintDef::check("truthy", "this == true")),
+        )
+        .output_full(
+            IrFieldDef::new("positive", FieldType::Int)
+                .with_constraint(ConstraintDef::assert("this > 0")),
+        )
+        .finish()
+        .unwrap();
+    let adapter = ChatAdapter;
+    let response =
+        Message::assistant(r#"{"answer.value":"quoted \"value\"","accepted":true,"positive":2}"#);
+    let (output, meta) = adapter
+        .parse_output_json_def(&def, &TypeTable::default(), &response)
+        .unwrap();
+    assert_eq!(output["answer"], "quoted \"value\"");
+    assert_eq!(output["accepted"], true);
+    assert!(meta["accepted"].checks[0].passed);
+    assert_eq!(meta["answer"].flags.len(), 0);
+
+    let bad = Message::assistant(r#"{"answer.value":null,"accepted":false,"positive":0}"#);
+    let error = adapter
+        .parse_output_json_def(&def, &TypeTable::default(), &bad)
+        .unwrap_err();
+    match error {
+        dspy_rs::ParseError::Multiple { errors, .. } => assert!(errors.iter().any(|error| matches!(error, dspy_rs::ParseError::AssertFailed { field, .. } if field == "positive"))),
+        other => panic!("expected collected parse errors, got {other}"),
+    }
 }

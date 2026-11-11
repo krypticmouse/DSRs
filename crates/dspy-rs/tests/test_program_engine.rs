@@ -11,10 +11,11 @@ use dspy_rs::ir::{
     self, DemoRow, FieldType as T, Interpreter, Overlay, ParamValue, Program, ProgramBuilder,
     RuntimeEnv, SignatureDef,
 };
+use dspy_rs::optimizer::engine::{BatchEvalOutcome, EvalOutcome, GateOutcome};
 use dspy_rs::trace::JsonMap;
 use dspy_rs::{
-    BatchEvalOutcome, Budget, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM, LMClient,
-    LMConfig, OptimizeTarget, ProgramMetric, TestCompletionModel, Trace,
+    Budget, Engine, EngineConfig, Eval, LM, LMClient, LMConfig, OptimizeTarget, ProgramMetric,
+    TestCompletionModel, Trace,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;

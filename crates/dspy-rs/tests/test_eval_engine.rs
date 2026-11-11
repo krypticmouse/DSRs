@@ -8,8 +8,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
+use dspy_rs::optimizer::engine::{EvalOutcome, GateOutcome};
 use dspy_rs::{
-    Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM,
+    Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, LM,
     LMClient, Module, ModuleState, OptimizeTarget, Predict, PredictError, Predicted, Signature,
     TestCompletionModel, TypedMetric,
 };

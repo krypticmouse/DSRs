@@ -227,6 +227,7 @@ impl Optimizer for MIPROv2 {
         self.common().engine_config()
     }
 
+    #[tracing::instrument(name = "dsrs.mipro.compile", skip_all, fields(trials = self.num_trials, candidates = self.num_candidates))]
     async fn compile(
         &self,
         target: &mut OptimizeTarget<'_>,

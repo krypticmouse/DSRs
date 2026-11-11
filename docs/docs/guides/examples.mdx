@@ -10,12 +10,13 @@ Every example in this index is a complete, runnable program in [`crates/dspy-rs/
 cargo run --example 01-simple
 ```
 
-Some examples need a feature flag (noted in the file header), for example `--features dataloaders` for the HotpotQA ones.
+The HotpotQA examples (03, 04 and 08) require `data`; the cache microbenchmark (97) requires `cache`. Both features are enabled by default. For a minimal build, select the required feature explicitly, for example `cargo run -p dspy-rs --no-default-features --features data --example 03-evaluate-hotpotqa`. Cargo skips examples whose required features are disabled and explains the missing feature when you select one directly.
 
 ## The examples
 
 | Example | What it shows | Key APIs |
 |---------|---------------|----------|
+| [00-quickstart.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/00-quickstart.rs) | Typed QA, prompt inspection without a request using `--inspect-only`, and parsed invocation history | `Predict::build_chat`, `call_and_parse`, `LM::inspect_history` |
 | [01-simple.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/01-simple.rs) | Typed signatures, chain-of-thought via a `reasoning` field, and module composition | `Signature`, `Predict`, `Module` |
 | [02-module-iteration-and-updation.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/02-module-iteration-and-updation.rs) | Optimizing a module end to end with the typed optimizer API | `COPRO`, `compile_module`, `TypedMetric` |
 | [03-evaluate-hotpotqa.rs](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/03-evaluate-hotpotqa.rs) | Evaluating a typed QA predictor on a HotpotQA sample | `DataLoader`, `evaluate_trainset`, `Eval` |

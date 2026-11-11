@@ -10,15 +10,13 @@ OPENAI_API_KEY=your_key cargo run --example 09-gepa-sentiment
 use anyhow::Result;
 use bon::Builder;
 use dspy_rs::{
-    Eval, GEPA, LM, Module, ModuleState, Optimizer,
-    Predict, PredictError, Predicted, Signature, TypedMetric, average_score, configure,
-    evaluate_trainset, init_tracing,
+    Eval, GEPA, LM, Module, ModuleState, Optimizer, Predict, PredictError, Predicted, Signature,
+    TypedMetric, average_score, configure, evaluate_trainset, init_tracing,
 };
 
+/// Analyze the sentiment and classify as positive, negative, or neutral.
 #[derive(Signature, Clone, Debug)]
 struct SentimentSignature {
-    /// Analyze the sentiment and classify as positive, negative, or neutral.
-
     #[input]
     text: String,
 
@@ -151,7 +149,9 @@ async fn main() -> Result<()> {
             text: "This product changed my life! Absolutely amazing!".to_string(),
         })
         .await?;
-    let test_feedback = metric.evaluate(&test_example, &test_prediction, None).await?;
+    let test_feedback = metric
+        .evaluate(&test_example, &test_prediction, None)
+        .await?;
 
     println!("Test prediction: {}", test_prediction.sentiment);
     println!("Test score: {:.3}", test_feedback.score);
