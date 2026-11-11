@@ -153,6 +153,12 @@ async fn independent_handles_do_not_lose_concurrent_updates() {
 #[derive(Debug)]
 struct Broken;
 impl InteractionStore for Broken {
+    fn upsert_trace(&self, _: &dspy_rs::Trace) -> Result<(), dspy_rs::StorageError> {
+        Err(std::io::Error::other("disk full").into())
+    }
+    fn get_trace(&self, _: &str) -> Result<Option<dspy_rs::Trace>, dspy_rs::StorageError> {
+        unreachable!()
+    }
     fn upsert(&self, _: &dspy_rs::HistoryEntry) -> Result<(), dspy_rs::StorageError> {
         Err(std::io::Error::other("disk full").into())
     }
@@ -162,6 +168,35 @@ impl InteractionStore for Broken {
     fn recent(&self, _: usize) -> Result<Vec<dspy_rs::HistoryEntry>, dspy_rs::StorageError> {
         unreachable!()
     }
+}
+
+#[tokio::test]
+async fn captured_traces_are_reopened_and_joined_to_call_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("calls.jsonl");
+    let store = Arc::new(JsonlInteractionStore::open(&path).unwrap());
+    let predict = Predict::<QA>::new().with_lm(lm(vec![answer("Paris")]).await);
+    let (result, trace) = with_interaction_store(
+        store.clone(),
+        dspy_rs::capture(|| {
+            predict.call(QAInput {
+                question: "France?".into(),
+            })
+        }),
+    )
+    .await
+    .unwrap();
+    let id = result.unwrap().metadata().call_ids[0].clone();
+    drop(store);
+    let reopened = JsonlInteractionStore::open(&path).unwrap();
+    let entry = reopened.get(&id).unwrap().unwrap();
+    assert_eq!(
+        entry.trace_id.as_deref(),
+        Some(trace.meta.trace_id.as_str())
+    );
+    let saved = reopened.get_trace(&trace.meta.trace_id).unwrap().unwrap();
+    assert_eq!(saved.spans.len(), 1);
+    assert_eq!(saved.spans[0].output.as_ref().unwrap()["answer"], "Paris");
 }
 
 #[tokio::test]

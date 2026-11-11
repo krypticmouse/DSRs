@@ -26,6 +26,8 @@ pub trait InteractionStore: std::fmt::Debug + Send + Sync {
     fn get(&self, id: &str) -> Result<Option<HistoryEntry>, StorageError>;
     /// Newest invocations first, with at most one revision per ID.
     fn recent(&self, limit: usize) -> Result<Vec<HistoryEntry>, StorageError>;
+    fn upsert_trace(&self, trace: &crate::Trace) -> Result<(), StorageError>;
+    fn get_trace(&self, id: &str) -> Result<Option<crate::Trace>, StorageError>;
 }
 
 /// Versioned, append-only JSONL with durable updates and OS file locking.
@@ -39,7 +41,15 @@ pub struct JsonlInteractionStore {
 #[derive(Serialize, Deserialize)]
 struct Revision {
     version: u32,
-    entry: HistoryEntry,
+    #[serde(flatten)]
+    record: Record,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Record {
+    Invocation { entry: HistoryEntry },
+    Execution { trace: crate::Trace },
 }
 
 struct LockedFile<'a>(&'a mut File);
@@ -74,12 +84,22 @@ impl JsonlInteractionStore {
         f(guard.0)
     }
 
-    fn read(file: &mut File) -> Result<(HashMap<String, HistoryEntry>, u64), StorageError> {
+    fn read(
+        file: &mut File,
+    ) -> Result<
+        (
+            HashMap<String, HistoryEntry>,
+            HashMap<String, crate::Trace>,
+            u64,
+        ),
+        StorageError,
+    > {
         file.seek(SeekFrom::Start(0))?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes)?;
         let complete = bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
         let mut entries = HashMap::new();
+        let mut traces = HashMap::new();
         for line in bytes[..complete]
             .split(|b| *b == b'\n')
             .filter(|line| !line.is_empty())
@@ -88,27 +108,45 @@ impl JsonlInteractionStore {
             if revision.version != 1 {
                 return Err(StorageError::Version(revision.version));
             }
-            entries.insert(revision.entry.id.clone(), revision.entry);
+            match revision.record {
+                Record::Invocation { entry } => {
+                    entries.insert(entry.id.clone(), entry);
+                }
+                Record::Execution { trace } => {
+                    traces.insert(trace.meta.trace_id.clone(), trace);
+                }
+            }
         }
-        Ok((entries, complete as u64))
+        Ok((entries, traces, complete as u64))
     }
-}
 
-impl InteractionStore for JsonlInteractionStore {
-    fn upsert(&self, entry: &HistoryEntry) -> Result<(), StorageError> {
-        let mut bytes = serde_json::to_vec(&Revision {
-            version: 1,
-            entry: entry.clone(),
-        })?;
+    fn append(&self, record: Record) -> Result<(), StorageError> {
+        let mut bytes = serde_json::to_vec(&Revision { version: 1, record })?;
         bytes.push(b'\n');
         self.locked(|file| {
-            let (_, complete) = Self::read(file)?;
+            let (_, _, complete) = Self::read(file)?;
             file.set_len(complete)?;
             file.seek(SeekFrom::Start(complete))?;
             file.write_all(&bytes)?;
             file.sync_data()?;
             Ok(())
         })
+    }
+}
+
+impl InteractionStore for JsonlInteractionStore {
+    fn upsert(&self, entry: &HistoryEntry) -> Result<(), StorageError> {
+        self.append(Record::Invocation {
+            entry: entry.clone(),
+        })
+    }
+    fn upsert_trace(&self, trace: &crate::Trace) -> Result<(), StorageError> {
+        self.append(Record::Execution {
+            trace: trace.clone(),
+        })
+    }
+    fn get_trace(&self, id: &str) -> Result<Option<crate::Trace>, StorageError> {
+        self.locked(|file| Ok(Self::read(file)?.1.remove(id)))
     }
     fn get(&self, id: &str) -> Result<Option<HistoryEntry>, StorageError> {
         self.locked(|file| Ok(Self::read(file)?.0.remove(id)))
@@ -133,6 +171,15 @@ pub(crate) struct StoreSession {
     errors: Mutex<Vec<String>>,
 }
 impl StoreSession {
+    fn persist_trace(&self, trace: &crate::Trace) {
+        if let Err(error) = self.store.upsert_trace(trace) {
+            tracing::error!(%error, trace_id = %trace.meta.trace_id, "trace persistence failed");
+            self.errors
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(error.to_string());
+        }
+    }
     pub(crate) fn persist(&self, entry: &HistoryEntry) {
         if let Err(error) = self.store.upsert(entry) {
             tracing::error!(%error, call_id = %entry.id, "interaction persistence failed");
@@ -146,6 +193,12 @@ impl StoreSession {
 tokio::task_local! { static STORES: Vec<Arc<StoreSession>>; }
 pub(crate) fn current_stores() -> Vec<Arc<StoreSession>> {
     STORES.try_with(Clone::clone).unwrap_or_default()
+}
+
+pub(crate) fn persist_trace(trace: &crate::Trace) {
+    for session in current_stores() {
+        session.persist_trace(trace);
+    }
 }
 
 /// Persist calls, cache hits, failures, cancellation and subsequent parse results.

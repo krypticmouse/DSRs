@@ -26,6 +26,15 @@ unique for cache hits too. Replay-only execution creates no new LM invocations.
 Cache identity continues to include generation settings; storage never replaces
 or supplies cache entries.
 
+Run `capture(|| module.call(input))` inside the storage scope to persist the
+complete execution trace as well, including IR tool results and non-LM spans.
+Completed captures are saved automatically; retrieve them with
+`store.get_trace(&trace.meta.trace_id)`. Invocation `trace_id` fields join LM
+records to their enclosing trace, and predictions retain their span IDs. Nested
+capture semantics are unchanged: the innermost capture owns its spans. A scope
+cancelled before capture finishes still retains cancelled LM invocation records,
+but has no completed trace to save.
+
 The scope records raw completions, parsed output or parse errors, provider errors
 and dropped invocations. Parsing updates the original ID. Each record contains
 redacted configuration, input messages, tool events, usage and module path.

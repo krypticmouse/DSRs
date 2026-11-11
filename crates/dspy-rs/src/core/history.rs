@@ -14,6 +14,8 @@ pub const DEFAULT_HISTORY_CAPACITY: usize = 100;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
+    #[serde(default)]
+    pub trace_id: Option<String>,
     pub timestamp_us: u64,
     pub duration_us: u64,
     pub model: String,
@@ -186,6 +188,7 @@ impl HistoryCall {
         let record = HistoryRecord {
             entry: Arc::new(Mutex::new(HistoryEntry {
                 id: crate::trace::capture::mint_trace_id(),
+                trace_id: crate::trace::capture::current_trace_id(),
                 timestamp_us: crate::trace::capture::now_us(),
                 duration_us: 0,
                 model: config.model.clone(),
