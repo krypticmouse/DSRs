@@ -150,6 +150,14 @@ impl ToolSet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Builder)]
 #[builder(finish_fn(vis = "", name = __internal_build))]
 pub struct LMConfig {
+    /// Set false for models/endpoints without native function calling. Tool
+    /// declarations and results then travel as text through the same tool loop.
+    #[serde(
+        default = "native_tools_default",
+        skip_serializing_if = "native_tools_enabled"
+    )]
+    #[builder(default = true)]
+    pub native_tools: bool,
     pub base_url: Option<String>,
     #[serde(skip)]
     pub api_key: Option<String>,
@@ -202,6 +210,14 @@ impl Default for LMConfig {
     }
 }
 
+fn native_tools_default() -> bool {
+    true
+}
+
+fn native_tools_enabled(enabled: &bool) -> bool {
+    *enabled
+}
+
 /// The live half: an [`LMConfig`] plus the initialized provider client and
 /// response cache. Constructed via [`LM::builder()`] or [`LM::from_config`].
 #[derive(Clone)]
@@ -223,6 +239,10 @@ impl Default for LM {
 }
 
 impl LM {
+    pub fn with_native_tools(mut self, enabled: bool) -> Self {
+        self.config.native_tools = enabled;
+        self
+    }
     /// Enables native output formatting for an explicitly verified custom OpenAI-compatible endpoint.
     pub fn with_custom_output_schema(mut self, enabled: bool) -> Self {
         self.custom_output_schema = enabled;
@@ -535,6 +555,76 @@ fn classify_choice(choice: rig::OneOrMany<AssistantContent>) -> Result<ChoiceAct
     Ok(ChoiceAction::Text(display))
 }
 
+/// Render tools and exchanges for endpoints accepting ordinary chat messages only.
+fn format_prompt_tools(request: &mut CompletionRequest) -> Result<()> {
+    if !request.tools.is_empty() {
+        let declarations = serde_json::to_string(&request.tools)?;
+        let instruction = format!(
+            "Available tools: {declarations}\nTo request tools return ONLY a JSON object {{\"tool_calls\":[{{\"id\":\"unique-id\",\"name\":\"tool-name\",\"arguments\":{{}}}}]}}. Arguments must be a JSON object. Tool results will be supplied as text. When no tool is needed, follow the task's final output format. Tool choice policy: {:?}.",
+            request.tool_choice
+        );
+        request.preamble = Some(match request.preamble.take() {
+            Some(preamble) => format!("{preamble}\n\n{instruction}"),
+            None => instruction,
+        });
+        request.tools.clear();
+        request.tool_choice = None;
+        request.output_schema = None;
+        request.additional_params = None;
+    }
+    request.chat_history = rig::OneOrMany::many(request.chat_history.clone().into_iter().map(|message| match message {
+        rig::message::Message::Assistant { id, content } => rig::message::Message::Assistant { id, content: rig::OneOrMany::many(content.into_iter().map(|item| match item {
+            AssistantContent::ToolCall(call) => AssistantContent::text(serde_json::json!({"tool_calls":[{"id":call.id,"name":call.function.name,"arguments":call.function.arguments}]}).to_string()),
+            other => other,
+        })).expect("nonempty assistant content") },
+        rig::message::Message::User { content } => rig::message::Message::User { content: rig::OneOrMany::many(content.into_iter().map(|item| match item {
+            rig::message::UserContent::ToolResult(result) => rig::message::UserContent::text(format!("Tool result: {}", serde_json::to_string(&result).expect("serializable tool result"))),
+            other => other,
+        })).expect("nonempty user content") },
+    })).expect("nonempty chat history");
+    Ok(())
+}
+
+fn decode_prompt_tools(response: &mut CompletionResponse<()>) -> Result<()> {
+    let mut choice = Vec::new();
+    for item in response.choice.iter() {
+        choice.push(item.clone());
+        let AssistantContent::Text(text) = item else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text.text) else {
+            continue;
+        };
+        let Some(calls) = value.get("tool_calls") else {
+            continue;
+        };
+        let calls = calls
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("tool_calls must be an array"))?;
+        let mut ids = std::collections::HashSet::new();
+        for call in calls {
+            let id = call
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("tool call needs an id"))?;
+            anyhow::ensure!(ids.insert(id), "duplicate tool call id");
+            let name = call
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("tool call needs a name"))?;
+            let arguments = call
+                .get("arguments")
+                .filter(|v| v.is_object())
+                .ok_or_else(|| anyhow::anyhow!("tool arguments must be an object"))?;
+            choice.push(AssistantContent::tool_call(id, name, arguments.clone()));
+        }
+    }
+    response.choice = rig::OneOrMany::many(choice).expect("provider choice is nonempty");
+    Ok(())
+}
+
 /// Whether a rig completion error is worth retrying.
 ///
 /// Retry transport failures and HTTP 429/5xx. Permanent HTTP errors and
@@ -592,6 +682,7 @@ impl LM {
 
         let mut hasher = StableHasher::new();
         hasher.write(self.config.model.as_bytes());
+        hasher.write(&[u8::from(self.config.native_tools)]);
         if let Some(base_url) = &self.config.base_url {
             hasher.write(base_url.as_bytes());
         }
@@ -692,8 +783,16 @@ impl LM {
 
         let mut attempt = 0u32;
         loop {
-            match client.completion(build_request()).await {
-                Ok(response) => {
+            let mut request = build_request();
+            let prompt_tools = !self.config.native_tools && !request.tools.is_empty();
+            if !self.config.native_tools {
+                format_prompt_tools(&mut request)?;
+            }
+            match client.completion(request).await {
+                Ok(mut response) => {
+                    if prompt_tools {
+                        decode_prompt_tools(&mut response)?;
+                    }
                     debug!(target: "dsrs::content", choice = ?response.choice, "provider response");
                     return Ok(response);
                 }

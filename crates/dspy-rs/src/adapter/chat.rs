@@ -284,6 +284,116 @@ fn build_system_view(
 }
 
 impl ChatAdapter {
+    /// Read typed declarations from signature input fields. Invalid schemas
+    /// fail before a provider is called.
+    pub fn signature_tools(
+        &self,
+        def: &SignatureDef,
+        input: &JsonMap,
+    ) -> Result<Vec<rig::completion::ToolDefinition>> {
+        let mut definitions = Vec::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::Tools))
+        {
+            let value = input
+                .get(&*field.name)
+                .context("missing tool declarations")?;
+            let tools: Vec<crate::Tool> = if value.is_array() {
+                serde_json::from_value(value.clone())?
+            } else {
+                vec![serde_json::from_value(value.clone())?]
+            };
+            for tool in tools {
+                let definition = tool.definition()?;
+                anyhow::ensure!(!definition.name.is_empty(), "tool name is empty");
+                anyhow::ensure!(
+                    definition.parameters.get("type").and_then(Value::as_str) == Some("object"),
+                    "tool arguments schema must be an object"
+                );
+                anyhow::ensure!(
+                    !definitions
+                        .iter()
+                        .any(|d: &rig::completion::ToolDefinition| d.name == definition.name),
+                    "duplicate tool declaration {}",
+                    definition.name
+                );
+                definitions.push(definition);
+            }
+        }
+        Ok(definitions)
+    }
+
+    pub fn signature_history(&self, def: &SignatureDef, input: &JsonMap) -> Result<Vec<Message>> {
+        let mut messages = Vec::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::History))
+        {
+            let history: crate::History = serde_json::from_value(
+                input.get(&*field.name).context("missing history")?.clone(),
+            )?;
+            for message in history.messages {
+                messages.push(match message.role.as_str() {
+                    "user" => Message::user(message.content),
+                    "assistant" => Message::assistant(message.content),
+                    _ => anyhow::bail!("history role must be user or assistant"),
+                });
+            }
+        }
+        Ok(messages)
+    }
+
+    pub fn signature_tools_from_messages(
+        &self,
+        def: &SignatureDef,
+        messages: &[Message],
+    ) -> Result<Vec<rig::completion::ToolDefinition>> {
+        let mut input = JsonMap::new();
+        for field in def
+            .inputs
+            .iter()
+            .filter(|f| f.special_kind() == Some(crate::SpecialField::Tools))
+        {
+            let value = messages
+                .iter()
+                .rev()
+                .filter(|m| m.role == crate::Role::User)
+                .find_map(|message| {
+                    Self::parse_sections(&message.content()).shift_remove(&*field.lm_name)
+                })
+                .context("conversation has no tool declarations")?;
+            let value = serde_json::Deserializer::from_str(&value)
+                .into_iter::<Value>()
+                .next()
+                .context("missing tool declaration value")??;
+            input.insert(field.name.to_string(), value);
+        }
+        self.signature_tools(def, &input)
+    }
+
+    pub fn signature_tool_output(
+        &self,
+        def: &SignatureDef,
+        calls: &[rig::message::ToolCall],
+    ) -> Option<JsonMap> {
+        if def.outputs.len() != 1
+            || def.outputs[0].special_kind() != Some(crate::SpecialField::ToolCalls)
+        {
+            return None;
+        }
+        Some(
+            [(
+                def.outputs[0].name.to_string(),
+                serde_json::to_value(crate::ToolCalls::from_native(calls))
+                    .expect("serializable typed tool calls"),
+            )]
+            .into_iter()
+            .collect(),
+        )
+    }
     /// Builds a system message from an owned [`SignatureDef`] — no `'static`
     /// requirement anywhere. `types` resolves the def's class/enum references
     /// (for derive-bridged defs, [`SignatureDef::types_of`]).
@@ -398,6 +508,9 @@ impl ChatAdapter {
         let mut result = String::new();
         let mut input_context = None;
         for field in def.inputs.iter() {
+            if field.special_kind() == Some(crate::SpecialField::History) {
+                continue;
+            }
             let Some(value) = input.get(&*field.name) else {
                 continue;
             };

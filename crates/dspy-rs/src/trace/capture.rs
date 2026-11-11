@@ -35,6 +35,12 @@ pub(crate) fn mint_trace_id() -> String {
     format!("{:016x}{:016x}", now_us(), random)
 }
 
+pub(crate) fn current_trace_id() -> Option<String> {
+    ACTIVE
+        .try_with(|sink| sink.0.lock().unwrap().trace.meta.trace_id.clone())
+        .ok()
+}
+
 /// Shared handle to an in-progress trace.
 #[derive(Clone)]
 pub struct TraceSink(Arc<Mutex<SinkInner>>);
@@ -227,7 +233,9 @@ where
 {
     let sink = TraceSink::new(meta);
     let result = ACTIVE.scope(sink.clone(), f()).await;
-    (result, sink.finish())
+    let trace = sink.finish();
+    crate::core::storage::persist_trace(&trace);
+    (result, trace)
 }
 
 /// Returns `true` if the current task is inside a [`capture`] scope.

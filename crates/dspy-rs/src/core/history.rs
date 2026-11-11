@@ -14,6 +14,8 @@ pub const DEFAULT_HISTORY_CAPACITY: usize = 100;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub id: String,
+    #[serde(default)]
+    pub trace_id: Option<String>,
     pub timestamp_us: u64,
     pub duration_us: u64,
     pub model: String,
@@ -37,15 +39,26 @@ pub struct HistoryEntry {
 
 /// Shared live record. Parsed output is attached by the interpreter after the LM returns.
 #[derive(Clone, Debug)]
-pub struct HistoryRecord(Arc<Mutex<HistoryEntry>>);
+pub struct HistoryRecord {
+    entry: Arc<Mutex<HistoryEntry>>,
+    stores: Vec<Arc<super::storage::StoreSession>>,
+}
 
 impl HistoryRecord {
+    fn persist(&self) {
+        if !self.stores.is_empty() {
+            let entry = self.snapshot();
+            for store in &self.stores {
+                store.persist(&entry);
+            }
+        }
+    }
     pub fn snapshot(&self) -> HistoryEntry {
-        self.0.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.entry.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     pub(crate) fn parsed<T, E: std::fmt::Display>(&self, result: &Result<(JsonMap, T), E>) {
-        let mut entry = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let mut entry = self.entry.lock().unwrap_or_else(|p| p.into_inner());
         match result {
             Ok((output, _)) => {
                 entry.output = Some(output.clone());
@@ -58,6 +71,8 @@ impl HistoryRecord {
                 })
             }
         }
+        drop(entry);
+        self.persist();
     }
 }
 
@@ -177,7 +192,8 @@ impl HistoryCall {
         chat: &Chat,
         lm_history: &HistoryBuffer,
     ) -> Option<Self> {
-        let enabled = lm_history.is_enabled()
+        let enabled = !super::storage::current_stores().is_empty()
+            || lm_history.is_enabled()
             || GLOBAL.is_enabled()
             || CALLERS
                 .try_with(|callers| callers.iter().any(|caller| caller.buffer.is_enabled()))
@@ -186,24 +202,28 @@ impl HistoryCall {
             return None;
         }
         let callers = CALLERS.try_with(Clone::clone).unwrap_or_default();
-        let record = HistoryRecord(Arc::new(Mutex::new(HistoryEntry {
-            id: crate::trace::capture::mint_trace_id(),
-            timestamp_us: crate::trace::capture::now_us(),
-            duration_us: 0,
-            model: config.model.clone(),
-            config: crate::trace::ModelEntry::from_config(config).config,
-            messages: chat.messages.clone(),
-            prompt: chat.to_json().to_string(),
-            response: None,
-            raw_output: None,
-            output: None,
-            usage: None,
-            cost: None,
-            cache_hit: false,
-            module_path: callers.iter().map(|c| c.name.clone()).collect(),
-            events: Vec::new(),
-            error: None,
-        })));
+        let record = HistoryRecord {
+            entry: Arc::new(Mutex::new(HistoryEntry {
+                id: crate::trace::capture::mint_trace_id(),
+                trace_id: crate::trace::capture::current_trace_id(),
+                timestamp_us: crate::trace::capture::now_us(),
+                duration_us: 0,
+                model: config.model.clone(),
+                config: crate::trace::ModelEntry::from_config(config).config,
+                messages: chat.messages.clone(),
+                prompt: chat.to_json().to_string(),
+                response: None,
+                raw_output: None,
+                output: None,
+                usage: None,
+                cost: None,
+                cache_hit: false,
+                module_path: callers.iter().map(|c| c.name.clone()).collect(),
+                events: Vec::new(),
+                error: None,
+            })),
+            stores: super::storage::current_stores(),
+        };
         let mut sinks = vec![lm_history.clone(), GLOBAL.clone()];
         for caller in callers {
             if !sinks
@@ -223,7 +243,7 @@ impl HistoryCall {
 
     pub(crate) fn finish(mut self, result: &mut anyhow::Result<LMResponse>) {
         {
-            let mut entry = self.record.0.lock().unwrap_or_else(|p| p.into_inner());
+            let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
             match result {
                 Ok(response) => {
                     entry.response = response
@@ -254,6 +274,7 @@ impl HistoryCall {
             }
             entry.duration_us = self.started.elapsed().as_micros() as u64;
         }
+        self.record.persist();
         self.finished = true;
         for sink in &self.sinks {
             sink.push(self.record.clone());
@@ -265,13 +286,14 @@ impl Drop for HistoryCall {
     fn drop(&mut self) {
         if !self.finished {
             {
-                let mut entry = self.record.0.lock().unwrap_or_else(|p| p.into_inner());
+                let mut entry = self.record.entry.lock().unwrap_or_else(|p| p.into_inner());
                 entry.duration_us = self.started.elapsed().as_micros() as u64;
                 entry.error = Some(SpanError {
                     kind: SpanErrorKind::Cancelled,
                     message: "LM invocation ended before completion".into(),
                 });
             }
+            self.record.persist();
             for sink in &self.sinks {
                 sink.push(self.record.clone());
             }
