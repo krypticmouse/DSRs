@@ -117,6 +117,11 @@ pub mod predictors;
 pub mod trace;
 pub mod utils;
 
+pub use core::specials::{History, HistoryMessage, SpecialField, Tool, ToolCalls, ToolInvocation};
+pub use core::storage::{
+    InteractionStore, JsonlInteractionStore, StorageError, with_interaction_store,
+};
+
 pub use adapter::chat::ChatAdapter;
 pub use augmentation::{Augmentation, Augmented, AugmentedOutput};
 pub use core::{
