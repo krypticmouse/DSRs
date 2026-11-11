@@ -408,9 +408,9 @@ impl Compiler {
             "evaluation budget must include the baseline"
         );
         program.validate()?;
-        let baseline = evaluate(Arc::new(program.clone())).await?;
+        let mut incumbent = Arc::new(program.clone());
+        let baseline = evaluate(Arc::clone(&incumbent)).await?;
         anyhow::ensure!(baseline.valid(None), "invalid baseline measurements");
-        let mut incumbent = program.clone();
         let mut current = baseline.clone();
         let mut steps = Vec::new();
         let mut seen = HashSet::from([program.meta.program_hash]);
@@ -423,7 +423,7 @@ impl Compiler {
                 }
                 let parent_hash = incumbent.meta.program_hash;
                 let child = match incumbent.edited(std::slice::from_ref(&edit)) {
-                    Ok(child) => child,
+                    Ok(child) => Arc::new(child),
                     Err(error) => {
                         steps.push(CompilerStep {
                             parent_hash,
@@ -441,7 +441,7 @@ impl Compiler {
                 }
                 evaluations += 1;
                 let child_hash = Some(child.meta.program_hash);
-                let measurement = match evaluate(Arc::new(child.clone())).await {
+                let measurement = match evaluate(Arc::clone(&child)).await {
                     Ok(measurement) => measurement,
                     Err(error) => {
                         steps.push(CompilerStep {
@@ -496,6 +496,7 @@ impl Compiler {
             current = measurement;
         }
         incumbent.validate()?;
+        let mut incumbent = Arc::unwrap_or_clone(incumbent);
         let lineage = incumbent.meta.lineage.get_or_insert_with(Default::default);
         lineage.optimizer = "dsrs-compiler".into();
         lineage.budget = format!("{evaluations} evaluations").into();
