@@ -21,6 +21,7 @@ use dspy_rs::prelude::*;
 const QA_INSTRUCTION: &str = "Answer the question step by step.";
 const RATE_INSTRUCTION: &str = "Rate the answer on a scale of 1 (very bad) to 10 (very good).";
 
+/// Answer the question step by step.
 #[derive(dspy_rs::Signature, Clone, Debug)]
 pub struct QA {
     #[input]
@@ -33,6 +34,7 @@ pub struct QA {
     pub answer: String,
 }
 
+/// Rate the answer on a scale of 1 (very bad) to 10 (very good).
 #[derive(dspy_rs::Signature, Clone, Debug)]
 pub struct Rate {
     #[input]
@@ -108,10 +110,12 @@ impl Module for QARater {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     // =========================================================================
     // Example 1: Direct typed API usage (recommended for simple cases)

@@ -17,6 +17,55 @@ LM Response → Adapter.parse() → Typed Output
 
 ## ChatAdapter
 
+### Provider-native JSON output
+
+`Predict` automatically selects the response format from the configured LM and output signature:
+
+- For OpenAI, Gemini, and Anthropic clients, compatible signatures use provider-native JSON Schema output.
+- When a signature cannot use strict schemas, OpenAI and Gemini clients use JSON mode.
+- Other clients use the delimiter protocol described below.
+
+JSON responses pass through typed coercion and constraint checking, with output aliases mapped back to canonical field names. This behavior is provided by `ChatAdapter`; there is no separate `JSONAdapter` to configure.
+
+Custom OpenAI-compatible endpoints use the delimiter protocol by default. If your endpoint supports native structured output, opt in when constructing its LM:
+
+```rust
+let lm = LM::builder()
+    .base_url("http://localhost:8000/v1".to_string())
+    .model("my-model".to_string())
+    .build()
+    .await?
+    .with_custom_output_schema(true);
+configure(lm);
+```
+
+Capability selection happens before the request. A provider error is returned to the caller; it does not trigger an automatic retry with a different response format.
+
+### Troubleshooting local examples
+
+If a local model adds commentary or omits field markers, first inspect the generated prompt with `predictor.build_chat(&input).await?`. Signature doc comments supply the task instruction; field doc comments supply field descriptions. Calling `.instruction(...)` replaces the signature's instruction.
+
+For a local Ollama server with structured-output support, use `.with_custom_output_schema(true)` as above to request schema-constrained JSON instead of relying on the model to emit delimiter markers. This is an explicit capability opt-in: a custom endpoint URL alone does not imply support.
+
+The [Ollama structured-output example](https://github.com/krypticmouse/DSRs/blob/main/crates/dspy-rs/examples/19-ollama-structured-output.rs) uses the local endpoint and `llama3.2`, enables structured output, and prints the full prompt before sending it. It prints the conversation on success and error details on failure.
+
+With Ollama running locally, pull the model and run:
+
+```shell
+ollama pull llama3.2
+cargo run -p dspy-rs --no-default-features --example 19-ollama-structured-output
+```
+
+`OLLAMA_BASE_URL` and `OLLAMA_MODEL` override the endpoint and model. See [Ollama's structured-output documentation](https://docs.ollama.com/capabilities/structured-outputs) and [OpenAI-compatible API documentation](https://docs.ollama.com/api/openai-compatibility) for server support.
+
+To run the live regression against that server:
+
+```shell
+cargo test -p dspy-rs --no-default-features --test test_local_structured_output live_ollama_structured_prediction -- --ignored --nocapture
+```
+
+The regular test suite uses a local HTTP test server to verify the serialized request and typed parsing; it does not require a downloaded model. The live test is ignored by default because it requires Ollama and the model to be available.
+
 ### Prompt structure
 
 The system message has four parts (in this order):
@@ -137,7 +186,8 @@ Usually you do not touch the adapter - `Predict` handles it. The public surface 
 | Method | Produces |
 |--------|----------|
 | `build_system_def(def, types, instruction_override)` | The system message (field descriptions, structure template, response instructions, task description) |
-| `format_input_def(def, input)` | The user message: input fields with `[[ ## field ## ]]` markers plus response instructions. `input` is a `JsonMap`; absent fields are skipped |
+| `format_input_def(def, input)` | Returns the user message as `String`; template errors produce an explicit error marker for compatibility |
+| `try_format_input_def(def, input)` | Returns `Result<String>` so runtime callers can reject Jinja compile or render errors |
 | `format_output_def(def, output)` | An assistant message for few-shot demos, ending with `[[ ## completed ## ]]` |
 | `parse_output_def(def, types, response)` | `(JsonMap, IndexMap<String, FieldMeta>)` — the parsed output map plus per-field parse metadata |
 | `ChatAdapter::parse_sections(content)` | Ordered map of `field_name → section_content` split by the delimiters |

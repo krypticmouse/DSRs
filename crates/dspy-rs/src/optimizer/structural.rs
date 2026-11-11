@@ -39,6 +39,8 @@ use crate::{Predict, Signature};
 /// single edit most likely to fix the failure modes the feedback names: add
 /// reasoning where answers are shallow, add or drop tools where tool use goes
 /// wrong, wrap flaky steps in a retry, remove steps that only add noise.
+/// Fuse independent steps when repeated work adds overhead; split output
+/// responsibilities when the feedback shows one task obscuring another.
 /// Return only the `option` number of the chosen menu entry, with no preamble
 /// or commentary.
 #[derive(Signature, Clone, Debug)]
@@ -306,6 +308,13 @@ impl Structural {
             .enumerate()
             .map(|(option, entry)| {
                 let note = match entry.kind {
+                    EditKind::FuseNext => {
+                        "fuse this prediction with its independent successor to reduce LM calls"
+                            .to_string()
+                    }
+                    EditKind::SplitOutputs => {
+                        "split output responsibilities into independent predictions".to_string()
+                    }
                     EditKind::AugmentSig => {
                         "prepend a chain-of-thought `reasoning` output field".to_string()
                     }
@@ -347,6 +356,15 @@ impl Structural {
     /// 2 retry attempts).
     fn materialize(program: &Program, entry: &MenuEntry) -> Edit {
         match entry.kind {
+            EditKind::FuseNext => Edit::Fuse {
+                first: entry.node,
+                second: crate::ir::compiler::fusion_next(program, entry.node)
+                    .expect("legal fusion menu entry"),
+            },
+            EditKind::SplitOutputs => crate::ir::compiler::transformation_menu(program)
+                .into_iter()
+                .find(|edit| matches!(edit, Edit::Split { leaf, .. } if *leaf == entry.node))
+                .expect("legal split menu entry"),
             EditKind::AugmentSig => Edit::AugmentSig {
                 leaf: entry.node,
                 prepend: cot_reasoning_field(),

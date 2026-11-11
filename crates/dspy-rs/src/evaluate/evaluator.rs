@@ -1,9 +1,9 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures::stream::{self, StreamExt, TryStreamExt};
 
+use crate::Predicted;
 use crate::core::{Module, ToInput};
 use crate::trace::{SpanId, Trace, TraceMeta, TraceOutcome, capture_with_meta};
-use crate::Predicted;
 
 pub use crate::trace::Eval;
 
@@ -130,6 +130,8 @@ where
 ///
 /// `max_concurrency` LM calls run in flight at once; results come back in trainset
 /// order. Use `1` for strictly sequential evaluation (e.g. rate-limited providers).
+#[tracing::instrument(name = "dsrs.evaluate", level = "info", skip_all,
+    fields(examples = trainset.len(), concurrency = max_concurrency.max(1)))]
 pub async fn evaluate_trainset_with_concurrency<E, M, MT>(
     module: &M,
     trainset: &[E],
@@ -148,7 +150,9 @@ where
 /// produced it (with [`Trace::outcome`] filled in).
 pub type Rollout = (Eval, Trace);
 
-fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<crate::trace::JsonMap> {
+fn json_object(
+    value: Result<serde_json::Value, serde_json::Error>,
+) -> Option<crate::trace::JsonMap> {
     match value {
         Ok(serde_json::Value::Object(map)) => Some(map),
         _ => None,
@@ -163,6 +167,8 @@ fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<cr
 ///
 /// Both the public evaluation entry points and the optimizer engine compose
 /// this — there is exactly one traced-rollout loop in the crate.
+#[tracing::instrument(name = "dsrs.evaluate.rollout", level = "debug", skip_all,
+    fields(module = std::any::type_name::<M>()))]
 pub(crate) async fn rollout_traced<E, M, MT>(
     module: &M,
     example: &E,
@@ -180,7 +186,7 @@ where
     }
     let started = std::time::Instant::now();
     let (result, mut trace) = capture_with_meta(meta, || module.call(input)).await;
-    let predicted = result.map_err(|err| anyhow!("{err}"))?;
+    let predicted = result?;
     let eval = metric.evaluate(example, &predicted, Some(&trace)).await?;
     // Per-span credit (RFC 0004 §4): stamp any span-level evals the metric
     // attaches; demo harvesting prefers these over the rollout score.

@@ -29,10 +29,16 @@ pub(crate) fn now_us() -> u64 {
         .unwrap_or(0)
 }
 
-fn mint_trace_id() -> String {
+pub(crate) fn mint_trace_id() -> String {
     use rand::Rng;
     let random: u64 = rand::thread_rng().r#gen();
     format!("{:016x}{:016x}", now_us(), random)
+}
+
+pub(crate) fn current_trace_id() -> Option<String> {
+    ACTIVE
+        .try_with(|sink| sink.0.lock().unwrap().trace.meta.trace_id.clone())
+        .ok()
 }
 
 /// Shared handle to an in-progress trace.
@@ -82,6 +88,10 @@ impl TraceSink {
             // Fallback: clone if an orphaned task still holds a reference.
             Err(arc) => arc.lock().unwrap().trace.clone(),
         }
+    }
+
+    fn tag(&self, key: String, value: String) {
+        self.0.lock().unwrap().trace.meta.tags.insert(key, value);
     }
 
     fn begin(&self, req: SpanRequest<'_>) -> SpanGuard {
@@ -223,12 +233,21 @@ where
 {
     let sink = TraceSink::new(meta);
     let result = ACTIVE.scope(sink.clone(), f()).await;
-    (result, sink.finish())
+    let trace = sink.finish();
+    crate::core::storage::persist_trace(&trace);
+    (result, trace)
 }
 
 /// Returns `true` if the current task is inside a [`capture`] scope.
 pub fn is_capturing() -> bool {
     ACTIVE.try_with(|_| ()).is_ok()
+}
+
+/// Adds or replaces a free-form tag on the active trace, if capture is active.
+pub(crate) fn set_trace_tag(key: impl Into<String>, value: impl Into<String>) -> bool {
+    ACTIVE
+        .try_with(|sink| sink.tag(key.into(), value.into()))
+        .is_ok()
 }
 
 /// Everything recorded eagerly at span open.

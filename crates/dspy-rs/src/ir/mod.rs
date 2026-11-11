@@ -30,6 +30,7 @@ pub use sig::{
 
 pub mod bridge;
 pub mod builder;
+pub mod compiler;
 pub mod edit;
 pub mod graph;
 pub mod interp;

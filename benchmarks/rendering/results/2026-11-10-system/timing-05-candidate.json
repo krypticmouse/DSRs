@@ -1,0 +1,1 @@
+[{"case":"system-1","iterations":20000,"warmup":100,"ns_per_op":1265.79,"output_bytes":877},{"case":"system-8","iterations":20000,"warmup":100,"ns_per_op":3230.335,"output_bytes":1528},{"case":"system-16","iterations":20000,"warmup":100,"ns_per_op":5717.915,"output_bytes":2303}]

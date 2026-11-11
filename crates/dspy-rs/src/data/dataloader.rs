@@ -20,9 +20,9 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+use crate::FieldType;
 use crate::data::utils::is_url;
 use crate::typesys::schema::field_type_from_shape;
-use crate::FieldType;
 use facet::{Facet, Type, UserType};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -124,19 +124,19 @@ impl RowRecord {
 pub enum DataLoadError {
     /// Source read/download failure.
     #[error("I/O error: {0}")]
-    Io(anyhow::Error),
+    Io(#[source] anyhow::Error),
     /// CSV parser failure.
     #[error("CSV error: {0}")]
-    Csv(anyhow::Error),
+    Csv(#[source] anyhow::Error),
     /// JSON/JSONL parser failure.
     #[error("JSON error: {0}")]
-    Json(anyhow::Error),
+    Json(#[source] anyhow::Error),
     /// Parquet parser failure.
     #[error("Parquet error: {0}")]
-    Parquet(anyhow::Error),
+    Parquet(#[source] anyhow::Error),
     /// HuggingFace Hub listing or file retrieval failure.
     #[error("HuggingFace error: {0}")]
-    Hf(anyhow::Error),
+    Hf(#[source] anyhow::Error),
     /// Required row-struct field was missing from a row.
     #[error("missing field `{field}` at row {row}")]
     MissingField { row: usize, field: String },
@@ -151,8 +151,12 @@ pub enum DataLoadError {
         message: String,
     },
     /// Custom mapper closure returned an error.
-    #[error("mapper error at row {row}: {message}")]
-    Mapper { row: usize, message: String },
+    #[error("mapper error at row {row}: {source}")]
+    Mapper {
+        row: usize,
+        #[source]
+        source: anyhow::Error,
+    },
 }
 
 /// Typed dataset ingress for JSON/CSV/Parquet/HuggingFace sources.
@@ -189,11 +193,7 @@ impl DataLoader {
     /// # Errors
     /// Returns [`DataLoadError`] wrapped in `anyhow::Error` for parse, schema,
     /// mapping, and conversion failures.
-    pub fn load_json<E>(
-        path: &str,
-        lines: bool,
-        opts: TypedLoadOptions,
-    ) -> Result<Vec<E>>
+    pub fn load_json<E>(path: &str, lines: bool, opts: TypedLoadOptions) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
@@ -317,10 +317,7 @@ impl DataLoader {
         )
     )]
     /// Load typed rows from a local Parquet file.
-    pub fn load_parquet<E>(
-        path: &str,
-        opts: TypedLoadOptions,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet<E>(path: &str, opts: TypedLoadOptions) -> Result<Vec<E>>
     where
         E: DeserializeOwned + for<'f> Facet<'f>,
     {
@@ -344,11 +341,7 @@ impl DataLoader {
     ///
     /// This bypasses schema-driven conversion and gives full control to the caller.
     /// `opts` is accepted for API parity with non-mapper loaders.
-    pub fn load_parquet_with<E, F>(
-        path: &str,
-        opts: TypedLoadOptions,
-        mapper: F,
-    ) -> Result<Vec<E>>
+    pub fn load_parquet_with<E, F>(path: &str, opts: TypedLoadOptions, mapper: F) -> Result<Vec<E>>
     where
         F: Fn(&RowRecord) -> Result<E>,
     {
@@ -484,7 +477,7 @@ impl DataLoader {
             .map(|row| {
                 mapper(&row).map_err(|err| DataLoadError::Mapper {
                     row: row.row_index,
-                    message: err.to_string(),
+                    source: err,
                 })
             })
             .map(|result| result.map_err(anyhow::Error::from))
@@ -494,6 +487,7 @@ impl DataLoader {
     fn fetch_text(path: &str) -> std::result::Result<String, DataLoadError> {
         if is_url(path) {
             let response = reqwest::blocking::get(path)
+                .and_then(reqwest::blocking::Response::error_for_status)
                 .with_context(|| format!("failed to GET `{path}`"))
                 .map_err(DataLoadError::Io)?;
             response.text().map_err(|err| DataLoadError::Io(err.into()))
@@ -546,6 +540,7 @@ impl DataLoader {
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
         if is_url(path) {
             let bytes = reqwest::blocking::get(path)
+                .and_then(reqwest::blocking::Response::error_for_status)
                 .with_context(|| format!("failed to GET `{path}`"))
                 .map_err(DataLoadError::Csv)?
                 .bytes()
