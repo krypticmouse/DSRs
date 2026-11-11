@@ -10,6 +10,7 @@ cargo run --example 07-inspect-history
 use anyhow::Result;
 use dspy_rs::{LM, Predict, Signature, configure, get_lm, init_tracing};
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]

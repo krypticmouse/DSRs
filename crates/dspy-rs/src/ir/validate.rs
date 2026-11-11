@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use cranelift_entity::EntityRef;
 use indexmap::IndexMap;
 
-use crate::ir::graph::{Binding, Node, NodeId, PortRef, Program, SigId, Sym, ToolKind};
+use crate::ir::graph::{Binding, MAX_NODE_DEPTH, Node, NodeId, PortRef, Program, SigId, Sym, ToolKind};
 use crate::ir::params::{ParamId, ParamKind, ParamOwner};
 use crate::ir::sig::SignatureDef;
 use crate::typesys::{FieldType, TypeTable};
@@ -44,8 +44,14 @@ pub enum ValidateError {
     UnreachableNodes { count: usize },
     #[error("root node must be a Seq")]
     RootNotSeq,
+    #[error("program exceeds the {limit}-node nesting limit at {at}")]
+    NodeNestingExceeded { at: String, limit: usize },
     #[error("signature `{sig}` references unknown type `{token}`")]
     UnknownTypeToken { sig: String, token: String },
+    #[error("signature `{sig}` contains recursive class `{token}`")]
+    RecursiveType { sig: String, token: String },
+    #[error("signature `{sig}` exceeds the class nesting limit")]
+    TypeNestingExceeded { sig: String },
     #[error("input `{field}` of `{at}` is not bound")]
     UnboundInput { at: String, field: String },
     #[error("input `{field}` of `{at}` is bound more than once")]
@@ -203,7 +209,7 @@ impl<'p> Validator<'p> {
             visible: Vec::new(),
             in_loop: false,
         };
-        let root_iface = self.check_node(self.p.root, &scope)?;
+        let root_iface = self.check_node(self.p.root, &scope, 1)?;
 
         // The root seq's exports are the program's external interface.
         for field in self.p.sigs[self.p.sig].outputs.iter() {
@@ -474,7 +480,13 @@ impl<'p> Validator<'p> {
 
     // -- the tree walk --------------------------------------------------------
 
-    fn check_node(&mut self, id: NodeId, scope: &Scope<'_>) -> Result<Interface, ValidateError> {
+    fn check_node(&mut self, id: NodeId, scope: &Scope<'_>, depth: usize) -> Result<Interface, ValidateError> {
+        if depth > MAX_NODE_DEPTH {
+            return Err(ValidateError::NodeNestingExceeded {
+                at: self.p.node_display(id),
+                limit: MAX_NODE_DEPTH,
+            });
+        }
         if !self.visited.insert(id) {
             return Err(ValidateError::NodeReused {
                 at: self.p.node_display(id),
@@ -562,7 +574,7 @@ impl<'p> Validator<'p> {
             Node::Seq(n) => {
                 let mut inner = scope.child(&[]);
                 for &child in n.body.iter() {
-                    self.check_node(child, &inner)?;
+                    self.check_node(child, &inner, depth + 1)?;
                     inner.visible.push(child);
                 }
                 self.check_export_bindings(&format!("{id}"), &n.out, &inner)?
@@ -570,7 +582,7 @@ impl<'p> Validator<'p> {
             Node::ForkJoin(n) => {
                 for &branch in n.branches.iter() {
                     // Branches cannot see each other: entry scope for each.
-                    self.check_node(branch, scope)?;
+                    self.check_node(branch, scope, depth + 1)?;
                 }
                 let after = scope.child(&n.branches);
                 self.check_export_bindings(&format!("{id}"), &n.join, &after)?
@@ -587,7 +599,7 @@ impl<'p> Validator<'p> {
                         return Err(ValidateError::RouteUnknownVariant { at, variant: vname });
                     }
                     covered.insert(vname.clone());
-                    let iface = self.check_node(*arm, scope)?;
+                    let iface = self.check_node(*arm, scope, depth + 1)?;
                     match &first {
                         None => first = Some((vname, iface)),
                         Some((_, expect)) => {
@@ -603,7 +615,7 @@ impl<'p> Validator<'p> {
                 })?;
                 match n.default {
                     Some(default) => {
-                        let d_iface = self.check_node(default, scope)?;
+                        let d_iface = self.check_node(default, scope, depth + 1)?;
                         if !iface_eq(&iface, &d_iface) {
                             return Err(ValidateError::RouteArmMismatch {
                                 at,
@@ -624,12 +636,12 @@ impl<'p> Validator<'p> {
                 }
                 iface
             }
-            Node::Retry(n) => self.check_node(n.child, scope)?,
+            Node::Retry(n) => self.check_node(n.child, scope, depth + 1)?,
             Node::Refine(n) => {
                 let at = format!("{id}");
-                let child_iface = self.check_node(n.child, scope)?;
+                let child_iface = self.check_node(n.child, scope, depth + 1)?;
                 let judge_scope = scope.child(&[n.child]);
-                let judge_iface = self.check_node(n.judge, &judge_scope)?;
+                let judge_iface = self.check_node(n.judge, &judge_scope, depth + 1)?;
                 if !matches!(self.p.nodes[n.judge], Node::Predict(_) | Node::Hole(_)) {
                     return Err(ValidateError::RefineJudgeNotLeaf { at });
                 }
@@ -679,7 +691,7 @@ impl<'p> Validator<'p> {
                     visible: scope.visible.clone(),
                     in_loop: true,
                 };
-                self.check_node(n.body, &body_scope)?;
+                self.check_node(n.body, &body_scope, depth + 1)?;
                 // `while`/`carry`/`out` ports resolve in the body's final
                 // scope: the body node itself plus, when the body is a Seq,
                 // its steps — the text form (`loop { step+ }`) references
@@ -957,8 +969,30 @@ pub(crate) fn compat(src: &FieldType, dst: &FieldType) -> bool {
 }
 
 fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), ValidateError> {
+    check_tokens_inner(sig, ty, types, &mut Vec::new())
+}
+
+const MAX_CLASS_DEPTH: usize = 64;
+
+fn check_tokens_inner(
+    sig: &str,
+    ty: &FieldType,
+    types: &TypeTable,
+    stack: &mut Vec<String>,
+) -> Result<(), ValidateError> {
     match ty {
         FieldType::Class(token) => {
+            if stack.contains(token) {
+                return Err(ValidateError::RecursiveType {
+                    sig: sig.to_string(),
+                    token: token.clone(),
+                });
+            }
+            if stack.len() >= MAX_CLASS_DEPTH {
+                return Err(ValidateError::TypeNestingExceeded {
+                    sig: sig.to_string(),
+                });
+            }
             let def = types
                 .classes
                 .get(token)
@@ -966,9 +1000,11 @@ fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), Vali
                     sig: sig.to_string(),
                     token: token.clone(),
                 })?;
+            stack.push(token.clone());
             for field in &def.fields {
-                check_tokens(sig, &field.field_type, types)?;
+                check_tokens_inner(sig, &field.field_type, types, stack)?;
             }
+            stack.pop();
             Ok(())
         }
         FieldType::Enum(token) => {
@@ -981,12 +1017,16 @@ fn check_tokens(sig: &str, ty: &FieldType, types: &TypeTable) -> Result<(), Vali
                     token: token.clone(),
                 })
         }
-        FieldType::List(inner) | FieldType::Optional(inner) => check_tokens(sig, inner, types),
-        FieldType::Map(key, value) => {
-            check_tokens(sig, key, types)?;
-            check_tokens(sig, value, types)
+        FieldType::List(inner) | FieldType::Optional(inner) => {
+            check_tokens_inner(sig, inner, types, stack)
         }
-        FieldType::Union(items) => items.iter().try_for_each(|i| check_tokens(sig, i, types)),
+        FieldType::Map(key, value) => {
+            check_tokens_inner(sig, key, types, stack)?;
+            check_tokens_inner(sig, value, types, stack)
+        }
+        FieldType::Union(items) => items
+            .iter()
+            .try_for_each(|i| check_tokens_inner(sig, i, types, stack)),
         _ => Ok(()),
     }
 }

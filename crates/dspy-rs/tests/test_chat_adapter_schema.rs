@@ -4,7 +4,8 @@
 //! canonical `FieldDef::name` (Predict translates to `rust_name` keying at
 //! its boundary).
 
-use dspy_rs::ir::SignatureDef;
+use dspy_rs::ir::{ConstraintDef, FieldDef as IrFieldDef, SignatureDef};
+use dspy_rs::typesys::{FieldType, TypeTable};
 use dspy_rs::{CallMetadata, ChatAdapter, Message, Predicted, Signature};
 use serde_json::Value;
 
@@ -27,6 +28,140 @@ struct AliasSig {
     #[output]
     #[alias("answer.value")]
     answer: String,
+}
+
+#[dspy_rs::Schema]
+#[derive(Clone, Debug)]
+struct City {
+    /// The official city name.
+    name: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+struct NestedSig {
+    #[input]
+    question: String,
+    #[output]
+    city: City,
+}
+
+async fn native_demo_lm() -> dspy_rs::LM {
+    dspy_rs::LM::builder()
+        .base_url("http://127.0.0.1:1/v1".into())
+        .model("demo-format-test".into())
+        .cache(false)
+        .build()
+        .await
+        .unwrap()
+        .with_custom_output_schema(true)
+        .with_scalar_output_schema(false)
+}
+
+#[tokio::test]
+async fn native_schema_demos_match_the_compact_prompt_and_preserve_aliases() {
+    let predictor = dspy_rs::Predict::<AliasSig>::builder()
+        .lm(native_demo_lm().await)
+        .demo(dspy_rs::Demo::new(
+            AliasSigInput {
+                question: "A demo?".into(),
+            },
+            AliasSigOutput {
+                answer: "A value".into(),
+            },
+        ))
+        .build();
+    let chat = predictor
+        .build_chat(&AliasSigInput {
+            question: "A new question?".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        chat.messages[0]
+            .text_content()
+            .contains("Return compact JSON")
+    );
+    assert_eq!(
+        chat.messages[2].text_content(),
+        r#"{"answer.value":"A value"}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_native_schema_demos_keep_the_descriptive_json_format() {
+    let predictor = dspy_rs::Predict::<NestedSig>::builder()
+        .lm(native_demo_lm().await)
+        .demo(dspy_rs::Demo::new(
+            NestedSigInput {
+                question: "A demo?".into(),
+            },
+            NestedSigOutput {
+                city: City {
+                    name: "A city".into(),
+                },
+            },
+        ))
+        .build();
+    let chat = predictor
+        .build_chat(&NestedSigInput {
+            question: "A new question?".into(),
+        })
+        .await
+        .unwrap();
+    let output = chat.messages[2].text_content();
+    assert!(output.contains('\n'));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap(),
+        serde_json::json!({"city":{"name":"A city"}})
+    );
+}
+
+#[test]
+fn complex_native_outputs_keep_nested_schema_descriptions_in_the_prompt() {
+    let prompt = ChatAdapter.build_system_json_def(
+        SignatureDef::of::<NestedSig>(),
+        SignatureDef::types_of::<NestedSig>(),
+        None,
+        true,
+    );
+    assert!(prompt.contains("The official city name."));
+    assert!(prompt.contains("additionalProperties"));
+}
+
+#[test]
+fn native_schema_prompt_keeps_semantics_without_repeating_the_api_schema() {
+    let def = SignatureDef::build("Prompt")
+        .instruction("Compare cities.")
+        .input_full(
+            IrFieldDef::new("question", FieldType::String)
+                .aliased("query")
+                .with_docs("The question."),
+        )
+        .output_full(
+            IrFieldDef::new("answer", FieldType::String)
+                .aliased("answer.value")
+                .with_docs("City name."),
+        )
+        .finish()
+        .unwrap();
+    let types = TypeTable::default();
+    let native =
+        ChatAdapter.build_system_json_def(&def, &types, Some("Use current capitals."), true);
+    for text in [
+        "query",
+        "answer.value",
+        "The question.",
+        "City name.",
+        "Use current capitals.",
+    ] {
+        assert!(native.contains(text), "missing {text}");
+    }
+    assert!(!native.contains("Compare cities."));
+    assert!(!native.contains("additionalProperties"));
+    let json_mode = ChatAdapter.build_system_json_def(&def, &types, None, false);
+    assert!(json_mode.contains("Compare cities."));
+    assert!(json_mode.contains("additionalProperties"));
+    assert!(json_mode.contains("answer.value"));
 }
 
 #[test]
@@ -88,4 +223,43 @@ fn parse_output_def_accepts_dotted_field_markers() {
             .trim(),
         "Paris"
     );
+}
+
+#[test]
+fn native_json_parser_preserves_string_values_and_field_metadata() {
+    let def = SignatureDef::build("Native")
+        .input("question", FieldType::String)
+        .output_full(
+            IrFieldDef::new("answer", FieldType::Optional(Box::new(FieldType::String)))
+                .aliased("answer.value"),
+        )
+        .output_full(
+            IrFieldDef::new("accepted", FieldType::Bool)
+                .with_constraint(ConstraintDef::check("truthy", "this == true")),
+        )
+        .output_full(
+            IrFieldDef::new("positive", FieldType::Int)
+                .with_constraint(ConstraintDef::assert("this > 0")),
+        )
+        .finish()
+        .unwrap();
+    let adapter = ChatAdapter;
+    let response =
+        Message::assistant(r#"{"answer.value":"quoted \"value\"","accepted":true,"positive":2}"#);
+    let (output, meta) = adapter
+        .parse_output_json_def(&def, &TypeTable::default(), &response)
+        .unwrap();
+    assert_eq!(output["answer"], "quoted \"value\"");
+    assert_eq!(output["accepted"], true);
+    assert!(meta["accepted"].checks[0].passed);
+    assert_eq!(meta["answer"].flags.len(), 0);
+
+    let bad = Message::assistant(r#"{"answer.value":null,"accepted":false,"positive":0}"#);
+    let error = adapter
+        .parse_output_json_def(&def, &TypeTable::default(), &bad)
+        .unwrap_err();
+    match error {
+        dspy_rs::ParseError::Multiple { errors, .. } => assert!(errors.iter().any(|error| matches!(error, dspy_rs::ParseError::AssertFailed { field, .. } if field == "positive"))),
+        other => panic!("expected collected parse errors, got {other}"),
+    }
 }

@@ -1,0 +1,418 @@
+{
+  "candidate_build": {
+    "revision": "03b2005bc23479e186256614c5b6ef645ff31f88",
+    "ended": "2026-11-10T14:13:52.9528623Z",
+    "dirty": [],
+    "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1",
+    "started": "2026-11-10T14:10:08.7404210Z",
+    "command": [
+      "cargo",
+      "+1.98.1",
+      "build",
+      "-p",
+      "dspy-rs",
+      "--release",
+      "--no-default-features",
+      "--features",
+      "cache",
+      "--locked",
+      "--example",
+      "bench-target-22",
+      "-j1"
+    ],
+    "rust_binary_sha256": "98acb4e2cb060f3d780771457c30b5ed6ad0e085ff063bddd5a8a9284123a2c6",
+    "exit_code": 0,
+    "worktree": "C:/Users/georg/Documents/DSRs-worktrees/fix-inference-io-performance",
+    "incremental": false,
+    "rustc": [
+      "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "binary: rustc",
+      "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+      "commit-date: 2026-09-01",
+      "host: x86_64-pc-windows-msvc",
+      "release: 1.98.1",
+      "LLVM version: 22.1.8"
+    ],
+    "harness_sha256": {
+      "crates/dspy-rs/examples/bench-target-22.rs": "2105625796371b9756488639221328ad8b9e8e333a9df4870ea8da623eeeadcf"
+    }
+  },
+  "baseline_build": {
+    "revision": "fcf173173da7f2bf29cded39bbb97b35763c1820",
+    "ended": "2026-11-10T14:10:07.2730870Z",
+    "dirty": [],
+    "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1",
+    "started": "2026-11-10T14:06:09.6526126Z",
+    "command": [
+      "cargo",
+      "+1.98.1",
+      "build",
+      "-p",
+      "dspy-rs",
+      "--release",
+      "--no-default-features",
+      "--features",
+      "cache",
+      "--locked",
+      "--example",
+      "bench-target-22",
+      "-j1"
+    ],
+    "rust_binary_sha256": "c539eb3a4045e4bf5988c8dfb0027cf4f392b5802a7728241d5135acd4ae6be3",
+    "exit_code": 0,
+    "worktree": "C:/Users/georg/Documents/DSRs-worktrees/benchmark-scalar-output-baseline",
+    "incremental": false,
+    "rustc": [
+      "rustc 1.98.1 (48a229cea 2026-09-01)",
+      "binary: rustc",
+      "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+      "commit-date: 2026-09-01",
+      "host: x86_64-pc-windows-msvc",
+      "release: 1.98.1",
+      "LLVM version: 22.1.8"
+    ],
+    "harness_sha256": {
+      "crates/dspy-rs/examples/bench-target-22.rs": "2105625796371b9756488639221328ad8b9e8e333a9df4870ea8da623eeeadcf"
+    }
+  },
+  "live_collection": {
+    "revision": "03b2005bc23479e186256614c5b6ef645ff31f88",
+    "controller_revision": "e311027ebb409110fb00f6bd41125d962dd07df9",
+    "utc": "2026-11-10T14:50:53Z",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "driver_python": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+    "model": {
+      "models": [
+        {
+          "name": "llama3.2:latest",
+          "model": "llama3.2:latest",
+          "modified_at": "2026-11-10T13:53:17.907573034+01:00",
+          "size": 2019393189,
+          "digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+          "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "llama",
+            "families": [
+              "llama"
+            ],
+            "parameter_size": "3.2B",
+            "quantization_level": "Q4_K_M",
+            "context_length": 131072,
+            "embedding_length": 3072,
+            "runner": "ggml"
+          },
+          "capabilities": [
+            "completion",
+            "tools"
+          ]
+        }
+      ]
+    },
+    "ollama": {
+      "version": "0.40.16"
+    },
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "framework_python": "Python 3.12.11",
+    "python_packages": {
+      "Jinja2": "3.1.6",
+      "MarkupSafe": "3.0.4",
+      "PyYAML": "6.0.3",
+      "aiohappyeyeballs": "2.7.1",
+      "aiohttp": "3.14.5",
+      "aiosignal": "1.4.0",
+      "annotated-types": "0.8.0",
+      "anyio": "4.16.0",
+      "asyncer": "0.0.8",
+      "attrs": "26.1.0",
+      "boto3": "1.43.127",
+      "botocore": "1.43.127",
+      "cachetools": "8.0.0",
+      "certifi": "2026.10.23",
+      "charset-normalizer": "3.5.2",
+      "click": "8.5.1",
+      "cloudpickle": "3.1.2",
+      "colorama": "0.4.6",
+      "diskcache": "5.6.3",
+      "dspy": "3.2.1",
+      "fastuuid": "0.14.0",
+      "filelock": "4.2.10",
+      "frozenlist": "1.8.0",
+      "fsspec": "2026.9.0",
+      "gepa": "0.0.27",
+      "h11": "0.16.0",
+      "h2": "4.4.1",
+      "hf-xet": "1.8.0",
+      "hpack": "4.2.0",
+      "httpcore": "1.0.9",
+      "httpcore2": "2.16.0",
+      "httpx": "0.28.1",
+      "httpx2": "2.16.0",
+      "huggingface_hub": "1.33.0",
+      "hyperframe": "6.1.0",
+      "idna": "3.20",
+      "importlib_metadata": "8.9.0",
+      "jiter": "0.19.0",
+      "jmespath": "1.1.0",
+      "json_repair": "0.64.8",
+      "jsonschema": "4.26.0",
+      "jsonschema-specifications": "2025.9.1",
+      "litellm": "1.108.4",
+      "multidict": "7.2.1",
+      "numpy": "2.5.4",
+      "openai": "3.48.0",
+      "orjson": "3.13.0",
+      "packaging": "26.3",
+      "propcache": "0.5.4",
+      "pydantic": "2.14.3",
+      "pydantic-settings": "2.16.2",
+      "pydantic_core": "2.50.4",
+      "python-dateutil": "2.9.0.post0",
+      "python-dotenv": "1.2.4",
+      "referencing": "0.37.0",
+      "regex": "2026.11.9",
+      "requests": "2.34.2",
+      "rpds-py": "2026.9.1",
+      "s3transfer": "0.19.3",
+      "six": "1.17.0",
+      "sniffio": "1.3.1",
+      "tenacity": "9.2.1",
+      "tiktoken": "0.14.0",
+      "tokenizers": "0.23.3",
+      "tqdm": "4.70.1",
+      "truststore": "0.10.5",
+      "typeguard": "4.4.3",
+      "typing-inspection": "0.4.5",
+      "typing_extensions": "4.16.0",
+      "urllib3": "2.8.0",
+      "xxhash": "4.1.0",
+      "yarl": "1.25.1",
+      "zipp": "4.1.2"
+    },
+    "rust_binary_sha256": "98acb4e2cb060f3d780771457c30b5ed6ad0e085ff063bddd5a8a9284123a2c6",
+    "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1",
+    "modes": [
+      "live"
+    ],
+    "baseline": {
+      "revision": "fcf173173da7f2bf29cded39bbb97b35763c1820",
+      "binary_sha256": "c539eb3a4045e4bf5988c8dfb0027cf4f392b5802a7728241d5135acd4ae6be3",
+      "record_sha256": "8dba88871bd1d9ea16498e0791b8030f57b075b2568f3bfeae62971fc656c288",
+      "rustc": [
+        "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "binary: rustc",
+        "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+        "commit-date: 2026-09-01",
+        "host: x86_64-pc-windows-msvc",
+        "release: 1.98.1",
+        "LLVM version: 22.1.8"
+      ]
+    },
+    "harness_sha256": {
+      "crates/dspy-rs/examples/bench-target-22.rs": "2105625796371b9756488639221328ad8b9e8e333a9df4870ea8da623eeeadcf",
+      "benchmarks/target-22/dspy_case.py": "a9fcb8747e8431ca508e4050df310b710002b835f500006320ab14f7a1bebb08",
+      "benchmarks/target-22/run.py": "98c0644703d35834c0cdf2936b9e001d4868cf8239ace72d3bf79fb6c4c24404"
+    },
+    "protocol": {
+      "order": "baseline-candidate-DSPy-DSPy-candidate-baseline repeated four times per mode",
+      "samples_per_framework": 8,
+      "iterations": {
+        "live": 1,
+        "cached": 1000,
+        "offline": 1000
+      },
+      "warmup": {
+        "live": 1,
+        "cached": 100,
+        "offline": 100
+      },
+      "temperature": 0,
+      "max_tokens": 64,
+      "retries": 0,
+      "quality": "answer exactly Paris",
+      "target_speedup": 2,
+      "output_format": "native JSON Schema, explicit custom endpoint opt-in",
+      "history": "DSPy disabled; DSRs capacities zero"
+    }
+  },
+  "cached_offline_collection": {
+    "revision": "03b2005bc23479e186256614c5b6ef645ff31f88",
+    "controller_revision": "e311027ebb409110fb00f6bd41125d962dd07df9",
+    "utc": "2026-11-10T14:39:48Z",
+    "platform": "Windows-11-10.0.26100-SP0",
+    "driver_python": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+    "model": {
+      "models": [
+        {
+          "name": "llama3.2:latest",
+          "model": "llama3.2:latest",
+          "modified_at": "2026-11-10T13:53:17.907573034+01:00",
+          "size": 2019393189,
+          "digest": "a80c4f17acd55265feec403c7aef86be0c25983ab279d83f3bcd3abbcb5b8b72",
+          "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "llama",
+            "families": [
+              "llama"
+            ],
+            "parameter_size": "3.2B",
+            "quantization_level": "Q4_K_M",
+            "context_length": 131072,
+            "embedding_length": 3072,
+            "runner": "ggml"
+          },
+          "capabilities": [
+            "completion",
+            "tools"
+          ]
+        }
+      ]
+    },
+    "ollama": {
+      "version": "0.40.16"
+    },
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+    "framework_python": "Python 3.12.11",
+    "python_packages": {
+      "Jinja2": "3.1.6",
+      "MarkupSafe": "3.0.4",
+      "PyYAML": "6.0.3",
+      "aiohappyeyeballs": "2.7.1",
+      "aiohttp": "3.14.5",
+      "aiosignal": "1.4.0",
+      "annotated-types": "0.8.0",
+      "anyio": "4.16.0",
+      "asyncer": "0.0.8",
+      "attrs": "26.1.0",
+      "boto3": "1.43.127",
+      "botocore": "1.43.127",
+      "cachetools": "8.0.0",
+      "certifi": "2026.10.23",
+      "charset-normalizer": "3.5.2",
+      "click": "8.5.1",
+      "cloudpickle": "3.1.2",
+      "colorama": "0.4.6",
+      "diskcache": "5.6.3",
+      "dspy": "3.2.1",
+      "fastuuid": "0.14.0",
+      "filelock": "4.2.10",
+      "frozenlist": "1.8.0",
+      "fsspec": "2026.9.0",
+      "gepa": "0.0.27",
+      "h11": "0.16.0",
+      "h2": "4.4.1",
+      "hf-xet": "1.8.0",
+      "hpack": "4.2.0",
+      "httpcore": "1.0.9",
+      "httpcore2": "2.16.0",
+      "httpx": "0.28.1",
+      "httpx2": "2.16.0",
+      "huggingface_hub": "1.33.0",
+      "hyperframe": "6.1.0",
+      "idna": "3.20",
+      "importlib_metadata": "8.9.0",
+      "jiter": "0.19.0",
+      "jmespath": "1.1.0",
+      "json_repair": "0.64.8",
+      "jsonschema": "4.26.0",
+      "jsonschema-specifications": "2025.9.1",
+      "litellm": "1.108.4",
+      "multidict": "7.2.1",
+      "numpy": "2.5.4",
+      "openai": "3.48.0",
+      "orjson": "3.13.0",
+      "packaging": "26.3",
+      "propcache": "0.5.4",
+      "pydantic": "2.14.3",
+      "pydantic-settings": "2.16.2",
+      "pydantic_core": "2.50.4",
+      "python-dateutil": "2.9.0.post0",
+      "python-dotenv": "1.2.4",
+      "referencing": "0.37.0",
+      "regex": "2026.11.9",
+      "requests": "2.34.2",
+      "rpds-py": "2026.9.1",
+      "s3transfer": "0.19.3",
+      "six": "1.17.0",
+      "sniffio": "1.3.1",
+      "tenacity": "9.2.1",
+      "tiktoken": "0.14.0",
+      "tokenizers": "0.23.3",
+      "tqdm": "4.70.1",
+      "truststore": "0.10.5",
+      "typeguard": "4.4.3",
+      "typing-inspection": "0.4.5",
+      "typing_extensions": "4.16.0",
+      "urllib3": "2.8.0",
+      "xxhash": "4.1.0",
+      "yarl": "1.25.1",
+      "zipp": "4.1.2"
+    },
+    "rust_binary_sha256": "98acb4e2cb060f3d780771457c30b5ed6ad0e085ff063bddd5a8a9284123a2c6",
+    "lock_sha256": "f9cea9f8ed91c895f9050e026b6908e2d9ce59f0f7db5185d50a2401b02382d1",
+    "modes": [
+      "cached",
+      "offline"
+    ],
+    "baseline": {
+      "revision": "fcf173173da7f2bf29cded39bbb97b35763c1820",
+      "binary_sha256": "c539eb3a4045e4bf5988c8dfb0027cf4f392b5802a7728241d5135acd4ae6be3",
+      "record_sha256": "8dba88871bd1d9ea16498e0791b8030f57b075b2568f3bfeae62971fc656c288",
+      "rustc": [
+        "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "binary: rustc",
+        "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985",
+        "commit-date: 2026-09-01",
+        "host: x86_64-pc-windows-msvc",
+        "release: 1.98.1",
+        "LLVM version: 22.1.8"
+      ]
+    },
+    "harness_sha256": {
+      "crates/dspy-rs/examples/bench-target-22.rs": "2105625796371b9756488639221328ad8b9e8e333a9df4870ea8da623eeeadcf",
+      "benchmarks/target-22/dspy_case.py": "a9fcb8747e8431ca508e4050df310b710002b835f500006320ab14f7a1bebb08",
+      "benchmarks/target-22/run.py": "98c0644703d35834c0cdf2936b9e001d4868cf8239ace72d3bf79fb6c4c24404"
+    },
+    "protocol": {
+      "order": "baseline-candidate-DSPy-DSPy-candidate-baseline repeated four times per mode",
+      "samples_per_framework": 8,
+      "iterations": {
+        "live": 1,
+        "cached": 1000,
+        "offline": 1000
+      },
+      "warmup": {
+        "live": 1,
+        "cached": 100,
+        "offline": 100
+      },
+      "temperature": 0,
+      "max_tokens": 64,
+      "retries": 0,
+      "quality": "answer exactly Paris",
+      "target_speedup": 2,
+      "output_format": "native JSON Schema, explicit custom endpoint opt-in",
+      "history": "DSPy disabled; DSRs capacities zero"
+    }
+  },
+  "host": {
+    "os": {
+      "Caption": "Microsoft Windows 11 Pro",
+      "Version": "10.0.26100",
+      "TotalVisibleMemorySize": 16489304
+    },
+    "cpu": {
+      "Name": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+      "NumberOfCores": 4,
+      "NumberOfLogicalProcessors": 8
+    },
+    "utc": "2026-11-10T13:05:38.5367259Z",
+    "power": [
+      "GUID des Energieschemas: 381b4222-f694-41f0-9685-ff5bb260df2e  (Ausbalanciert)"
+    ]
+  },
+  "archive_sha256": "50ce005ac7cdb560b0db548c477ccedec30966f77677a8c4a6d95473006e7901",
+  "excluded_retry_attempts": 2,
+  "collections": "Each mode is a complete 24-run collection with eight accepted samples per program. Independent live and cached/offline collections use identical binaries, workload, packages, controller and sampling policy. Earlier interrupted collections remain diagnostic artifacts locally; none substitutes for these complete collections."
+}

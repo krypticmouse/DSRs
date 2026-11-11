@@ -11,6 +11,7 @@ use anyhow::Result;
 use bon::Builder;
 use dspy_rs::prelude::*;
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
@@ -81,10 +82,12 @@ fn trainset() -> Vec<(QAInput, QAOutput)> {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     let metric = ExactMatch;
     let mut module = QAModule::builder().build();
