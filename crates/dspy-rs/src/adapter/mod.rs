@@ -15,4 +15,4 @@
 
 pub mod chat;
 
-pub use chat::*;
+pub use chat::ChatAdapter;

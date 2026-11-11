@@ -3,17 +3,16 @@ Script to evaluate a typed QA predictor on a HotpotQA sample.
 
 Run with:
 ```
-cargo run --example 03-evaluate-hotpotqa --features dataloaders
+cargo run --example 03-evaluate-hotpotqa --features data
 ```
 */
 
 use anyhow::Result;
 use dspy_rs::prelude::*;
 
+/// Concisely answer the question, but be accurate.
 #[derive(Signature, Clone, Debug)]
 struct QA {
-    /// Concisely answer the question, but be accurate.
-
     #[input]
     question: String,
 
@@ -62,10 +61,12 @@ impl TypedMetric<HotpotRow, Predict<QA>> for ExactMatchMetric {
 async fn main() -> Result<()> {
     init_tracing()?;
 
-    configure(LM::builder()
+    configure(
+        LM::builder()
             .model("openai:gpt-4o-mini".to_string())
             .build()
-            .await?);
+            .await?,
+    );
 
     // Loaders are generic over the row struct: extra dataset columns land in
     // the row's metric-only fields instead of being thrown away.

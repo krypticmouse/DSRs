@@ -10,7 +10,7 @@ fn json_map<T: serde::Serialize>(value: &T) -> serde_json::Map<String, Value> {
 }
 
 fn user_message<S: Signature>(input: &S::Input) -> String {
-    ChatAdapter.format_input_def(SignatureDef::of::<S>(), &json_map(input))
+    ChatAdapter.try_format_input_def(SignatureDef::of::<S>(), &json_map(input)).unwrap()
 }
 
 #[derive(Clone, Debug)]
@@ -98,6 +98,16 @@ struct RenderJinjaStrictSig {
     #[render(jinja = "{{ missing_var }}")]
     question: String,
 
+    #[output]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug)]
+/// Render a numeric collection with the registered sum filter.
+struct RenderJinjaSumSig {
+    #[input]
+    #[render(jinja = "{{ this | sum }}")]
+    values: Vec<i64>,
     #[output]
     answer: String,
 }
@@ -303,15 +313,30 @@ fn typed_input_render_jinja_uses_context_values() {
 }
 
 #[test]
-fn typed_input_render_jinja_missing_var_panics() {
+fn typed_input_render_jinja_missing_var_returns_error() {
     let input = RenderJinjaStrictSigInput {
         question: "Question".to_string(),
     };
 
-    let result = std::panic::catch_unwind(|| {
-        user_message::<RenderJinjaStrictSig>(&input)
-    });
-    assert!(result.is_err(), "missing Jinja variables should panic");
+    let map = json_map(&input);
+    assert!(ChatAdapter
+        .try_format_input_def(SignatureDef::of::<RenderJinjaStrictSig>(), &map)
+        .is_err());
+    assert_eq!(
+        ChatAdapter.format_input_def(SignatureDef::of::<RenderJinjaStrictSig>(), &map),
+        "[[ ## input_render_error ## ]]"
+    );
+}
+
+#[test]
+fn typed_input_render_jinja_sum_overflow_returns_error() {
+    let input = RenderJinjaSumSigInput {
+        values: vec![i64::MAX, 1],
+    };
+    let err = ChatAdapter
+        .try_format_input_def(SignatureDef::of::<RenderJinjaSumSig>(), &json_map(&input))
+        .unwrap_err();
+    assert!(format!("{err:#}").contains("sum overflow"), "{err:#}");
 }
 
 #[test]

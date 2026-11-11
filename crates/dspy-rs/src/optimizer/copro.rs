@@ -132,6 +132,8 @@ impl Optimizer for COPRO {
         self.common().engine_config()
     }
 
+    #[tracing::instrument(name = "dsrs.copro.compile", skip_all,
+        fields(depth = self.depth, breadth = self.breadth))]
     async fn compile(
         &self,
         target: &mut OptimizeTarget<'_>,

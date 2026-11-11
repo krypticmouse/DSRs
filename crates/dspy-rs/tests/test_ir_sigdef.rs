@@ -8,6 +8,37 @@ use dspy_rs::ir::{ConstraintDef, FieldDef, FieldType, RenderSpec, SigError, Sign
 use dspy_rs::modules::Reasoning;
 use dspy_rs::{Augmented, Schema, Signature};
 
+#[test]
+fn constraint_predicates_reject_allocation_operations() {
+    for expression in [
+        "'x' * 1000000000",
+        "range(1000000000)|list",
+        "this ~ this",
+        "this|join(',')",
+    ] {
+        let result = SignatureDef::build("Bounded")
+            .input("question", FieldType::String)
+            .output_full(
+                FieldDef::new("answer", FieldType::String)
+                    .with_constraint(ConstraintDef::assert(expression)),
+            )
+            .finish();
+        assert!(matches!(result, Err(SigError::InvalidConstraintExpr { .. })));
+        assert!(!dspy_rs::typesys::evaluate_expression(
+            expression,
+            &serde_json::json!("x")
+        ));
+    }
+    assert!(dspy_rs::typesys::evaluate_expression(
+        "this|length > 0",
+        &serde_json::json!("x")
+    ));
+    assert!(dspy_rs::typesys::evaluate_expression(
+        "this + 1 > 2",
+        &serde_json::json!(2)
+    ));
+}
+
 #[derive(Signature, Clone, Debug)]
 /// Answer questions accurately and concisely.
 struct PlainQA {

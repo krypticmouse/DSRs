@@ -12,8 +12,8 @@ use crate::ir::{
     self, Budget, Interpreter, Overlay, Program, RunError, RunOutput, RuntimeEnv, SignatureDef,
 };
 use crate::{
-    CallMetadata, Chat, FieldSchema, GLOBAL_SETTINGS, LmError, LmUsage, ParseError, PredictError,
-    Predicted, Schema, SignatureSchema,
+    CallMetadata, Chat, FieldSchema, LmError, LmUsage, ParseError, PredictError, Predicted, Schema,
+    SignatureSchema,
 };
 
 /// Loop options for a tooled predictor's 1-node `agent` program.
@@ -114,6 +114,8 @@ impl<S: Signature> Demo<S> {
 #[facet(crate = facet, opaque)]
 pub struct Predict<S: Signature> {
     #[facet(skip, opaque)]
+    history: crate::HistoryBuffer,
+    #[facet(skip, opaque)]
     tools: Vec<Arc<dyn ToolDyn>>,
     /// Loop options applied to the 1-node `agent` program when tools are
     /// attached (stop spec, node budget, context policy). Settable only at
@@ -159,6 +161,7 @@ impl<S: Signature> Predict<S> {
     /// Creates a new `Predict` with no demos, no instruction override, and no tools.
     pub fn new() -> Self {
         Self {
+            history: crate::HistoryBuffer::default(),
             tools: Vec::new(),
             agent_spec: None,
             demos: Vec::new(),
@@ -176,6 +179,15 @@ impl<S: Signature> Predict<S> {
     /// Returns a builder for configuring demos, instruction, and tools.
     pub fn builder() -> PredictBuilder<S> {
         PredictBuilder::new()
+    }
+
+    /// Adds application validation and bounded corrective conversations.
+    pub fn validated(self) -> crate::modules::ValidatedPredict<S> {
+        crate::modules::ValidatedPredict::new(self)
+    }
+
+    pub(crate) fn has_tools(&self) -> bool {
+        !self.tools.is_empty()
     }
 
     /// The typed write path for optimizable state (instruction override + demos).
@@ -238,17 +250,70 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
+        self.history
+            .scope(
+                self.trace_name
+                    .as_deref()
+                    .unwrap_or(std::any::type_name::<S>()),
+                self.call_inner(input),
+            )
+            .await
+    }
+
+    async fn call_inner(&self, input: S::Input) -> Result<Predicted<S::Output>, PredictError> {
         let program = self.program().await?;
         let overlay = self.effective_overlay(&program)?;
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
         let input_map = json_map_from_input::<S>(&input)
-            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+            .map_err(|err| internal_source("failed to serialize input", err))?;
         let run = interpreter
             .run_collecting(input_map, overlay, Budget::unlimited())
             .await
             .map_err(map_run_error::<S>)?;
         predicted_from_run::<S>(run)
+    }
+
+    pub async fn inspect_history(&self, n: usize) -> Vec<crate::HistoryEntry> {
+        self.history.inspect(n)
+    }
+
+    pub fn set_history_capacity(&self, capacity: usize) {
+        self.history.set_capacity(capacity);
+    }
+
+    pub fn clear_history(&self) {
+        self.history.clear();
+    }
+
+    /// Calls with an explicit LM, overriding the predictor, scoped, and global
+    /// LMs for this call without mutating them.
+    pub async fn call_with_lm(
+        &self,
+        input: S::Input,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<Predicted<S::Output>, PredictError> {
+        crate::core::settings::with_call_lm(lm, self.call(input)).await
+    }
+
+    /// Merges configuration changes into the resolved LM for this call only.
+    pub async fn call_with_config(
+        &self,
+        input: S::Input,
+        overrides: impl FnOnce(&mut crate::LMConfig),
+    ) -> Result<Predicted<S::Output>, PredictError> {
+        let lm = self
+            .resolve_lm()
+            .copy_with(overrides)
+            .await
+            .map_err(|err| PredictError::Lm {
+                source: LmError::Provider {
+                    provider: "configuration".into(),
+                    message: "failed to initialize LM override".into(),
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
+                },
+            })?;
+        self.call_with_lm(input, lm).await
     }
 
     /// Returns the cached 1-node program, building it on first use: a
@@ -344,7 +409,7 @@ impl<S: Signature> Predict<S> {
             root = root.out(&field.name, ir::out(leaf, &field.name));
         }
         b.main(sid, root)
-            .map_err(|err| internal_error(format!("failed to build agent program: {err}")))
+            .map_err(|err| internal_source("failed to build agent program", err))
     }
 
     /// Builds the 1-node `predict` program: leaf name = the trace-name
@@ -373,7 +438,7 @@ impl<S: Signature> Predict<S> {
             root = root.out(&field.name, ir::out(leaf, &field.name));
         }
         b.main(sid, root)
-            .map_err(|err| internal_error(format!("failed to build predict program: {err}")))
+            .map_err(|err| internal_source("failed to build predict program", err))
     }
 
     /// The instance overlay: instruction override + demos as slot values
@@ -475,18 +540,11 @@ impl<S: Signature> Predict<S> {
         Ok(merged.map(Arc::new))
     }
 
-    /// Resolves the LM this call uses: instance LM > global
-    /// [`configure()`](crate::configure) settings. Panics exactly like the
-    /// pre-IR path when no global LM is configured and no instance LM is set.
+    /// Resolves the LM: explicit call > instance > scoped default > global.
     fn resolve_lm(&self) -> Arc<crate::core::LM> {
-        match &self.lm {
-            Some(lm) => Arc::clone(lm),
-            None => {
-                let guard = GLOBAL_SETTINGS.read().unwrap();
-                let settings = guard.as_ref().unwrap();
-                Arc::clone(&settings.lm)
-            }
-        }
+        crate::core::settings::call_lm()
+            .or_else(|| self.lm.as_ref().map(Arc::clone))
+            .unwrap_or_else(crate::get_lm)
     }
 
     /// Returns the loaded interpreter for `lm`, reloading when the resolved
@@ -504,9 +562,9 @@ impl<S: Signature> Predict<S> {
             return Ok(Arc::clone(interpreter));
         }
         let env = self.runtime_env(lm);
-        let interpreter = Interpreter::load((**program).clone(), env)
+        let interpreter = Interpreter::load_shared(Arc::clone(program), env)
             .await
-            .map_err(|err| internal_error(format!("failed to load predict program: {err}")))?;
+            .map_err(|err| internal_source("failed to load predict program", err))?;
         let interpreter = Arc::new(interpreter);
         *slot = Some((Arc::clone(lm), Arc::clone(&interpreter)));
         Ok(interpreter)
@@ -542,12 +600,22 @@ impl<S: Signature> Predict<S> {
         let lm = self.resolve_lm();
         let interpreter = self.interpreter(&program, &lm).await?;
         let input_map = json_map_from_input::<S>(input)
-            .map_err(|err| internal_error(format!("failed to serialize input: {err}")))?;
+            .map_err(|err| internal_source("failed to serialize input", err))?;
         let chat = interpreter
             .conversation_opening(&input_map, overlay)
             .map_err(map_run_error::<S>)?;
         trace!(message_count = chat.len(), "chat constructed");
         Ok(chat)
+    }
+
+    /// Builds the prompt using the same explicit LM as a subsequent
+    /// [`call_and_parse_with_lm`](Self::call_and_parse_with_lm).
+    pub async fn build_chat_with_lm(
+        &self,
+        input: &S::Input,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<Chat, PredictError> {
+        crate::core::settings::with_call_lm(lm, self.build_chat(input)).await
     }
 
     /// The component name recorded on trace spans: the assigned `trace_name`
@@ -608,6 +676,20 @@ impl<S: Signature> Predict<S> {
         S::Input: Schema,
         S::Output: Schema,
     {
+        self.history
+            .scope(
+                self.trace_name
+                    .as_deref()
+                    .unwrap_or(std::any::type_name::<S>()),
+                self.call_and_parse_inner(chat),
+            )
+            .await
+    }
+
+    async fn call_and_parse_inner(
+        &self,
+        chat: Chat,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError> {
         trace!(message_count = chat.len(), "chat-level call");
         let program = self.program().await?;
         let overlay = self.effective_overlay(&program)?;
@@ -619,6 +701,15 @@ impl<S: Signature> Predict<S> {
             .map_err(map_run_error::<S>)?;
         let predicted = predicted_from_run::<S>(run)?;
         Ok((predicted, chat))
+    }
+
+    /// Sends a conversation with an explicit LM for this turn.
+    pub async fn call_and_parse_with_lm(
+        &self,
+        chat: Chat,
+        lm: impl Into<Arc<crate::LM>>,
+    ) -> Result<(Predicted<S::Output>, Chat), PredictError> {
+        crate::core::settings::with_call_lm(lm, self.call_and_parse(chat)).await
     }
 }
 
@@ -727,6 +818,7 @@ impl<S: Signature> PredictBuilder<S> {
     /// uses.
     pub fn build(self) -> Predict<S> {
         let mut predict = Predict {
+            history: crate::HistoryBuffer::default(),
             tools: self.tools,
             agent_spec: self.agent_spec,
             demos: Vec::new(),
@@ -974,6 +1066,17 @@ fn field_type_from_json_schema(
 
 /// Internal (non-provider, non-parse) failure surfaced through the historical
 /// `PredictError::Lm { provider: "internal" }` shape.
+fn internal_source(context: &str, error: impl Into<anyhow::Error>) -> PredictError {
+    let error = error.into();
+    PredictError::Lm {
+        source: LmError::Provider {
+            provider: "internal".into(),
+            message: format!("{context}: {error}"),
+            source: Some(error.reallocate_into_boxed_dyn_error_without_backtrace()),
+        },
+    }
+}
+
 fn internal_error(message: String) -> PredictError {
     PredictError::Lm {
         source: LmError::Provider {
@@ -1074,12 +1177,13 @@ fn translate_parse_error<S: Signature>(err: ParseError) -> ParseError {
             errors: errors.into_iter().map(translate_parse_error::<S>).collect(),
             partial,
         },
+        other @ ParseError::ValidationFailed { .. } => other,
     }
 }
 
 /// Maps an interpreter [`RunError`] onto the historical [`PredictError`]
-/// variants: `Lm`/`Parse`/`Replay` map structurally; everything else (input
-/// validation, internal invariants) surfaces as an internal LM error.
+/// variants: `Lm`/`Parse`/`Replay` map structurally; input validation uses the
+/// non-retryable `Params` variant, while interpreter invariants remain internal.
 fn map_run_error<S: Signature>(err: RunError) -> PredictError {
     match err {
         RunError::Lm { source, .. } => PredictError::Lm { source },
@@ -1098,7 +1202,11 @@ fn map_run_error<S: Signature>(err: RunError) -> PredictError {
             lm_usage: usage,
         },
         RunError::Replay { source, .. } => PredictError::Replay { source },
-        other => internal_error(other.to_string()),
+        input @ RunError::Input { .. } => PredictError::Params {
+            name: std::any::type_name::<S>().to_string(),
+            source: Box::new(input),
+        },
+        other => internal_source("interpreter call failed", other),
     }
 }
 
@@ -1111,6 +1219,11 @@ fn predicted_from_run<S: Signature>(run: RunOutput) -> Result<Predicted<S::Outpu
 where
     S::Output: Schema,
 {
+    let call_ids = run
+        .leaves
+        .iter()
+        .flat_map(|leaf| leaf.call_ids.clone())
+        .collect();
     let leaf = run.leaves.into_iter().next();
     let (raw_response, lm_usage, span_id, leaf_meta, tool_calls, tool_executions) = match leaf {
         Some(leaf) => (
@@ -1155,7 +1268,7 @@ where
         checks_total, checks_failed, "typed parse completed"
     );
 
-    let metadata = CallMetadata::new(
+    let mut metadata = CallMetadata::new(
         raw_response,
         lm_usage,
         tool_calls,
@@ -1163,6 +1276,7 @@ where
         span_id,
         field_meta,
     );
+    metadata.call_ids = call_ids;
     Ok(Predicted::new(typed, metadata))
 }
 
@@ -1288,6 +1402,16 @@ where
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn input_render_failure_is_non_retryable_predict_error() {
+        let err = map_run_error::<PredictConversionSig>(RunError::Input {
+            at: "self".into(),
+            message: "failed to render input".into(),
+        });
+        assert!(matches!(err, PredictError::Params { .. }));
+        assert!(!err.is_retryable());
+    }
 
     #[derive(crate::Signature, Clone, Debug)]
     struct PredictConversionSig {

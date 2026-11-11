@@ -30,7 +30,13 @@ pub mod replay;
 pub mod serialize;
 pub mod span;
 
-pub use capture::*;
+pub use capture::{
+    SpanGuard, SpanOutcome, SpanRequest, TraceSink, begin_span, capture, capture_with_meta,
+    is_capturing,
+};
 pub use replay::{ReplayError, ReplayMode, ReplayReport, is_replaying, replay};
 pub use serialize::TRACE_FORMAT_VERSION;
-pub use span::*;
+pub use span::{
+    CompId, Eval, JsonMap, ModelEntry, ModelId, PrefixEntry, PrefixId, Span, SpanError,
+    SpanErrorKind, SpanEvent, SpanId, Trace, TraceMeta, TraceOutcome,
+};

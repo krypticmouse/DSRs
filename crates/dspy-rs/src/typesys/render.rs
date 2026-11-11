@@ -51,12 +51,29 @@ fn resolve_name(token: &str, schema: Option<&TypeTable>) -> String {
 /// skips emitting a redundant block). For classes, enums, and lists thereof it renders a
 /// structured, indented block that names each field/value with doc comments.
 pub fn schema_block(field_type: &FieldType, schema: &TypeTable) -> String {
+    schema_block_inner(field_type, schema, &mut Vec::new())
+}
+
+const MAX_CLASS_EXPANSION_DEPTH: usize = 64;
+
+fn schema_block_inner(
+    field_type: &FieldType,
+    schema: &TypeTable,
+    stack: &mut Vec<String>,
+) -> String {
     match field_type {
-        FieldType::Class(name) => schema
-            .classes
-            .get(name)
-            .map(|class| render_class(class, schema))
-            .unwrap_or_else(|| type_name(field_type, Some(schema))),
+        FieldType::Class(name) => {
+            let Some(class) = schema.classes.get(name) else {
+                return type_name(field_type, Some(schema));
+            };
+            if stack.contains(name) || stack.len() >= MAX_CLASS_EXPANSION_DEPTH {
+                return type_name(field_type, Some(schema));
+            }
+            stack.push(name.clone());
+            let rendered = render_class(class, schema, stack);
+            stack.pop();
+            rendered
+        }
         FieldType::Enum(name) => schema
             .enums
             .get(name)
@@ -64,14 +81,14 @@ pub fn schema_block(field_type: &FieldType, schema: &TypeTable) -> String {
             .unwrap_or_else(|| type_name(field_type, Some(schema))),
         FieldType::List(inner) => match inner.as_ref() {
             FieldType::Class(_) | FieldType::Enum(_) => {
-                let inner_block = schema_block(inner, schema);
+                let inner_block = schema_block_inner(inner, schema, stack);
                 format!("[\n{}\n]", indent(&inner_block, 2))
             }
             _ => type_name(field_type, Some(schema)),
         },
         FieldType::Optional(inner) => match inner.as_ref() {
             FieldType::Class(_) | FieldType::Enum(_) | FieldType::List(_) => {
-                schema_block(inner, schema)
+                schema_block_inner(inner, schema, stack)
             }
             _ => type_name(field_type, Some(schema)),
         },
@@ -79,7 +96,7 @@ pub fn schema_block(field_type: &FieldType, schema: &TypeTable) -> String {
     }
 }
 
-fn render_class(class: &ClassDef, schema: &TypeTable) -> String {
+fn render_class(class: &ClassDef, schema: &TypeTable, stack: &mut Vec<String>) -> String {
     let mut lines = vec!["{".to_string()];
     for field in &class.fields {
         if let Some(docs) = &field.docs {
@@ -90,7 +107,7 @@ fn render_class(class: &ClassDef, schema: &TypeTable) -> String {
         let rendered_type = match field.field_type.peel() {
             FieldType::Class(_) | FieldType::Enum(_) => {
                 // Inline nested structured types one level so the block is self-describing.
-                let nested = schema_block(&field.field_type, schema);
+                let nested = schema_block_inner(&field.field_type, schema, stack);
                 indent_inline(&nested)
             }
             _ => type_name(&field.field_type, Some(schema)),
