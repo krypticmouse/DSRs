@@ -59,6 +59,9 @@ pub struct FieldDef {
 }
 
 impl FieldDef {
+    pub fn special_kind(&self) -> Option<crate::SpecialField> {
+        crate::core::specials::special_field(&self.ty)
+    }
     /// A plain field: `lm_name == name`, no docs, no constraints, default rendering.
     pub fn new(name: &str, ty: FieldType) -> Self {
         Self {

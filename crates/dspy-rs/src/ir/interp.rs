@@ -172,6 +172,8 @@ impl BudgetMeter {
 ///   predictions carry no per-field parse metadata").
 #[derive(Debug, Clone)]
 pub struct LeafOutcome {
+    /// Persistent invocation IDs, in call order. Replay adds no stored calls.
+    pub call_ids: Vec<String>,
     /// The program-unique leaf name (the trace span `component`).
     pub name: String,
     /// The full text the LM returned, before parsing.
@@ -1084,8 +1086,24 @@ impl Interpreter {
 
         let options = output_schema_options(lm, def, &self.program.types);
         let structured = options.is_json();
+        let declarations = ChatAdapter
+            .signature_tools_from_messages(def, &messages)
+            .map_err(|error| RunError::Input {
+                at: at.into(),
+                message: error.to_string(),
+            })?;
+        let toolset = ToolSet::from_definitions(declarations);
         let response = match lm
-            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
             .await
         {
             Ok(response) => response,
@@ -1112,17 +1130,31 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = if structured {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &self.program.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
             ChatAdapter.parse_output_json_def(def, &self.program.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         match parsed {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
                     raw_response: raw.clone(),
+                    call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
                     field_meta: metas,
                     usage: response.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -1209,6 +1241,7 @@ impl Interpreter {
         let leaf = LeafOutcome {
             name: at.to_string(),
             raw_response: span.raw_output.clone().unwrap_or_default(),
+            call_ids: Vec::new(),
             field_meta: IndexMap::new(),
             usage: span.usage,
             model_config_hash: crate::trace::ModelEntry::from_config(&lm.config).config_hash,
@@ -1259,6 +1292,7 @@ impl Interpreter {
                     name: at.to_string(),
                     raw_response: raw.clone(),
                     field_meta,
+                    call_ids: run.call_ids,
                     usage: run.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                         .config_hash,
@@ -1773,6 +1807,7 @@ impl Interpreter {
                     leaves.push(LeafOutcome {
                         name: at.clone(),
                         raw_response: span.raw_output.clone().unwrap_or_default(),
+                        call_ids: Vec::new(),
                         field_meta: IndexMap::new(),
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -1828,8 +1863,25 @@ impl Interpreter {
 
         let options = output_schema_options(&lm, def, &p.types);
         let structured = options.is_json();
+        let declarations =
+            ChatAdapter
+                .signature_tools(def, &input)
+                .map_err(|error| RunError::Input {
+                    at: at.clone().into(),
+                    message: error.to_string(),
+                })?;
+        let toolset = ToolSet::from_definitions(declarations);
         let response = match lm
-            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
             .await
         {
             Ok(response) => response,
@@ -1856,12 +1908,25 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = if structured {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &p.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
             ChatAdapter.parse_output_json_def(def, &p.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(def, &p.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         match parsed {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
@@ -1869,6 +1934,7 @@ impl Interpreter {
                         name: at.clone(),
                         raw_response: raw.clone(),
                         field_meta: metas,
+                        call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
                         usage: response.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
@@ -2172,6 +2238,7 @@ impl Interpreter {
                     leaves.push(LeafOutcome {
                         name: at.clone(),
                         raw_response: span.raw_output.clone().unwrap_or_default(),
+                        call_ids: Vec::new(),
                         field_meta: IndexMap::new(),
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -2246,6 +2313,7 @@ impl Interpreter {
                         name: at.clone(),
                         raw_response: raw.clone(),
                         field_meta,
+                        call_ids: run.call_ids,
                         usage: run.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
@@ -2317,6 +2385,8 @@ impl Interpreter {
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events.clone());
+            run.call_ids
+                .extend(response.history.iter().map(|h| h.snapshot().id));
             chat = response.chat;
 
             if !response.tool_calls.is_empty() {
@@ -2373,7 +2443,9 @@ impl Interpreter {
                 } else {
                     ChatAdapter.parse_output_def(lc.def, types, &response.output)
                 };
-                if let Some(history) = &response.history { history.parsed(&parsed); }
+                if let Some(history) = &response.history {
+                    history.parsed(&parsed);
+                }
                 match parsed {
                     Ok((output, metas)) => {
                         return Ok(LoopOutcome::Done {
@@ -2441,13 +2513,17 @@ impl Interpreter {
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
+        run.call_ids
+            .extend(response.history.iter().map(|h| h.snapshot().id));
         let raw = response.output.content();
         let parsed = if structured {
             ChatAdapter.parse_output_json_def(lc.def, &self.program.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         let (output, metas) = parsed.map_err(|err| RunError::Parse {
             at: lc.at.into(),
             raw: raw.clone(),
@@ -2863,6 +2939,7 @@ impl Interpreter {
 /// [`LeafOutcome`].
 #[derive(Default)]
 struct AgentRun {
+    call_ids: Vec<String>,
     events: Vec<SpanEvent>,
     usage: LmUsage,
     tool_calls: Vec<rig::message::ToolCall>,
@@ -3023,15 +3100,23 @@ fn render_prompt(
             adapter.format_output_def(def, &row.output)
         }));
     }
-    let suffix = vec![Message::user(if structured {
+    let mut suffix = adapter.signature_history(def, input)?;
+    suffix.push(Message::user(if structured {
         adapter.try_format_input_json_def(def, input)?
     } else {
         adapter.try_format_input_def(def, input)?
-    })];
+    }));
     Ok((prefix, suffix))
 }
 
 fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCallOptions {
+    if def
+        .outputs
+        .iter()
+        .any(|field| field.special_kind() == Some(crate::SpecialField::ToolCalls))
+    {
+        return LMCallOptions::default();
+    }
     if lm.supports_output_schema() && json_schema_compatible(def, types) {
         LMCallOptions {
             output_schema: Some(json_schema_for_outputs(def, types)),
