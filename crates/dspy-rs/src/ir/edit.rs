@@ -73,6 +73,15 @@ use crate::ir::validate::ValidateError;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "edit", rename_all = "snake_case")]
 pub enum Edit {
+    /// Merge adjacent independent predictions with identical inputs/model and
+    /// disjoint outputs. Model behavior must be evaluated before promotion.
+    Fuse { first: NodeId, second: NodeId },
+    /// Move selected output fields into a separate prediction with the same inputs.
+    Split {
+        leaf: NodeId,
+        outputs: Vec<String>,
+        name: String,
+    },
     /// Prepend an output field to a `Predict`/`AgentLoop` leaf's signature —
     /// the CoT move (mirrors [`SignatureDef::augmented_with`]). Copy-on-write:
     /// a new [`SigId`] is created; nodes sharing the old signature keep it.
@@ -127,6 +136,8 @@ pub enum SwapTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditKind {
+    FuseNext,
+    SplitOutputs,
     AugmentSig,
     SwapToAgent,
     SwapToPredict,
@@ -163,6 +174,8 @@ pub enum EditError {
 /// A locally-checkable application failure.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ApplyError {
+    #[error("unsupported graph transformation: {0}")]
+    Transform(String),
     #[error("no node {node} in this program (stale NodeId)")]
     StaleNode { node: NodeId },
     #[error("{node} is a `{got}` node, expected {expected}")]
@@ -273,6 +286,12 @@ impl Program {
             _ => {}
         }
         let parent = self.parent_of(at);
+        if super::compiler::fusion_next(self, at).is_some() {
+            out.push(EditKind::FuseNext);
+        }
+        if super::compiler::can_split(self, at) {
+            out.push(EditKind::SplitOutputs);
+        }
         let is_judge = matches!(
             parent.map(|p| &self.nodes[p]),
             Some(Node::Refine(r)) if r.judge == at
@@ -431,6 +450,12 @@ fn owner_sig(p: &Program, owner: ParamOwner) -> Option<SigId> {
 
 fn apply(work: &mut Program, edit: &Edit) -> Result<(), ApplyError> {
     match edit {
+        Edit::Fuse { first, second } => super::compiler::fuse(work, *first, *second),
+        Edit::Split {
+            leaf,
+            outputs,
+            name,
+        } => super::compiler::split(work, *leaf, outputs, name),
         Edit::AugmentSig { leaf, prepend } => augment_sig(work, *leaf, prepend),
         Edit::SwapLeaf { leaf, to } => swap_leaf(work, *leaf, to),
         Edit::WrapRetry {
@@ -860,7 +885,7 @@ fn redirect_out_ports(node: &mut Node, from: NodeId, to: NodeId) {
     for_each_port(node, redirect);
 }
 
-fn for_each_port(node: &mut Node, mut f: impl FnMut(&mut PortRef)) {
+pub(crate) fn for_each_port(node: &mut Node, mut f: impl FnMut(&mut PortRef)) {
     match node {
         Node::Predict(n) => n.binding.iter_mut().for_each(|b| f(&mut b.src)),
         Node::AgentLoop(n) => n.binding.iter_mut().for_each(|b| f(&mut b.src)),
