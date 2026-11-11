@@ -412,6 +412,17 @@ let lm = LM::builder()
 
 All provider integrations are powered by [Rig](https://github.com/0xPlaygrounds/rig), which handles the provider-specific API details.
 
+### Chat Completions token limits
+
+The OpenAI-compatible adapter forwards `max_tokens`, including changes made
+through `copy_with`, to the HTTP request. It selects `max_completion_tokens`
+for o-series and GPT-5-or-newer model names, and `max_tokens` for other models,
+including local Ollama's OpenAI-compatible endpoint. These wire parameter names
+differ from the single `max_tokens` setting used by the LM configuration.
+Explicit token-limit fields in a third-party request's additional parameters
+are preserved. See the [OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+for the distinction between the two parameters.
+
 ## Tool sets and Code Mode
 
 `LM::call` accepts tools directly, but repeated calls with a fixed set of tools should build a `ToolSet` once and reuse it via `LM::call_with_toolset`. A `ToolSet` pre-fetches every tool definition and indexes the executors by name.

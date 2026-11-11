@@ -1,12 +1,12 @@
-use dspy_rs::{Chat, LM, LMClient, Message, TestCompletionModel};
-use rig::completion::AssistantContent;
+use dspy_rs::{Chat, CompletionProvider, LM, LMClient, Message, TestCompletionModel};
+use rig::completion::{AssistantContent, CompletionError, CompletionRequest};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
-async fn server(statuses: Vec<u16>) -> (String, JoinHandle<Vec<(String, Value)>>) {
+async fn server(statuses: Vec<u16>) -> (String, JoinHandle<Vec<(String, Value, String)>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1", listener.local_addr().unwrap());
     let task = tokio::spawn(async move {
@@ -35,7 +35,11 @@ async fn server(statuses: Vec<u16>) -> (String, JoinHandle<Vec<(String, Value)>>
             }
             let mut bytes = vec![0; length.unwrap()];
             reader.read_exact(&mut bytes).await.unwrap();
-            requests.push((authorization, serde_json::from_slice(&bytes).unwrap()));
+            requests.push((
+                authorization,
+                serde_json::from_slice(&bytes).unwrap(),
+                String::from_utf8(bytes).unwrap(),
+            ));
             let body = if status == 200 {
                 json!({
                     "id": "test", "object": "chat.completion", "created": 0, "model": "test",
@@ -66,6 +70,110 @@ async fn server(statuses: Vec<u16>) -> (String, JoinHandle<Vec<(String, Value)>>
 
 fn chat() -> Chat {
     Chat::new(vec![Message::user("hello")])
+}
+
+fn raw_request(additional_params: Value) -> CompletionRequest {
+    CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: rig::OneOrMany::one("hello".into()),
+        documents: vec![],
+        tools: vec![],
+        temperature: Some(0.0),
+        max_tokens: Some(321),
+        tool_choice: None,
+        additional_params: Some(additional_params),
+        output_schema: None,
+    }
+}
+
+#[rstest::rstest]
+#[case("max_tokens")]
+#[case("max_completion_tokens")]
+#[tokio::test]
+#[cfg_attr(miri, ignore = "requires localhost TCP")]
+async fn explicit_provider_limits_and_other_parameters_are_preserved(#[case] parameter: &str) {
+    timeout(Duration::from_secs(10), async {
+        let (url, server) = server(vec![200]).await;
+        let client = LMClient::from_local(&url, "custom").unwrap();
+        let request = raw_request(json!({parameter: 7, "presence_penalty": 0.2}));
+        client.completion(request).await.unwrap();
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0].1[parameter], 7);
+        assert_eq!(requests[0].1["presence_penalty"], 0.2);
+        let other = if parameter == "max_tokens" {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        assert!(requests[0].1.get(other).is_none());
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+#[cfg_attr(miri, ignore = "requires a native HTTP client")]
+async fn invalid_additional_parameters_fail_as_a_typed_request_error() {
+    let client = LMClient::from_local("http://127.0.0.1:1/v1", "custom").unwrap();
+    let error = client.completion(raw_request(json!([]))).await.unwrap_err();
+    let CompletionError::RequestError(cause) = error else {
+        panic!("expected a request error")
+    };
+    assert_eq!(
+        cause.downcast_ref::<std::io::Error>().unwrap().kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+}
+
+#[rstest::rstest]
+#[case("llama3.2:3b", "max_tokens")]
+#[case("gpt-4o-mini", "max_tokens")]
+#[case("gpt-oss:20b", "max_tokens")]
+#[case("o3-mini", "max_completion_tokens")]
+#[case("gpt-5", "max_completion_tokens")]
+#[case("gpt-5.1", "max_completion_tokens")]
+#[case("gpt-6", "max_completion_tokens")]
+#[case("chatgpt-5-latest", "max_completion_tokens")]
+#[tokio::test]
+#[cfg_attr(miri, ignore = "requires localhost TCP")]
+async fn token_limit_and_config_copies_reach_the_http_payload(
+    #[case] model: &str,
+    #[case] parameter: &str,
+) {
+    timeout(Duration::from_secs(10), async {
+        let (url, server) = server(vec![200, 200]).await;
+        let original = LM::builder()
+            .base_url(url)
+            .model(model.into())
+            .max_tokens(321)
+            .max_retries(0)
+            .cache(false)
+            .build()
+            .await
+            .unwrap();
+        original.call(chat(), vec![]).await.unwrap();
+        let copy = original
+            .copy_with(|config| config.max_tokens = 7)
+            .await
+            .unwrap();
+        copy.call(chat(), vec![]).await.unwrap();
+        let requests = server.await.unwrap();
+        assert_eq!(requests[0].1[parameter], 321);
+        assert_eq!(requests[1].1[parameter], 7);
+        let other = if parameter == "max_tokens" {
+            "max_completion_tokens"
+        } else {
+            "max_tokens"
+        };
+        for (_, body, raw) in requests {
+            assert!(body.get(other).is_none());
+            assert_eq!(raw.matches(&format!("\"{parameter}\"")).count(), 1);
+        }
+        assert_eq!(original.config.max_tokens, 321);
+    })
+    .await
+    .unwrap();
 }
 
 #[rstest::rstest]

@@ -160,12 +160,47 @@ completion_clients! {
     Custom(CustomCompletionModel),
 }
 
-// Implement the trait for each concrete provider type using the CompletionModel trait from rig
+fn openai_token_limit_parameter(model: &str) -> &'static str {
+    let gpt_major = model
+        .strip_prefix("gpt-")
+        .or_else(|| model.strip_prefix("chatgpt-"))
+        .and_then(|version| version.split(['.', '-']).next())
+        .and_then(|major| major.parse::<u16>().ok());
+    if (model.starts_with('o') && model.as_bytes().get(1).is_some_and(u8::is_ascii_digit))
+        || gpt_major.is_some_and(|major| major >= 5)
+    {
+        "max_completion_tokens"
+    } else {
+        "max_tokens"
+    }
+}
+
 impl CompletionProvider for openai::completion::CompletionModel {
     async fn completion(
         &self,
-        request: CompletionRequest,
+        mut request: CompletionRequest,
     ) -> Result<CompletionResponse<()>, CompletionError> {
+        // Rig's pinned Chat converter drops max_tokens; retain the generic value
+        // for telemetry and supply the wire field through additional parameters.
+        if let Some(limit) = request.max_tokens {
+            let parameter =
+                openai_token_limit_parameter(request.model.as_deref().unwrap_or(&self.model));
+            let params = request
+                .additional_params
+                .get_or_insert_with(|| serde_json::json!({}));
+            let params = params.as_object_mut().ok_or_else(|| {
+                CompletionError::RequestError(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "OpenAI additional parameters must be a JSON object",
+                    )
+                    .into(),
+                )
+            })?;
+            if !params.contains_key("max_tokens") && !params.contains_key("max_completion_tokens") {
+                params.insert(parameter.into(), limit.into());
+            }
+        }
         let response = rig::completion::CompletionModel::completion(self, request).await?;
         // Convert the typed response to unit type
         Ok(to_unit_completion_response(response))
