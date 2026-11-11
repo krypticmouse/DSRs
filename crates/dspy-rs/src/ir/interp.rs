@@ -1084,8 +1084,24 @@ impl Interpreter {
 
         let options = output_schema_options(lm, def, &self.program.types);
         let structured = options.is_json();
+        let declarations = ChatAdapter
+            .signature_tools_from_messages(def, &messages)
+            .map_err(|error| RunError::Input {
+                at: at.into(),
+                message: error.to_string(),
+            })?;
+        let toolset = ToolSet::from_definitions(declarations);
         let response = match lm
-            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
             .await
         {
             Ok(response) => response,
@@ -1112,7 +1128,18 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = if structured {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &self.program.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
             ChatAdapter.parse_output_json_def(def, &self.program.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
@@ -1827,8 +1854,25 @@ impl Interpreter {
 
         let options = output_schema_options(&lm, def, &p.types);
         let structured = options.is_json();
+        let declarations =
+            ChatAdapter
+                .signature_tools(def, &input)
+                .map_err(|error| RunError::Input {
+                    at: at.clone().into(),
+                    message: error.to_string(),
+                })?;
+        let toolset = ToolSet::from_definitions(declarations);
         let response = match lm
-            .call_with_options(Chat::new(messages), Vec::new(), ToolLoopMode::Auto, options)
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
             .await
         {
             Ok(response) => response,
@@ -1855,7 +1899,18 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        let parsed = if structured {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &p.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
             ChatAdapter.parse_output_json_def(def, &p.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(def, &p.types, &response.output)
@@ -3019,15 +3074,23 @@ fn render_prompt(
             adapter.format_output_def(def, &row.output)
         }));
     }
-    let suffix = vec![Message::user(if structured {
+    let mut suffix = adapter.signature_history(def, input)?;
+    suffix.push(Message::user(if structured {
         adapter.try_format_input_json_def(def, input)?
     } else {
         adapter.try_format_input_def(def, input)?
-    })];
+    }));
     Ok((prefix, suffix))
 }
 
 fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCallOptions {
+    if def
+        .outputs
+        .iter()
+        .any(|field| field.special_kind() == Some(crate::SpecialField::ToolCalls))
+    {
+        return LMCallOptions::default();
+    }
     if lm.supports_output_schema() && json_schema_compatible(def, types) {
         LMCallOptions {
             output_schema: Some(json_schema_for_outputs(def, types)),
