@@ -1048,7 +1048,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -1704,7 +1704,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -2269,7 +2269,7 @@ impl Interpreter {
                 source: LmError::Provider {
                     provider: lc.lm.config.model.clone(),
                     message: err.to_string(),
-                    source: None,
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                 },
             })?;
         lc.run_meter.record_usage(&response.usage);
@@ -2794,7 +2794,7 @@ async fn lm_call_toolset(
             source: LmError::Provider {
                 provider: lm.config.model.clone(),
                 message: err.to_string(),
-                source: None,
+                source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
             },
         })
 }

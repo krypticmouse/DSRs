@@ -223,6 +223,51 @@ pub trait Module: Send + Sync {
     async fn call(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
         self.forward(input).await
     }
+
+    /// Overrides the LM for this call and its predictor leaves.
+    async fn call_with_lm(
+        &self,
+        input: Self::Input,
+        lm: impl Into<std::sync::Arc<crate::LM>>,
+    ) -> Result<Predicted<Self::Output>, PredictError> {
+        crate::core::settings::with_call_lm(lm, self.call(input)).await
+    }
+
+    /// Assigns a default LM to this module. Predictor-specific LMs take precedence.
+    fn with_lm(self, lm: impl Into<std::sync::Arc<crate::LM>>) -> WithLM<Self>
+    where
+        Self: Sized,
+    {
+        WithLM {
+            module: self,
+            lm: lm.into(),
+        }
+    }
+}
+
+/// A module with a scoped default LM. Leaf discovery delegates to the module.
+pub struct WithLM<M> {
+    pub module: M,
+    lm: std::sync::Arc<crate::LM>,
+}
+
+impl<M: Module> Module for WithLM<M> {
+    type Input = M::Input;
+    type Output = M::Output;
+
+    async fn forward(&self, input: Self::Input) -> Result<Predicted<Self::Output>, PredictError> {
+        crate::with_lm(std::sync::Arc::clone(&self.lm), self.module.call(input)).await
+    }
+}
+
+impl<M: Predictors> Predictors for WithLM<M> {
+    fn predictors(&self) -> Vec<(String, &dyn PredictorInfo)> {
+        self.module.predictors()
+    }
+
+    fn predictors_mut(&mut self) -> Vec<(String, &mut dyn PredictorInfo)> {
+        self.module.predictors_mut()
+    }
 }
 
 /// Runs a module on many inputs concurrently.
