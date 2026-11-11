@@ -481,6 +481,7 @@ async fn retry_intercepts_parse_failures_with_feedback() {
 }
 
 #[tokio::test]
+#[cfg(feature = "cache")]
 async fn retry_with_cached_malformed_response_uses_fresh_sample_identity() {
     let mut b = ProgramBuilder::new("retried-cache");
     b.model("m", config());

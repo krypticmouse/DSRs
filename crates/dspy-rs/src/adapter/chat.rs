@@ -146,6 +146,19 @@ fn def_views(fields: &[crate::ir::FieldDef]) -> Vec<FieldView<'_>> {
     fields.iter().map(FieldView::of_def).collect()
 }
 
+fn compact_schema_output(def: &SignatureDef) -> bool {
+    def.outputs.iter().all(|field| {
+        matches!(
+            &field.ty,
+            FieldType::String
+                | FieldType::Int
+                | FieldType::Float
+                | FieldType::Bool
+                | FieldType::Literal(_)
+        )
+    })
+}
+
 fn format_task_description_view(
     inputs: &[FieldView<'_>],
     outputs: &[FieldView<'_>],
@@ -455,18 +468,7 @@ impl ChatAdapter {
         let inputs = def_views(&def.inputs);
         let outputs = def_views(&def.outputs);
         let mut parts = vec![format_field_descriptions_view(&inputs, &outputs, types)];
-        if schema_mode
-            && outputs.iter().all(|field| {
-                matches!(
-                    field.ty,
-                    FieldType::String
-                        | FieldType::Int
-                        | FieldType::Float
-                        | FieldType::Bool
-                        | FieldType::Literal(_)
-                )
-            })
-        {
+        if schema_mode && compact_schema_output(def) {
             parts.push(
                 "Return compact JSON matching the provider JSON Schema. No markdown.".to_string(),
             );
@@ -634,6 +636,20 @@ impl ChatAdapter {
     ) -> String {
         let value = alias_output_fields(Value::Object(output.clone()), def, types);
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    /// Match the compact format requested by simple native-schema prompts.
+    pub(crate) fn format_output_json_schema_def(
+        &self,
+        def: &SignatureDef,
+        types: &TypeTable,
+        output: &JsonMap,
+    ) -> String {
+        if !compact_schema_output(def) {
+            return self.format_output_json_def(def, types, output);
+        }
+        let value = alias_output_fields(Value::Object(output.clone()), def, types);
+        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string())
     }
 
     #[allow(clippy::result_large_err)]
