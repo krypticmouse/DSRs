@@ -1,0 +1,10 @@
+{
+  "revision": "5244904f0185ab11ad008feaa0e1220f4bb90bd0",
+  "workload": "examples/14-compile-program.rs: delayed in-process provider, two countries, four measured cases, one warmup per candidate",
+  "command": "cargo run -p dspy-rs --release --no-default-features --example 14-compile-program --locked -j 1 --target-dir C:\\Users\\georg\\Documents\\DSRs-target",
+  "exit_code": 0,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\r\nbinary: rustc\r\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\r\ncommit-date: 2026-10-13\r\nhost: x86_64-pc-windows-msvc\r\nrelease: 1.99.1\r\nLLVM version: 23.1.1\r\n",
+  "binary_sha256": "0d6b5b5605be4dc07b0793a7c7fc9a2af73eabafce959c230c339a38d5bf5aff",
+  "source_sha256": "9a9437ff2a4ce9c76fd97102ec7daddf34d1c5a0a6c90f89980547780de3924c",
+  "policy": "Functional compiler demonstration using 10 ms simulated provider waits; measured time is descriptive, not a live-provider performance comparison."
+}

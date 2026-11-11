@@ -68,3 +68,15 @@ deployment. Functional tests demonstrate identical typed outputs with two
 provider requests before fusion, one after fusion, and two after splitting.
 Those controlled mock-provider results establish routing/call-count behavior;
 they are not a production-provider speedup claim.
+
+Run the measured demonstration with:
+
+```text
+cargo run -p dspy-rs --release --no-default-features --locked --example 14-compile-program
+```
+
+The retained [mock run report](../benchmarks/compiler/evidence/2026-11-11-mock/report.json)
+records eight calls before fusion and four after it, with all four validation
+outputs correct. The adjacent manifest identifies the source and executable.
+The example inserts a 10 ms provider delay; its elapsed times demonstrate the
+compiler's measurement gate and do not estimate live-model performance.

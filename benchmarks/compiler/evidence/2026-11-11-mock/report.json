@@ -1,0 +1,274 @@
+{
+  "settings": {
+    "max_rounds": 1,
+    "max_evaluations": 2,
+    "max_quality_drop": 0.0,
+    "min_latency_reduction": 0.01
+  },
+  "program": {
+    "meta": {
+      "format": 1,
+      "name": "country",
+      "program_hash": 6924412450326680777,
+      "lineage": {
+        "optimizer": "dsrs-compiler",
+        "trainset": "",
+        "budget": "2 evaluations",
+        "parent": "028fc6c6fb75b881",
+        "date": ""
+      }
+    },
+    "nodes": {
+      "elems": [
+        {
+          "op": "predict",
+          "name": 0,
+          "sig": 1,
+          "instruction": 0,
+          "demos": 1,
+          "model": 2,
+          "binding": [
+            {
+              "dst": 1,
+              "src": {
+                "input": 1
+              }
+            }
+          ]
+        },
+        {
+          "op": "seq",
+          "body": [
+            0
+          ],
+          "out": [
+            {
+              "dst": 0,
+              "src": {
+                "out": {
+                  "node": 0,
+                  "field": 0
+                }
+              }
+            },
+            {
+              "dst": 2,
+              "src": {
+                "out": {
+                  "node": 0,
+                  "field": 2
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "unused": null
+    },
+    "sigs": {
+      "elems": [
+        {
+          "name": "Country",
+          "instruction": "",
+          "inputs": [
+            {
+              "name": "country",
+              "lm_name": "country",
+              "ty": "String",
+              "render": "default"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "capital",
+              "lm_name": "capital",
+              "ty": "String",
+              "render": "default"
+            },
+            {
+              "name": "continent",
+              "lm_name": "continent",
+              "ty": "String",
+              "render": "default"
+            }
+          ]
+        },
+        {
+          "name": "Capital_fused",
+          "instruction": "Perform both independent tasks and produce all their output fields.\n\nTask capital:\nGive only the name of the country's capital city.\n\nTask continent:\nGive only the name of the country's continent.",
+          "inputs": [
+            {
+              "name": "country",
+              "lm_name": "country",
+              "ty": "String",
+              "render": "default"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "capital",
+              "lm_name": "capital",
+              "ty": "String",
+              "render": "default"
+            },
+            {
+              "name": "continent",
+              "lm_name": "continent",
+              "ty": "String",
+              "render": "default"
+            }
+          ]
+        }
+      ],
+      "unused": null
+    },
+    "params": {
+      "elems": [
+        {
+          "path": "capital.instruction",
+          "owner": {
+            "node": 0
+          },
+          "kind": "instruction",
+          "default": {
+            "k": "instruction",
+            "text": "Perform both independent tasks and produce all their output fields.\n\nTask capital:\nGive only the name of the country's capital city.\n\nTask continent:\nGive only the name of the country's continent."
+          }
+        },
+        {
+          "path": "capital.demos",
+          "owner": {
+            "node": 0
+          },
+          "kind": "demos",
+          "default": {
+            "k": "demos",
+            "rows": []
+          }
+        },
+        {
+          "path": "capital.model",
+          "owner": {
+            "node": 0
+          },
+          "kind": "model_ref",
+          "default": {
+            "k": "model_ref",
+            "model": 0
+          }
+        }
+      ],
+      "unused": null
+    },
+    "models": {
+      "elems": [
+        {
+          "name": "m",
+          "config": {
+            "base_url": null,
+            "model": "openai:gpt-4o-mini",
+            "temperature": 0.7,
+            "max_tokens": 512,
+            "max_tool_iterations": 10,
+            "max_retries": 2,
+            "retry_base_delay_ms": 250,
+            "cache": false
+          }
+        }
+      ],
+      "unused": null
+    },
+    "tools": {
+      "elems": [],
+      "unused": null
+    },
+    "types": {
+      "classes": {},
+      "enums": {}
+    },
+    "syms": [
+      "capital",
+      "country",
+      "continent"
+    ],
+    "caps": [],
+    "root": 1,
+    "sig": 0
+  },
+  "baseline": {
+    "quality": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "latency_us": [
+      31120,
+      35521,
+      33280,
+      33094
+    ],
+    "lm_calls": 8,
+    "feedback": [
+      "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}"
+    ]
+  },
+  "final_measurement": {
+    "quality": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "latency_us": [
+      17377,
+      15572,
+      17721,
+      15195
+    ],
+    "lm_calls": 4,
+    "feedback": [
+      "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+      "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}"
+    ]
+  },
+  "steps": [
+    {
+      "parent_hash": 184584667670100097,
+      "child_hash": 6924412450326680777,
+      "edit": {
+        "edit": "fuse",
+        "first": 0,
+        "second": 1
+      },
+      "measurement": {
+        "quality": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "latency_us": [
+          17377,
+          15572,
+          17721,
+          15195
+        ],
+        "lm_calls": 4,
+        "feedback": [
+          "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+          "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}",
+          "{\"country\":\"France\",\"expected_capital\":\"Paris\",\"output\":{\"capital\":\"Paris\",\"continent\":\"Europe\"}}",
+          "{\"country\":\"Germany\",\"expected_capital\":\"Berlin\",\"output\":{\"capital\":\"Berlin\",\"continent\":\"Europe\"}}"
+        ]
+      },
+      "accepted": true,
+      "reason": "per-example quality and latency gates passed"
+    }
+  ]
+}
