@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use dspy_rs::ir::{
     self, Budget, FieldType as T, Interpreter, LoadError, Overlay, ParamValue, Program,
-    ProgramBuilder, RunError, RuntimeEnv, SignatureDef,
+    ProgramBuilder, RenderSpec, RunError, RuntimeEnv, SignatureDef,
 };
 use dspy_rs::trace::{SpanEvent, capture};
 use dspy_rs::typesys::{EnumDef, EnumValueDef, TypeTable};
@@ -45,11 +45,19 @@ fn tool_call(name: &str, args: serde_json::Value) -> AssistantContent {
 }
 
 async fn canned_lm(responses: Vec<AssistantContent>) -> (Arc<LM>, TestCompletionModel) {
+    canned_lm_with_cache(responses, false).await
+}
+
+async fn canned_lm_with_cache(
+    responses: Vec<AssistantContent>,
+    cache: bool,
+) -> (Arc<LM>, TestCompletionModel) {
     let client = TestCompletionModel::new(responses);
     let lm = temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
         LM::builder()
             .model("openai:gpt-4o-mini".to_string())
+            .cache(cache)
             .build(),
     )
     .await
@@ -108,6 +116,96 @@ fn seq_program() -> Program {
         ir::seq([drafter, checker]).out("verdict", ir::out("checker", "verdict")),
     )
     .unwrap()
+}
+
+fn jinja_program(template: &str) -> Program {
+    let mut b = ProgramBuilder::new("jinja-render");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .input("context", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let leaf_sig = b.sig(
+        SignatureDef::build("QA")
+            .input_full(
+                ir::FieldDef::new("question", T::String)
+                    .with_render(RenderSpec::Jinja(template.into())),
+            )
+            .input("context", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let node = ir::predict("answerer", leaf_sig)
+        .bind("question", ir::input("question"))
+        .bind("context", ir::input("context"));
+    b.main(
+        main_sig,
+        ir::seq([node]).out("answer", ir::out("answerer", "answer")),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn jinja_render_failure_returns_input_error_before_lm_call() {
+    let (lm, client) = canned_lm(vec![]).await;
+    let interp = Interpreter::load(
+        jinja_program("{{ this.missing }}"),
+        RuntimeEnv::new().bind_model("m", lm),
+    )
+    .await
+    .unwrap();
+    let input = obj(&[("question", json!("hello")), ("context", json!("known"))]);
+    let err = interp
+        .run(input.clone(), None, Budget::unlimited())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(err.to_string().contains("failed to render input field"));
+
+    let err = interp
+        .run_conversation(
+            dspy_rs::Chat::new(vec![dspy_rs::Message::system("previous turn")]),
+            Some(input),
+            None,
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(client.last_request().is_none());
+}
+
+#[tokio::test]
+async fn jinja_render_failure_in_demo_returns_input_error() {
+    let (lm, client) = canned_lm(vec![]).await;
+    let program = jinja_program("{{ input.context }}");
+    let demos_slot = program.slot_of::<ir::Demos>("answerer.demos").unwrap();
+    let mut overlay = Overlay::new(&program);
+    overlay.set_demos(
+        demos_slot,
+        vec![ir::DemoRow {
+            input: obj(&[("question", json!("demo"))]),
+            output: obj(&[("answer", json!("example"))]),
+        }],
+    );
+    let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let err = interp
+        .run(
+            obj(&[("question", json!("live")), ("context", json!("known"))]),
+            Some(Arc::new(overlay)),
+            Budget::unlimited(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RunError::Input { .. }));
+    assert!(client.last_request().is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +480,52 @@ async fn retry_intercepts_parse_failures_with_feedback() {
     assert!(last.contains("could not be parsed"));
 }
 
+#[tokio::test]
+async fn retry_with_cached_malformed_response_uses_fresh_sample_identity() {
+    let mut b = ProgramBuilder::new("retried-cache");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let answer_sig = b.sig(
+        SignatureDef::build("Answer")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let node = ir::retry(
+        ir::predict("answerer", answer_sig).bind("question", ir::input("question")),
+        2,
+    );
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([node.named("attempted")]).out("answer", ir::out("attempted", "answer")),
+        )
+        .unwrap();
+    let (lm, client) = canned_lm_with_cache(
+        vec![
+            text("malformed response"),
+            text(fields(&[("answer", "recovered")])),
+        ],
+        true,
+    )
+    .await;
+    let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let result = interp
+        .run(obj(&[("question", json!("q"))]), None, Budget::unlimited())
+        .await;
+    assert_eq!(result.unwrap()["answer"], "recovered");
+    assert_eq!(client.call_count(), 2);
+}
+
 // ---------------------------------------------------------------------------
 // Bounded Loop
 // ---------------------------------------------------------------------------
@@ -521,7 +665,91 @@ async fn refine_reruns_child_with_judge_feedback() {
     // Round 2's child input carried the judge's feedback in `hint`.
     assert_eq!(writers[1].input.as_ref().unwrap()["hint"], "cite a source");
     assert_eq!(trace.for_component("judge").count(), 2);
+    assert_eq!(trace.meta.tags["refine.writer.selected_round"], "2");
+    assert_eq!(trace.meta.tags["refine.writer.selected_score"], "0.9");
     let _ = client;
+}
+
+#[tokio::test]
+async fn refine_returns_earliest_highest_scoring_attempt_on_exhaustion() {
+    let mut b = ProgramBuilder::new("refined-best");
+    b.model("m", config());
+    let main_sig = b.sig(
+        SignatureDef::build("Main")
+            .input("question", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let child_sig = b.sig(
+        SignatureDef::build("Writer")
+            .input("question", T::String)
+            .input("hint", T::String)
+            .output("answer", T::String)
+            .output("reason", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let judge_sig = b.sig(
+        SignatureDef::build("Judge")
+            .input("answer", T::String)
+            .output("score", T::Float)
+            .output("feedback", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let consumer_sig = b.sig(
+        SignatureDef::build("Consumer")
+            .input("reason", T::String)
+            .output("answer", T::String)
+            .finish()
+            .unwrap(),
+    );
+    let child = ir::predict("writer", child_sig)
+        .bind("question", ir::input("question"))
+        .bind("hint", ir::lit(""));
+    let judge = ir::predict("judge", judge_sig).bind("answer", ir::out("writer", "answer"));
+    let refined = ir::refine(child, judge, "hint")
+        .threshold(0.95)
+        .max_rounds(3)
+        .named("loop");
+    let consumer = ir::predict("consumer", consumer_sig).bind("reason", ir::out("loop", "reason"));
+    let program = b
+        .main(
+            main_sig,
+            ir::seq([refined, consumer]).out("answer", ir::out("consumer", "answer")),
+        )
+        .unwrap();
+    let (lm, _) = canned_lm(vec![
+        text(fields(&[
+            ("answer", "first best"),
+            ("reason", "first frame"),
+        ])),
+        text(fields(&[("score", "0.8"), ("feedback", "again")])),
+        text(fields(&[
+            ("answer", "tied later"),
+            ("reason", "tied frame"),
+        ])),
+        text(fields(&[("score", "0.8"), ("feedback", "again")])),
+        text(fields(&[
+            ("answer", "lower later"),
+            ("reason", "lower frame"),
+        ])),
+        text(fields(&[("score", "0.4"), ("feedback", "done")])),
+        text(fields(&[("answer", "consumer result")])),
+    ])
+    .await;
+    let interp = Interpreter::load(program, RuntimeEnv::new().bind_model("m", lm))
+        .await
+        .unwrap();
+    let (result, trace) =
+        capture(|| interp.run(obj(&[("question", json!("q"))]), None, Budget::unlimited())).await;
+    let result = result.unwrap();
+    assert_eq!(result["answer"], "consumer result");
+    let consumer = trace.for_component("consumer").next().unwrap();
+    assert_eq!(consumer.input.as_ref().unwrap()["reason"], "first frame");
+    assert_eq!(trace.meta.tags["refine.writer.selected_round"], "1");
+    assert_eq!(trace.meta.tags["refine.writer.selected_score"], "0.8");
 }
 
 // ---------------------------------------------------------------------------

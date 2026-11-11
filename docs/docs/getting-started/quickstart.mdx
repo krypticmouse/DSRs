@@ -27,6 +27,19 @@ Or via cargo:
 cargo add dspy-rs tokio anyhow
 ```
 
+DSRs enables the `data` and `cache` Cargo features by default:
+
+| Features | Dataset loading | Response caching | Execution history |
+|---|---|---|---|
+| Default (`data`, `cache`) | JSON/JSONL, CSV, Parquet, Hugging Face | Available | Available |
+| `default-features = false` | JSON/JSONL | Unavailable | Available |
+| `default-features = false, features = ["cache"]` | JSON/JSONL | Available | Available |
+| `default-features = false, features = ["data"]` | JSON/JSONL, CSV, Parquet, Hugging Face | Unavailable | Available |
+
+For a minimal build, use `dspy-rs = { version = "0.7", default-features = false }`. The `data` feature enables Arrow, Parquet, Hugging Face and CSV dependencies; `cache` enables foyer and tempfile. HTTP support remains part of the core library for LM providers and JSON/JSONL loading. Tests use tempfile independently as a development dependency.
+
+The `cache` feature makes response caching available; enable it for an LM with `.cache(true)`. That setting returns an error when the feature is absent.
+
 </Step>
 
 <Step title="Configure the LM">

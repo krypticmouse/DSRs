@@ -155,6 +155,7 @@ pub mod prelude {
     // Modules and predictors.
     pub use crate::core::{
         CallMetadata, Module, ModuleState, PredictError, PredictState, Predicted, Predictors,
+        WithLM,
     };
     pub use crate::modules::{ChainOfThought, WithReasoning};
     pub use crate::predictors::{Demo, Predict};
@@ -162,8 +163,11 @@ pub mod prelude {
     pub use crate::predictors;
 
     // LM configuration.
+    pub use crate::core::history::{
+        HistoryBuffer, HistoryEntry, clear_history, inspect_history, set_history_capacity,
+    };
     pub use crate::core::lm::{LM, LMConfig};
-    pub use crate::core::settings::configure;
+    pub use crate::core::settings::{configure, with_lm};
 
     // Data loading.
     pub use crate::data::dataloader::{DataLoader, TypedLoadOptions};
@@ -217,5 +221,3 @@ pub mod __macro_support {
     pub use serde_json;
     pub use tokio;
 }
-
-

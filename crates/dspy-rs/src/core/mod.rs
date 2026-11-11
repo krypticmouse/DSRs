@@ -21,20 +21,34 @@
 
 mod errors;
 pub mod example;
+pub mod history;
 pub mod lm;
 pub mod module;
 mod predicted;
+pub mod sampling;
 mod schema;
 pub mod settings;
 pub mod signature;
+pub mod specials;
 mod state;
+pub mod storage;
+pub use specials::{History, HistoryMessage, SpecialField, Tool, ToolCalls, ToolInvocation};
 
-pub use errors::{ConversionError, ErrorClass, JsonishError, LmError, ParseError, PredictError};
+pub use errors::{
+    ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
+    PredictError,
+};
 pub use example::{ToInput, ToOutput};
-pub use state::{ModuleState, PredictState};
+pub use history::{
+    HistoryBuffer, HistoryEntry, HistoryRecord, clear_history, inspect_history,
+    set_history_capacity,
+};
 pub use lm::*;
 pub use module::*;
 pub use predicted::{CallMetadata, ConstraintResult, FieldMeta, Predicted};
+pub use sampling::{SamplingOptions, current_sampling_options, with_sampling_options};
 pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, SignatureSchema};
 pub use settings::*;
 pub use signature::*;
+pub use state::{ModuleState, PredictState};
+pub use storage::{InteractionStore, JsonlInteractionStore, StorageError, with_interaction_store};

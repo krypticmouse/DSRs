@@ -193,7 +193,13 @@ Mapper closure errors are wrapped as `DataLoadError::Mapper` with the failing ro
 | `MissingField` | `{ row: usize, field: String }` | Required row-struct field absent from a row |
 | `UnknownField` | `{ row: usize, field: String }` | Extra source field under `UnknownFieldPolicy::Error` |
 | `TypeMismatch` | `{ row, field, message }` | Field existed but could not convert to the required type |
-| `Mapper` | `{ row: usize, message: String }` | Custom mapper closure returned an error |
+| `Mapper` | `{ row: usize, source: anyhow::Error }` | Custom mapper closure returned an error; original cause retained |
+
+Match the typed category with `error.downcast_ref::<DataLoadError>()`. The
+I/O, CSV, JSON, Parquet, HuggingFace and mapper variants expose their original
+cause through `std::error::Error::source`; mapper failures also retain the row
+index. Public loaders keep `anyhow::Result` for compatibility without replacing
+those causes with formatted strings.
 
 The module also exposes `is_url(path: &str) -> bool`, the helper the loaders use to decide between filesystem and HTTP(S) fetching.
 

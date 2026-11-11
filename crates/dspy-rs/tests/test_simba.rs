@@ -4,8 +4,8 @@
 
 use anyhow::Result;
 use dspy_rs::{
-    Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA,
-    Signature, SimbaMove, TestCompletionModel, TypedMetric,
+    Eval, LM, LMClient, Module, ModuleState, Predict, PredictError, Predicted, SIMBA, Signature,
+    SimbaMove, TestCompletionModel, TypedMetric,
 };
 use rig::completion::AssistantContent;
 use rig::message::Text;
@@ -67,7 +67,9 @@ fn rule_response(text: &str) -> AssistantContent {
 async fn make_test_lm(client: TestCompletionModel) -> LM {
     temp_env::async_with_vars(
         [("OPENAI_API_KEY", Some("test"))],
-        LM::builder().model("openai:gpt-4o-mini".to_string()).build(),
+        LM::builder()
+            .model("openai:gpt-4o-mini".to_string())
+            .build(),
     )
     .await
     .unwrap()
@@ -109,6 +111,12 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
         answer_response("wrong"),
         answer_response("2"),
         answer_response("0"),
+        answer_response("wrong"),
+        answer_response("1"),
+        answer_response("wrong"),
+        answer_response("2"),
+        answer_response("wrong"),
+        answer_response("0"),
         answer_response("1"),
         answer_response("2"),
     ]);
@@ -134,16 +142,19 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
     assert_eq!(report.steps.len(), 1);
     let step = &report.steps[0];
     assert_eq!(step.move_kind, SimbaMove::AppendDemo);
+    assert_eq!(step.contrast_example, Some(0));
+    assert_eq!(step.contrast_gap, Some(1.0));
     assert!(step.accepted);
     assert!((step.parent_minibatch_score - 2.0 / 3.0).abs() < 1e-9);
     assert!((step.child_minibatch_score - 1.0).abs() < 1e-9);
     assert_eq!(step.full_score, Some(1.0));
 
-    // Baseline pass (3) + gate minibatch (3); the promotion full pass is
+    // Baseline pass (3) + trajectory probes (6) + gate minibatch (3); promotion
+    // full pass is
     // served entirely from the cache (minibatch == full set).
-    assert_eq!(report.spend.lm_calls, 6);
-    assert_eq!(report.spend.metric_calls, 6);
-    assert_eq!(report.spend.cache_hits, 3);
+    assert_eq!(report.spend.lm_calls, 12);
+    assert_eq!(report.spend.metric_calls, 12);
+    assert_eq!(report.spend.cache_hits, 6);
 
     // The accepted demo is installed permanently; it came from the best
     // rollout (example 0) via the trace name-join.
@@ -152,7 +163,10 @@ async fn append_demo_move_is_harvested_gated_and_installed() {
     assert_eq!(predictor.demos.len(), 1);
     assert_eq!(predictor.demos[0]["prompt"].as_str(), Some("0"));
     assert_eq!(predictor.demos[0]["answer"].as_str(), Some("0"));
-    assert_eq!(predictor.instruction_override, None, "demo moves leave instructions alone");
+    assert_eq!(
+        predictor.instruction_override, None,
+        "demo moves leave instructions alone"
+    );
 }
 
 #[tokio::test]
@@ -161,6 +175,10 @@ async fn append_rule_move_uses_the_reflection_lm() {
     // step 0 falls back to append-rule via the canned reflection LM.
     let client = TestCompletionModel::new([
         answer_response("x"),
+        answer_response("x"),
+        answer_response("0"),
+        answer_response("x"),
+        answer_response("1"),
         answer_response("x"),
         answer_response("0"),
         answer_response("1"),
@@ -172,7 +190,7 @@ async fn append_rule_move_uses_the_reflection_lm() {
     let simba = SIMBA::builder()
         .max_steps(1)
         .minibatch_size(2)
-        .min_demo_score(1.0)
+        .min_demo_score(2.0)
         .eval_concurrency(1)
         .seed(0)
         .prompt_model(make_test_lm(reflection_client).await)
@@ -189,9 +207,9 @@ async fn append_rule_move_uses_the_reflection_lm() {
     assert_eq!(report.steps[0].move_kind, SimbaMove::AppendRule);
     assert!(report.steps[0].accepted);
 
-    // Baseline (2) + gate minibatch (2) + one charged reflection call.
-    assert_eq!(report.spend.lm_calls, 5);
-    assert_eq!(report.spend.metric_calls, 4);
+    // Baseline (2) + trajectory probes (4) + gate minibatch (2) + reflection.
+    assert_eq!(report.spend.lm_calls, 9);
+    assert_eq!(report.spend.metric_calls, 8);
 
     // The distilled rule is appended to the predictor's instruction.
     let state = ModuleState::from_module(&mut module).unwrap();
@@ -200,13 +218,20 @@ async fn append_rule_move_uses_the_reflection_lm() {
         .as_deref()
         .expect("rule moves install an instruction override");
     assert!(instruction.contains("[SIMBA rule] Always echo the prompt digits exactly."));
-    assert!(state.predictors["predictor"].demos.is_empty(), "rule moves leave demos alone");
+    assert!(
+        state.predictors["predictor"].demos.is_empty(),
+        "rule moves leave demos alone"
+    );
 }
 
 #[tokio::test]
 async fn append_rule_falls_back_to_metric_feedback_without_prompt_model() {
     let client = TestCompletionModel::new([
         answer_response("x"),
+        answer_response("x"),
+        answer_response("0"),
+        answer_response("x"),
+        answer_response("1"),
         answer_response("x"),
         answer_response("0"),
         answer_response("1"),
@@ -216,7 +241,7 @@ async fn append_rule_falls_back_to_metric_feedback_without_prompt_model() {
     let simba = SIMBA::builder()
         .max_steps(1)
         .minibatch_size(2)
-        .min_demo_score(1.0)
+        .min_demo_score(2.0)
         .eval_concurrency(1)
         .seed(0)
         .build();
@@ -228,8 +253,8 @@ async fn append_rule_falls_back_to_metric_feedback_without_prompt_model() {
 
     assert_eq!(report.steps[0].move_kind, SimbaMove::AppendRule);
     assert!(report.steps[0].accepted);
-    // No reflection LM: only the 4 rollouts spend LM calls.
-    assert_eq!(report.spend.lm_calls, 4);
+    // No reflection LM: baseline, probes, and gate rollouts spend LM calls.
+    assert_eq!(report.spend.lm_calls, 8);
 
     let state = ModuleState::from_module(&mut module).unwrap();
     let instruction = state.predictors["predictor"]
@@ -247,6 +272,10 @@ async fn gate_rejection_leaves_the_module_untouched() {
     // move is rejected and the module keeps its baseline state.
     let client = TestCompletionModel::new([
         answer_response("0"),
+        answer_response("wrong"),
+        answer_response("0"),
+        answer_response("wrong"),
+        answer_response("wrong"),
         answer_response("wrong"),
         answer_response("wrong"),
         answer_response("wrong"),
@@ -267,17 +296,23 @@ async fn gate_rejection_leaves_the_module_untouched() {
         .unwrap();
 
     assert!((report.baseline_score - 0.5).abs() < 1e-9);
-    assert!((report.final_score - 0.5).abs() < 1e-9, "rejected moves never change the score");
+    assert!(
+        (report.final_score - 0.5).abs() < 1e-9,
+        "rejected moves never change the score"
+    );
     assert_eq!(report.accepted, 0);
     assert_eq!(report.rejected, 1);
     let step = &report.steps[0];
     assert_eq!(step.move_kind, SimbaMove::AppendDemo);
     assert!(!step.accepted);
-    assert_eq!(step.full_score, None, "rejected moves never run the full set");
+    assert_eq!(
+        step.full_score, None,
+        "rejected moves never run the full set"
+    );
     assert_eq!(step.child_minibatch_score, 0.0);
 
-    // Rejection ran only baseline (2) + gate minibatch (2).
-    assert_eq!(report.spend.metric_calls, 4);
+    // Rejection ran baseline, trajectory probes, and the gate minibatch.
+    assert_eq!(report.spend.metric_calls, 8);
 
     let state = ModuleState::from_module(&mut module).unwrap();
     assert!(state.predictors["predictor"].demos.is_empty());
@@ -307,4 +342,40 @@ async fn budget_stops_the_ascent_cleanly() {
     assert!((report.baseline_score - 1.0).abs() < 1e-9);
     assert!(report.steps.is_empty(), "no step fit the remaining budget");
     assert_eq!(report.spend.metric_calls, 2, "only the baseline ran");
+}
+
+#[tokio::test]
+async fn zero_trajectory_gap_records_noop_without_rejecting_a_move() {
+    let client = TestCompletionModel::new([
+        answer_response("x"),
+        answer_response("x"),
+        answer_response("x"),
+        answer_response("x"),
+        answer_response("x"),
+        answer_response("x"),
+    ]);
+    let mut module = simba_module(client.clone()).await;
+    let before = ModuleState::from_module(&mut module).unwrap();
+    let simba = SIMBA::builder()
+        .max_steps(1)
+        .minibatch_size(2)
+        .seed(7)
+        .eval_concurrency(1)
+        .build();
+    let report = simba
+        .compile_module(&mut module, &trainset(2), &ExactMatch)
+        .await
+        .unwrap();
+    assert_eq!(report.steps.len(), 1);
+    assert_eq!(report.steps[0].move_kind, SimbaMove::NoOp);
+    assert_eq!(report.steps[0].contrast_example, None);
+    assert_eq!(report.accepted, 0);
+    assert_eq!(report.rejected, 0);
+    assert_eq!(report.spend.lm_calls, 6); // two baseline + four probes
+    assert_eq!(client.call_count(), 6);
+    let after = ModuleState::from_module(&mut module).unwrap();
+    assert_eq!(
+        after.predictors["predictor"],
+        before.predictors["predictor"]
+    );
 }

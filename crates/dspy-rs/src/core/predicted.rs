@@ -46,6 +46,8 @@ pub struct ConstraintResult {
 /// ```
 #[derive(Debug, Clone)]
 pub struct CallMetadata {
+    /// IDs for looking up this prediction's LM invocations in an interaction store.
+    pub call_ids: Vec<String>,
     /// The full text the LM returned, before any parsing.
     pub raw_response: String,
     /// Token usage for this call (prompt, completion, total).
@@ -63,6 +65,7 @@ pub struct CallMetadata {
 impl Default for CallMetadata {
     fn default() -> Self {
         Self {
+            call_ids: Vec::new(),
             raw_response: String::new(),
             lm_usage: LmUsage::default(),
             tool_calls: Vec::new(),
@@ -83,6 +86,7 @@ impl CallMetadata {
         field_meta: IndexMap<String, FieldMeta>,
     ) -> Self {
         Self {
+            call_ids: Vec::new(),
             raw_response,
             lm_usage,
             tool_calls,

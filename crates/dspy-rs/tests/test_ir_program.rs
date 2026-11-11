@@ -906,6 +906,35 @@ fn overlay_tool_set_accepts_subsets_and_refuses_undeclared_tools() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn serialized_program_rejects_deep_node_chain() {
+    let mut program = qa_program();
+    for _ in 0..65 {
+        let child = program.root;
+        let ir::Node::Seq(seq) = &program.nodes[child] else {
+            unreachable!()
+        };
+        let out = seq
+            .out
+            .iter()
+            .map(|binding| ir::Binding {
+                dst: binding.dst,
+                src: ir::PortRef::Out {
+                    node: child,
+                    field: binding.dst,
+                },
+            })
+            .collect::<Vec<_>>();
+        program.root = program.nodes.push(ir::Node::Seq(ir::SeqNode {
+            body: vec![child].into_boxed_slice(),
+            out: out.into_boxed_slice(),
+        }));
+    }
+    let value = serde_json::to_value(&program).unwrap();
+    let err = serde_json::from_value::<Program>(value).unwrap_err();
+    assert!(err.to_string().contains("nesting limit"), "{err}");
+}
+
+#[test]
 fn program_serde_round_trips_canonically() {
     let program = qa_program();
     let json = serde_json::to_string_pretty(&program).unwrap();

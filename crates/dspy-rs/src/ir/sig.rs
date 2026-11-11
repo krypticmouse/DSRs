@@ -59,6 +59,9 @@ pub struct FieldDef {
 }
 
 impl FieldDef {
+    pub fn special_kind(&self) -> Option<crate::SpecialField> {
+        crate::core::specials::special_field(&self.ty)
+    }
     /// A plain field: `lm_name == name`, no docs, no constraints, default rendering.
     pub fn new(name: &str, ty: FieldType) -> Self {
         Self {
@@ -367,6 +370,15 @@ fn validate_field(field: &FieldDef) -> Result<(), SigError> {
         if constraint.kind == ConstraintKind::Check && constraint.label.is_empty() {
             return Err(SigError::CheckMissingLabel {
                 field: field.name.to_string(),
+            });
+        }
+        if let Err(message) =
+            crate::typesys::constraint::validate_constraint_expression(&constraint.expr)
+        {
+            return Err(SigError::InvalidConstraintExpr {
+                field: field.name.to_string(),
+                expr: constraint.expr.to_string(),
+                message: message.to_string(),
             });
         }
         let env = minijinja::Environment::new();

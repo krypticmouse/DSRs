@@ -6,6 +6,8 @@
 //! JSONL (see [`Trace::to_jsonl`]); the in-memory form always speaks interned ids.
 
 use std::collections::BTreeMap;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
@@ -169,17 +171,33 @@ impl SpanErrorKind {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ModelEntry {
     pub config: LMConfig,
-    /// Stable hash of the redacted config; part of `request_hash`'s preimage.
+    /// Identity hash of the redacted config and endpoint; part of `request_hash`.
+    /// Endpoints with private path, query, or userinfo use a process-local key,
+    /// so their strict replay identity cannot survive a process restart.
     pub config_hash: u64,
 }
 
 impl ModelEntry {
     /// Builds the redacted, hashable entry from a live config.
     pub fn from_config(config: &LMConfig) -> Self {
+        // A process-local key keeps URL credentials out of the exported hash
+        // while still distinguishing custom endpoints during live replay.
+        static ENDPOINT_HASHER: LazyLock<std::collections::hash_map::RandomState> =
+            LazyLock::new(std::collections::hash_map::RandomState::new);
+        let endpoint_identity = config.base_url.as_ref().map(|url| {
+            let origin = url_origin(url);
+            if *url == origin || *url == format!("{origin}/v1") || *url == format!("{origin}/v1/") {
+                return url.clone();
+            }
+            let mut hasher = ENDPOINT_HASHER.build_hasher();
+            url.hash(&mut hasher);
+            format!("private:{}", hasher.finish())
+        });
         let mut config = config.clone();
+        config.temperature = crate::core::sampling::effective_temperature(config.temperature);
         config.api_key = None;
         config.base_url = config.base_url.as_deref().map(url_origin);
-        let config_hash = stable_hash_debug(&config);
+        let config_hash = stable_hash_debug(&(config.clone(), endpoint_identity));
         Self {
             config,
             config_hash,
@@ -194,10 +212,7 @@ fn url_origin(url: &str) -> String {
         Some((scheme, rest)) => (scheme, rest),
         None => ("", url),
     };
-    let authority = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(rest);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
     // Strip userinfo (`user:pass@host`).
     let host = authority.rsplit('@').next().unwrap_or(authority);
     if scheme.is_empty() {
@@ -360,7 +375,6 @@ impl Trace {
             .map(|name| by_leaf.get(name.as_str()).cloned())
             .collect();
     }
-
 }
 
 impl Span {
@@ -420,6 +434,10 @@ pub(crate) fn request_hash(config_hash: u64, prefix: &[Message], suffix: &[Messa
 
     let mut hasher = StableHasher::new();
     hasher.write(&config_hash.to_le_bytes());
+    if let Some(id) = crate::core::sampling::current_sampling_options().id {
+        hasher.write(&(id.len() as u64).to_le_bytes());
+        hasher.write(id.as_bytes());
+    }
     let mut writer = HashWriter(&mut hasher);
     for message in prefix.iter().chain(suffix) {
         let _ = write!(writer, "{message:?}");
@@ -451,6 +469,10 @@ mod tests {
         let entry = ModelEntry::from_config(&config);
         assert_eq!(entry.config.api_key, None);
         assert_eq!(entry.config.base_url.as_deref(), Some("https://host"));
+        assert_ne!(
+            entry.config_hash,
+            stable_hash_debug(&(entry.config.clone(), config.base_url))
+        );
     }
 
     #[test]
@@ -461,5 +483,89 @@ mod tests {
         assert_eq!(base, request_hash(1, &prefix, &suffix));
         assert_ne!(base, request_hash(2, &prefix, &suffix));
         assert_ne!(base, request_hash(1, &prefix, &[Message::user("bye")]));
+    }
+
+    #[test]
+    fn output_format_changes_strict_replay_request_hash() {
+        let def = crate::ir::SignatureDef::build("ReplayFormat")
+            .input("question", crate::typesys::FieldType::String)
+            .output("answer", crate::typesys::FieldType::String)
+            .finish()
+            .unwrap();
+        let types = crate::typesys::TypeTable::default();
+        let adapter = crate::ChatAdapter;
+        let schema_prompt = adapter.build_system_json_def(&def, &types, None, true);
+        let json_mode_prompt = adapter.build_system_json_def(&def, &types, None, false);
+        let model_hash = ModelEntry::from_config(&LMConfig::default()).config_hash;
+        let schema_hash = request_hash(model_hash, &[Message::system(schema_prompt)], &[]);
+        let json_mode_hash = request_hash(model_hash, &[Message::system(json_mode_prompt)], &[]);
+        assert_ne!(schema_hash, json_mode_hash);
+    }
+
+    #[test]
+    fn exact_custom_endpoint_changes_trace_identity_without_serializing_path() {
+        let left = LMConfig {
+            base_url: Some("https://api.example/v1/first".into()),
+            ..LMConfig::default()
+        };
+        let right = LMConfig {
+            base_url: Some("https://api.example/v1/second".into()),
+            ..LMConfig::default()
+        };
+        let left_entry = ModelEntry::from_config(&left);
+        let right_entry = ModelEntry::from_config(&right);
+        assert_eq!(
+            left_entry.config_hash,
+            ModelEntry::from_config(&left).config_hash
+        );
+        assert_eq!(left_entry.config.base_url, right_entry.config.base_url);
+        assert_ne!(left_entry.config_hash, right_entry.config_hash);
+        assert!(!format!("{:?}", left_entry.config).contains("/v1/first"));
+        let public_guess = stable_hash_debug(&(left_entry.config.clone(), left.base_url));
+        assert_ne!(left_entry.config_hash, public_guess);
+
+        let common = LMConfig {
+            base_url: Some("http://localhost/v1".into()),
+            ..LMConfig::default()
+        };
+        let common_entry = ModelEntry::from_config(&common);
+        assert_eq!(
+            common_entry.config_hash,
+            stable_hash_debug(&(common_entry.config.clone(), common.base_url))
+        );
+    }
+
+    #[tokio::test]
+    async fn request_hash_includes_sampling_identity_and_temperature() {
+        let prompt = [Message::user("hello")];
+        let config = LMConfig::default();
+        let plain = request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt);
+        let first = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-a".into()),
+                temperature: Some(0.2),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        let second = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-b".into()),
+                temperature: Some(0.2),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        let changed_temperature = crate::with_sampling_options(
+            crate::SamplingOptions {
+                id: Some("sample-a".into()),
+                temperature: Some(0.8),
+            },
+            async { request_hash(ModelEntry::from_config(&config).config_hash, &[], &prompt) },
+        )
+        .await;
+        assert_ne!(plain, first);
+        assert_ne!(first, second);
+        assert_ne!(first, changed_temperature);
     }
 }
