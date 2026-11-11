@@ -232,6 +232,15 @@ async fn prompt_fallback_executes_tools_and_formats_results_as_text() {
     assert!(json.contains("Tool result:"));
     for message in request.chat_history.iter() {
         if let rig::message::Message::Assistant { content, .. } = message {
+            assert_eq!(
+                content.len(),
+                1,
+                "prompt tool history must not duplicate the original JSON envelope"
+            );
+        }
+    }
+    for message in request.chat_history.iter() {
+        if let rig::message::Message::Assistant { content, .. } = message {
             assert!(
                 content
                     .iter()
