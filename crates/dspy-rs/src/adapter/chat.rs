@@ -297,9 +297,13 @@ impl ChatAdapter {
             .iter()
             .filter(|f| f.special_kind() == Some(crate::SpecialField::Tools))
         {
-            let value = input
-                .get(&*field.name)
-                .context("missing tool declarations")?;
+            let Some(value) = input.get(&*field.name) else {
+                anyhow::ensure!(field.ty.is_optional(), "missing tool declarations");
+                continue;
+            };
+            if value.is_null() && field.ty.is_optional() {
+                continue;
+            }
             let tools: Vec<crate::Tool> = if value.is_array() {
                 serde_json::from_value(value.clone())?
             } else {
@@ -332,9 +336,14 @@ impl ChatAdapter {
             .iter()
             .filter(|f| f.special_kind() == Some(crate::SpecialField::History))
         {
-            let history: crate::History = serde_json::from_value(
-                input.get(&*field.name).context("missing history")?.clone(),
-            )?;
+            let Some(value) = input.get(&*field.name) else {
+                anyhow::ensure!(field.ty.is_optional(), "missing history");
+                continue;
+            };
+            if value.is_null() && field.ty.is_optional() {
+                continue;
+            }
+            let history: crate::History = serde_json::from_value(value.clone())?;
             for message in history.messages {
                 messages.push(match message.role.as_str() {
                     "user" => Message::user(message.content),
@@ -363,8 +372,14 @@ impl ChatAdapter {
                 .filter(|m| m.role == crate::Role::User)
                 .find_map(|message| {
                     Self::parse_sections(&message.content()).shift_remove(&*field.lm_name)
-                })
-                .context("conversation has no tool declarations")?;
+                });
+            let Some(value) = value else {
+                anyhow::ensure!(
+                    field.ty.is_optional(),
+                    "conversation has no tool declarations"
+                );
+                continue;
+            };
             let value = serde_json::Deserializer::from_str(&value)
                 .into_iter::<Value>()
                 .next()
@@ -409,6 +424,15 @@ impl ChatAdapter {
         types: &TypeTable,
         instruction_override: Option<&str>,
     ) -> String {
+        if def.outputs.len() == 1
+            && def.outputs[0].special_kind() == Some(crate::SpecialField::ToolCalls)
+        {
+            return format!(
+                "{}\n\nSelect tools for the user's request. Use the supplied tool-calling protocol for requests; do not describe a tool request as a signature output field. If no tool is needed, return `[[ ## {} ## ]]` followed by {{\"calls\":[]}} and `[[ ## completed ## ]]`.",
+                instruction_override.unwrap_or(&def.instruction),
+                def.outputs[0].lm_name
+            );
+        }
         build_system_view(
             &def_views(&def.inputs),
             &def_views(&def.outputs),
@@ -469,6 +493,11 @@ impl ChatAdapter {
 
     /// Fallible input formatting for runtime callers that must reject bad templates.
     pub fn try_format_input_def(&self, def: &SignatureDef, input: &JsonMap) -> Result<String> {
+        if def.outputs.len() == 1
+            && def.outputs[0].special_kind() == Some(crate::SpecialField::ToolCalls)
+        {
+            return self.try_format_input_with_response(def, input, "Use the supplied tool-calling protocol to request the appropriate tools. Do not copy input fields into the response.");
+        }
         self.try_format_input_with_response(
             def,
             input,

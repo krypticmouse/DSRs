@@ -1160,8 +1160,8 @@ impl Interpreter {
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                         .config_hash,
                     span_id: guard.as_ref().map(|guard| guard.id()),
-                    tool_calls: Vec::new(),
-                    tool_executions: Vec::new(),
+                    tool_calls: response.tool_calls.clone(),
+                    tool_executions: response.tool_executions.clone(),
                 };
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
@@ -1813,7 +1813,11 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: Vec::new(),
+                        tool_calls: span
+                            .completion_messages()
+                            .iter()
+                            .flat_map(|message| message.tool_calls().into_iter().cloned())
+                            .collect(),
                         tool_executions: Vec::new(),
                     });
                 }
@@ -1939,8 +1943,8 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: Vec::new(),
-                        tool_executions: Vec::new(),
+                        tool_calls: response.tool_calls.clone(),
+                        tool_executions: response.tool_executions.clone(),
                     });
                 }
                 if let Some(guard) = guard {

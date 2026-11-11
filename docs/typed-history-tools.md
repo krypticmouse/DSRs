@@ -39,6 +39,11 @@ tools. Follow-up requests encode tool calls/results as ordinary text messages;
 no native tool fields reach the endpoint. This capability is explicit: provider
 names alone cannot establish whether an arbitrary model supports tools.
 
+Special tool-request signatures use protocol-specific instructions instead of
+asking the model to print a tool-call schema as a normal text field. The fallback
+accepts field/code-fence wrappers and trailing commas while preserving quoted
+argument strings; it still rejects malformed argument types and duplicate IDs.
+
 Input `History { messages: Vec<HistoryMessage> }` is inserted as actual chat
 messages before the current user input. Supported roles are `user` and
 `assistant`; system instructions remain host-owned. It is distinct from execution
