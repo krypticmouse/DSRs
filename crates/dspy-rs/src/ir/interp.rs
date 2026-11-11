@@ -172,6 +172,8 @@ impl BudgetMeter {
 ///   predictions carry no per-field parse metadata").
 #[derive(Debug, Clone)]
 pub struct LeafOutcome {
+    /// Persistent invocation IDs, in call order. Replay adds no stored calls.
+    pub call_ids: Vec<String>,
     /// The program-unique leaf name (the trace span `component`).
     pub name: String,
     /// The full text the LM returned, before parsing.
@@ -1117,12 +1119,15 @@ impl Interpreter {
         } else {
             ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         match parsed {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
                     raw_response: raw.clone(),
+                    call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
                     field_meta: metas,
                     usage: response.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -1209,6 +1214,7 @@ impl Interpreter {
         let leaf = LeafOutcome {
             name: at.to_string(),
             raw_response: span.raw_output.clone().unwrap_or_default(),
+            call_ids: Vec::new(),
             field_meta: IndexMap::new(),
             usage: span.usage,
             model_config_hash: crate::trace::ModelEntry::from_config(&lm.config).config_hash,
@@ -1259,6 +1265,7 @@ impl Interpreter {
                     name: at.to_string(),
                     raw_response: raw.clone(),
                     field_meta,
+                    call_ids: run.call_ids,
                     usage: run.usage,
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                         .config_hash,
@@ -1773,6 +1780,7 @@ impl Interpreter {
                     leaves.push(LeafOutcome {
                         name: at.clone(),
                         raw_response: span.raw_output.clone().unwrap_or_default(),
+                        call_ids: Vec::new(),
                         field_meta: IndexMap::new(),
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -1861,7 +1869,9 @@ impl Interpreter {
         } else {
             ChatAdapter.parse_output_def(def, &p.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         match parsed {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
@@ -1869,6 +1879,7 @@ impl Interpreter {
                         name: at.clone(),
                         raw_response: raw.clone(),
                         field_meta: metas,
+                        call_ids: response.history.iter().map(|h| h.snapshot().id).collect(),
                         usage: response.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
@@ -2172,6 +2183,7 @@ impl Interpreter {
                     leaves.push(LeafOutcome {
                         name: at.clone(),
                         raw_response: span.raw_output.clone().unwrap_or_default(),
+                        call_ids: Vec::new(),
                         field_meta: IndexMap::new(),
                         usage: span.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
@@ -2246,6 +2258,7 @@ impl Interpreter {
                         name: at.clone(),
                         raw_response: raw.clone(),
                         field_meta,
+                        call_ids: run.call_ids,
                         usage: run.usage,
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
@@ -2317,6 +2330,8 @@ impl Interpreter {
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events.clone());
+            run.call_ids
+                .extend(response.history.iter().map(|h| h.snapshot().id));
             chat = response.chat;
 
             if !response.tool_calls.is_empty() {
@@ -2373,7 +2388,9 @@ impl Interpreter {
                 } else {
                     ChatAdapter.parse_output_def(lc.def, types, &response.output)
                 };
-                if let Some(history) = &response.history { history.parsed(&parsed); }
+                if let Some(history) = &response.history {
+                    history.parsed(&parsed);
+                }
                 match parsed {
                     Ok((output, metas)) => {
                         return Ok(LoopOutcome::Done {
@@ -2441,13 +2458,17 @@ impl Interpreter {
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
+        run.call_ids
+            .extend(response.history.iter().map(|h| h.snapshot().id));
         let raw = response.output.content();
         let parsed = if structured {
             ChatAdapter.parse_output_json_def(lc.def, &self.program.types, &response.output)
         } else {
             ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output)
         };
-        if let Some(history) = &response.history { history.parsed(&parsed); }
+        if let Some(history) = &response.history {
+            history.parsed(&parsed);
+        }
         let (output, metas) = parsed.map_err(|err| RunError::Parse {
             at: lc.at.into(),
             raw: raw.clone(),
@@ -2863,6 +2884,7 @@ impl Interpreter {
 /// [`LeafOutcome`].
 #[derive(Default)]
 struct AgentRun {
+    call_ids: Vec<String>,
     events: Vec<SpanEvent>,
     usage: LmUsage,
     tool_calls: Vec<rig::message::ToolCall>,

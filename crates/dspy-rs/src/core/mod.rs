@@ -30,6 +30,7 @@ mod schema;
 pub mod settings;
 pub mod signature;
 mod state;
+pub mod storage;
 
 pub use errors::{
     ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
@@ -48,3 +49,4 @@ pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, Sig
 pub use settings::*;
 pub use signature::*;
 pub use state::{ModuleState, PredictState};
+pub use storage::{InteractionStore, JsonlInteractionStore, StorageError, with_interaction_store};
