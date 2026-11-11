@@ -37,7 +37,7 @@ fn augmented_demo_roundtrips_through_adapter() {
     let types = SignatureDef::types_of::<Augmented<QA, Reasoning>>();
     // `WithReasoning` flattens: the serialized demo output keys flat by leaf
     // name (`reasoning`, `answer`) — exactly the def's canonical field names.
-    let user_msg = adapter.format_input_def(def, &json_map(&demo.input));
+    let user_msg = adapter.try_format_input_def(def, &json_map(&demo.input)).unwrap();
     let assistant_msg = adapter.format_output_def(def, &json_map(&demo.output));
     let schema = <Augmented<QA, Reasoning> as Signature>::schema();
     let output_names: Vec<&str> = schema.output_fields().iter().map(|f| f.lm_name).collect();

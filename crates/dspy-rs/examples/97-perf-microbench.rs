@@ -4,7 +4,7 @@
 //! using the in-process test client, so provider latency is excluded and what
 //! remains is pure DSRs CPU + allocator cost.
 //!
-//! Run with: `cargo run --release --example 97-perf-microbench`
+//! Run with: `cargo run --release --example 97-perf-microbench --features cache`
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};

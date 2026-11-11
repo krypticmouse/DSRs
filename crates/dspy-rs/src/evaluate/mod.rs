@@ -19,4 +19,7 @@
 
 pub mod evaluator;
 
-pub use evaluator::*;
+pub use evaluator::{
+    DEFAULT_EVAL_CONCURRENCY, Eval, Rollout, TypedMetric, average_score, evaluate_trainset,
+    evaluate_trainset_with_concurrency,
+};

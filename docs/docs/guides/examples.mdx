@@ -10,7 +10,7 @@ Every example in this index is a complete, runnable program in [`crates/dspy-rs/
 cargo run --example 01-simple
 ```
 
-Some examples need a feature flag (noted in the file header), for example `--features dataloaders` for the HotpotQA ones.
+The HotpotQA examples (03, 04 and 08) require `data`; the cache microbenchmark (97) requires `cache`. Both features are enabled by default. For a minimal build, select the required feature explicitly, for example `cargo run -p dspy-rs --no-default-features --features data --example 03-evaluate-hotpotqa`. Cargo skips examples whose required features are disabled and explains the missing feature when you select one directly.
 
 ## The examples
 

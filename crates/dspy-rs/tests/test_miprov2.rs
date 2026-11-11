@@ -1,4 +1,5 @@
-use dspy_rs::{MIPROv2, PromptingTips};
+use dspy_rs::MIPROv2;
+use dspy_rs::optimizer::mipro::PromptingTips;
 use rstest::*;
 
 #[rstest]

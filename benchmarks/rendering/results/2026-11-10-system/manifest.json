@@ -1,0 +1,21 @@
+{
+  "baseline": "46f1c90cf5a655eba81d8a08f0cb4a687daea601",
+  "candidate": "af0247d010f707ede284be4669270cd321213efd",
+  "utc": "2026-11-10T11:22:49Z",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "python": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "harness_sha256": "f13a6b9e9033f4891c688e6a439c2782e32ec547f0f9f80d6488e810bdec7b07",
+  "lock_sha256": "de0528ee4fbc25352dbaff00ec0df2beeb6f1a68fd35fd4bb19aca0e08aadb3e",
+  "executables": {
+    "baseline": "077f5d31b66d064c6db3352348357ff80955ca507f48a6c3f3066c0716bfc6bf",
+    "candidate": "120224f195769b208120ac6ecd0203433c9e9ddc3fab4f99db6f5df90c8c76c5"
+  },
+  "protocol": {
+    "iterations": 20000,
+    "warmup": 100,
+    "samples_per_binary": 8,
+    "order": "ABBA repeated four times",
+    "max_median_latency_ratio": 0.9
+  }
+}

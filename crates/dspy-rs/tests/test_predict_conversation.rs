@@ -1,4 +1,6 @@
-use dspy_rs::{LM, LMClient, Message, Predict, Role, Signature, TestCompletionModel, configure};
+use dspy_rs::{
+    LM, LMClient, LMConfig, Message, Predict, Role, Signature, TestCompletionModel, configure,
+};
 use rig::completion::{AssistantContent, CompletionRequest};
 use rig::message::{Message as RigMessage, Text, UserContent};
 use std::sync::LazyLock;
@@ -35,6 +37,24 @@ async fn configure_test_lm(responses: Vec<String>) -> TestCompletionModel {
 
     configure(lm);
 
+    client
+}
+
+async fn configure_structured_test_lm(responses: Vec<String>) -> TestCompletionModel {
+    let client = TestCompletionModel::new(responses.into_iter().map(text_response));
+    let lm = LM::from_config(LMConfig {
+        base_url: Some("https://mock.example/v1".into()),
+        api_key: Some("test-key".into()),
+        model: "mock-model".into(),
+        ..LMConfig::default()
+    })
+    .await
+    .unwrap()
+    .with_client(LMClient::Test(client.clone()))
+    .await
+    .unwrap()
+    .with_custom_output_schema(true);
+    configure(lm);
     client
 }
 
@@ -85,6 +105,66 @@ struct ConversationQA {
 
     #[output]
     answer: String,
+}
+
+#[derive(Signature, Clone, Debug, PartialEq)]
+/// Signature used to exercise native JSON Schema through Predict.
+struct NativeJsonQA {
+    #[input]
+    question: String,
+
+    #[output]
+    #[alias("answer.value")]
+    answer: String,
+}
+
+#[derive(Signature, Clone, Debug, PartialEq)]
+/// Map output uses JSON mode because strict schemas must preserve open maps.
+struct NativeJsonMap {
+    #[input]
+    question: String,
+
+    #[output]
+    labels: std::collections::HashMap<String, String>,
+}
+
+#[tokio::test]
+async fn predict_uses_provider_schema_and_parses_native_json() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let client =
+        configure_structured_test_lm(vec![r#"{"answer.value":"a \"quoted\" answer"}"#.into()])
+            .await;
+    let predicted = Predict::<NativeJsonQA>::new()
+        .call(NativeJsonQAInput {
+            question: "Question?".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(predicted.into_inner().answer, "a \"quoted\" answer");
+    let request = client.last_request().unwrap();
+    let schema = serde_json::to_value(request.output_schema.as_ref().unwrap()).unwrap();
+    assert_eq!(schema["properties"]["answer.value"]["type"], "string");
+    assert!(request.preamble.unwrap().contains("provider JSON Schema"));
+}
+
+#[tokio::test]
+async fn predict_uses_json_mode_for_open_map_output() {
+    let _lock = SETTINGS_LOCK.lock().await;
+    let client = configure_structured_test_lm(vec![r#"{"labels":{"tone":"warm"}}"#.into()]).await;
+    let predicted = Predict::<NativeJsonMap>::new()
+        .call(NativeJsonMapInput {
+            question: "Question?".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(predicted.into_inner().labels["tone"], "warm");
+    let request = client.last_request().unwrap();
+    assert!(request.output_schema.is_none());
+    assert_eq!(
+        request.additional_params.unwrap()["response_format"]["type"],
+        "json_object"
+    );
+    assert!(request.preamble.unwrap().contains("provider JSON mode"));
 }
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]

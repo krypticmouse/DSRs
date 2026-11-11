@@ -9,11 +9,16 @@
 
 pub mod coerce;
 pub mod constraint;
+pub mod json_schema;
 pub mod render;
 pub mod schema;
 
-pub use coerce::{Coerced, Flag, coerce};
+pub use coerce::{Coerced, Flag, coerce, coerce_value};
 pub use constraint::{Constraint, ConstraintKind, ConstraintLevel, evaluate_expression};
+pub use json_schema::{
+    alias_output_fields, canonicalize_output_aliases, json_schema_compatible,
+    json_schema_for_outputs,
+};
 pub use render::{schema_block, type_name};
 pub use schema::{
     ClassDef, EnumDef, EnumValueDef, FieldDef, FieldType, OutputSchema, Schema, TypeTable,

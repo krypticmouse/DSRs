@@ -1,5 +1,4 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use anyhow::Result;
 use foyer::{BlockEngineBuilder, DeviceBuilder, FsDeviceBuilder, HybridCache, HybridCacheBuilder};
@@ -8,6 +7,26 @@ use tempfile::TempDir;
 use tracing::{debug, trace, warn};
 
 use crate::LmUsage;
+
+/// Disk-tier initialization and lookup failures, with the backend cause intact.
+#[derive(Debug, thiserror::Error)]
+pub enum CacheError {
+    #[error("response cache {operation} failed: {source}")]
+    Backend {
+        operation: &'static str,
+        #[source]
+        source: anyhow::Error,
+    },
+}
+
+impl CacheError {
+    fn backend(operation: &'static str, source: impl Into<anyhow::Error>) -> Self {
+        Self::Backend {
+            operation,
+            source: source.into(),
+        }
+    }
+}
 
 /// Response-cache key: a 64-bit hash over the prompt + generation parameters.
 ///
@@ -39,21 +58,15 @@ pub struct CacheEntry {
 /// Uses [foyer](https://docs.rs/foyer) with 256MB memory and 1GB disk (in a
 /// temp directory owned by the cache for its whole lifetime). If the disk
 /// tier cannot be initialized, the cache degrades to memory-only with a
-/// warning instead of panicking. Maintains a sliding window of the 100 most
-/// recent entries for [`inspect_history`](crate::LM::inspect_history).
+/// warning instead of panicking. Execution history is owned independently
+/// by [`LM`](crate::LM).
 ///
-/// All methods take `&self`: the foyer cache is internally synchronized and
-/// the history ring sits behind its own small mutex, so concurrent LM calls
-/// never serialize on a cache-wide lock.
+/// All methods take `&self`: the foyer cache is internally synchronized.
 ///
 /// Created automatically by [`LM`](crate::LM) — you don't construct this directly.
 #[derive(Clone)]
 pub struct ResponseCache {
     handler: HybridCache<CacheKey, CacheEntry>,
-    window_size: usize,
-    /// Debug ring buffer (newest at the back) backing `get_history`. Isolated
-    /// in its own mutex so history bookkeeping never blocks cache lookups.
-    history_window: Arc<Mutex<VecDeque<CacheEntry>>>,
     /// Keeps the disk tier's temp directory alive: `TempDir` deletes the
     /// directory on drop, so it must outlive every clone of the cache.
     /// `None` when running memory-only.
@@ -76,12 +89,9 @@ impl ResponseCache {
 
         let cache = Self {
             handler,
-            window_size: 100,
-            history_window: Arc::new(Mutex::new(VecDeque::new())),
             _disk_dir: disk_dir,
         };
         debug!(
-            window_size = cache.window_size,
             disk_tier = cache._disk_dir.is_some(),
             "response cache initialized"
         );
@@ -91,18 +101,21 @@ impl ResponseCache {
     /// Builds the full memory + disk hybrid, returning the `TempDir` guard
     /// that must be held for as long as the cache lives.
     async fn try_build_hybrid() -> Result<(HybridCache<CacheKey, CacheEntry>, TempDir)> {
-        let dir = tempfile::tempdir()?;
+        let dir =
+            tempfile::tempdir().map_err(|error| CacheError::backend("create directory", error))?;
 
         let device = FsDeviceBuilder::new(dir.path())
             .with_capacity(DISK_CAPACITY)
-            .build()?;
+            .build()
+            .map_err(|error| CacheError::backend("create device", error))?;
 
         let hybrid = HybridCacheBuilder::new()
             .memory(MEMORY_CAPACITY)
             .storage()
             .with_engine_config(BlockEngineBuilder::new(device))
             .build()
-            .await?;
+            .await
+            .map_err(|error| CacheError::backend("initialize disk tier", error))?;
         Ok((hybrid, dir))
     }
 
@@ -117,54 +130,24 @@ impl ResponseCache {
             .expect("memory-only foyer cache construction cannot fail")
     }
 
-    fn lock_history(&self) -> MutexGuard<'_, VecDeque<CacheEntry>> {
-        // The ring is debug bookkeeping: recover from a poisoned lock rather
-        // than propagating a panic into unrelated LM calls.
-        self.history_window
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
     /// Fetches the full cached entry (including raw output) for a key.
     #[tracing::instrument(name = "dsrs.cache.get_entry", level = "trace", skip(self))]
     pub async fn get_entry(&self, key: CacheKey) -> Result<Option<CacheEntry>> {
-        let value = self.handler.get(&key).await?.map(|v| v.value().clone());
+        let value = self
+            .handler
+            .get(&key)
+            .await
+            .map_err(|error| CacheError::backend("read", error))?
+            .map(|v| v.value().clone());
         trace!(hit = value.is_some(), "cache lookup complete");
         Ok(value)
     }
 
     /// Inserts an entry synchronously — the direct path used by [`LM::call`](crate::LM).
-    #[tracing::instrument(
-        name = "dsrs.cache.insert_entry",
-        level = "trace",
-        skip(self, entry),
-        fields(window_size = self.window_size)
-    )]
+    #[tracing::instrument(name = "dsrs.cache.insert_entry", level = "trace", skip(self, entry))]
     pub fn insert_entry(&self, key: CacheKey, entry: CacheEntry) {
         let prompt_len = entry.prompt.len();
-        let history_len = {
-            let mut history = self.lock_history();
-            history.push_back(entry.clone());
-            if history.len() > self.window_size {
-                history.pop_front();
-            }
-            history.len()
-        };
         self.handler.insert(key, entry);
-        trace!(history_len, prompt_len, "cache entry inserted");
-    }
-
-    /// Returns the `n` most recent cached entries (newest first).
-    #[tracing::instrument(
-        name = "dsrs.cache.get_history",
-        level = "trace",
-        skip(self),
-        fields(n = n)
-    )]
-    pub fn get_history(&self, n: usize) -> Vec<CacheEntry> {
-        let history = self.lock_history();
-        let entries: Vec<CacheEntry> = history.iter().rev().take(n).cloned().collect();
-        trace!(actual_n = entries.len(), "cache history fetched");
-        entries
+        trace!(prompt_len, "cache entry inserted");
     }
 }

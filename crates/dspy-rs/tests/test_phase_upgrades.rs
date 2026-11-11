@@ -517,6 +517,7 @@ async fn mipro_bootstraps_demos_from_successful_traces() {
 
 #[cfg_attr(miri, ignore = "MIRI has issues with tokio's I/O driver")]
 #[tokio::test]
+#[cfg(feature = "cache")]
 async fn lm_response_cache_serves_repeat_calls_without_provider() {
     // Only ONE response is queued: a second provider call would error with
     // "test response queue is empty", so a passing second call proves a cache hit.
