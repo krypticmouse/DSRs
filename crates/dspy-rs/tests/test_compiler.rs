@@ -89,6 +89,24 @@ fn fusion_rewrites_exports_and_round_trips() {
 }
 
 #[test]
+fn fusion_rejects_cross_collisions_between_output_names_and_aliases() {
+    let mut p = program();
+    let first = p.leaf_id("answerer").unwrap();
+    let second = p.leaf_id("researcher").unwrap();
+    let Node::Predict(a) = p.nodes[first].clone() else {
+        unreachable!()
+    };
+    let Node::Predict(b) = p.nodes[second].clone() else {
+        unreachable!()
+    };
+    p.sigs[a.sig].outputs[0].lm_name = "response".into();
+    p.sigs[b.sig].outputs[0].lm_name = "answer".into();
+    p.validate().unwrap();
+    assert!(fusion_next(&p, first).is_none());
+    assert!(p.edited(&[Edit::Fuse { first, second }]).is_err());
+}
+
+#[test]
 fn split_preserves_all_outputs_and_round_trips() {
     let p = fused(&program());
     let result = p

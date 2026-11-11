@@ -61,9 +61,9 @@ pub fn fusion_next(p: &Program, first: NodeId) -> Option<NodeId> {
         return None;
     }
     if sa.outputs.iter().any(|a| {
-        sb.outputs
-            .iter()
-            .any(|b| a.name == b.name || a.lm_name == b.lm_name)
+        sb.outputs.iter().any(|b| {
+            a.name == b.name || a.lm_name == b.lm_name || a.name == b.lm_name || a.lm_name == b.name
+        })
     }) {
         return None;
     }
