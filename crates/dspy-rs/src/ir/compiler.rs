@@ -24,6 +24,19 @@ fn no_demos(p: &Program, n: &PredictNode) -> bool {
     matches!(&p.params[n.demos].default, ParamValue::Demos { rows } if rows.is_empty())
 }
 
+fn tool_fields(signature: &super::SignatureDef) -> bool {
+    signature
+        .inputs
+        .iter()
+        .chain(signature.outputs.iter())
+        .any(|field| {
+            matches!(
+                field.special_kind(),
+                Some(crate::SpecialField::Tools | crate::SpecialField::ToolCalls)
+            )
+        })
+}
+
 /// Adjacent, independent predictions are eligible only when every input binding
 /// and model agrees and output names/aliases are disjoint. Tools are excluded.
 pub fn fusion_next(p: &Program, first: NodeId) -> Option<NodeId> {
@@ -41,6 +54,8 @@ pub fn fusion_next(p: &Program, first: NodeId) -> Option<NodeId> {
     };
     let (sa, sb) = (&p.sigs[a.sig], &p.sigs[b.sig]);
     if sa.inputs != sb.inputs
+        || tool_fields(sa)
+        || tool_fields(sb)
         || a.binding != b.binding
         || p.params[a.model].default != p.params[b.model].default
         || !no_demos(p, a)
@@ -59,7 +74,13 @@ pub fn fusion_next(p: &Program, first: NodeId) -> Option<NodeId> {
 }
 
 pub fn can_split(p: &Program, leaf: NodeId) -> bool {
-    matches!(p.nodes.get(leaf), Some(Node::Predict(n)) if p.sigs[n.sig].outputs.len() > 1 && no_demos(p, n) && (leaf == p.root || parent_seq(p, leaf).is_some()))
+    let Some(Node::Predict(n)) = p.nodes.get(leaf) else {
+        return false;
+    };
+    p.sigs[n.sig].outputs.len() > 1
+        && no_demos(p, n)
+        && !tool_fields(&p.sigs[n.sig])
+        && (leaf == p.root || parent_seq(p, leaf).is_some())
 }
 
 fn sig_name(p: &Program, stem: &str) -> Box<str> {
@@ -459,7 +480,7 @@ impl Compiler {
                     parent_hash,
                     child_hash,
                     edit,
-                    measurement: Some(measurement.clone()),
+                    measurement: valid.then(|| measurement.clone()),
                     accepted,
                     reason,
                 });

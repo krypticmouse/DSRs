@@ -251,6 +251,8 @@ async fn compiler_rejects_quality_regressions_and_invalid_measurements() {
             .unwrap();
         assert_eq!(report.program.meta.program_hash, base);
         assert!(report.steps.iter().all(|step| !step.accepted));
+        let encoded = serde_json::to_string(&report).unwrap();
+        let _: ir::compiler::CompilerReport = serde_json::from_str(&encoded).unwrap();
     }
 }
 
