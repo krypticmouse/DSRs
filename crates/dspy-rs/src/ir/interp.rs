@@ -3100,6 +3100,8 @@ fn render_prompt(
                 .get(field.name.as_ref())
                 .ok_or_else(|| anyhow::anyhow!("demo missing output field `{}`", field.name))?
                 .to_string()
+        } else if format == OutputFormat::JsonSchema {
+            adapter.format_output_json_schema_def(def, types, &row.output)
         } else if format != OutputFormat::Delimited {
             adapter.format_output_json_def(def, types, &row.output)
         } else {

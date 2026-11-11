@@ -45,6 +45,77 @@ struct NestedSig {
     city: City,
 }
 
+async fn native_demo_lm() -> dspy_rs::LM {
+    dspy_rs::LM::builder()
+        .base_url("http://127.0.0.1:1/v1".into())
+        .model("demo-format-test".into())
+        .cache(false)
+        .build()
+        .await
+        .unwrap()
+        .with_custom_output_schema(true)
+        .with_scalar_output_schema(false)
+}
+
+#[tokio::test]
+async fn native_schema_demos_match_the_compact_prompt_and_preserve_aliases() {
+    let predictor = dspy_rs::Predict::<AliasSig>::builder()
+        .lm(native_demo_lm().await)
+        .demo(dspy_rs::Demo::new(
+            AliasSigInput {
+                question: "A demo?".into(),
+            },
+            AliasSigOutput {
+                answer: "A value".into(),
+            },
+        ))
+        .build();
+    let chat = predictor
+        .build_chat(&AliasSigInput {
+            question: "A new question?".into(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        chat.messages[0]
+            .text_content()
+            .contains("Return compact JSON")
+    );
+    assert_eq!(
+        chat.messages[2].text_content(),
+        r#"{"answer.value":"A value"}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_native_schema_demos_keep_the_descriptive_json_format() {
+    let predictor = dspy_rs::Predict::<NestedSig>::builder()
+        .lm(native_demo_lm().await)
+        .demo(dspy_rs::Demo::new(
+            NestedSigInput {
+                question: "A demo?".into(),
+            },
+            NestedSigOutput {
+                city: City {
+                    name: "A city".into(),
+                },
+            },
+        ))
+        .build();
+    let chat = predictor
+        .build_chat(&NestedSigInput {
+            question: "A new question?".into(),
+        })
+        .await
+        .unwrap();
+    let output = chat.messages[2].text_content();
+    assert!(output.contains('\n'));
+    assert_eq!(
+        serde_json::from_str::<Value>(&output).unwrap(),
+        serde_json::json!({"city":{"name":"A city"}})
+    );
+}
+
 #[test]
 fn complex_native_outputs_keep_nested_schema_descriptions_in_the_prompt() {
     let prompt = ChatAdapter.build_system_json_def(
