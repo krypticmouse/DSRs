@@ -2,6 +2,7 @@
 use crate::typesys::{FieldType, Schema};
 use facet::Facet;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, Facet)]
 pub struct History {
@@ -77,14 +78,30 @@ pub enum SpecialField {
 }
 
 pub(crate) fn special_field(ty: &FieldType) -> Option<SpecialField> {
-    let FieldType::Class(name) = ty.peel() else {
+    static NAMES: LazyLock<[String; 3]> = LazyLock::new(|| {
+        [
+            History::internal_name(),
+            Tool::internal_name(),
+            ToolCalls::internal_name(),
+        ]
+    });
+    if let FieldType::Optional(inner) = ty {
+        return special_field(inner);
+    }
+    if let FieldType::List(inner) = ty {
+        return match &**inner {
+            FieldType::Class(name) if *name == NAMES[1] => Some(SpecialField::Tools),
+            _ => None,
+        };
+    }
+    let FieldType::Class(name) = ty else {
         return None;
     };
-    if *name == History::internal_name() {
+    if *name == NAMES[0] {
         Some(SpecialField::History)
-    } else if *name == Tool::internal_name() {
+    } else if *name == NAMES[1] {
         Some(SpecialField::Tools)
-    } else if *name == ToolCalls::internal_name() {
+    } else if *name == NAMES[2] {
         Some(SpecialField::ToolCalls)
     } else {
         None
