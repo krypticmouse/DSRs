@@ -42,7 +42,9 @@ async fn reopens_complete_typed_records_with_history_disabled() {
     let store = Arc::new(JsonlInteractionStore::open(&path).unwrap());
     let lm = lm(vec![answer("Paris")]).await;
     lm.history.set_capacity(0);
-    let predict = Predict::<QA>::new().with_lm(lm);
+    dspy_rs::set_history_capacity(0);
+    let predict = Predict::<QA>::builder().lm(lm).build();
+    predict.set_history_capacity(0);
     let output = with_interaction_store(
         store.clone(),
         predict.call(QAInput {
