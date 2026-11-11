@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
   - `base_url` - API endpoint URL (optional, inferred from model provider)
   - `temperature` - Sampling temperature (default: 0.7)
   - `max_tokens` - Maximum completion tokens (default: 512)
-  - `max_tool_iterations` - Upper bound on tool-loop round trips (default: 10)
+  - `max_tool_iterations` - Maximum automatic tool-execution rounds, including the initial round (default: 10)
   - `max_retries` - Additional attempts after a transient failure (default: 2)
   - `retry_base_delay_ms` - Base delay for exponential retry backoff (default: 250)
   - `cache` - Enable response caching (default: false)
@@ -91,6 +91,30 @@ let lm = LM::builder()
 ```
 
 - **Clone semantics:** `LM` implements `Clone`; clones share the underlying client and cache via `Arc`, so they see the same history while carrying their own config copy.
+
+## Provider injection and typed failures
+
+Built-in providers, `TestCompletionModel`, and application providers implement
+`core::lm::CompletionProvider`. An external implementation can be injected with
+`lm.with_client(LMClient::custom(provider)).await?`; it follows the same LM
+configuration, scoped `with_lm`, call overrides, retry and tool pipeline. The
+trait's completion future must be `Send`, so the provider works in concurrent
+module calls. `LMClient::from_custom` remains the conversion constructor for
+existing enum variants.
+
+Direct LM calls retain a `LmCallError` in their error chain. Use
+`error.downcast_ref::<LmCallError>()` to inspect `kind()`, `http_status()` and
+`is_retryable()`. Predictor calls expose the same cause through
+`PredictError::Lm { source }` and `source.call_error()`. The original provider
+error, including its response detail, remains available via `Error::source`.
+HTTP 429 and server failures are transient; authentication, policy and other
+request errors do not consume the retry budget. Providers that expose only
+string errors retain their source and use the documented transient-marker
+fallback. Retry headers are unavailable through Rig's completion error type.
+
+`PredictError::is_retryable()` describes a possible new attempt after the LM's
+own configured retries have finished; applications should choose an outer
+retry budget explicitly.
 
 ## API Reference
 
@@ -145,6 +169,86 @@ fn main() -> anyhow::Result<()> {
   </Tab>
 </Tabs>
 
+## Response caching and sampling
+
+Enable response caching with `.cache(true)`. Cache keys use the formatted messages and generation settings, including model, endpoint, effective temperature, token limit, output-schema/JSON-mode options, and scoped sampling identity. Responses with tools bypass the cache so tool side effects are not replayed. Cached entries retain raw assistant text and the original token usage; cache hits report zero new token usage.
+
+Use a stable sampling identity to reuse an earlier response, or a distinct identity to request a fresh sample:
+
+```rust
+use dspy_rs::{SamplingOptions, with_sampling_options};
+
+let prediction = with_sampling_options(
+    SamplingOptions {
+        id: Some("trial-2".to_string()),
+        temperature: Some(0.8),
+    },
+    predictor.call(input),
+)
+.await?;
+```
+
+Sampling settings apply within the current task-local scope and are restored afterward. Matching identities can reuse cache entries only when the rest of the request also matches.
+## Selecting an LM for a call or module
+
+LM selection uses this precedence:
+
+1. An explicit `call_with_lm` override.
+2. The predictor's `.lm(...)` setting.
+3. The innermost task-local or module default.
+4. The global LM installed by `configure`.
+
+An explicit call override applies to the module's predictor leaves for that call, including leaves with their own LM. A scoped default fills in leaves without an instance LM.
+
+```rust
+use dspy_rs::{Module, with_lm};
+
+// A default for the current future, restored when it finishes.
+let result = with_lm(alternative_lm.clone(), module.call(input.clone())).await?;
+
+// An explicit override for this call and its predictor leaves.
+let result = module.call_with_lm(input.clone(), alternative_lm).await?;
+
+// A persistent module default; predictor-specific LMs take precedence.
+let configured_module = module.with_lm(default_lm);
+let result = configured_module.call(input).await?;
+```
+
+These methods accept an owned `LM` or an `Arc<LM>`. Scopes restore automatically on success, error, panic, and cancellation, and concurrent scopes do not change the global configuration. Spawned Tokio tasks do not inherit scopes: pass the LM explicitly into the spawned future and establish its scope there. Generated `#[module]` programs also use the active scope when binding their default model; explicitly bound named models retain their bindings.
+
+For a predictor-level conversation, use `build_chat_with_lm(&input, lm.clone())` and `call_and_parse_with_lm(chat, lm)` to select the same LM when building and sending the prompt.
+
+## Copying and overriding configuration
+
+`LM::copy_with` clones the existing configuration and applies only the changes made by your closure:
+
+```rust
+let deterministic = lm.copy_with(|config| {
+    config.temperature = 0.0;
+    config.max_tokens = 1_024;
+}).await?;
+```
+
+Generation-only changes retain the current provider client, including injected custom clients. Changes to `model`, `base_url`, or `api_key` rebuild the client from the resulting configuration. Set optional fields to `None` to clear them; provider credential lookup then follows the normal initialization rules. The original LM remains unchanged, including if initialization fails. Each copy starts with a fresh response cache when caching is enabled.
+
+Prefer this method over directly changing provider-identity fields on `lm.config`, because a config mutation alone does not rebuild the live client.
+
+A predictor can also merge configuration changes for one call:
+
+```rust
+let result = predictor.call_with_config(input, |config| {
+    config.temperature = 0.2;
+}).await?;
+```
+
+This starts from the predictor's resolved LM, applies the closure, and uses the variant as an explicit override. To reuse a variant's cache across calls, construct it once with `copy_with` and pass its `Arc<LM>` to subsequent calls.
+
+## Retry behavior
+
+`max_retries` counts additional attempts after the first request; `0` disables retries. HTTP 429 and 5xx responses, connection failures, timeouts, and interrupted response-body reads are retryable. Other HTTP 4xx responses and request-construction errors fail immediately. Provider errors without a typed HTTP status use the existing transient-message classifier.
+
+Retries wait for `retry_base_delay_ms * 2^attempt`, with up to 50% random jitter and saturated arithmetic. The base delay defaults to 250 ms; the exponent is capped at 16. Retries do not switch the selected LM or response format.
+
 ## Inspecting history
 
 ```rust
@@ -155,7 +259,21 @@ for entry in history {
 }
 ```
 
-> `inspect_history` requires caching to be enabled (`.cache(true)`); it panics on an LM built without caching. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
+> Enable caching with `.cache(true)` before making calls to record history. `inspect_history` returns an empty vector when caching is disabled or no entries have been recorded. It returns up to `n` recent cache insertions, newest first, from a window of 100 entries. Cache hits do not add history entries. Entries are `CacheEntry` values served by `ResponseCache`; see [Utils](/docs/components/utils). Only tool-free calls are cached, since tool loops execute side-effectful user code.
+
+Replacing the provider with `lm.with_client(client).await?` starts a fresh cache and history when caching is enabled. Existing LM clones keep their original client, cached responses, and history.
+
+### Inspecting a prompt before sending
+
+For a configured predictor and typed input, use [`Predict::build_chat`](/docs/components/predict) to inspect the formatted messages, including the signature's instructions and output format. This works with caching disabled and lets you see the prompt even if the subsequent response fails to parse.
+
+```rust
+let chat = predictor.build_chat(&input).await?;
+println!("Prompt: {}", chat.to_json());
+
+// Send the same chat after inspecting it.
+let (prediction, conversation) = predictor.call_and_parse(chat).await?;
+```
 
 ## Configuration options
 
@@ -168,10 +286,14 @@ All `LM` builder parameters have sensible defaults, so you only need to override
 | `base_url`   | `Option<String>`| `None`               | Custom endpoint URL; auto-detected from model provider if not provided         |
 | `temperature`| `f32`           | `0.7`                | Higher values increase randomness                                              |
 | `max_tokens` | `u32`           | `512`                | Upper bound on completion tokens                                               |
-| `max_tool_iterations` | `u32`  | `10`                 | Upper bound on tool-loop round trips per call                                  |
+| `max_tool_iterations` | `u32`  | `10`                 | Maximum automatic tool-execution rounds, including the initial round; `0` disables automatic tool execution |
 | `max_retries`| `u32`           | `2`                  | Additional attempts after a transient failure (429/5xx/network/timeout); `0` disables retries |
 | `retry_base_delay_ms` | `u64`  | `250`                | Base delay for exponential backoff between retries, plus up to 50% jitter      |
 | `cache`      | `bool`          | `false`              | Enables response caching and `inspect_history` support                         |
+
+### Automatic tool-loop limits
+
+For the automatic `LM::call` tool loop, `max_tool_iterations(1)` permits one round of tool execution followed by a completion that can return the final answer. If that completion requests more tools, the call fails before executing them. Parallel tool calls in one model response count as one round. A zero limit still allows a text response, but a tool request fails before any tools execute. `ToolLoopMode::CallerManaged` leaves execution limits to the caller; IR agents use their own `StopSpec` and budgets.
 
 ### Example with custom settings
 
@@ -243,6 +365,17 @@ let lm = LM::builder()
 ```
 
 All provider integrations are powered by [Rig](https://github.com/0xPlaygrounds/rig), which handles the provider-specific API details.
+
+### Chat Completions token limits
+
+The OpenAI-compatible adapter forwards `max_tokens`, including changes made
+through `copy_with`, to the HTTP request. It selects `max_completion_tokens`
+for o-series and GPT-5-or-newer model names, and `max_tokens` for other models,
+including local Ollama's OpenAI-compatible endpoint. These wire parameter names
+differ from the single `max_tokens` setting used by the LM configuration.
+Explicit token-limit fields in a third-party request's additional parameters
+are preserved. See the [OpenAI Chat Completions reference](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+for the distinction between the two parameters.
 
 ## Tool sets and Code Mode
 

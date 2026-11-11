@@ -15,8 +15,8 @@
 //!   one span whose model is the reserved `sandbox:quickjs` config.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use cranelift_entity::SecondaryMap;
@@ -28,14 +28,16 @@ use crate::adapter::chat::ChatAdapter;
 use crate::core::FieldMeta;
 use crate::ir::graph::{
     AgentLoopNode, Binding, BudgetPolicy, CapSet, HoleImpl, HoleNode, ModelId, Node, NodeId,
-    PortRef, PredictNode, Program, ToolId, ToolKind,
+    PortRef, PredictNode, Program, SigId, ToolId, ToolKind,
 };
 use crate::ir::params::{ContextPolicy, DemoRow, Overlay, ParamId, ParamValue};
 use crate::ir::sig::SignatureDef;
 use crate::ir::validate::{ValidateError, json_matches_type};
 use crate::trace::{JsonMap, SpanEvent, SpanOutcome, SpanRequest, begin_span};
-use crate::typesys::{FieldType, TypeTable};
-use crate::{Chat, LM, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet};
+use crate::typesys::{FieldType, TypeTable, json_schema_compatible, json_schema_for_outputs};
+use crate::{
+    Chat, LM, LMCallOptions, LMConfig, LmError, LmUsage, Message, Role, ToolLoopMode, ToolSet,
+};
 
 // ---------------------------------------------------------------------------
 // Budgets
@@ -472,6 +474,9 @@ pub type HostHoleFn =
 /// registered sandbox code. Cheap to share; run state never lives here.
 pub struct Interpreter {
     program: Arc<Program>,
+    /// One last-used instruction/system pair per signature. Dynamic candidates
+    /// replace entries rather than growing an unbounded process-wide cache.
+    system_prompts: RwLock<HashMap<SigId, (String, OutputFormat, String)>>,
     models: SecondaryMap<ModelId, Option<Arc<LM>>>,
     tool_exec: SecondaryMap<ToolId, Option<ToolExec>>,
     /// Extern-hole bindings by leaf name, verified complete at load.
@@ -502,7 +507,17 @@ impl Interpreter {
     /// 5. every sandboxed tool and hole registered through the dsrs-tools
     ///    lifecycle (parse → compile → register). A hole that doesn't compile
     ///    fails the LOAD, not the call.
-    pub async fn load(program: Program, env: RuntimeEnv) -> Result<Self, LoadError> {
+    pub fn load(
+        program: Program,
+        env: RuntimeEnv,
+    ) -> impl std::future::Future<Output = Result<Self, LoadError>> {
+        Self::load_shared(Arc::new(program), env)
+    }
+
+    /// Loads independent runtime bindings over an existing immutable program.
+    /// Every validation and capability check is identical to `load`; only the
+    /// graph allocation is shared. Per-run state remains local to each call.
+    pub async fn load_shared(program: Arc<Program>, env: RuntimeEnv) -> Result<Self, LoadError> {
         program.validate()?;
 
         if !program.caps.is_subset(&env.grants) {
@@ -617,7 +632,8 @@ impl Interpreter {
         }
 
         Ok(Self {
-            program: Arc::new(program),
+            program,
+            system_prompts: RwLock::new(HashMap::new()),
             models,
             tool_exec,
             host_holes,
@@ -629,6 +645,35 @@ impl Interpreter {
 
     pub fn program(&self) -> &Arc<Program> {
         &self.program
+    }
+
+    fn system_prompt(&self, sig: SigId, instruction: &str, format: OutputFormat) -> String {
+        if let Some((cached_instruction, cached_format, prompt)) = self
+            .system_prompts
+            .read()
+            .expect("system prompt cache poisoned")
+            .get(&sig)
+            && cached_instruction == instruction
+            && *cached_format == format
+        {
+            return prompt.clone();
+        }
+        let def = &self.program.sigs[sig];
+        let prompt = if format == OutputFormat::Delimited {
+            ChatAdapter.build_system_def(def, &self.program.types, Some(instruction))
+        } else {
+            ChatAdapter.build_system_json_def(
+                def,
+                &self.program.types,
+                Some(instruction),
+                format == OutputFormat::JsonSchema,
+            )
+        };
+        self.system_prompts
+            .write()
+            .expect("system prompt cache poisoned")
+            .insert(sig, (instruction.to_owned(), format, prompt.clone()));
+        prompt
     }
 
     /// Evaluates the program on `input`, reading parameters through `overlay`
@@ -897,7 +942,13 @@ impl Interpreter {
         } else {
             if let Some(input_map) = input.as_ref() {
                 self.validate_input(&at, def, input_map)?;
-                chat.push_message(Message::user(ChatAdapter.format_input_def(def, input_map)));
+                let rendered = ChatAdapter
+                    .try_format_input_def(def, input_map)
+                    .map_err(|err| RunError::Input {
+                        at: at.clone().into(),
+                        message: format!("{err:#}"),
+                    })?;
+                chat.push_message(Message::user(rendered));
             }
             (Vec::new(), chat.messages)
         };
@@ -1031,7 +1082,28 @@ impl Interpreter {
             return Err(RunError::Budget { at: at.into() });
         }
 
-        let response = match lm.call(Chat::new(messages), Vec::new()).await {
+        let options = output_schema_options(lm, def, &self.program.types);
+        let structured = options.is_json();
+        let declarations = ChatAdapter
+            .signature_tools_from_messages(def, &messages)
+            .map_err(|error| RunError::Input {
+                at: at.into(),
+                message: error.to_string(),
+            })?;
+        let toolset = ToolSet::from_definitions(declarations);
+        let response = match lm
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 if let Some(guard) = guard {
@@ -1048,7 +1120,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -1056,7 +1128,23 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &self.program.types, &response.output) {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &self.program.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
+            ChatAdapter.parse_output_json_def(def, &self.program.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(def, &self.program.types, &response.output)
+        };
+        match parsed {
             Ok((output, metas)) => {
                 let leaf = LeafOutcome {
                     name: at.to_string(),
@@ -1066,8 +1154,8 @@ impl Interpreter {
                     model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                         .config_hash,
                     span_id: guard.as_ref().map(|guard| guard.id()),
-                    tool_calls: Vec::new(),
-                    tool_executions: Vec::new(),
+                    tool_calls: response.tool_calls.clone(),
+                    tool_executions: response.tool_executions.clone(),
                 };
                 if let Some(guard) = guard {
                     guard.finish(SpanOutcome {
@@ -1301,26 +1389,43 @@ impl Interpreter {
         cx: &Cx,
     ) -> Result<(Vec<Message>, Vec<Message>), RunError> {
         let p = &*self.program;
-        Ok(match &p.nodes[node] {
+        let rendered = match &p.nodes[node] {
             Node::Predict(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
-                render_prompt(&p.sigs[n.sig], &p.types, &instruction, &demos, input, None)
+                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
+                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
+                render_prompt(
+                    &p.sigs[n.sig],
+                    &p.types,
+                    self.system_prompt(n.sig, &instruction, format),
+                    &demos,
+                    input,
+                    None,
+                    format,
+                )
             }
             Node::AgentLoop(n) => {
                 let instruction = self.p_text(cx, n.instruction);
                 let demos = self.p_demos(cx, n.demos);
                 let policy = self.p_context(cx, n.context_policy);
+                let lm = self.p_model(p.syms.get(n.name), cx, n.model)?;
+                let format = output_format(&output_schema_options(&lm, &p.sigs[n.sig], &p.types));
                 render_prompt(
                     &p.sigs[n.sig],
                     &p.types,
-                    &instruction,
+                    self.system_prompt(n.sig, &instruction, format),
                     &demos,
                     input,
                     policy.playbook.as_deref(),
+                    format,
                 )
             }
             _ => unreachable!("conversation_leaf returns only leaves"),
+        };
+        rendered.map_err(|err| RunError::Input {
+            at: p.node_display(node).into(),
+            message: format!("{err:#}"),
         })
     }
 
@@ -1486,7 +1591,11 @@ impl Interpreter {
                 Node::Retry(n) => {
                     let mut attempt = 0u32;
                     loop {
-                        match self.eval(n.child, cx).await {
+                        let options = crate::current_sampling_options().child(
+                            format!("retry-{}", self.program.node_display(id)),
+                            attempt as usize,
+                        );
+                        match crate::with_sampling_options(options, self.eval(n.child, cx)).await {
                             Ok(out) => break out,
                             Err(err) if err.retryable() && attempt + 1 < n.max_attempts.get() => {
                                 attempt += 1;
@@ -1567,21 +1676,65 @@ impl Interpreter {
         n: &crate::ir::graph::RefineNode,
         cx: &mut Cx,
     ) -> Result<JsonMap, RunError> {
+        let mut best: Option<(f64, usize, JsonMap, SecondaryMap<NodeId, Option<JsonMap>>)> = None;
         for round in 0..n.max_rounds.get() {
-            let out = self.eval(n.child, cx).await?;
-            let judge_out = self.eval(n.judge, cx).await?;
+            let child_scope = crate::current_sampling_options().child(
+                format!("refine-{}", self.program.node_display(n.child)),
+                round as usize,
+            );
+            let out = crate::with_sampling_options(child_scope, self.eval(n.child, cx)).await?;
+            let judge_scope = crate::current_sampling_options().child(
+                format!("refine-judge-{}", self.program.node_display(n.judge)),
+                round as usize,
+            );
+            let judge_out =
+                crate::with_sampling_options(judge_scope, self.eval(n.judge, cx)).await?;
             let score = judge_out
                 .get("score")
                 .and_then(Value::as_f64)
                 .unwrap_or(f64::NEG_INFINITY);
-            if score >= n.threshold || round + 1 == n.max_rounds.get() {
+            if best
+                .as_ref()
+                .map_or(true, |(best_score, _, _, _)| score > *best_score)
+            {
+                best = Some((score, round as usize, out.clone(), cx.frames.clone()));
+            }
+            if score >= n.threshold {
+                let key = format!(
+                    "refine.{}.selected_round",
+                    self.program.node_display(n.child)
+                );
+                crate::trace::capture::set_trace_tag(key, (round + 1).to_string());
+                crate::trace::capture::set_trace_tag(
+                    format!(
+                        "refine.{}.selected_score",
+                        self.program.node_display(n.child)
+                    ),
+                    score.to_string(),
+                );
                 return Ok(out);
             }
             let feedback = judge_out.get("feedback").cloned().unwrap_or(Value::Null);
             let field = self.program.syms.get(n.feedback_field).to_string();
             cx.refine_feedback = Some((n.child, field, feedback));
         }
-        unreachable!("refine rounds are bounded and return inside the loop")
+        let (score, round, out, frames) = best.expect("refine has at least one bounded attempt");
+        cx.frames = frames;
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_round",
+                self.program.node_display(n.child)
+            ),
+            (round + 1).to_string(),
+        );
+        crate::trace::capture::set_trace_tag(
+            format!(
+                "refine.{}.selected_score",
+                self.program.node_display(n.child)
+            ),
+            score.to_string(),
+        );
+        Ok(out)
     }
 
     // -- leaves ---------------------------------------------------------------
@@ -1599,12 +1752,24 @@ impl Interpreter {
 
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
-        let (prefix, mut suffix) = render_prompt(def, &p.types, &instruction, &demos, &input, None);
+        let lm = self.p_model(&at, cx, n.model)?;
+        let format = output_format(&output_schema_options(&lm, def, &p.types));
+        let (prefix, mut suffix) = render_prompt(
+            def,
+            &p.types,
+            self.system_prompt(n.sig, &instruction, format),
+            &demos,
+            &input,
+            None,
+            format,
+        )
+        .map_err(|err| RunError::Input {
+            at: at.clone().into(),
+            message: format!("{err:#}"),
+        })?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let lm = self.p_model(&at, cx, n.model)?;
-
         let guard = begin_span(SpanRequest {
             component: &at,
             prefix: Some(&prefix),
@@ -1639,7 +1804,11 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: Vec::new(),
+                        tool_calls: span
+                            .completion_messages()
+                            .iter()
+                            .flat_map(|message| message.tool_calls().into_iter().cloned())
+                            .collect(),
                         tool_executions: Vec::new(),
                     });
                 }
@@ -1687,7 +1856,29 @@ impl Interpreter {
             });
         }
 
-        let response = match lm.call(Chat::new(messages), Vec::new()).await {
+        let options = output_schema_options(&lm, def, &p.types);
+        let structured = options.is_json();
+        let declarations =
+            ChatAdapter
+                .signature_tools(def, &input)
+                .map_err(|error| RunError::Input {
+                    at: at.clone().into(),
+                    message: error.to_string(),
+                })?;
+        let toolset = ToolSet::from_definitions(declarations);
+        let response = match lm
+            .call_with_toolset_and_options(
+                Chat::new(messages),
+                &toolset,
+                if toolset.is_empty() {
+                    ToolLoopMode::Auto
+                } else {
+                    ToolLoopMode::CallerManaged
+                },
+                options,
+            )
+            .await
+        {
             Ok(response) => response,
             Err(err) => {
                 if let Some(guard) = guard {
@@ -1704,7 +1895,7 @@ impl Interpreter {
                     source: LmError::Provider {
                         provider: lm.config.model.clone(),
                         message: err.to_string(),
-                        source: None,
+                        source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                     },
                 });
             }
@@ -1712,7 +1903,23 @@ impl Interpreter {
         cx.meter.record_usage(&response.usage);
 
         let raw = response.output.content();
-        match ChatAdapter.parse_output_def(def, &p.types, &response.output) {
+        let parsed = if let Some(output) = ChatAdapter
+            .signature_tool_output(def, &response.tool_calls)
+            .filter(|_| !response.tool_calls.is_empty())
+        {
+            ChatAdapter.parse_output_json_def(
+                def,
+                &p.types,
+                &Message::assistant(
+                    serde_json::to_string(&output).expect("serializable typed tool output"),
+                ),
+            )
+        } else if structured {
+            ChatAdapter.parse_output_json_def(def, &p.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(def, &p.types, &response.output)
+        };
+        match parsed {
             Ok((output, metas)) => {
                 if let Some(leaves) = cx.leaves.as_mut() {
                     leaves.push(LeafOutcome {
@@ -1723,8 +1930,8 @@ impl Interpreter {
                         model_config_hash: crate::trace::ModelEntry::from_config(&lm.config)
                             .config_hash,
                         span_id: guard.as_ref().map(|guard| guard.id()),
-                        tool_calls: Vec::new(),
-                        tool_executions: Vec::new(),
+                        tool_calls: response.tool_calls.clone(),
+                        tool_executions: response.tool_executions.clone(),
                     });
                 }
                 if let Some(guard) = guard {
@@ -1852,7 +2059,7 @@ impl Interpreter {
                     duration_us,
                     error: None,
                 };
-                match coerce_outputs(&at, def, &p.types, &value) {
+                match coerce_outputs(&at, def, &p.types, value, &raw) {
                     Ok(output) => {
                         if let Some(guard) = guard {
                             guard.finish(SpanOutcome {
@@ -1958,19 +2165,24 @@ impl Interpreter {
         let instruction = self.p_text(cx, n.instruction);
         let demos = self.p_demos(cx, n.demos);
         let policy = self.p_context(cx, n.context_policy);
+        let lm = self.p_model(&at, cx, n.model)?;
+        let format = output_format(&output_schema_options(&lm, def, &p.types));
         let (prefix, mut suffix) = render_prompt(
             def,
             &p.types,
-            &instruction,
+            self.system_prompt(n.sig, &instruction, format),
             &demos,
             &input,
             policy.playbook.as_deref(),
-        );
+            format,
+        )
+        .map_err(|err| RunError::Input {
+            at: at.clone().into(),
+            message: format!("{err:#}"),
+        })?;
         if let Some(feedback) = cx.feedback.take() {
             suffix.push(Message::user(feedback));
         }
-        let lm = self.p_model(&at, cx, n.model)?;
-
         let surface = self.build_agent_surface(&at, n, cx, true).await?;
 
         let meter = Arc::new(BudgetMeter::child(&cx.meter, node_budget(&n.budget)));
@@ -2156,7 +2368,9 @@ impl Interpreter {
             }
 
             chat = truncate_history(chat, lc.prefix_len, lc.policy);
-            let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at).await?;
+            let options = output_schema_options(lc.lm, lc.def, types);
+            let structured = options.is_json();
+            let response = lm_call_toolset(lc.lm, chat, lc.toolset, lc.at, options).await?;
             lc.meter.record_usage(&response.usage);
             run.usage = run.usage + response.usage;
             run.events.extend(response.events.clone());
@@ -2170,10 +2384,11 @@ impl Interpreter {
                     .find(|call| lc.stop_names.contains(&call.function.name))
                 {
                     let args = call.function.arguments.clone();
-                    let output = coerce_outputs(lc.at, lc.def, types, &args)?;
+                    let raw = args.to_string();
+                    let output = coerce_outputs(lc.at, lc.def, types, args, &raw)?;
                     return Ok(LoopOutcome::Done {
                         output,
-                        raw: args.to_string(),
+                        raw,
                         field_meta: IndexMap::new(),
                         chat,
                     });
@@ -2210,7 +2425,12 @@ impl Interpreter {
             // Text turn.
             if lc.n.stop.until_parse {
                 let raw = response.output.content();
-                match ChatAdapter.parse_output_def(lc.def, types, &response.output) {
+                let parsed = if structured {
+                    ChatAdapter.parse_output_json_def(lc.def, types, &response.output)
+                } else {
+                    ChatAdapter.parse_output_def(lc.def, types, &response.output)
+                };
+                match parsed {
                     Ok((output, metas)) => {
                         return Ok(LoopOutcome::Done {
                             output,
@@ -2223,7 +2443,7 @@ impl Interpreter {
                         chat.push_message(Message::user(format!(
                             "Your response could not be parsed: {err}. Respond again, \
                              producing every output field in the required \
-                             `[[ ## field ## ]]` format."
+                             required output format."
                         )));
                     }
                     Err(err) => {
@@ -2256,34 +2476,39 @@ impl Interpreter {
         lc.run_meter
             .try_reserve_call()
             .map_err(|_| RunError::Budget { at: lc.at.into() })?;
+        let options = output_schema_options(lc.lm, lc.def, &self.program.types);
+        let structured = options.is_json();
         chat.push_message(Message::user(
             "Budget exhausted — wrap up now. Produce the final output fields in the required \
-             `[[ ## field ## ]]` format, without calling any tools.",
+             required output format, without calling any tools.",
         ));
         let response = lc
             .lm
-            .call(chat, Vec::new())
+            .call_with_options(chat, Vec::new(), ToolLoopMode::Auto, options)
             .await
             .map_err(|err| RunError::Lm {
                 at: lc.at.into(),
                 source: LmError::Provider {
                     provider: lc.lm.config.model.clone(),
                     message: err.to_string(),
-                    source: None,
+                    source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
                 },
             })?;
         lc.run_meter.record_usage(&response.usage);
         run.usage = run.usage + response.usage;
         run.events.extend(response.events.clone());
         let raw = response.output.content();
-        let (output, metas) = ChatAdapter
-            .parse_output_def(lc.def, &self.program.types, &response.output)
-            .map_err(|err| RunError::Parse {
-                at: lc.at.into(),
-                raw: raw.clone(),
-                source: Some(Box::new(err)),
-                usage: run.usage,
-            })?;
+        let parsed = if structured {
+            ChatAdapter.parse_output_json_def(lc.def, &self.program.types, &response.output)
+        } else {
+            ChatAdapter.parse_output_def(lc.def, &self.program.types, &response.output)
+        };
+        let (output, metas) = parsed.map_err(|err| RunError::Parse {
+            at: lc.at.into(),
+            raw: raw.clone(),
+            source: Some(Box::new(err)),
+            usage: run.usage,
+        })?;
         Ok(LoopOutcome::Done {
             output,
             raw,
@@ -2786,15 +3011,16 @@ async fn lm_call_toolset(
     chat: Chat,
     toolset: &ToolSet,
     at: &str,
+    options: LMCallOptions,
 ) -> Result<crate::core::lm::LMResponse, RunError> {
-    lm.call_with_toolset(chat, toolset, ToolLoopMode::CallerManaged)
+    lm.call_with_toolset_and_options(chat, toolset, ToolLoopMode::CallerManaged, options)
         .await
         .map_err(|err| RunError::Lm {
             at: at.into(),
             source: LmError::Provider {
                 provider: lm.config.model.clone(),
                 message: err.to_string(),
-                source: None,
+                source: Some(err.reallocate_into_boxed_dyn_error_without_backtrace()),
             },
         })
 }
@@ -2806,16 +3032,34 @@ async fn lm_call_toolset(
 /// Renders the (prefix, suffix) message split for a leaf call: prefix =
 /// system + demo turns, suffix = the live user turn. Instruction and demos
 /// arrive overlay-resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputFormat {
+    Delimited,
+    JsonSchema,
+    JsonMode,
+}
+
+fn output_format(options: &LMCallOptions) -> OutputFormat {
+    if options.output_schema.is_some() {
+        OutputFormat::JsonSchema
+    } else if options.json_mode {
+        OutputFormat::JsonMode
+    } else {
+        OutputFormat::Delimited
+    }
+}
+
 fn render_prompt(
     def: &SignatureDef,
     types: &TypeTable,
-    instruction: &str,
+    mut system: String,
     demos: &[DemoRow],
     input: &JsonMap,
     playbook: Option<&str>,
-) -> (Vec<Message>, Vec<Message>) {
+    format: OutputFormat,
+) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     let adapter = ChatAdapter;
-    let mut system = adapter.build_system_def(def, types, Some(instruction));
+    let structured = format != OutputFormat::Delimited;
     if let Some(playbook) = playbook {
         system.push_str("\n\n");
         system.push_str(playbook);
@@ -2823,13 +3067,47 @@ fn render_prompt(
     let mut prefix = Vec::with_capacity(1 + demos.len() * 2);
     prefix.push(Message::system(system));
     for row in demos {
-        prefix.push(Message::user(adapter.format_input_def(def, &row.input)));
-        prefix.push(Message::assistant(
-            adapter.format_output_def(def, &row.output),
-        ));
+        prefix.push(Message::user(if structured {
+            adapter.try_format_input_json_def(def, &row.input)?
+        } else {
+            adapter.try_format_input_def(def, &row.input)?
+        }));
+        prefix.push(Message::assistant(if structured {
+            adapter.format_output_json_def(def, types, &row.output)
+        } else {
+            adapter.format_output_def(def, &row.output)
+        }));
     }
-    let suffix = vec![Message::user(adapter.format_input_def(def, input))];
-    (prefix, suffix)
+    let mut suffix = adapter.signature_history(def, input)?;
+    suffix.push(Message::user(if structured {
+        adapter.try_format_input_json_def(def, input)?
+    } else {
+        adapter.try_format_input_def(def, input)?
+    }));
+    Ok((prefix, suffix))
+}
+
+fn output_schema_options(lm: &LM, def: &SignatureDef, types: &TypeTable) -> LMCallOptions {
+    if def
+        .outputs
+        .iter()
+        .any(|field| field.special_kind() == Some(crate::SpecialField::ToolCalls))
+    {
+        return LMCallOptions::default();
+    }
+    if lm.supports_output_schema() && json_schema_compatible(def, types) {
+        LMCallOptions {
+            output_schema: Some(json_schema_for_outputs(def, types)),
+            ..LMCallOptions::default()
+        }
+    } else if lm.supports_json_mode() {
+        LMCallOptions {
+            json_mode: true,
+            ..LMCallOptions::default()
+        }
+    } else {
+        LMCallOptions::default()
+    }
 }
 
 fn span_error(
@@ -2854,21 +3132,26 @@ fn coerce_outputs(
     at: &str,
     def: &SignatureDef,
     types: &TypeTable,
-    value: &Value,
+    value: Value,
+    raw: &str,
 ) -> Result<JsonMap, RunError> {
-    let Some(object) = value.as_object() else {
+    let Value::Object(mut object) = value else {
         return Err(RunError::Parse {
             at: at.into(),
-            raw: value.to_string(),
+            raw: raw.to_string(),
             source: None,
             usage: LmUsage::default(),
         });
     };
     let mut output = JsonMap::new();
     for field in def.outputs.iter() {
-        match object.get(&*field.name) {
-            Some(v) if json_matches_type(v, &field.ty, types) => {
-                output.insert(field.name.to_string(), v.clone());
+        match object.remove(&*field.name) {
+            Some(v)
+                if json_matches_type(&v, &field.ty, types)
+                    && crate::typesys::coerce::validate_json_constraints(&v, &field.ty, types)
+                        .is_ok() =>
+            {
+                output.insert(field.name.to_string(), v);
             }
             None if field.ty.is_optional() => {
                 output.insert(field.name.to_string(), Value::Null);
@@ -2876,7 +3159,7 @@ fn coerce_outputs(
             _ => {
                 return Err(RunError::Parse {
                     at: at.into(),
-                    raw: value.to_string(),
+                    raw: raw.to_string(),
                     source: None,
                     usage: LmUsage::default(),
                 });
@@ -2884,6 +3167,51 @@ fn coerce_outputs(
         }
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod output_constraint_tests {
+    use super::*;
+    use crate::typesys::{ClassDef, Constraint, ConstraintKind, FieldDef as TypeFieldDef};
+
+    #[test]
+    fn structured_stop_output_enforces_nested_assert() {
+        let mut types = TypeTable::default();
+        types.classes.insert(
+            "Score".into(),
+            ClassDef {
+                internal_name: "Score".into(),
+                rendered_name: "Score".into(),
+                docs: None,
+                fields: vec![TypeFieldDef {
+                    name: "value".into(),
+                    rendered_name: "value".into(),
+                    field_type: crate::typesys::FieldType::Int,
+                    docs: None,
+                    constraints: vec![Constraint {
+                        level: ConstraintKind::Assert,
+                        label: Some("positive".into()),
+                        expression: "this > 0".into(),
+                    }],
+                }],
+                constraints: Vec::new(),
+            },
+        );
+        let def = SignatureDef::build("Result")
+            .input("question", crate::typesys::FieldType::String)
+            .output("score", crate::typesys::FieldType::Class("Score".into()))
+            .finish()
+            .unwrap();
+        let invalid = serde_json::json!({"score":{"value":0}});
+        let raw = invalid.to_string();
+        assert!(matches!(
+            coerce_outputs("stop", &def, &types, invalid, &raw),
+            Err(RunError::Parse { .. })
+        ));
+        let valid = serde_json::json!({"score":{"value":1}});
+        let raw = valid.to_string();
+        assert!(coerce_outputs("stop", &def, &types, valid, &raw).is_ok());
+    }
 }
 
 /// Projects a tool/hole signature's *input* side to a JSON Schema object —

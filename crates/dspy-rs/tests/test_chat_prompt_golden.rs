@@ -66,7 +66,7 @@ fn golden_user_prompt_is_stable() {
     let input = GoldenSigInput {
         question: "What is 2+2?".to_string(),
     };
-    let user = adapter.format_input_def(SignatureDef::of::<GoldenSig>(), &json_map(&input));
+    let user = adapter.try_format_input_def(SignatureDef::of::<GoldenSig>(), &json_map(&input)).unwrap();
 
     let expected = concat!(
         "[[ ## question ## ]]\n",
@@ -108,7 +108,7 @@ fn golden_demo_messages_are_stable() {
     );
 
     let def = SignatureDef::of::<GoldenSig>();
-    let user = adapter.format_input_def(def, &json_map(&demo.input));
+    let user = adapter.try_format_input_def(def, &json_map(&demo.input)).unwrap();
     let assistant = adapter.format_output_def(def, &json_map(&demo.output));
 
     let expected_user = concat!(

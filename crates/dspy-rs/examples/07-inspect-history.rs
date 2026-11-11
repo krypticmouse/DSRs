@@ -10,6 +10,7 @@ cargo run --example 07-inspect-history
 use anyhow::Result;
 use dspy_rs::{LM, Predict, Signature, configure, get_lm, init_tracing};
 
+/// Answer the question accurately and concisely.
 #[derive(Signature, Clone, Debug)]
 struct QA {
     #[input]
@@ -25,6 +26,7 @@ async fn main() -> Result<()> {
 
     let lm = LM::builder()
         .model("openai:gpt-4o-mini".to_string())
+        .cache(true)
         .build()
         .await?;
     configure(lm);

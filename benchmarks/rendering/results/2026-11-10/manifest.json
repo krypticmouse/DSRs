@@ -1,0 +1,26 @@
+{
+  "baseline_revision": "8d7c9cf214990d93bfe639db64834c271639743b",
+  "candidate_revision": "0f24d2d29d4fa10a18394408fdf2acc4605b1fe4",
+  "utc": "2026-11-10T10:10:04Z",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "python": "3.14.6 (tags/v3.14.6:c63aec6, Jun 10 2026, 10:26:10) [MSC v.1944 64 bit (AMD64)]",
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-pc-windows-msvc\nrelease: 1.98.1\nLLVM version: 22.1.8\n",
+  "binaries": {
+    "baseline": "10afb4d12d6967fcf3af646973c826fdf55c87d5e647c5482c9db39dfbf0245c",
+    "candidate": "ffce5a460d117dcd2e8fe6d65d06cefed1cd7a5f6f9f0393da1df73b2e4d8a87"
+  },
+  "harness_sha256_git_blob": "f17c2529ce635687a63af8718a73a7b4b151dcd92b89b661d2305408095ccc53",
+  "lock_sha256": "de0528ee4fbc25352dbaff00ec0df2beeb6f1a68fd35fd4bb19aca0e08aadb3e",
+  "protocol": {
+    "iterations": 2000,
+    "warmup": 100,
+    "samples_per_binary": 8,
+    "order": "ABBA repeated four times",
+    "allocation_iterations": 200,
+    "acceptance": {
+      "default_max_latency_ratio": 1.1,
+      "jinja_8_16_max_latency_ratio": 0.9,
+      "jinja_8_16_max_allocated_byte_ratio": 0.5
+    }
+  }
+}

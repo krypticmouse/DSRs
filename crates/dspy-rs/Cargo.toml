@@ -19,6 +19,7 @@ indexmap = { version = "2.10.0", features = ["serde"] }
 rayon = "1.10.0"
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = "1.0.4"
 tokio = { workspace = true, features = ["full"] }
 async-trait = { workspace = true }
 anyhow = { workspace = true }
@@ -44,7 +45,7 @@ rig-core = { workspace = true }
 enum_dispatch = "0.3.13"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
-minijinja = { workspace = true, features = ["builtins", "serde", "debug"] }
+minijinja = { workspace = true, features = ["builtins", "serde", "debug", "fuel", "unstable_machinery"] }
 # IR graph core (RFC 0002 §2): entity arenas + the sandboxed hole executor.
 # Unconditional since phase 2β: Predict runs through the IR Interpreter, so
 # the graph core (and Code Mode via dsrs-tools) is load-bearing, not optional.
@@ -60,6 +61,18 @@ default = ["data"]
 # loading is always available. Build with --no-default-features for a
 # meaningfully lighter dependency tree.
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
+
+[[example]]
+name = "03-evaluate-hotpotqa"
+required-features = ["data"]
+
+[[example]]
+name = "04-optimize-hotpotqa"
+required-features = ["data"]
+
+[[example]]
+name = "08-optimize-mipro"
+required-features = ["data"]
 
 [dev-dependencies]
 rstest = "0.25.0"

@@ -151,7 +151,7 @@ fn user_builder_appends_requirements() {
         context: "Facts: Paris is the capital city of France.".to_string(),
     };
 
-    let user = adapter.format_input_def(SignatureDef::of::<PromptPartsSig>(), &json_map(&input));
+    let user = adapter.try_format_input_def(SignatureDef::of::<PromptPartsSig>(), &json_map(&input)).unwrap();
 
     assert!(user.contains("[[ ## question ## ]]"));
     assert!(user.contains("What is the capital of France?"));
@@ -187,7 +187,7 @@ fn demo_format_composes_user_and_assistant_parts() {
     );
 
     let def = SignatureDef::of::<PromptPartsSig>();
-    let user_msg = adapter.format_input_def(def, &json_map(&demo.input));
+    let user_msg = adapter.try_format_input_def(def, &json_map(&demo.input)).unwrap();
     let assistant_msg = adapter.format_output_def(def, &json_map(&demo.output));
 
     assert!(user_msg.contains("[[ ## question ## ]]"));

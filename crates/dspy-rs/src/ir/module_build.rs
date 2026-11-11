@@ -419,9 +419,8 @@ pub fn unbound_model_config(name: &str) -> LMConfig {
     }
 }
 
-/// The globally-configured LM ([`configure`](crate::configure)), used by
+/// The active call, scoped, or globally-configured LM, used by
 /// generated module code to bind the `default` model ref at load.
 pub fn default_lm() -> Option<std::sync::Arc<crate::LM>> {
-    let guard = crate::core::settings::GLOBAL_SETTINGS.read().ok()?;
-    guard.as_ref().map(|settings| std::sync::Arc::clone(&settings.lm))
+    crate::try_get_lm()
 }
