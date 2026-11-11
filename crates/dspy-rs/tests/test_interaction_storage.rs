@@ -209,7 +209,16 @@ async fn persistence_failure_is_returned_to_the_caller() {
         lm.call(Chat::new(vec![Message::user("?")]), vec![]),
     )
     .await;
-    assert!(result.unwrap_err().to_string().contains("disk full"));
+    let error = result.unwrap_err();
+    assert!(error.to_string().contains("disk full"));
+    let cause = std::error::Error::source(&error).unwrap();
+    assert!(
+        cause
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .is_some()
+    );
 }
 
 struct Pending;

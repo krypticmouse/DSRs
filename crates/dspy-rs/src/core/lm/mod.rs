@@ -572,21 +572,53 @@ fn format_prompt_tools(request: &mut CompletionRequest) -> Result<()> {
         request.output_schema = None;
         request.additional_params = None;
     }
-    request.chat_history = rig::OneOrMany::many(request.chat_history.clone().into_iter().map(|message| match message {
-        rig::message::Message::Assistant { id, content } => rig::message::Message::Assistant { id, content: rig::OneOrMany::many(content.into_iter().map(|item| match item {
-            AssistantContent::ToolCall(call) => AssistantContent::text(serde_json::json!({"tool_calls":[{"id":call.id,"name":call.function.name,"arguments":call.function.arguments}]}).to_string()),
-            other => other,
-        })).expect("nonempty assistant content") },
-        rig::message::Message::User { content } => rig::message::Message::User { content: rig::OneOrMany::many(content.into_iter().map(|item| match item {
-            rig::message::UserContent::ToolResult(result) => rig::message::UserContent::text(format!("Tool result: {}", serde_json::to_string(&result).expect("serializable tool result"))),
-            other => other,
-        })).expect("nonempty user content") },
-    })).expect("nonempty chat history");
+    request.chat_history = rig::OneOrMany::many(
+        request
+            .chat_history
+            .iter()
+            .cloned()
+            .map(prompt_tool_message),
+    )
+    .expect("nonempty chat history");
     Ok(())
 }
 
-fn decode_prompt_tools(response: &mut CompletionResponse<()>) -> Result<()> {
+fn prompt_tool_message(message: rig::message::Message) -> rig::message::Message {
+    match message {
+        rig::message::Message::Assistant { id, content } => {
+            let has_calls = content
+                .iter()
+                .any(|c| matches!(c, AssistantContent::ToolCall(_)));
+            let content = content.into_iter().filter_map(|item| match item {
+                AssistantContent::Text(ref text) if has_calls && serde_json::from_str::<serde_json::Value>(&text.text).ok().is_some_and(|v| v.get("tool_calls").is_some()) => None,
+                AssistantContent::ToolCall(call) => Some(AssistantContent::text(serde_json::json!({"tool_calls":[{"id":call.id,"name":call.function.name,"arguments":call.function.arguments}]}).to_string())),
+                other => Some(other),
+            });
+            rig::message::Message::Assistant {
+                id,
+                content: rig::OneOrMany::many(content).expect("nonempty assistant content"),
+            }
+        }
+        rig::message::Message::User { content } => {
+            let content = content.into_iter().map(|item| match item {
+                rig::message::UserContent::ToolResult(result) => {
+                    rig::message::UserContent::text(format!(
+                        "Tool result: {}",
+                        serde_json::to_string(&result).expect("serializable tool result")
+                    ))
+                }
+                other => other,
+            });
+            rig::message::Message::User {
+                content: rig::OneOrMany::many(content).expect("nonempty user content"),
+            }
+        }
+    }
+}
+
+fn decode_prompt_tools(response: &mut CompletionResponse<()>, required: bool) -> Result<()> {
     let mut choice = Vec::new();
+    let mut ids = std::collections::HashSet::new();
     for item in response.choice.iter() {
         choice.push(item.clone());
         let AssistantContent::Text(text) = item else {
@@ -601,14 +633,13 @@ fn decode_prompt_tools(response: &mut CompletionResponse<()>) -> Result<()> {
         let calls = calls
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("tool_calls must be an array"))?;
-        let mut ids = std::collections::HashSet::new();
         for call in calls {
             let id = call
                 .get("id")
                 .and_then(serde_json::Value::as_str)
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("tool call needs an id"))?;
-            anyhow::ensure!(ids.insert(id), "duplicate tool call id");
+            anyhow::ensure!(ids.insert(id.to_string()), "duplicate tool call id");
             let name = call
                 .get("name")
                 .and_then(serde_json::Value::as_str)
@@ -621,6 +652,13 @@ fn decode_prompt_tools(response: &mut CompletionResponse<()>) -> Result<()> {
             choice.push(AssistantContent::tool_call(id, name, arguments.clone()));
         }
     }
+    anyhow::ensure!(
+        !required
+            || choice
+                .iter()
+                .any(|c| matches!(c, AssistantContent::ToolCall(_))),
+        "a tool call was required"
+    );
     response.choice = rig::OneOrMany::many(choice).expect("provider choice is nonempty");
     Ok(())
 }
@@ -785,13 +823,14 @@ impl LM {
         loop {
             let mut request = build_request();
             let prompt_tools = !self.config.native_tools && !request.tools.is_empty();
+            let tool_required = matches!(&request.tool_choice, Some(ToolChoice::Required));
             if !self.config.native_tools {
                 format_prompt_tools(&mut request)?;
             }
             match client.completion(request).await {
                 Ok(mut response) => {
                     if prompt_tools {
-                        decode_prompt_tools(&mut response)?;
+                        decode_prompt_tools(&mut response, tool_required)?;
                     }
                     debug!(target: "dsrs::content", choice = ?response.choice, "provider response");
                     return Ok(response);
@@ -1388,6 +1427,22 @@ impl LM {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_tools_enforce_required_calls_and_unique_ids_across_blocks() {
+        let mut response = CompletionResponse {
+            choice: rig::OneOrMany::one(AssistantContent::text("done")),
+            usage: rig::completion::Usage::new(),
+            raw_response: (),
+            message_id: None,
+        };
+        assert!(decode_prompt_tools(&mut response, true).is_err());
+        let text = AssistantContent::text(
+            r#"{"tool_calls":[{"id":"same","name":"echo","arguments":{}}]}"#,
+        );
+        response.choice = rig::OneOrMany::many([text.clone(), text]).unwrap();
+        assert!(decode_prompt_tools(&mut response, false).is_err());
+    }
     use rig::OneOrMany;
     use rig::completion::AssistantContent;
     use rig::completion::ToolDefinition;
@@ -1864,6 +1919,7 @@ mod tests {
         LM {
             history: crate::HistoryBuffer::default(),
             config: LMConfig {
+                native_tools: true,
                 base_url: None,
                 api_key: None,
                 model: "openai:gpt-4o-mini".to_string(),
