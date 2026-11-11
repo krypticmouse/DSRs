@@ -1,9 +1,6 @@
 //! Validated DAG fusion/splitting and a feedback/measurement-gated compiler.
 use super::edit::{ApplyError, for_each_port};
-use super::{
-    Binding, Edit, Node, NodeId, ParamOwner, ParamSlot, ParamValue, PortRef, PredictNode, Program,
-    SeqNode,
-};
+use super::{Edit, Node, NodeId, ParamOwner, ParamSlot, ParamValue, PortRef, PredictNode, Program};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::future::Future;
@@ -80,7 +77,7 @@ pub fn can_split(p: &Program, leaf: NodeId) -> bool {
     p.sigs[n.sig].outputs.len() > 1
         && no_demos(p, n)
         && !tool_fields(&p.sigs[n.sig])
-        && (leaf == p.root || parent_seq(p, leaf).is_some())
+        && parent_seq(p, leaf).is_some()
 }
 
 fn sig_name(p: &Program, stem: &str) -> Box<str> {
@@ -168,7 +165,7 @@ pub(crate) fn split(
 ) -> Result<(), ApplyError> {
     if !can_split(p, leaf) {
         return Err(reject(
-            "split requires a multi-output prediction without demos at root or in a sequence",
+            "split requires a multi-output prediction without demos in a sequence",
         ));
     }
     if !name
@@ -246,38 +243,13 @@ pub(crate) fn split(
             }
         });
     }
-    if leaf == p.root {
-        let out = signature
-            .outputs
-            .iter()
-            .map(|f| {
-                let field = p.syms.intern(&f.name);
-                Binding {
-                    dst: field,
-                    src: PortRef::Out {
-                        node: if selected.contains(&*f.name) {
-                            right
-                        } else {
-                            leaf
-                        },
-                        field,
-                    },
-                }
-            })
-            .collect();
-        p.root = p.nodes.push(Node::Seq(SeqNode {
-            body: vec![leaf, right].into_boxed_slice(),
-            out,
-        }));
-    } else {
-        let parent = parent_seq(p, leaf).expect("split checked parent");
-        let Node::Seq(seq) = &mut p.nodes[parent] else {
-            unreachable!()
-        };
-        let mut body = seq.body.to_vec();
-        body.insert(body.iter().position(|id| *id == leaf).unwrap() + 1, right);
-        seq.body = body.into_boxed_slice();
-    }
+    let parent = parent_seq(p, leaf).expect("split checked parent");
+    let Node::Seq(seq) = &mut p.nodes[parent] else {
+        unreachable!()
+    };
+    let mut body = seq.body.to_vec();
+    body.insert(body.iter().position(|id| *id == leaf).unwrap() + 1, right);
+    seq.body = body.into_boxed_slice();
     Ok(())
 }
 

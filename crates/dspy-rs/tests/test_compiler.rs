@@ -273,7 +273,7 @@ fn transformations_are_available_to_feedback_driven_selection() {
 }
 
 #[test]
-fn splitting_a_root_prediction_preserves_its_public_interface() {
+fn splitting_a_single_prediction_program_preserves_its_public_interface() {
     let mut b = ProgramBuilder::new("root_split");
     b.model("m", LMConfig::default());
     let sig = b.sig(
@@ -287,12 +287,14 @@ fn splitting_a_root_prediction_preserves_its_public_interface() {
     let p = b
         .main(
             sig,
-            ir::predict("pair", sig).bind("question", ir::input("question")),
+            ir::seq([ir::predict("pair", sig).bind("question", ir::input("question"))])
+                .out("a", ir::out("pair", "a"))
+                .out("b", ir::out("pair", "b")),
         )
         .unwrap();
     let result = p
         .edited(&[Edit::Split {
-            leaf: p.root,
+            leaf: p.leaf_id("pair").unwrap(),
             outputs: vec!["b".into()],
             name: "second".into(),
         }])
@@ -302,7 +304,7 @@ fn splitting_a_root_prediction_preserves_its_public_interface() {
     round_trip(&result);
     assert!(
         p.edited(&[Edit::Split {
-            leaf: p.root,
+            leaf: p.leaf_id("pair").unwrap(),
             outputs: vec!["b".into()],
             name: "invalid name".into()
         }])

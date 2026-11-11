@@ -45,8 +45,8 @@ different model selections and demonstrated predictions are excluded.
 prediction's output fields into a new independent prediction, preserving input
 bindings and model/instruction settings. It partitions schemas/constraints,
 allocates distinct parameter slots, and rewires all consumers. It supports
-sequence steps and root predictions; splitting a root creates a sequence with
-the original exported interface. Demonstrations are excluded. The new leaf name
+sequence steps, including a program containing a single prediction (the IR
+requires a sequence root). Demonstrations are excluded. The new leaf name
 must be an unused identifier.
 
 Both operations are serializable graph-edit data and run through the same
