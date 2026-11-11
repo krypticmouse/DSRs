@@ -16,8 +16,12 @@ pub enum StorageError {
     Json(#[from] serde_json::Error),
     #[error("unsupported interaction journal version {0}")]
     Version(u32),
-    #[error("interaction persistence failed: {0}")]
-    Session(String),
+    #[error("interaction persistence failed: {source} ({additional} additional failures)")]
+    Session {
+        #[source]
+        source: Box<StorageError>,
+        additional: usize,
+    },
 }
 
 /// Parsing upserts the same invocation ID rather than creating another call.
@@ -168,7 +172,7 @@ impl InteractionStore for JsonlInteractionStore {
 #[derive(Debug)]
 pub(crate) struct StoreSession {
     store: Arc<dyn InteractionStore>,
-    errors: Mutex<Vec<String>>,
+    errors: Mutex<Vec<StorageError>>,
 }
 impl StoreSession {
     fn persist_trace(&self, trace: &crate::Trace) {
@@ -177,7 +181,7 @@ impl StoreSession {
             self.errors
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .push(error.to_string());
+                .push(error);
         }
     }
     pub(crate) fn persist(&self, entry: &HistoryEntry) {
@@ -186,7 +190,7 @@ impl StoreSession {
             self.errors
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .push(error.to_string());
+                .push(error);
         }
     }
 }
@@ -216,10 +220,14 @@ pub async fn with_interaction_store<T>(
     let mut stores = current_stores();
     stores.push(session.clone());
     let output = STORES.scope(stores, future).await;
-    let errors = session.errors.lock().unwrap_or_else(|p| p.into_inner());
+    let mut errors = session.errors.lock().unwrap_or_else(|p| p.into_inner());
     if errors.is_empty() {
         Ok(output)
     } else {
-        Err(StorageError::Session(errors.join("; ")))
+        let additional = errors.len() - 1;
+        Err(StorageError::Session {
+            source: Box::new(errors.remove(0)),
+            additional,
+        })
     }
 }
