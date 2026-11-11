@@ -1,3 +1,6 @@
+// These tests exercise native file locks and durable filesystem I/O.
+#![cfg(not(miri))]
+
 use dspy_rs::{
     Chat, InteractionStore, JsonlInteractionStore, LM, LMClient, Message, Module, Predict,
     Signature, TestCompletionModel, with_interaction_store,
@@ -150,6 +153,24 @@ async fn independent_handles_do_not_lose_concurrent_updates() {
     let records = a.recent(10).unwrap();
     assert_eq!(records.len(), 2);
     assert_ne!(records[0].id, records[1].id);
+    let barrier = Arc::new(std::sync::Barrier::new(7));
+    let writers = (0..6)
+        .map(|_| JsonlInteractionStore::open(&path))
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    std::thread::scope(|scope| {
+        for (index, writer) in writers.into_iter().enumerate() {
+            let mut entry = records[0].clone();
+            entry.id = format!("{}-writer-{index}", entry.id);
+            let barrier = barrier.clone();
+            scope.spawn(move || {
+                barrier.wait();
+                writer.upsert(&entry).unwrap();
+            });
+        }
+        barrier.wait();
+    });
+    assert_eq!(a.recent(20).unwrap().len(), 8);
 }
 
 #[derive(Debug)]

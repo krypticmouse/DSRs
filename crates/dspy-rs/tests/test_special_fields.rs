@@ -26,6 +26,19 @@ struct Conversation {
     answer: String,
 }
 
+#[derive(Signature, Clone, Debug)]
+/// Answer with optional conversation context.
+struct OptionalContext {
+    #[input]
+    history: Option<History>,
+    #[input]
+    tools: Option<Vec<Tool>>,
+    #[input]
+    question: String,
+    #[output]
+    answer: String,
+}
+
 fn tools() -> Vec<Tool> {
     vec![Tool {
         name: "lookup".into(),
@@ -67,6 +80,87 @@ fn fields_are_recognized_through_typed_schema() {
         Conversation::schema().input_fields()[0].special_kind(),
         Some(SpecialField::History)
     );
+}
+
+#[test]
+fn ordinary_history_lists_are_not_special_conversation_fields() {
+    let field = dspy_rs::ir::FieldDef::new(
+        "past",
+        dspy_rs::FieldType::List(Box::new(<History as dspy_rs::typesys::Schema>::field_type())),
+    );
+    assert_eq!(field.special_kind(), None);
+}
+
+#[tokio::test]
+async fn absent_optional_context_does_not_require_history_or_tools() {
+    let provider = TestCompletionModel::new([AssistantContent::text(
+        "[[ ## answer ## ]]\nParis\n[[ ## completed ## ]]",
+    )]);
+    let predict = Predict::<OptionalContext>::builder()
+        .lm(model(provider.clone(), true).await)
+        .build();
+    let result = predict
+        .call(OptionalContextInput {
+            history: None,
+            tools: None,
+            question: "France?".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.answer, "Paris");
+    let request = provider.last_request().unwrap();
+    assert_eq!(request.chat_history.len(), 1);
+    assert!(request.tools.is_empty());
+}
+
+#[tokio::test]
+async fn empty_declarations_can_return_no_tool_calls() {
+    let provider = TestCompletionModel::new([AssistantContent::text(
+        "[[ ## calls ## ]]\n{\"calls\":[]}\n[[ ## completed ## ]]",
+    )]);
+    let predict = Predict::<Choose>::builder()
+        .lm(model(provider.clone(), true).await)
+        .build();
+    let result = predict
+        .call(ChooseInput {
+            question: "No tool is needed".into(),
+            tools: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(result.calls.calls.is_empty());
+    assert!(provider.last_request().unwrap().tools.is_empty());
+}
+
+#[tokio::test]
+async fn requested_tools_survive_metadata_and_strict_replay() {
+    let provider = TestCompletionModel::new([AssistantContent::tool_call(
+        "id",
+        "lookup",
+        serde_json::json!({"query":"France"}),
+    )]);
+    let predict = Predict::<Choose>::builder()
+        .named("choose")
+        .lm(model(provider.clone(), true).await)
+        .build();
+    let input = || ChooseInput {
+        question: "France?".into(),
+        tools: tools(),
+    };
+    let (result, trace) = dspy_rs::capture(|| predict.call(input())).await;
+    assert_eq!(
+        result.unwrap().metadata().tool_calls[0].function.name,
+        "lookup"
+    );
+    let (result, _) = dspy_rs::replay(&trace, dspy_rs::ReplayMode::Strict, || {
+        predict.call(input())
+    })
+    .await;
+    assert_eq!(
+        result.unwrap().metadata().tool_calls[0].function.name,
+        "lookup"
+    );
+    assert_eq!(provider.call_count(), 1);
 }
 
 #[rstest::rstest]
@@ -316,4 +410,35 @@ async fn history_rejects_system_role_injection() {
             .is_err()
     );
     assert_eq!(provider.call_count(), 0);
+}
+
+#[rstest::rstest]
+#[case(true)]
+#[case(false)]
+#[tokio::test]
+#[ignore = "requires a running Ollama model; run explicitly"]
+async fn live_typed_tool_fields(#[case] native: bool) {
+    let lm = LM::builder()
+        .base_url(
+            std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:11434/v1".into()),
+        )
+        .model(std::env::var("DSRS_LIVE_MODEL").unwrap_or_else(|_| "llama3.2:3b".into()))
+        .cache(false)
+        .temperature(0.0)
+        .max_tokens(128)
+        .max_retries(0)
+        .build()
+        .await
+        .unwrap()
+        .with_native_tools(native);
+    let predict = Predict::<Choose>::builder().lm(lm).build();
+    let result = predict.call(ChooseInput {
+        question: "Use the lookup tool to look up France. Set query to exactly France. Request one tool call.".into(),
+        tools: tools(),
+    }).await.unwrap();
+    assert_eq!(result.calls.calls.len(), 1);
+    assert_eq!(result.calls.calls[0].name, "lookup");
+    let arguments: serde_json::Value =
+        serde_json::from_str(&result.calls.calls[0].arguments).unwrap();
+    assert_eq!(arguments["query"], "France");
 }

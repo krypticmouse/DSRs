@@ -590,8 +590,23 @@ fn prompt_tool_message(message: rig::message::Message) -> rig::message::Message 
                 .iter()
                 .any(|c| matches!(c, AssistantContent::ToolCall(_)));
             let content = content.into_iter().filter_map(|item| match item {
-                AssistantContent::Text(ref text) if has_calls && serde_json::from_str::<serde_json::Value>(&text.text).ok().is_some_and(|v| v.get("tool_calls").is_some()) => None,
-                AssistantContent::ToolCall(call) => Some(AssistantContent::text(serde_json::json!({"tool_calls":[{"id":call.id,"name":call.function.name,"arguments":call.function.arguments}]}).to_string())),
+                AssistantContent::Text(text) => {
+                    if has_calls
+                        && prompt_tool_value(&text.text)
+                            .is_some_and(|v| v.get("tool_calls").is_some())
+                    {
+                        None
+                    } else {
+                        Some(AssistantContent::Text(text))
+                    }
+                }
+                AssistantContent::ToolCall(call) => {
+                    let value = serde_json::json!({"tool_calls":[{
+                        "id":call.id, "name":call.function.name,
+                        "arguments":call.function.arguments
+                    }]});
+                    Some(AssistantContent::text(value.to_string()))
+                }
                 other => Some(other),
             });
             rig::message::Message::Assistant {
@@ -616,6 +631,45 @@ fn prompt_tool_message(message: rig::message::Message) -> rig::message::Message 
     }
 }
 
+/// Accept field/code-fence wrappers and trailing commas. Quoted arguments are
+/// preserved byte-for-byte; invalid argument types are still rejected.
+fn prompt_tool_value(text: &str) -> Option<serde_json::Value> {
+    if let Ok(value) = serde_json::from_str(text) {
+        return Some(value);
+    }
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let bytes = text.get(start..=end)?.as_bytes();
+    let mut repaired = Vec::with_capacity(bytes.len());
+    let (mut quoted, mut escaped) = (false, false);
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if escaped {
+            escaped = false;
+            repaired.push(byte);
+            continue;
+        }
+        if quoted && byte == b'\\' {
+            escaped = true;
+            repaired.push(byte);
+            continue;
+        }
+        if byte == b'"' {
+            quoted = !quoted;
+        }
+        if !quoted
+            && byte == b','
+            && bytes[index + 1..]
+                .iter()
+                .find(|b| !b.is_ascii_whitespace())
+                .is_some_and(|b| *b == b'}' || *b == b']')
+        {
+            continue;
+        }
+        repaired.push(byte);
+    }
+    serde_json::from_slice(&repaired).ok()
+}
+
 fn decode_prompt_tools(response: &mut CompletionResponse<()>, required: bool) -> Result<()> {
     let mut choice = Vec::new();
     let mut ids = std::collections::HashSet::new();
@@ -624,7 +678,7 @@ fn decode_prompt_tools(response: &mut CompletionResponse<()>, required: bool) ->
         let AssistantContent::Text(text) = item else {
             continue;
         };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text.text) else {
+        let Some(value) = prompt_tool_value(&text.text) else {
             continue;
         };
         let Some(calls) = value.get("tool_calls") else {
@@ -1442,6 +1496,12 @@ mod tests {
         );
         response.choice = rig::OneOrMany::many([text.clone(), text]).unwrap();
         assert!(decode_prompt_tools(&mut response, false).is_err());
+    }
+
+    #[test]
+    fn prompt_envelopes_allow_wrappers_without_modifying_argument_strings() {
+        let value = prompt_tool_value("[[ ## calls ## ]]\n{\"tool_calls\":[{\"id\":\"id\",\"name\":\"echo\",\"arguments\":{\"text\":\",}\",},},],}\n[[ ## completed ## ]]").unwrap();
+        assert_eq!(value["tool_calls"][0]["arguments"]["text"], ",}");
     }
     use rig::OneOrMany;
     use rig::completion::AssistantContent;
