@@ -426,6 +426,13 @@ With `ToolSet::code_mode`, instead of emitting one JSON tool call per step, the 
 
 ## See also
 
+Persistent interaction storage is available through `JsonlInteractionStore` and
+`with_interaction_store(store, future)`. It records calls independently of cache
+and bounded history, including failures, cache hits, cancellations and parsed
+results. Typed predictions expose `metadata().call_ids` for subsequent lookup.
+See the repository's `docs/interaction-storage.md` for the scope/error contract,
+reopening and recovery behavior, and an example.
+
 - [Predict](/docs/components/predict)
 - [Code Mode](/docs/components/code-mode)
 - [Utils](/docs/components/utils)

@@ -93,6 +93,9 @@ pub struct FieldSchema {
 }
 
 impl FieldSchema {
+    pub fn special_kind(&self) -> Option<super::specials::SpecialField> {
+        super::specials::special_field(&self.type_ir)
+    }
     pub fn path(&self) -> &FieldPath {
         &self.path
     }
