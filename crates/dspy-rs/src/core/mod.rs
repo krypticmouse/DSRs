@@ -29,8 +29,10 @@ pub mod sampling;
 mod schema;
 pub mod settings;
 pub mod signature;
+pub mod specials;
 mod state;
 pub mod storage;
+pub use specials::{History, HistoryMessage, SpecialField, Tool, ToolCalls, ToolInvocation};
 
 pub use errors::{
     ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
