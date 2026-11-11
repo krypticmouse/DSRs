@@ -1209,6 +1209,11 @@ fn predicted_from_run<S: Signature>(run: RunOutput) -> Result<Predicted<S::Outpu
 where
     S::Output: Schema,
 {
+    let call_ids = run
+        .leaves
+        .iter()
+        .flat_map(|leaf| leaf.call_ids.clone())
+        .collect();
     let leaf = run.leaves.into_iter().next();
     let (raw_response, lm_usage, span_id, leaf_meta, tool_calls, tool_executions) = match leaf {
         Some(leaf) => (
@@ -1253,7 +1258,7 @@ where
         checks_total, checks_failed, "typed parse completed"
     );
 
-    let metadata = CallMetadata::new(
+    let mut metadata = CallMetadata::new(
         raw_response,
         lm_usage,
         tool_calls,
@@ -1261,6 +1266,7 @@ where
         span_id,
         field_meta,
     );
+    metadata.call_ids = call_ids;
     Ok(Predicted::new(typed, metadata))
 }
 

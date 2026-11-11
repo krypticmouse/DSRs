@@ -29,7 +29,10 @@ pub mod sampling;
 mod schema;
 pub mod settings;
 pub mod signature;
+pub mod specials;
 mod state;
+pub mod storage;
+pub use specials::{History, HistoryMessage, SpecialField, Tool, ToolCalls, ToolInvocation};
 
 pub use errors::{
     ConversionError, ErrorClass, JsonishError, LmCallError, LmError, LmFailureKind, ParseError,
@@ -52,3 +55,4 @@ pub use schema::{FieldMetadataSpec, FieldPath, FieldSchema, InputRenderSpec, Sig
 pub use settings::{Settings, configure, get_lm, try_get_lm, with_lm};
 pub use signature::{ConstraintKind, ConstraintSpec, Signature};
 pub use state::{ModuleState, PredictState};
+pub use storage::{InteractionStore, JsonlInteractionStore, StorageError, with_interaction_store};
