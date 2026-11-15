@@ -50,6 +50,8 @@ minijinja = { workspace = true, features = ["builtins", "serde", "debug"] }
 # the graph core (and Code Mode via dsrs-tools) is load-bearing, not optional.
 cranelift-entity = { version = "0.134", features = ["enable-serde"] }
 dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
+# Single-flight for the response cache, gated behind the `inflight-dedup` feature.
+tokio-prompt-orchestrator = { version = "2.2.0", default-features = false, optional = true }
 
 [package.metadata.cargo-machete]
 ignored = ["rig-core"]
@@ -60,6 +62,9 @@ default = ["data"]
 # loading is always available. Build with --no-default-features for a
 # meaningfully lighter dependency tree.
 data = ["dep:arrow", "dep:parquet", "dep:hf-hub", "dep:csv"]
+# With `cache: true`, concurrent identical calls share one provider call
+# instead of each missing the cache and calling the provider.
+inflight-dedup = ["dep:tokio-prompt-orchestrator"]
 
 [dev-dependencies]
 rstest = "0.25.0"

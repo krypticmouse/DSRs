@@ -22,6 +22,8 @@ use tracing::{debug, trace, warn};
 use crate::trace::SpanEvent;
 use crate::utils::cache::CacheEntry;
 use crate::ResponseCache;
+#[cfg(feature = "inflight-dedup")]
+use tokio_prompt_orchestrator::enhanced::{DeduplicationResult, Deduplicator};
 
 #[derive(Clone, Debug)]
 pub struct LMResponse {
@@ -161,6 +163,11 @@ pub struct LM {
     pub config: LMConfig,
     pub cache_handler: Option<Arc<ResponseCache>>,
     client: Option<Arc<LMClient>>,
+    /// Cache-eligible calls currently waiting on the provider, keyed by cache
+    /// key, so concurrent identical calls share one completion. Set alongside
+    /// `cache_handler`.
+    #[cfg(feature = "inflight-dedup")]
+    inflight: Option<Deduplicator>,
 }
 
 impl Default for LM {
@@ -244,11 +251,20 @@ impl LM {
             None
         };
 
+        // Zero cache window: only calls still in flight are shared; finished
+        // responses are served by `cache_handler` as before.
+        #[cfg(feature = "inflight-dedup")]
+        let inflight = cache_handler
+            .as_ref()
+            .map(|_| Deduplicator::new(Duration::ZERO));
+
         debug!("lm client initialized");
         Ok(LM {
             config,
             cache_handler,
             client: Some(client),
+            #[cfg(feature = "inflight-dedup")]
+            inflight,
         })
     }
 
@@ -426,6 +442,25 @@ impl LM {
         use std::fmt::Write as _;
         let _ = write!(HashWriter(&mut hasher), "{messages:?}");
         hasher.finish()
+    }
+
+    /// Builds the response for a cache hit: the cached text appended to the
+    /// caller's chat as a single `Exchange`.
+    fn response_from_cache(messages: Chat, raw_output: String, usage: LmUsage) -> LMResponse {
+        let output = Message::assistant(&raw_output);
+        let mut chat = messages;
+        chat.push_message(output.clone());
+        LMResponse {
+            output: output.clone(),
+            usage,
+            chat,
+            tool_calls: Vec::new(),
+            tool_executions: Vec::new(),
+            events: vec![SpanEvent::Exchange {
+                message: output,
+                usage,
+            }],
+        }
     }
 
     fn chat_from_rig_history(system_prompt: &str, history: &[rig::message::Message]) -> Chat {
@@ -772,20 +807,36 @@ impl LM {
             && let Some(raw_output) = entry.raw_output
         {
             debug!("lm response served from cache");
-            let output = Message::assistant(&raw_output);
-            let mut chat = messages;
-            chat.push_message(output.clone());
-            return Ok(LMResponse {
-                output: output.clone(),
-                usage: entry.usage,
-                chat,
-                tool_calls: Vec::new(),
-                tool_executions: Vec::new(),
-                events: vec![SpanEvent::Exchange {
-                    message: output,
-                    usage: entry.usage,
-                }],
-            });
+            return Ok(Self::response_from_cache(messages, raw_output, entry.usage));
+        }
+
+        // Cache miss: if an identical call is already waiting on the provider,
+        // wait for it and take its answer from the cache instead of sending the
+        // same request again. If it produced nothing cacheable (or failed),
+        // fall through and call the provider as before.
+        #[cfg(feature = "inflight-dedup")]
+        let mut inflight_token = None;
+        #[cfg(feature = "inflight-dedup")]
+        if let (Some(key), Some(cache), Some(inflight)) = (
+            cache_key,
+            self.cache_handler.as_ref(),
+            self.inflight.as_ref(),
+        ) {
+            let inflight_key = key.to_string();
+            match inflight.check_and_register(&inflight_key).await {
+                DeduplicationResult::New(token) => inflight_token = Some(token),
+                DeduplicationResult::InProgress => {
+                    inflight.wait_for_result(&inflight_key).await;
+                    if let Some(entry) = cache.get_entry(key).await?
+                        && let Some(raw_output) = entry.raw_output
+                    {
+                        debug!("lm response shared with an in-flight identical call");
+                        return Ok(Self::response_from_cache(messages, raw_output, entry.usage));
+                    }
+                }
+                // The window is zero, so finished calls are never held here.
+                DeduplicationResult::Cached(_) => {}
+            }
         }
 
         let tool_definitions = tools.definitions();
@@ -812,7 +863,15 @@ impl LM {
                     tool_choice.clone(),
                 )
             })
-            .await?;
+            .await;
+        #[cfg(feature = "inflight-dedup")]
+        if response.is_err()
+            && let (Some(inflight), Some(token)) = (self.inflight.as_ref(), inflight_token.take())
+        {
+            // Release waiters so they send their own request, as without sharing.
+            inflight.fail_with(token, String::new()).await;
+        }
+        let response = response?;
         debug!(
             prompt_tokens = response.usage.input_tokens,
             completion_tokens = response.usage.output_tokens,
@@ -912,6 +971,12 @@ impl LM {
             };
             cache.insert_entry(key, entry);
             trace!("lm response cached");
+        }
+        // Wake any identical calls waiting on this one; they read the entry
+        // just inserted, or call the provider themselves if there is none.
+        #[cfg(feature = "inflight-dedup")]
+        if let (Some(inflight), Some(token)) = (self.inflight.as_ref(), inflight_token.take()) {
+            inflight.complete(token, String::new()).await;
         }
 
         let mut full_chat = if let Some(result) = tool_loop_result.as_ref() {
@@ -1205,7 +1270,84 @@ mod tests {
             },
             cache_handler: None,
             client: Some(Arc::new(LMClient::Test(model))),
+            #[cfg(feature = "inflight-dedup")]
+            inflight: None,
         }
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    async fn cached_test_lm(model: TestCompletionModel) -> LM {
+        let mut lm = test_lm_with_model(model);
+        lm.config.cache = true;
+        lm.cache_handler = Some(Arc::new(ResponseCache::new().await));
+        lm.inflight = Some(Deduplicator::new(Duration::ZERO));
+        lm
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    #[tokio::test]
+    async fn identical_call_waits_for_in_flight_call_instead_of_calling_provider() {
+        let model = TestCompletionModel::new([]);
+        let lm = cached_test_lm(model.clone()).await;
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let key = lm.cache_key_for(&chat);
+        let inflight = lm.inflight.clone().unwrap();
+        let DeduplicationResult::New(token) = inflight.check_and_register(&key.to_string()).await
+        else {
+            panic!("expected to own the in-flight slot");
+        };
+
+        let waiter = tokio::spawn({
+            let lm = lm.clone();
+            let chat = chat.clone();
+            async move { lm.call(chat, vec![]).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        lm.cache_handler.as_ref().unwrap().insert_entry(
+            key,
+            CacheEntry {
+                prompt: chat.to_json().to_string(),
+                usage: LmUsage::default(),
+                raw_output: Some("shared".to_string()),
+            },
+        );
+        inflight.complete(token, String::new()).await;
+
+        let response = waiter.await.unwrap().expect("waiter should be served");
+        assert_eq!(response.output.content(), "shared");
+        assert!(
+            model.last_request().is_none(),
+            "provider must not be called"
+        );
+    }
+
+    #[cfg(feature = "inflight-dedup")]
+    #[tokio::test]
+    async fn identical_call_falls_back_to_provider_when_in_flight_call_fails() {
+        let model = TestCompletionModel::new([make_text("fresh")]);
+        let lm = cached_test_lm(model.clone()).await;
+        let chat = Chat::new(vec![Message::user("hi")]);
+        let key = lm.cache_key_for(&chat);
+        let inflight = lm.inflight.clone().unwrap();
+        let DeduplicationResult::New(token) = inflight.check_and_register(&key.to_string()).await
+        else {
+            panic!("expected to own the in-flight slot");
+        };
+
+        let waiter = tokio::spawn({
+            let lm = lm.clone();
+            async move { lm.call(chat, vec![]).await }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        inflight.fail_with(token, String::new()).await;
+
+        let response = waiter
+            .await
+            .unwrap()
+            .expect("waiter should call the provider");
+        assert_eq!(response.output.content(), "fresh");
+        assert!(model.last_request().is_some());
     }
 
     #[tokio::test]
