@@ -105,3 +105,57 @@ was 1.005 against a 1.10 limit.
 
 - [Raw samples, including warm-ups and native exits](results/rust-1.94.0/samples.csv)
 - [Summary and executable hashes](results/rust-1.94.0/summary.json)
+
+## Score-only evaluation on Rust 1.94.0
+
+The baseline is PR #141 at `5c13efa1c65c05846e39e4dca60222f5c317818a`.
+The candidate runtime is `4fc53a23a29028d0dd865532c398939d1a1334ad`.
+The candidate skips final prediction serialization when the evaluator returns
+scores. Both metric hooks still receive the execution trace, and optimizer
+rollouts keep their scored trace outcomes.
+
+Both builds use the same [harness](score-only.rs) and lockfile. The harness
+SHA-256 is `e6366b123e3f01385144cf4033a9c5421bf1df65adb7236be82515c83eb8a7b5`.
+The LF lockfile SHA-256 is
+`ca7e9805f78f509d559e8175ee585df5c5413c9904698761a74aeb66fb242f79`.
+The binaries use Rust and Cargo 1.94.0 for x86_64-pc-windows-msvc, LLVM
+21.1.8, and locked release builds with default features disabled. The host
+uses the same CPU, Windows version, and power plan described above.
+
+Each process evaluates 4,096 rows in eight batches of 512 at concurrency
+eight for each payload size. A local module produces each payload as eight
+strings. The metric checks the prediction and trace, the span hook runs once
+per row, and the harness checks the order and value of every score. The timed
+work uses no provider. Each series uses one warm-up per binary followed by
+four ABBA blocks. The target median paired candidate/baseline ratio is 0.85.
+
+| Series | Payload per row | Baseline median [range], ms | Candidate median [range], ms | Median paired ratio | Faster pairs |
+| --- | --- | ---: | ---: | ---: | ---: |
+| First | 64 B | 18.17 [17.52–59.26] | 12.40 [11.28–13.30] | 0.654 | 8/8 |
+| First | 4 KiB | 21.80 [16.99–73.59] | 12.31 [10.92–17.93] | 0.516 | 8/8 |
+| First | 64 KiB | 42.94 [39.20–105.47] | 26.08 [24.29–29.83] | 0.613 | 8/8 |
+| Repeat | 64 B | 16.93 [16.42–20.13] | 12.04 [10.57–16.71] | 0.680 | 7/8 |
+| Repeat | 4 KiB | 16.92 [16.04–19.56] | 10.70 [10.03–15.57] | 0.629 | 8/8 |
+| Repeat | 64 KiB | 41.66 [38.41–45.43] | 24.07 [22.55–28.29] | 0.604 | 8/8 |
+
+One baseline process produced the maximum of each first-series case. The
+repeat used the same binaries and confirmed the paired-ratio target at all
+three sizes. Both series retain every sample. All native exits were successful
+and the compiler processes were idle at both timing boundaries.
+
+The candidate passed 27 focused Windows tests with all features on each of
+Rust 1.90.0 and 1.94.0, plus the minimal `dspy-rs` check on both toolchains.
+The tests cover metric hooks, order, optimizer trace outcomes and cache
+accounting, and bootstrap evaluation.
+
+Copy [score-only.rs](score-only.rs) to
+`crates/dspy-rs/examples/bench-score-only-evaluation.rs` in each checkout and
+build each revision in its own Cargo target directory.
+
+```text
+cargo +1.94.0 build --locked --release --no-default-features -p dspy-rs --example bench-score-only-evaluation
+python run.py --score-only --baseline path/to/baseline.exe --candidate path/to/candidate.exe --output path/to/new-results
+```
+
+- [First-series samples](results/score-only-rust-1.94.0/samples.csv) and [summary](results/score-only-rust-1.94.0/summary.json)
+- [Repeat samples](results/score-only-rust-1.94.0/repeat/samples.csv) and [summary](results/score-only-rust-1.94.0/repeat/summary.json)

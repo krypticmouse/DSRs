@@ -1,0 +1,57 @@
+{
+  "samples_per_binary": 8,
+  "sha256": {
+    "baseline": "92bbda25a9438561429b1a64a5a6f1acad3a7e8f84988886fc9f548e4d47c7ea",
+    "candidate": "90cab26d8e5a1c74a12ca0e30cfe2efdead250989dd23503891e1d4dd4592cff"
+  },
+  "cases": {
+    "score-only/64": {
+      "baseline_median_us": 16930.5,
+      "baseline_range_us": [
+        16420,
+        20131
+      ],
+      "candidate_median_us": 12042.5,
+      "candidate_range_us": [
+        10572,
+        16713
+      ],
+      "median_paired_ratio": 0.6798567387763357,
+      "faster_pairs": 7,
+      "maximum_paired_ratio": 0.85,
+      "passed": true
+    },
+    "score-only/4096": {
+      "baseline_median_us": 16918.5,
+      "baseline_range_us": [
+        16038,
+        19555
+      ],
+      "candidate_median_us": 10701.5,
+      "candidate_range_us": [
+        10033,
+        15574
+      ],
+      "median_paired_ratio": 0.6288018020308563,
+      "faster_pairs": 8,
+      "maximum_paired_ratio": 0.85,
+      "passed": true
+    },
+    "score-only/65536": {
+      "baseline_median_us": 41658.0,
+      "baseline_range_us": [
+        38408,
+        45432
+      ],
+      "candidate_median_us": 24074.5,
+      "candidate_range_us": [
+        22554,
+        28287
+      ],
+      "median_paired_ratio": 0.6036301620481646,
+      "faster_pairs": 8,
+      "maximum_paired_ratio": 0.85,
+      "passed": true
+    }
+  }
+}
