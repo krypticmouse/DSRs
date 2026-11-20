@@ -343,7 +343,10 @@ async fn repeated_batch_pairs_share_one_rollout() {
         );
         assert_eq!(result.scores(), vec![0.2, 0.0, 0.2]);
     }
-    assert!(first[0].rollouts[0].trace.is_some());
+    let trace = first[0].rollouts[0].trace.as_ref().unwrap();
+    let outcome = trace.outcome.as_ref().unwrap();
+    assert_eq!(outcome.output.as_ref().unwrap()["answer"], "2");
+    assert_eq!(outcome.eval.as_ref().unwrap().score, 0.2);
     assert!(first[0].rollouts[1].trace.is_some());
     assert!(first[0].rollouts[2].trace.is_none());
     assert!(first[1].rollouts.iter().all(|r| r.trace.is_none()));

@@ -3,6 +3,7 @@ use dspy_rs::{
     CallMetadata, Eval, Module, PredictError, Predicted, Signature, TypedMetric, average_score,
     evaluate_trainset, evaluate_trainset_with_concurrency,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::Notify;
@@ -114,6 +115,74 @@ async fn evaluate_trainset_propagates_typed_metric_errors() {
         .expect_err("typed metric errors should propagate");
 
     assert!(err.to_string().contains("typed metric failure"));
+}
+
+#[derive(facet::Facet, serde::Deserialize, serde::Serialize)]
+struct ScoreOnlyOutput {
+    #[serde(serialize_with = "unused_output")]
+    answer: String,
+}
+
+fn unused_output<S: serde::Serializer>(_: &str, _: S) -> Result<S::Ok, S::Error> {
+    panic!("score-only evaluation serialized the prediction");
+}
+
+struct ScoreOnlyModule;
+
+impl Module for ScoreOnlyModule {
+    type Input = EvalSigInput;
+    type Output = ScoreOnlyOutput;
+
+    async fn forward(
+        &self,
+        input: EvalSigInput,
+    ) -> Result<Predicted<ScoreOnlyOutput>, PredictError> {
+        Ok(Predicted::new(
+            ScoreOnlyOutput {
+                answer: input.prompt,
+            },
+            CallMetadata::default(),
+        ))
+    }
+}
+
+struct ScoreOnlyMetric(AtomicUsize);
+
+impl TypedMetric<(EvalSigInput, EvalSigOutput), ScoreOnlyModule> for ScoreOnlyMetric {
+    async fn evaluate(
+        &self,
+        example: &(EvalSigInput, EvalSigOutput),
+        prediction: &Predicted<ScoreOnlyOutput>,
+        trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        let input = trace.unwrap().meta.input.as_ref().unwrap();
+        assert_eq!(input["prompt"], example.0.prompt);
+        Ok(Eval::score(
+            (prediction.answer == example.1.answer) as u8 as f64,
+        ))
+    }
+
+    async fn evaluate_spans(
+        &self,
+        _: &(EvalSigInput, EvalSigOutput),
+        _: &Predicted<ScoreOnlyOutput>,
+        _: &dspy_rs::Trace,
+    ) -> Result<Vec<(dspy_rs::trace::SpanId, Eval)>> {
+        self.0.fetch_add(1, Ordering::Relaxed);
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn score_only_evaluation_keeps_metric_hooks_and_skips_output_serialization() {
+    let rows = trainset();
+    let metric = ScoreOnlyMetric(AtomicUsize::new(0));
+    let evals = evaluate_trainset(&ScoreOnlyModule, &rows, &metric)
+        .await
+        .unwrap();
+    assert_eq!(evals.len(), rows.len());
+    assert_eq!(average_score(&evals), 1.0);
+    assert_eq!(metric.0.load(Ordering::Relaxed), rows.len());
 }
 
 struct GatedMetric {

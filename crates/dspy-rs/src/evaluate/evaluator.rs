@@ -142,7 +142,7 @@ where
     MT: TypedMetric<E, M>,
 {
     let mut pending = trainset.iter().enumerate().map(|(index, example)| async move {
-        let result = rollout_traced(module, example, metric, TraceMeta::default())
+        let result = rollout_traced(module, example, metric, TraceMeta::default(), false)
             .await
             .map(|(eval, _)| eval);
         (index, result)
@@ -199,12 +199,14 @@ fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<cr
 /// evals the metric attaches via [`TypedMetric::evaluate_spans`].
 ///
 /// Both the public evaluation entry points and the optimizer engine compose
-/// this — there is exactly one traced-rollout loop in the crate.
+/// this. Scoring-only callers may skip the final outcome after the metric
+/// hooks have run.
 pub(crate) async fn rollout_traced<E, M, MT>(
     module: &M,
     example: &E,
     metric: &MT,
     mut meta: TraceMeta,
+    retain_outcome: bool,
 ) -> Result<Rollout>
 where
     E: ToInput<M::Input> + Sync,
@@ -226,12 +228,14 @@ where
             span.eval = Some(span_eval);
         }
     }
-    trace.outcome = Some(TraceOutcome {
-        output: json_object(serde_json::to_value(&*predicted)),
-        error: None,
-        eval: Some(eval.clone()),
-        duration_us: started.elapsed().as_micros() as u64,
-    });
+    if retain_outcome {
+        trace.outcome = Some(TraceOutcome {
+            output: json_object(serde_json::to_value(&*predicted)),
+            error: None,
+            eval: Some(eval.clone()),
+            duration_us: started.elapsed().as_micros() as u64,
+        });
+    }
     Ok((eval, trace))
 }
 
