@@ -2,6 +2,7 @@
 name = "dsrs-syntax"
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 description = "Lexer and structural grammar for the .dsrs text format, shared by dspy-rs and dsrs_macros"
 readme = "../../README.md"

@@ -4,6 +4,9 @@ members = [
     "crates/*",
 ]
 
+[workspace.package]
+rust-version = "1.90"
+
 # Single source of truth for every dependency used by 2+ member crates.
 # Pins match what Cargo.lock currently resolves — bump here, not in members.
 [workspace.dependencies]
