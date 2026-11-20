@@ -122,8 +122,8 @@ The public evaluation entry points return `Vec<Eval>`; the traced `Rollout` path
 
 | Item | Signature | Behavior |
 |---|---|---|
-| `evaluate_trainset` | `async fn(module: &M, trainset: &[E], metric: &MT) -> Result<Vec<Eval>>` where `E: ToInput<M::Input> + Sync` | Runs the module on every row (projected via `to_input()`) and scores each with the metric. Results come back in trainset order. Any `Module::call` or `TypedMetric::evaluate` failure propagates immediately; for fault-tolerant batching use `forward_all` instead |
-| `evaluate_trainset_with_concurrency` | `async fn(module, trainset, metric, max_concurrency: usize) -> Result<Vec<Eval>>` | Same loop with an explicit concurrency level. `max_concurrency` LM calls run in flight at once (clamped to at least 1). Use `1` for strictly sequential evaluation on rate-limited providers |
+| `evaluate_trainset` | `async fn(module: &M, trainset: &[E], metric: &MT) -> Result<Vec<Eval>>` where `E: ToInput<M::Input> + Sync` | Runs the module on rows projected via `to_input()` and scores them with the metric. Results come back in trainset order. A failed rollout stops admission and returns the earliest failed row's error in trainset order. Use `forward_all` to collect individual successes and failures. |
+| `evaluate_trainset_with_concurrency` | `async fn(module, trainset, metric, max_concurrency: usize) -> Result<Vec<Eval>>` | Runs at most `max_concurrency` examples concurrently, with a minimum of one slot. Each completed example frees a slot even while earlier examples are pending. Use `1` for sequential evaluation. |
 | `DEFAULT_EVAL_CONCURRENCY` | `const usize = 16` | Concurrency used by `evaluate_trainset` |
 | `average_score` | `fn(evals: &[Eval]) -> f64` | Arithmetic mean of scores; returns `0.0` for an empty slice |
 

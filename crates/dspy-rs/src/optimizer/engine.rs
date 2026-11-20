@@ -38,7 +38,7 @@
 //!   seam: sampling params live on LM configs outside the candidate, so
 //!   callers that change them must bump the salt.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{Result, anyhow};
 use futures::stream::{self, StreamExt, TryStreamExt};
@@ -800,7 +800,9 @@ impl Engine {
     /// are injected per rollout, never applied to shared state.
     ///
     /// Cached rollouts return their `Eval` with `trace: None` and consume no
-    /// budget. If the uncached portion doesn't fit the remaining budget the
+    /// budget. Repeated pairs share their score, and only the first occurrence
+    /// of a fresh pair carries its trace.
+    /// If the uncached portion doesn't fit the remaining budget the
     /// engine runs nothing and returns [`BatchEvalOutcome::BudgetExhausted`].
     pub async fn evaluate_many(
         &mut self,
@@ -827,24 +829,31 @@ impl Engine {
         let baseline = target.baseline();
         let salt = self.config.cache_salt;
 
-        // Partition the (candidate × example) grid into cached and pending.
-        let mut cached: HashMap<(usize, usize), Eval> = HashMap::new();
-        let mut pending: Vec<(usize, usize)> = Vec::new();
-        for &candidate in candidates {
+        // Deduplicate each axis once, retaining first-seen order for scheduling.
+        let [unique_candidates, unique_indices] = [candidates, indices.as_slice()].map(|items| {
+            let mut seen = HashSet::new();
+            items
+                .iter()
+                .copied()
+                .filter(|&index| seen.insert(index))
+                .collect::<Vec<_>>()
+        });
+        let repeats =
+            unique_candidates.len() != candidates.len() || unique_indices.len() != indices.len();
+
+        let mut cached = HashMap::new();
+        let mut pending = Vec::new();
+        for &candidate in &unique_candidates {
             let candidate_hash = self.candidates[candidate].0;
-            for &idx in &indices {
-                let key = (candidate, idx);
-                if cached.contains_key(&key) || pending.contains(&key) {
-                    continue;
-                }
+            for &idx in &unique_indices {
                 match self
                     .cache
                     .get(baseline, candidate_hash, target.example_uid(idx), salt)
                 {
                     Some(eval) => {
-                        cached.insert(key, eval.clone());
+                        cached.insert((candidate, idx), eval.clone());
                     }
-                    None => pending.push(key),
+                    None => pending.push((candidate, idx)),
                 }
             }
         }
@@ -857,7 +866,7 @@ impl Engine {
 
         // Bind each requested candidate against the target once.
         let mut bound: HashMap<usize, BoundCandidate> = HashMap::new();
-        for &candidate in candidates {
+        for &candidate in &unique_candidates {
             bound.insert(candidate, target.bind(&self.candidates[candidate].1)?);
         }
 
@@ -900,22 +909,24 @@ impl Engine {
                 rollouts: indices
                     .iter()
                     .map(|&idx| {
-                        if let Some((eval, trace)) = fresh_by_key.remove(&(candidate, idx)) {
-                            RolloutOutcome {
-                                example: idx,
-                                eval,
-                                trace: Some(trace),
+                        let key = (candidate, idx);
+                        let (eval, trace) = if let Some((eval, trace)) = fresh_by_key.remove(&key) {
+                            if repeats {
+                                cached.insert(key, eval.clone());
                             }
+                            (eval, Some(trace))
                         } else {
-                            let eval = cached
-                                .get(&(candidate, idx))
-                                .cloned()
-                                .expect("every requested pair is either fresh or cached");
-                            RolloutOutcome {
-                                example: idx,
-                                eval,
-                                trace: None,
-                            }
+                            let eval = if repeats {
+                                cached.get(&key).cloned()
+                            } else {
+                                cached.remove(&key)
+                            };
+                            (eval.expect("evaluated pair"), None)
+                        };
+                        RolloutOutcome {
+                            example: idx,
+                            eval,
+                            trace,
                         }
                     })
                     .collect(),

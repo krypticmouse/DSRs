@@ -1,9 +1,11 @@
 use anyhow::{Result, anyhow};
 use dspy_rs::{
     CallMetadata, Eval, Module, PredictError, Predicted, Signature, TypedMetric, average_score,
-    evaluate_trainset,
+    evaluate_trainset, evaluate_trainset_with_concurrency,
 };
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
 
 #[derive(Signature, Clone, Debug)]
 struct EvalSig {
@@ -112,4 +114,76 @@ async fn evaluate_trainset_propagates_typed_metric_errors() {
         .expect_err("typed metric errors should propagate");
 
     assert!(err.to_string().contains("typed metric failure"));
+}
+
+struct GatedMetric {
+    release_on: &'static str,
+    release: Notify,
+    fail: bool,
+}
+
+impl TypedMetric<(EvalSigInput, EvalSigOutput), EchoModule> for GatedMetric {
+    async fn evaluate(
+        &self,
+        _example: &(EvalSigInput, EvalSigOutput),
+        prediction: &Predicted<EvalSigOutput>,
+        trace: Option<&dspy_rs::Trace>,
+    ) -> Result<Eval> {
+        assert!(trace.is_some());
+        if prediction.answer == "one" {
+            self.release.notified().await;
+        }
+        if prediction.answer == self.release_on {
+            self.release.notify_one();
+        }
+        if self.fail {
+            assert_ne!(prediction.answer, "three", "a failure stops further admission");
+            anyhow::bail!("{}", prediction.answer);
+        }
+        Ok(Eval::with_feedback(1.0, prediction.answer.clone()))
+    }
+}
+
+fn three_examples() -> Vec<(EvalSigInput, EvalSigOutput)> {
+    let mut rows = trainset();
+    rows.push((
+        EvalSigInput {
+            prompt: "three".into(),
+        },
+        EvalSigOutput {
+            answer: "three".into(),
+        },
+    ));
+    rows
+}
+
+#[tokio::test]
+async fn evaluator_refills_slots_and_preserves_trainset_order() {
+    let metric = GatedMetric {
+        release_on: "three",
+        release: Notify::new(),
+        fail: false,
+    };
+    let evals = tokio::time::timeout(
+        Duration::from_secs(5),
+        evaluate_trainset_with_concurrency(&EchoModule, &three_examples(), &metric, 2),
+    )
+    .await
+    .expect("the third example must start while the first is still waiting")
+    .unwrap();
+    let feedback: Vec<_> = evals.iter().map(|eval| eval.feedback.as_deref()).collect();
+    assert_eq!(feedback, [Some("one"), Some("two"), Some("three")]);
+}
+
+#[tokio::test]
+async fn evaluator_returns_the_earliest_failed_row() {
+    let metric = GatedMetric {
+        release_on: "two",
+        release: Notify::new(),
+        fail: true,
+    };
+    let error = evaluate_trainset_with_concurrency(&EchoModule, &three_examples(), &metric, 2)
+        .await
+        .unwrap_err();
+    assert_eq!(error.to_string(), "one");
 }

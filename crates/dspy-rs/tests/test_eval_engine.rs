@@ -309,6 +309,59 @@ async fn subset_evaluation_respects_order_and_matrix_cells() {
 }
 
 #[tokio::test]
+async fn repeated_batch_pairs_share_one_rollout() {
+    let mut module = EchoModule::new();
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(2),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let candidates = [candidate, candidate];
+    let subset = [2, 0, 2];
+
+    let first = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(first.len(), 2);
+    for result in &first {
+        assert_eq!(result.candidate, candidate);
+        assert_eq!(
+            result.rollouts.iter().map(|r| r.example).collect::<Vec<_>>(),
+            subset
+        );
+        assert_eq!(result.scores(), vec![0.2, 0.0, 0.2]);
+    }
+    assert!(first[0].rollouts[0].trace.is_some());
+    assert!(first[0].rollouts[1].trace.is_some());
+    assert!(first[0].rollouts[2].trace.is_none());
+    assert!(first[1].rollouts.iter().all(|r| r.trace.is_none()));
+    assert_eq!(engine.spend().metric_calls, 2);
+
+    let cached = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert!(
+        cached
+            .iter()
+            .flat_map(|r| &r.rollouts)
+            .all(|r| r.trace.is_none())
+    );
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 2);
+}
+
+#[tokio::test]
 async fn rollout_cache_serves_repeats_without_lm_calls() {
     let client = TestCompletionModel::new([
         answer_response("0"),
