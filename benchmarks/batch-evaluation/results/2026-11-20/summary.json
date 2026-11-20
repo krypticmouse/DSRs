@@ -1,0 +1,69 @@
+{
+  "samples_per_binary": 8,
+  "sha256": {
+    "baseline": "51785aad53f61b7ca53c67201bb17510c307d1b95a65880c1ab228c8589faefa",
+    "candidate": "cc01d6d28c05a74c5eb2aa127a3165171951f7f57e90b1d55d64bfb79d52eb65"
+  },
+  "cases": {
+    "skewed/64": {
+      "baseline_median_us": 393710.0,
+      "baseline_range_us": [
+        375637,
+        396796
+      ],
+      "candidate_median_us": 169379.0,
+      "candidate_range_us": [
+        145666,
+        178366
+      ],
+      "median_paired_ratio": 0.4309449169503673,
+      "maximum_paired_ratio": 0.8,
+      "passed": true
+    },
+    "uniform/64": {
+      "baseline_median_us": 112341.5,
+      "baseline_range_us": [
+        84483,
+        130799
+      ],
+      "candidate_median_us": 128833.0,
+      "candidate_range_us": [
+        102757,
+        129486
+      ],
+      "median_paired_ratio": 1.068641383009775,
+      "maximum_paired_ratio": 1.1,
+      "passed": true
+    },
+    "preflight/4096": {
+      "baseline_median_us": 5139.5,
+      "baseline_range_us": [
+        4165,
+        6616
+      ],
+      "candidate_median_us": 1902.5,
+      "candidate_range_us": [
+        1713,
+        2573
+      ],
+      "median_paired_ratio": 0.3823602741673311,
+      "maximum_paired_ratio": 0.8,
+      "passed": true
+    },
+    "preflight/32768": {
+      "baseline_median_us": 251420.5,
+      "baseline_range_us": [
+        237908,
+        258259
+      ],
+      "candidate_median_us": 17090.5,
+      "candidate_range_us": [
+        15814,
+        19700
+      ],
+      "median_paired_ratio": 0.06752674332019433,
+      "maximum_paired_ratio": 0.8,
+      "passed": true
+    }
+  }
+}
