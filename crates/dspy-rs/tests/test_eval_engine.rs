@@ -334,7 +334,11 @@ async fn repeated_batch_pairs_share_one_rollout() {
     for result in &first {
         assert_eq!(result.candidate, candidate);
         assert_eq!(
-            result.rollouts.iter().map(|r| r.example).collect::<Vec<_>>(),
+            result
+                .rollouts
+                .iter()
+                .map(|r| r.example)
+                .collect::<Vec<_>>(),
             subset
         );
         assert_eq!(result.scores(), vec![0.2, 0.0, 0.2]);

@@ -1091,6 +1091,7 @@ dependencies = [
  "proc-macro-crate",
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn 2.0.106",
  "trybuild",
 ]
