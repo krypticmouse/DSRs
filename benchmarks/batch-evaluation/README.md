@@ -1,5 +1,7 @@
 # Trainset evaluation and optimizer batch planning
 
+## Original Rust 1.100.0 comparison
+
 The baseline is upstream main at `72b247e2bddc7337f923461fb27b4127c7d104f3`.
 The candidate runtime is `56b5fd075b28fd60ca4fe84929dec50273f169c4`.
 Each checkout adds the same benchmark example for the build. The harness
@@ -56,8 +58,8 @@ Rust 1.97.1.
 
 Copy [harness.rs](harness.rs) to
 `crates/dspy-rs/examples/bench-batch-evaluation.rs` in a checkout of each
-revision above. Build in each checkout and save its executable before the next
-build.
+revision above. Use distinct Cargo target directories for the two checkouts
+so each build compiles its own runtime source.
 
 ```text
 cargo +1.100.0 build --locked --release --no-default-features -p dspy-rs --example bench-batch-evaluation
@@ -68,3 +70,38 @@ The [raw CSV](results/2026-11-20/samples.csv) includes warm-ups, timing in
 microseconds, execution order, and native exits. The
 [summary](results/2026-11-20/summary.json) records executable hashes, observed
 ranges, medians, and paired ratios.
+
+## Rust 1.94.0 comparison
+
+Both release builds use Rust and Cargo 1.94.0 for x86_64-pc-windows-msvc,
+LLVM 21.1.8, and the same Windows host and Balanced power plan described above.
+The workload, harness and ABBA schedule are the same as in the original run.
+
+The candidate source is `84d1caad20dab2464ee5567283d638a64efb6f50`. For the
+baseline, start at upstream `72b247e2bddc7337f923461fb27b4127c7d104f3` and copy
+`Cargo.toml`, `Cargo.lock`, and the five `crates/*/Cargo.toml` files from that
+candidate. This produced the local baseline source
+`db104f6679eb47537d3e64acdd0f9ff860415cb9`. Both binaries used Cargo.lock
+SHA-256 `6200d330c3cbac5d41f50cd7499d6b4bb603aaa80d59c5f72bd463b43f4799ac`.
+The published PR and the benchmark candidate resolve the same normal and build
+dependency tree for the benchmark feature set.
+
+Use the reproduction steps above with `cargo +1.94.0`. The initial candidate
+build reused the baseline executable through a shared Cargo target. It was
+rejected before timing. Clearing the generated `dspy-rs` release artifacts in
+the benchmark target forced a rebuild and produced a distinct executable.
+Both compiler-idle checks passed and all 72 recorded observations have a
+successful native exit.
+
+| Workload | Baseline median [range], ms | Candidate median [range], ms | Median paired ratio |
+| --- | ---: | ---: | ---: |
+| Uneven evaluator latency | 389.64 [380.24–462.16] | 165.02 [140.67–185.75] | 0.399 |
+| Equal-delay evaluator control | 110.62 [88.76–122.57] | 109.36 [90.84–124.51] | 1.005 |
+| Preflight, 4,096 pairs | 11.30 [9.95–17.51] | 3.83 [2.99–6.51] | 0.339 |
+| Preflight, 32,768 pairs | 549.04 [528.34–564.54] | 28.99 [25.64–32.97] | 0.052 |
+
+All four predefined paired-ratio limits passed. The equal-delay paired ratio
+was 1.005 against a 1.10 limit.
+
+- [Raw samples, including warm-ups and native exits](results/rust-1.94.0/samples.csv)
+- [Summary and executable hashes](results/rust-1.94.0/summary.json)
