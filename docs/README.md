@@ -63,11 +63,20 @@ repository secret.
 `docs/toast-chat.js` is auto-injected into every page by Mintlify and adds
 an "Ask AI" chat backed by toast-1, grounded in the `dsrs-docs` store. The
 browser never sees the API key: requests go through the Cloudflare Worker
-in `docs-chat-worker/`. A SQLite-backed Durable Object reserves one unit
-before each Mixedbread request, including the fallback retry, and stops
-upstream calls after `CHAT_DAILY_BUDGET` (200 by default) across all Worker
-locations. If its quota binding is unavailable, chat fails closed. Set the
-budget in `docs-chat-worker/wrangler.toml` to match the provider allowance.
+in `docs-chat-worker/`. A SQLite-backed Durable Object checks both the
+aggregate budget (`CHAT_DAILY_BUDGET`, 200 by default) and a per-network
+budget (`CHAT_CLIENT_DAILY_BUDGET`, 10 by default) before each Mixedbread
+call, including fallback. Both budgets reset at midnight UTC. The per-network
+limit groups IPv4 clients by address and IPv6 clients by /64, so users on a
+shared network may share a budget. Distributed traffic across multiple
+networks can still reach the aggregate cap.
+
+The Worker uses Cloudflare's `CF-Connecting-IP` and stores a hash of the
+network bucket for the current quota day. Requests without a valid edge
+address, or with an unavailable quota binding, receive 503. Set the limits
+in `docs-chat-worker/wrangler.toml`, keeping the per-network limit below
+the aggregate budget. A 429 response includes the time to reset in
+`Retry-After`.
 To deploy it:
 
 ```bash

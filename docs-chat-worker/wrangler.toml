@@ -6,6 +6,7 @@ compatibility_date = "2026-08-01"
 STORES = "dsrs-docs,dsrs-code"
 ALLOWED_ORIGINS = "https://dsrs.herumbshandilya.com"
 CHAT_DAILY_BUDGET = "200"
+CHAT_CLIENT_DAILY_BUDGET = "10"
 
 [[durable_objects.bindings]]
 name = "CHAT_QUOTA"
