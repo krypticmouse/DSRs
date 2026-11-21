@@ -159,3 +159,62 @@ python run.py --score-only --baseline path/to/baseline.exe --candidate path/to/c
 
 - [First-series samples](results/score-only-rust-1.94.0/samples.csv) and [summary](results/score-only-rust-1.94.0/summary.json)
 - [Repeat samples](results/score-only-rust-1.94.0/repeat/samples.csv) and [summary](results/score-only-rust-1.94.0/repeat/summary.json)
+
+## Local JSONL and optimizer cache on Rust 1.94.0
+
+The baseline is PR #141 at `66cba2949ddef4dd226af8b44a28a2fb9e14c847`.
+The candidate runtime is `740e5e010fbb5fe8a7f581f8cc24b5566614e46e`.
+This comparison isolates the follow-up from arthurianresolve/DSRs#31.
+
+Both binaries use Rust and Cargo 1.94.0 for x86_64-pc-windows-msvc, LLVM
+21.1.8, locked release builds, and default features disabled. The Windows
+11 host has an Intel Core i7-10610U and uses the Balanced power plan. The
+builds shared the same harness and lockfile. The harness SHA-256 is
+`8e99419c61dd4a353b773f862d1592cfbe0db20ceff453587dd371d4b65d21ab`.
+The LF lockfile SHA-256 is
+`ca7e9805f78f509d559e8175ee585df5c5413c9904698761a74aeb66fb242f79`.
+Executable hashes are in the summary.
+
+The warm-cache workload seeds 32 candidates across 2,048 examples before
+timing. The empty-cache workload includes repeated candidate and example
+indices and asserts the exact required pair count. The local JSONL fixture
+is 128 MiB with 8,192 rows containing 16 KiB strings. The harness checks
+the typed rows and their order. Fixture generation and cache seeding are
+outside the timed regions. Peak memory uses the Windows process working set
+high-water mark. [Counter definition](https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-process_memory_counters)
+
+Each case uses one warm-up per binary followed by four baseline–candidate–
+candidate–baseline blocks. All 54 observations exited successfully. An
+initial timing series was excluded after compiler activity resumed during
+the run. The repeat permitted and recorded background activity as a
+separate measurement condition. A compiler was active during the final
+JSONL samples, so elapsed times describe this workload under the observed
+host load.
+
+| Workload | Baseline median [range] | Candidate median [range] | Median paired ratio | Improving pairs |
+| --- | ---: | ---: | ---: | ---: |
+| 512 warm optimizer batches of 16 examples | 14.52 [11.23–18.06] ms | 7.53 [6.59–9.29] ms | 0.514 | 8/8 |
+| Reject 32,768 unique pairs with an empty cache and a zero-call budget | 39.68 [27.97–47.48] ms | 0.491 [0.408–0.787] ms | 0.014 | 8/8 |
+| Load and type 8,192 local JSONL rows | 324.45 [262.79–425.29] ms | 304.94 [218.10–371.64] ms | 0.887 | 7/8 |
+| JSONL loader peak process working set | 269.50 [269.46–269.75] MiB | 142.15 [142.12–142.21] MiB | 0.527 | 8/8 |
+
+Warm-cache batches, empty-cache rejection, and JSONL peak memory met the
+preset margin of a paired ratio at most 0.85 and seven of eight improving
+pairs. The loader elapsed-time ratio was 0.887. The candidate passed 39
+focused tests with all features and the locked minimal-feature check on
+each of Rust 1.90.0 and 1.94.0 on Windows.
+
+Copy [the harness](jsonl-and-cache/harness.rs) into each checkout as
+`crates/dspy-rs/examples/bench-upstream-jsonl-cache.rs` and use separate
+Cargo target directories. Save the harness and [runner](jsonl-and-cache/run.py)
+in a scratch directory beside the built executables, named `baseline.exe`
+and `trial.exe`. Run the following commands for the two builds and the
+paired comparison.
+
+```text
+cargo +1.94.0 build --locked --release --no-default-features -p dspy-rs --example bench-upstream-jsonl-cache
+python -B run.py
+```
+
+- [Raw samples and native exits](results/jsonl-and-cache-rust-1.94.0/samples.csv)
+- [Summary, fixture hash, and executable hashes](results/jsonl-and-cache-rust-1.94.0/summary.json)
