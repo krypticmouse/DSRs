@@ -61,6 +61,7 @@ fn resolve(rel: &Path, source_dir: Option<&Path>) -> Result<PathBuf, String> {
     }
     // Report the primary attempt: it is the documented resolution rule.
     let err = match std::fs::read(&primary) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "file not found".to_owned(),
         Err(e) => e.to_string(),
         Ok(_) => "file appeared mid-expansion".to_string(),
     };

@@ -360,6 +360,46 @@ fn jsonl_typed_success() -> Result<()> {
 }
 
 #[test]
+fn jsonl_mapper_keeps_line_numbers_and_the_unterminated_final_row() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("rows.jsonl");
+    fs::write(
+        &path,
+        b"\r\n{\"value\":\"first\"}\r\n \n{\"value\":\"last\"}",
+    )?;
+
+    let rows = DataLoader::load_json_with(
+        path.to_str().unwrap(),
+        true,
+        TypedLoadOptions::default(),
+        |row| Ok((row.row_index, row.get::<String>("value")?)),
+    )?;
+
+    assert_eq!(rows, [(2, "first".to_owned()), (4, "last".to_owned())]);
+    Ok(())
+}
+
+#[test]
+fn jsonl_read_errors_take_precedence_over_parse_errors() -> Result<()> {
+    let dir = tempdir()?;
+    let path = dir.path().join("rows.jsonl");
+    let mut bytes = b"not JSON\n".to_vec();
+    bytes.resize(64 * 1024, b' ');
+    bytes.extend_from_slice(b"\n\xff");
+    fs::write(&path, bytes)?;
+
+    let error =
+        DataLoader::load_json::<QARow>(path.to_str().unwrap(), true, TypedLoadOptions::default())
+            .expect_err("invalid UTF-8 should fail before JSON parsing");
+    let Some(dspy_rs::DataLoadError::Io(source)) = error.downcast_ref() else {
+        panic!("expected input I/O error, got {error:#}");
+    };
+    let io_error = source.downcast_ref::<std::io::Error>().unwrap();
+    assert_eq!(io_error.kind(), std::io::ErrorKind::InvalidData);
+    Ok(())
+}
+
+#[test]
 fn json_type_mismatch_errors() -> Result<()> {
     let dir = tempdir()?;
     let path = dir.path().join("bad.json");

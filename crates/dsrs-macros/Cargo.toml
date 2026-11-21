@@ -2,6 +2,7 @@
 name = "dsrs_macros"
 version = "0.7.2"
 edition = "2024"
+rust-version.workspace = true
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 description = "Derive macros for DSRs (DSPy Rust)"
 readme = "../../README.md"
@@ -24,4 +25,5 @@ minijinja = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 dspy-rs = { workspace = true }
+serde_json = { workspace = true }
 trybuild = "1.0.110"

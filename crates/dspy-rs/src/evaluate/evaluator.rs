@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use futures::stream::{self, StreamExt, TryStreamExt};
+use futures::stream::{FuturesUnordered, StreamExt};
 
 use crate::core::{Module, ToInput};
 use crate::trace::{SpanId, Trace, TraceMeta, TraceOutcome, capture_with_meta};
@@ -111,8 +111,8 @@ where
 ///
 /// # Errors
 ///
-/// - Any [`Module::call`] failure propagates immediately
-/// - Any [`TypedMetric::evaluate`] failure propagates immediately
+/// Stops admitting new examples when a rollout fails, then returns the error
+/// from the earliest failed example in trainset order.
 pub async fn evaluate_trainset<E, M, MT>(
     module: &M,
     trainset: &[E],
@@ -128,8 +128,8 @@ where
 
 /// [`evaluate_trainset`] with an explicit concurrency level.
 ///
-/// `max_concurrency` LM calls run in flight at once; results come back in trainset
-/// order. Use `1` for strictly sequential evaluation (e.g. rate-limited providers).
+/// Runs up to `max_concurrency` examples concurrently, with a minimum of one
+/// slot. Results come back in trainset order. Use `1` for sequential evaluation.
 pub async fn evaluate_trainset_with_concurrency<E, M, MT>(
     module: &M,
     trainset: &[E],
@@ -141,7 +141,44 @@ where
     M: Module,
     MT: TypedMetric<E, M>,
 {
-    evaluate_examples(module, trainset, metric, max_concurrency).await
+    let mut pending = trainset.iter().enumerate().map(|(index, example)| async move {
+        let result = rollout_traced(module, example, metric, TraceMeta::default(), false)
+            .await
+            .map(|(eval, _)| eval);
+        (index, result)
+    });
+    let mut in_flight: FuturesUnordered<_> = pending.by_ref().take(max_concurrency.max(1)).collect();
+    let mut scores = vec![None; trainset.len()];
+    let mut scored_prefix = 0;
+    let mut failure = None;
+
+    while let Some((index, result)) = in_flight.next().await {
+        match result {
+            Ok(eval) => {
+                scores[index] = Some(eval);
+                while scores.get(scored_prefix).is_some_and(Option::is_some) {
+                    scored_prefix += 1;
+                }
+            }
+            Err(error) if failure.as_ref().is_none_or(|(earliest, _)| index < *earliest) => {
+                failure = Some((index, error));
+            }
+            Err(_) => {}
+        }
+        // The iterator admits examples in order. Once a failure is observed,
+        // every earlier example has already been scheduled.
+        if let Some((earliest, _)) = &failure {
+            if scored_prefix == *earliest {
+                break;
+            }
+        } else {
+            in_flight.extend(pending.next());
+        }
+    }
+    match failure {
+        Some((_, error)) => Err(error),
+        None => Ok(scores.into_iter().flatten().collect()),
+    }
 }
 
 /// One evaluated rollout: the metric result plus the execution trace that
@@ -162,12 +199,14 @@ fn json_object(value: Result<serde_json::Value, serde_json::Error>) -> Option<cr
 /// evals the metric attaches via [`TypedMetric::evaluate_spans`].
 ///
 /// Both the public evaluation entry points and the optimizer engine compose
-/// this — there is exactly one traced-rollout loop in the crate.
+/// this. Scoring-only callers may skip the final outcome after the metric
+/// hooks have run.
 pub(crate) async fn rollout_traced<E, M, MT>(
     module: &M,
     example: &E,
     metric: &MT,
     mut meta: TraceMeta,
+    retain_outcome: bool,
 ) -> Result<Rollout>
 where
     E: ToInput<M::Input> + Sync,
@@ -189,59 +228,15 @@ where
             span.eval = Some(span_eval);
         }
     }
-    trace.outcome = Some(TraceOutcome {
-        output: json_object(serde_json::to_value(&*predicted)),
-        error: None,
-        eval: Some(eval.clone()),
-        duration_us: started.elapsed().as_micros() as u64,
-    });
+    if retain_outcome {
+        trace.outcome = Some(TraceOutcome {
+            output: json_object(serde_json::to_value(&*predicted)),
+            error: None,
+            eval: Some(eval.clone()),
+            duration_us: started.elapsed().as_micros() as u64,
+        });
+    }
     Ok((eval, trace))
-}
-
-/// Concurrency core shared by the public entry points and optimizers: fans
-/// [`rollout_traced`] out over the examples with bounded concurrency.
-pub(crate) async fn evaluate_examples_traced<'a, E, M, MT, I>(
-    module: &M,
-    examples: I,
-    metric: &MT,
-    max_concurrency: usize,
-) -> Result<Vec<Rollout>>
-where
-    E: ToInput<M::Input> + Sync + 'a,
-    M: Module,
-    MT: TypedMetric<E, M>,
-    I: IntoIterator<Item = &'a E>,
-{
-    stream::iter(
-        examples
-            .into_iter()
-            .map(|example| rollout_traced(module, example, metric, TraceMeta::default())),
-    )
-    .buffered(max_concurrency.max(1))
-    .try_collect()
-    .await
-}
-
-/// [`evaluate_examples_traced`] projected down to the metric results.
-pub(crate) async fn evaluate_examples<'a, E, M, MT, I>(
-    module: &M,
-    examples: I,
-    metric: &MT,
-    max_concurrency: usize,
-) -> Result<Vec<Eval>>
-where
-    E: ToInput<M::Input> + Sync + 'a,
-    M: Module,
-    MT: TypedMetric<E, M>,
-    I: IntoIterator<Item = &'a E>,
-{
-    Ok(
-        evaluate_examples_traced(module, examples, metric, max_concurrency)
-            .await?
-            .into_iter()
-            .map(|(eval, _)| eval)
-            .collect(),
-    )
 }
 
 /// Arithmetic mean of scores from a slice of [`Eval`]s.

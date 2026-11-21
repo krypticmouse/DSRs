@@ -1,0 +1,95 @@
+{
+  "build_sha256": {
+    "baseline": "7edb5f04a35f47a69f8876da809ff075cbe636ea902a8f6f3591f17b704fdb43",
+    "trial": "a098655a095f979272bbfb9959e3eb4d9d8ed1b278705992868c9400a72be31a"
+  },
+  "harness_sha256": "8e99419c61dd4a353b773f862d1592cfbe0db20ceff453587dd371d4b65d21ab",
+  "fixture_sha256": "e9133ab4420d5bfd85ce55e4e1a1fbf9fc10b21062d812431526faa221a32a01",
+  "fixture_bytes": 134396842,
+  "order": [
+    "baseline",
+    "trial",
+    "trial",
+    "baseline",
+    "baseline",
+    "trial",
+    "trial",
+    "baseline",
+    "baseline",
+    "trial",
+    "trial",
+    "baseline",
+    "baseline",
+    "trial",
+    "trial",
+    "baseline"
+  ],
+  "results": {
+    "cache": {
+      "elapsed_ns": {
+        "baseline_median": 14521050.0,
+        "trial_median": 7526600.0,
+        "baseline_range": [
+          11232900,
+          18063900
+        ],
+        "trial_range": [
+          6593400,
+          9290100
+        ],
+        "median_paired_ratio": 0.5140515269904788,
+        "faster_pairs": 8,
+        "meets_margin": true
+      }
+    },
+    "preflight": {
+      "elapsed_ns": {
+        "baseline_median": 39675300.0,
+        "trial_median": 490850.0,
+        "baseline_range": [
+          27968800,
+          47483200
+        ],
+        "trial_range": [
+          407600,
+          787200
+        ],
+        "median_paired_ratio": 0.01427651646990253,
+        "faster_pairs": 8,
+        "meets_margin": true
+      }
+    },
+    "jsonl": {
+      "elapsed_ns": {
+        "baseline_median": 324448750.0,
+        "trial_median": 304943900.0,
+        "baseline_range": [
+          262785600,
+          425288600
+        ],
+        "trial_range": [
+          218102500,
+          371637900
+        ],
+        "median_paired_ratio": 0.886798782836023,
+        "faster_pairs": 7,
+        "meets_margin": false
+      },
+      "peak_working_set_bytes": {
+        "baseline_median": 282595328.0,
+        "trial_median": 149053440.0,
+        "baseline_range": [
+          282546176,
+          282849280
+        ],
+        "trial_range": [
+          149020672,
+          149114880
+        ],
+        "median_paired_ratio": 0.5274486357489764,
+        "faster_pairs": 8,
+        "meets_margin": true
+      }
+    }
+  }
+}

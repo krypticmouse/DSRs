@@ -3,6 +3,7 @@ name = "dsrs-tools"
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 version = "0.1.0"
 edition = "2024"
+rust-version.workspace = true
 description = "Sandboxed tool-execution runtime for DSRs: Tier-1 in-process QuickJS ephemeral tools."
 repository = "https://github.com/krypticmouse/DSRs"
 license = "Apache-2.0"

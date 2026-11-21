@@ -229,7 +229,7 @@ where
             // rollout: each Predict leaf binds its own entry at call time.
             crate::fx::with_params_shared(
                 params,
-                rollout_traced(module, example, self.metric, meta),
+                rollout_traced(module, example, self.metric, meta, true),
             )
             .await
         })

@@ -3,6 +3,7 @@ name = "dspy-rs"
 authors = ["Herumb Shandilya <herumb@stanford.edu>"]
 version = "0.7.3"
 edition = "2024"
+rust-version.workspace = true
 description = "A DSPy rewrite(not port) to Rust."
 readme = "../../README.md"
 documentation = "https://dsrs.herumbshandilya.com"
@@ -48,7 +49,7 @@ minijinja = { workspace = true, features = ["builtins", "serde", "debug"] }
 # IR graph core (RFC 0002 §2): entity arenas + the sandboxed hole executor.
 # Unconditional since phase 2β: Predict runs through the IR Interpreter, so
 # the graph core (and Code Mode via dsrs-tools) is load-bearing, not optional.
-cranelift-entity = { version = "0.134", features = ["enable-serde"] }
+cranelift-entity = { version = "0.128.4", features = ["enable-serde"] }
 dsrs-tools = { version = "0.1.0", path = "../dsrs-tools" }
 
 [package.metadata.cargo-machete]

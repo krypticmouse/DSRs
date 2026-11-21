@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
+use dspy_rs::optimizer::{BatchEvalOutcome, RolloutCache};
 use dspy_rs::{
     Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM,
     LMClient, Module, ModuleState, OptimizeTarget, Predict, PredictError, Predicted, Signature,
@@ -306,6 +307,111 @@ async fn subset_evaluation_respects_order_and_matrix_cells() {
     for idx in [1, 2, 3] {
         assert!(engine.matrix().score(candidate, idx).is_some());
     }
+}
+
+#[tokio::test]
+async fn repeated_batch_pairs_share_one_rollout() {
+    let mut module = EchoModule::new();
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(2),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let candidate = engine.register(Candidate::new());
+    let candidates = [candidate, candidate];
+    let subset = [2, 0, 2];
+
+    let first = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert_eq!(first.len(), 2);
+    for result in &first {
+        assert_eq!(result.candidate, candidate);
+        assert_eq!(
+            result
+                .rollouts
+                .iter()
+                .map(|r| r.example)
+                .collect::<Vec<_>>(),
+            subset
+        );
+        assert_eq!(result.scores(), vec![0.2, 0.0, 0.2]);
+    }
+    let trace = first[0].rollouts[0].trace.as_ref().unwrap();
+    let outcome = trace.outcome.as_ref().unwrap();
+    assert_eq!(outcome.output.as_ref().unwrap()["answer"], "2");
+    assert_eq!(outcome.eval.as_ref().unwrap().score, 0.2);
+    assert!(first[0].rollouts[1].trace.is_some());
+    assert!(first[0].rollouts[2].trace.is_none());
+    assert!(first[1].rollouts.iter().all(|r| r.trace.is_none()));
+    assert_eq!(engine.spend().metric_calls, 2);
+
+    let cached = engine
+        .evaluate_many(&target, &candidates, Some(&subset))
+        .await
+        .unwrap()
+        .completed()
+        .unwrap();
+    assert!(
+        cached
+            .iter()
+            .flat_map(|r| &r.rollouts)
+            .all(|r| r.trace.is_none())
+    );
+    assert_eq!(engine.spend().metric_calls, 2);
+    assert_eq!(engine.spend().cache_hits, 2);
+}
+
+#[tokio::test]
+async fn empty_cache_budget_rejection_counts_distinct_pairs() {
+    let mut module = EchoModule::new();
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(0),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let first = engine.register(Candidate::new());
+    let second = engine.register(Candidate::with_instruction("predictor", "second"));
+
+    let result = engine
+        .evaluate_many(&target, &[first, second, first], Some(&[2, 2, 1]))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        BatchEvalOutcome::BudgetExhausted { needed: 4 }
+    ));
+    assert_eq!(engine.spend().metric_calls, 0);
+    assert!(engine.cache().is_empty());
+}
+
+#[test]
+fn rollout_cache_updates_existing_serialized_keys() {
+    let key = "ffffffffffffffff:0000000000000000:0123456789abcdef:0000000000000009";
+    let example = 0x0123456789abcdef;
+    let mut cache: RolloutCache = serde_json::from_value(serde_json::json!({
+        "entries": { (key): Eval::score(0.5) }
+    }))
+    .unwrap();
+
+    assert_eq!(cache.get(u64::MAX, 0, example, 9).unwrap().score, 0.5);
+    cache.insert(u64::MAX, 0, example, 9, Eval::score(0.75));
+
+    assert_eq!(cache.len(), 1);
+    let serialized = serde_json::to_value(cache).unwrap();
+    assert_eq!(serialized["entries"][key]["score"], 0.75);
 }
 
 #[tokio::test]

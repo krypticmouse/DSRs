@@ -5,7 +5,7 @@
 <em>A high-performance DSPy rewrite in Rust for building LM-powered applications</em>
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.90%2B-orange.svg)](rust-toolchain.toml)
 [![Crates.io](https://img.shields.io/crates/v/dspy-rs)](https://crates.io/crates/dspy-rs)
 [![Documentation](https://docs.rs/dspy-rs/badge.svg)](https://docs.rs/dspy-rs)
 [![Build Status](https://img.shields.io/badge/build-passing-green.svg)](#)
@@ -430,6 +430,11 @@ See `examples/12-tracing.rs` for a complete example.
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
 
 ### Development Setup
+
+The checkout and primary CI jobs use Rust 1.94.0. The workspace supports Rust
+1.90.0, which CI tests against the same dependency lockfile. Use
+`cargo +1.90.0 test --locked --workspace --all-features` to run those checks
+with the minimum supported compiler.
 
 ```bash
 # Clone the repository

@@ -51,7 +51,7 @@ Owns the candidate registry, the score matrix, the rollout cache, and the budget
 | Method | What it does |
 |---|---|
 | `new(config)` | Builds an engine from an `EngineConfig`. Examples and metric live on the target, not the engine — one engine can serve successive targets (a `Box<dyn Optimizer>` pipeline sharing one budget). |
-| `evaluate_many(target, candidates, subset)` | Evaluates N registered candidates over `subset` example indices (`None` = the target's full set) in **one** bounded-concurrency fan-out — candidate-level parallelism in both lanes. Cached rollouts return their `Eval` with `trace: None` and consume no budget. Returns `BatchEvalOutcome`. |
+| `evaluate_many(target, candidates, subset)` | Evaluates registered candidates over the requested example indices, or over the full set when `subset` is `None`. Each unique pair runs at most once. Repeated pairs share the score in request order, and only the first occurrence of a fresh pair carries its trace. Cached rollouts consume no budget. Returns `BatchEvalOutcome`. |
 | `evaluate(target, candidate, subset)` | Single-candidate convenience over `evaluate_many`. Returns `EvalOutcome`. |
 | `evaluate_gated(target, candidate, minibatch, threshold)` | The minibatch gate (the GEPA/SIMBA acceptance pattern): evaluates on `minibatch`; only a minibatch mean strictly greater than `threshold` promotes to a full-set evaluation. Returns `GateOutcome`. |
 | `register(candidate)` | Registers a module-lane `Candidate`, deduplicating by content hash. Returns its index; a duplicate returns the existing index. |
