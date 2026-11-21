@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 #[cfg(feature = "data")]
 use std::io::Cursor;
+use std::io::{BufRead, BufReader};
 #[cfg(feature = "data")]
 use std::path::{Path, PathBuf};
 use tracing::debug;
@@ -506,6 +507,9 @@ impl DataLoader {
         path: &str,
         lines: bool,
     ) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        if lines && !is_url(path) {
+            return Self::load_local_jsonl(path);
+        }
         let data = Self::fetch_text(path)?;
 
         if lines {
@@ -514,9 +518,7 @@ impl DataLoader {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let value: serde_json::Value =
-                    serde_json::from_str(line).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
-                rows.push(row_from_json_value(value, idx + 1)?);
+                rows.push(row_from_jsonl_line(line, idx + 1)?);
             }
             debug!(rows = rows.len(), "jsonl rows loaded");
             return Ok(rows);
@@ -535,6 +537,37 @@ impl DataLoader {
         };
 
         debug!(rows = rows.len(), "json rows loaded");
+        Ok(rows)
+    }
+
+    fn load_local_jsonl(path: &str) -> std::result::Result<Vec<RowRecord>, DataLoadError> {
+        let file = fs::File::open(path).map_err(|err| DataLoadError::Io(err.into()))?;
+        let mut reader = BufReader::with_capacity(64 * 1024, file);
+        let mut line = String::new();
+        let mut rows = Ok(Vec::new());
+        let mut row_index = 0;
+        while reader
+            .read_line(&mut line)
+            .map_err(|err| DataLoadError::Io(err.into()))?
+            != 0
+        {
+            row_index += 1;
+            if let Ok(parsed_rows) = &mut rows
+                && !line.trim().is_empty()
+            {
+                let text = line.strip_suffix('\n').map_or(line.as_str(), |text| {
+                    text.strip_suffix('\r').unwrap_or(text)
+                });
+                match row_from_jsonl_line(text, row_index) {
+                    Ok(row) => parsed_rows.push(row),
+                    Err(error) => rows = Err(error),
+                }
+            }
+            // Continue validating input UTF-8 so read errors retain precedence.
+            line.clear();
+        }
+        let rows = rows?;
+        debug!(rows = rows.len(), "jsonl rows loaded");
         Ok(rows)
     }
 
@@ -841,6 +874,14 @@ fn coerce_row_value(value: &Value, field_type: &FieldType) -> Value {
         },
         _ => value.clone(),
     }
+}
+
+fn row_from_jsonl_line(
+    line: &str,
+    row_index: usize,
+) -> std::result::Result<RowRecord, DataLoadError> {
+    let value = serde_json::from_str(line).map_err(|err| DataLoadError::Json(anyhow!(err)))?;
+    row_from_json_value(value, row_index)
 }
 
 fn row_from_json_value(

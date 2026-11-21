@@ -322,16 +322,37 @@ pub struct RolloutCache {
 }
 
 impl RolloutCache {
-    fn key(baseline: u64, candidate: u64, example: u64, salt: u64) -> String {
-        format!("{baseline:016x}:{candidate:016x}:{example:016x}:{salt:016x}")
+    fn key(baseline: u64, candidate: u64, example: u64, salt: u64) -> [u8; 67] {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        // Preserve the serialized key's four zero-padded words and separators.
+        let mut key = [b':'; 67];
+        for (mut word, block) in [baseline, candidate, example, salt]
+            .into_iter()
+            .zip(key.chunks_mut(17))
+        {
+            for digit in block[..16].iter_mut().rev() {
+                *digit = HEX[(word & 15) as usize];
+                word >>= 4;
+            }
+        }
+        key
     }
 
     pub fn get(&self, baseline: u64, candidate: u64, example: u64, salt: u64) -> Option<&Eval> {
-        self.entries.get(&Self::key(baseline, candidate, example, salt))
+        if self.entries.is_empty() {
+            return None;
+        }
+        let key = Self::key(baseline, candidate, example, salt);
+        self.entries
+            .get(std::str::from_utf8(&key).expect("ASCII cache key"))
     }
 
     pub fn insert(&mut self, baseline: u64, candidate: u64, example: u64, salt: u64, eval: Eval) {
-        self.entries.insert(Self::key(baseline, candidate, example, salt), eval);
+        let key = Self::key(baseline, candidate, example, salt);
+        self.entries.insert(
+            String::from_utf8(key.to_vec()).expect("ASCII cache key"),
+            eval,
+        );
     }
 
     pub fn len(&self) -> usize {
@@ -840,6 +861,16 @@ impl Engine {
         });
         let repeats =
             unique_candidates.len() != candidates.len() || unique_indices.len() != indices.len();
+
+        if self.cache.is_empty() {
+            let needed = unique_candidates
+                .len()
+                .checked_mul(unique_indices.len())
+                .ok_or_else(|| anyhow!("optimizer batch size overflow"))?;
+            if !self.budget_allows(needed) {
+                return Ok(BatchEvalOutcome::BudgetExhausted { needed });
+            }
+        }
 
         let mut cached = HashMap::new();
         let mut pending = Vec::new();

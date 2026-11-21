@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
+use dspy_rs::optimizer::{BatchEvalOutcome, RolloutCache};
 use dspy_rs::{
     Budget, CallMetadata, Candidate, Engine, EngineConfig, Eval, EvalOutcome, GateOutcome, LM,
     LMClient, Module, ModuleState, OptimizeTarget, Predict, PredictError, Predicted, Signature,
@@ -366,6 +367,51 @@ async fn repeated_batch_pairs_share_one_rollout() {
     );
     assert_eq!(engine.spend().metric_calls, 2);
     assert_eq!(engine.spend().cache_hits, 2);
+}
+
+#[tokio::test]
+async fn empty_cache_budget_rejection_counts_distinct_pairs() {
+    let mut module = EchoModule::new();
+    let examples = trainset(3);
+    let target = OptimizeTarget::module(&mut module, &examples, &IndexMetric);
+    let mut engine = Engine::new(EngineConfig {
+        budget: Budget {
+            max_metric_calls: Some(0),
+            ..Budget::default()
+        },
+        ..EngineConfig::default()
+    });
+    let first = engine.register(Candidate::new());
+    let second = engine.register(Candidate::with_instruction("predictor", "second"));
+
+    let result = engine
+        .evaluate_many(&target, &[first, second, first], Some(&[2, 2, 1]))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        result,
+        BatchEvalOutcome::BudgetExhausted { needed: 4 }
+    ));
+    assert_eq!(engine.spend().metric_calls, 0);
+    assert!(engine.cache().is_empty());
+}
+
+#[test]
+fn rollout_cache_updates_existing_serialized_keys() {
+    let key = "ffffffffffffffff:0000000000000000:0123456789abcdef:0000000000000009";
+    let example = 0x0123456789abcdef;
+    let mut cache: RolloutCache = serde_json::from_value(serde_json::json!({
+        "entries": { (key): Eval::score(0.5) }
+    }))
+    .unwrap();
+
+    assert_eq!(cache.get(u64::MAX, 0, example, 9).unwrap().score, 0.5);
+    cache.insert(u64::MAX, 0, example, 9, Eval::score(0.75));
+
+    assert_eq!(cache.len(), 1);
+    let serialized = serde_json::to_value(cache).unwrap();
+    assert_eq!(serialized["entries"][key]["score"], 0.75);
 }
 
 #[tokio::test]
